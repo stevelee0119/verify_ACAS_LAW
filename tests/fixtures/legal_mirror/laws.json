@@ -1,0 +1,19 @@
+[
+  {
+    "_synthetic": true,
+    "_notice": "테스트 전용 가상 데이터이다. 실제 법령이 아니다.",
+    "law_name": "테스트가상법",
+    "article": "10",
+    "text": "구법 조문 본문(가상).",
+    "effective_from": "2000-01-01",
+    "effective_to": "2019-12-31"
+  },
+  {
+    "_synthetic": true,
+    "law_name": "테스트가상법",
+    "article": "10",
+    "text": "신법 조문 본문(가상).",
+    "effective_from": "2020-01-01",
+    "effective_to": null
+  }
+]
