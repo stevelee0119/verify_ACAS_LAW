@@ -83,7 +83,7 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
             by_block.setdefault(citation.block_id, []).append(citation)
 
     claims: List[Claim] = []
-    for block in doc.visible_blocks():
+    for block in doc.body_blocks():
         for sentence in sentences(block.text):
             if len(sentence) < 10:
                 continue
@@ -124,7 +124,7 @@ def extract_entities(doc: NormalizedDocument) -> List[Entity]:
             {"document_id": doc.document_id, "block_id": block.block_id, "page": block.page, "span": list(span)}
         )
 
-    for block in doc.visible_blocks():
+    for block in doc.body_blocks():
         for m in PERSON_CONTEXT_RE.finditer(block.text):
             add(EntityType.PERSON, m.group(1), block, (m.start(1), m.end(1)))
         for m in COMPANY_CONTEXT_RE.finditer(block.text):
@@ -171,7 +171,7 @@ def resolve_entities(entities: List[Entity]) -> List[Entity]:
 def extract_events(doc: NormalizedDocument) -> List[Event]:
     """제11.4장 Timeline 입력. 날짜와 같은 문장의 사건 서술을 결합한다."""
     events: List[Event] = []
-    for block in doc.visible_blocks():
+    for block in doc.body_blocks():
         for sentence in sentences(block.text):
             for m in DATE_RE.finditer(sentence):
                 try:

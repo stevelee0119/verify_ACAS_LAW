@@ -92,7 +92,7 @@ class CalculationEngine:
 
     def verify_document(self, doc: NormalizedDocument) -> List[Finding]:
         findings: List[Finding] = []
-        for block in doc.visible_blocks():
+        for block in doc.body_blocks():
             if block.block_type == "table":
                 continue  # 표는 _verify_table_totals에서 행 단위로 검산한다
             findings.extend(self._verify_block(doc, block))

@@ -16,6 +16,7 @@ from packages.common.enums import (
     JobState,
     VerificationProfile,
 )
+from packages.common.config import get_settings
 from packages.common.storage import get_storage
 from packages.llm_router import LLMRouter
 from packages.source_adapters import SourceRegistry
@@ -282,20 +283,77 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
 
 
 class JobRunner:
-    """MVP 인프로세스 Worker. Celery/Redis 전환 시 동일 인터페이스를 유지한다(제3.1장)."""
+    """검증 Job 실행기 (제3.1장).
+
+    브로커가 설정되어 있으면 Celery로 디스패치하고, 없으면 인프로세스 스레드로 실행한다.
+    두 경로 모두 동일한 execute_run()을 호출하므로 Verification Core는 하나이다.
+    """
 
     def __init__(self) -> None:
         self._threads: Dict[str, threading.Thread] = {}
+        self._task_ids: Dict[str, str] = {}
 
-    def submit(self, run_id: str) -> None:
+    # -- 모드 판정 --------------------------------------------------------
+    @property
+    def mode(self) -> str:
+        settings = get_settings()
+        configured = (settings.worker_mode or "auto").lower()
+        if configured == "celery":
+            return "celery"
+        if configured == "inprocess":
+            return "inprocess"
+        from workers.celery_app import broker_url, celery_available
+
+        return "celery" if (broker_url() and celery_available()) else "inprocess"
+
+    # -- 제출 -------------------------------------------------------------
+    def submit(self, run_id: str) -> str:
+        if self.mode == "celery":
+            try:
+                from workers.celery_app import VERIFICATION_TASK, get_celery_app
+
+                app = get_celery_app()
+                if app is None:
+                    raise RuntimeError("celery를 사용할 수 없다")
+                result = app.send_task(VERIFICATION_TASK, args=[run_id], queue="verification")
+                self._task_ids[run_id] = result.id
+                return "celery"
+            except Exception:
+                # 브로커 장애 시 전체 기능을 잃지 않도록 인프로세스로 강등한다
+                # (제2장 Graceful Degradation)
+                pass
         thread = threading.Thread(target=execute_run, args=(run_id,), daemon=True, name=f"run-{run_id}")
         self._threads[run_id] = thread
         thread.start()
+        return "inprocess"
+
+    def task_id(self, run_id: str) -> Optional[str]:
+        return self._task_ids.get(run_id)
 
     def wait(self, run_id: str, timeout: float = 120.0) -> None:
+        """인프로세스 실행을 기다린다. Celery 경로에서는 Run 상태를 폴링한다."""
         thread = self._threads.get(run_id)
-        if thread:
+        if thread is not None:
             thread.join(timeout)
+            return
+        if run_id not in self._task_ids:
+            return
+        import time
+
+        from packages.common.enums import JobState
+
+        terminal = {str(JobState.COMPLETED), str(JobState.PARTIAL_COMPLETED),
+                    str(JobState.FAILED), str(JobState.CANCELLED)}
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            session = get_session_factory()()
+            try:
+                run = session.get(VerificationRun, run_id)
+                if run is not None and run.state in terminal:
+                    return
+            finally:
+                session.close()
+            time.sleep(0.3)
 
     def busy(self) -> List[str]:
         return [rid for rid, t in self._threads.items() if t.is_alive()]

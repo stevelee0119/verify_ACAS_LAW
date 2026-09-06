@@ -5,11 +5,24 @@
 """
 from __future__ import annotations
 
+import re
+import shutil
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Any, List, Optional
 
+from packages.common.config import get_settings
 from packages.common.schemas import BBox
+
+
+# 의미 있는 문자(한글·영숫자)가 2자 미만인 라인은 인식 노이즈로 본다.
+MEANINGFUL_RE = re.compile(r"[0-9A-Za-z가-힣]")
+MIN_MEANINGFUL_CHARS = 2
+
+
+def is_noise(text: str) -> bool:
+    return len(MEANINGFUL_RE.findall(text)) < MIN_MEANINGFUL_CHARS
 
 
 @dataclass
@@ -19,17 +32,30 @@ class OCRLine:
     bbox: Optional[BBox] = None
     confidence: float = 0.0
 
+    def to_dict(self) -> dict:
+        return {
+            "text": self.text,
+            "page": self.page,
+            "bbox": self.bbox.as_tuple() if self.bbox else None,
+            "confidence": round(self.confidence, 3),
+        }
+
 
 class OCRAdapter(ABC):
     name = "base"
     available = False
 
     @abstractmethod
-    def recognize(self, path: str, page_numbers: Optional[List[int]] = None) -> List[OCRLine]: ...
+    def recognize(self, path: str, page_numbers: Optional[List[int]] = None) -> List[OCRLine]:
+        """파일 경로에서 텍스트를 인식한다."""
+
+    def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0) -> List[OCRLine]:
+        """PIL Image에서 인식한다. scale은 이미지 좌표를 canonical 좌표로 되돌리는 비율이다."""
+        raise NotImplementedError
 
 
 class NullOCRAdapter(OCRAdapter):
-    """OCR 엔진 미설치 환경. 실패시키지 않고 빈 결과 + 경고를 반환한다(제10장 원칙)."""
+    """OCR 엔진 미설치 환경. 실패시키지 않고 빈 결과를 반환한다(제10장 원칙)."""
 
     name = "null"
     available = False
@@ -37,44 +63,87 @@ class NullOCRAdapter(OCRAdapter):
     def recognize(self, path: str, page_numbers: Optional[List[int]] = None) -> List[OCRLine]:
         return []
 
+    def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0) -> List[OCRLine]:
+        return []
 
-class TesseractOCRAdapter(OCRAdapter):  # pragma: no cover - 선택적 의존성
+
+class TesseractOCRAdapter(OCRAdapter):
+    """Tesseract 기반 구현. 단어가 아니라 라인 단위로 묶어 bbox를 보존한다."""
+
     name = "tesseract"
 
-    def __init__(self, lang: str = "kor+eng") -> None:
-        self.lang = lang
+    def __init__(self, lang: Optional[str] = None, psm: Optional[int] = None) -> None:
+        settings = get_settings()
+        self.lang = lang or settings.ocr_lang
+        self.psm = psm if psm is not None else settings.ocr_psm
+        self.available = False
+        self.version = ""
         try:
             import pytesseract  # noqa: F401
             from PIL import Image  # noqa: F401
 
+            if shutil.which("tesseract") is None:
+                return
+            self.version = str(pytesseract.get_tesseract_version())
             self.available = True
         except Exception:
             self.available = False
 
+    @property
+    def config(self) -> str:
+        return f"--psm {self.psm}"
+
     def recognize(self, path: str, page_numbers: Optional[List[int]] = None) -> List[OCRLine]:
         if not self.available:
             return []
-        import pytesseract
         from PIL import Image
 
-        data = pytesseract.image_to_data(Image.open(path), lang=self.lang, output_type=pytesseract.Output.DICT)
-        lines: List[OCRLine] = []
-        for i, text in enumerate(data["text"]):
-            if not text.strip():
+        try:
+            with Image.open(path) as image:
+                return self.recognize_image(image.convert("RGB"), page=1)
+        except Exception:
+            return []
+
+    def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0) -> List[OCRLine]:
+        """라인 단위로 그룹핑해 텍스트·bbox·평균 신뢰도를 만든다."""
+        if not self.available:
+            return []
+        import pytesseract
+
+        try:
+            data = pytesseract.image_to_data(
+                image, lang=self.lang, config=self.config, output_type=pytesseract.Output.DICT
+            )
+        except Exception:
+            return []
+
+        grouped: dict = defaultdict(list)
+        for index, text in enumerate(data.get("text", [])):
+            if not str(text).strip():
                 continue
+            key = (data["block_num"][index], data["par_num"][index], data["line_num"][index])
+            grouped[key].append(index)
+
+        lines: List[OCRLine] = []
+        for indices in grouped.values():
+            text = " ".join(str(data["text"][i]).strip() for i in indices).strip()
+            if not text or is_noise(text):
+                continue
+            confidences = [float(data["conf"][i]) for i in indices if str(data["conf"][i]) not in ("-1",)]
             lines.append(
                 OCRLine(
                     text=text,
-                    page=1,
+                    page=page,
                     bbox=BBox(
-                        float(data["left"][i]),
-                        float(data["top"][i]),
-                        float(data["left"][i] + data["width"][i]),
-                        float(data["top"][i] + data["height"][i]),
+                        x0=min(float(data["left"][i]) for i in indices) / scale,
+                        y0=min(float(data["top"][i]) for i in indices) / scale,
+                        x1=max(float(data["left"][i] + data["width"][i]) for i in indices) / scale,
+                        y1=max(float(data["top"][i] + data["height"][i]) for i in indices) / scale,
                     ),
-                    confidence=float(data["conf"][i]) / 100.0 if data["conf"][i] not in ("-1", -1) else 0.0,
+                    confidence=(sum(confidences) / len(confidences) / 100.0) if confidences else 0.0,
                 )
             )
+        lines.sort(key=lambda line: (line.bbox.y0 if line.bbox else 0, line.bbox.x0 if line.bbox else 0))
         return lines
 
 
@@ -92,3 +161,8 @@ def get_ocr_adapter() -> OCRAdapter:
 def set_ocr_adapter(adapter: OCRAdapter) -> None:
     global _adapter
     _adapter = adapter
+
+
+def reset_ocr_adapter() -> None:
+    global _adapter
+    _adapter = None

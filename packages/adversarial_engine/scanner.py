@@ -311,15 +311,18 @@ class AdversarialScanner:
             if not instruction_segments and delta.difference <= 0:
                 continue
 
-            is_ocr = delta.right_layer in ("ocr_layer", "independent_ocr")
+            ocr_layers = {"ocr_layer", "independent_ocr"}
+            is_ocr = bool({delta.left_layer, delta.right_layer} & ocr_layers)
             finding_type = FindingType.OCR_LAYER_INJECTION if is_ocr and instruction_segments else (
                 FindingType.OCR_LAYER_MISMATCH if is_ocr else FindingType.HIDDEN_TEXT_MISMATCH
             )
             severity = Severity.INFO
             if instruction_segments:
                 severity = Severity.CRITICAL if is_ocr else Severity.HIGH
-            elif delta.difference > 40:
+            elif not is_ocr and delta.difference > 40:
                 severity = Severity.MEDIUM
+            # OCR은 인식 오차가 있으므로 단순 분량 차이로는 Finding을 만들지 않는다.
+            # 지시형 문자열이 한쪽 레이어에만 존재할 때만 보고한다.
 
             if severity == Severity.INFO:
                 continue
@@ -337,6 +340,11 @@ class AdversarialScanner:
             )
             if instruction_segments:
                 detail += f" 표시되지 않는 구간 {len(instruction_segments)}건에 지시형 표현이 있다."
+            if delta.left_layer == "independent_ocr":
+                detail += (
+                    " 독립 OCR로 화면을 다시 읽은 결과에는 없고 내장 텍스트 레이어에만 존재하는 문자열이다. "
+                    "사람이 보는 화면과 모델이 읽는 텍스트가 다르다."
+                )
             out.append(
                 Finding.create(
                     type=finding_type,

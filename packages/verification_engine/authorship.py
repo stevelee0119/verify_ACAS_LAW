@@ -156,7 +156,7 @@ def _style_shift(sents: List[str]) -> Dict[str, Any]:
 def _segment_verdicts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """문단 단위 표시(제13장). 짧은 문단은 판단을 유보한다."""
     out: List[Dict[str, Any]] = []
-    for block in doc.visible_blocks():
+    for block in doc.body_blocks():
         sents = sentences(block.text)
         if len(sents) < 3:
             out.append({"block_id": block.block_id, "page": block.page, "verdict": str(AuthorshipVerdict.ABSTAIN)})

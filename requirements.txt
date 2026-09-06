@@ -10,21 +10,26 @@ httpx>=0.27
 
 # 문서 파싱
 pdfplumber>=0.11
+pypdfium2>=4.30          # PDF 페이지 래스터화 (독립 OCR·스캔본 처리)
 pypdf>=4.2
 python-docx>=1.1
 openpyxl>=3.1
 pillow>=10.3
 lxml>=5.2
 
+# OCR — 시스템에 tesseract-ocr, tesseract-ocr-kor 설치 필요
+pytesseract>=0.3.13
+
+# 데이터베이스 — PostgreSQL + pgvector
+psycopg[binary]>=3.1
+pgvector>=0.2
+
+# 비동기 Worker
+celery>=5.4
+redis>=5.0
+
 # 보고서
 reportlab>=4.2
-
-# 선택적 의존성 (설치되지 않아도 동작한다)
-# pytesseract>=0.3.10      # OCR Adapter
-# psycopg[binary]>=3.1     # PostgreSQL
-# pgvector>=0.2            # 임베딩 검색
-# celery>=5.4              # 분산 Worker
-# redis>=5.0               # Queue
 
 # 테스트
 pytest>=8.2

@@ -1,48 +1,88 @@
-# 개발·시연용 구성. 운영에서는 PostgreSQL+pgvector와 외부 Secret Manager를 사용한다.
+# 개발·시연용 전체 구성. API·Worker·PostgreSQL(pgvector)·Redis를 함께 띄운다.
+# API Key는 이미지에 굽지 않고 런타임 환경변수로 주입한다(제21.2장).
+
+x-app-env: &app-env
+  LV_DATA_DIR: /data
+  LV_DATABASE_URL: postgresql+psycopg://legal:${POSTGRES_PASSWORD:-legal}@db:5432/legal_verifier
+  LV_CELERY_BROKER: redis://redis:6379/0
+  LV_WORKER_MODE: celery
+  LV_DEFAULT_AI_POLICY: ${LV_DEFAULT_AI_POLICY:-MASKED}
+  LV_DEFAULT_PROFILE: ${LV_DEFAULT_PROFILE:-STANDARD}
+  LV_OCR_LANG: ${LV_OCR_LANG:-kor+eng}
+  LV_INDEPENDENT_OCR: ${LV_INDEPENDENT_OCR:-auto}
+  LV_PSEUDONYM_SECRET: ${LV_PSEUDONYM_SECRET:?운영 배포 전 반드시 설정한다}
+  LV_LAW_GO_KR_OC: ${LV_LAW_GO_KR_OC:-}
+  LV_KCI_KEY: ${LV_KCI_KEY:-}
+  LV_CROSSREF_MAILTO: ${LV_CROSSREF_MAILTO:-}
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+  GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+
 services:
   api:
     build:
       context: .
       dockerfile: docker/Dockerfile
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn apps.api.main:app --host 0.0.0.0 --port 8000"
     ports:
       - "8000:8000"
-    environment:
-      # 기본은 SQLite. PostgreSQL 사용 시 아래 주석을 해제한다.
-      # LV_DATABASE_URL: postgresql+psycopg://legal:legal@db:5432/legal_verifier
-      LV_DATA_DIR: /data
-      LV_DEFAULT_AI_POLICY: MASKED
-      LV_DEFAULT_PROFILE: STANDARD
-      # API Key는 이미지에 굽지 않고 런타임 secret으로 주입한다(제21.2장).
-      LV_LAW_GO_KR_OC: ${LV_LAW_GO_KR_OC:-}
-      LV_KCI_KEY: ${LV_KCI_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      LV_PSEUDONYM_SECRET: ${LV_PSEUDONYM_SECRET:-change-me-in-production}
+    environment: *app-env
     volumes:
       - lv-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
-  # 폐쇄망·기관 배포에서 사용한다(제23장).
-  # db:
-  #   image: pgvector/pgvector:pg16
-  #   environment:
-  #     POSTGRES_USER: legal
-  #     POSTGRES_PASSWORD: legal
-  #     POSTGRES_DB: legal_verifier
-  #   volumes:
-  #     - lv-db:/var/lib/postgresql/data
-  #
-  # redis:
-  #   image: redis:7-alpine
-  #
-  # worker:
-  #   build:
-  #     context: .
-  #     dockerfile: docker/Dockerfile
-  #   command: celery -A workers.celery_app worker -l info
-  #   depends_on: [redis, db]
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: celery -A workers.celery_app worker -l info -Q verification,report --concurrency 2
+    environment: *app-env
+    volumes:
+      - lv-data:/data
+    depends_on:
+      api:
+        condition: service_started
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: legal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-legal}
+      POSTGRES_DB: legal_verifier
+    volumes:
+      - lv-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U legal -d legal_verifier"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --appendonly yes
+    volumes:
+      - lv-redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
 
 volumes:
   lv-data:
-  # lv-db:
+  lv-db:
+  lv-redis:

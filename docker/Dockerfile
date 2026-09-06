@@ -2,9 +2,10 @@ FROM python:3.11-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+    PYTHONPATH=/app
 
-# OCR·이미지 처리용 시스템 패키지. 폐쇄망에서는 내부 미러를 사용한다.
+# OCR(한국어 포함)·이미지 처리·PDF 래스터화용 시스템 패키지.
+# 폐쇄망에서는 내부 미러를 사용한다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libjpeg62-turbo zlib1g libxml2 libxslt1.1 \
         tesseract-ocr tesseract-ocr-kor \

@@ -19,7 +19,8 @@ def isolated_environment():
     tmp = tempfile.mkdtemp(prefix="lv-test-")
     os.environ["LV_DATA_DIR"] = tmp
     os.environ["LV_ALLOW_NETWORK"] = "0"
-    os.environ["LV_DATABASE_URL"] = f"sqlite:///{tmp}/test.db"
+    # LV_TEST_DATABASE_URL이 있으면 그 DB로 테스트한다(PostgreSQL 검증용).
+    os.environ["LV_DATABASE_URL"] = os.getenv("LV_TEST_DATABASE_URL") or f"sqlite:///{tmp}/test.db"
     os.environ["LV_STORAGE_ROOT"] = f"{tmp}/storage"
     os.environ["LV_PSEUDONYM_SECRET"] = "test-secret"
     os.environ.pop("LV_LAW_GO_KR_OC", None)

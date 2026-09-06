@@ -55,6 +55,20 @@ class Settings:
     semantic_scholar_key: Optional[str] = os.getenv("LV_SEMANTIC_SCHOLAR_KEY")
     crossref_mailto: Optional[str] = os.getenv("LV_CROSSREF_MAILTO")
     monthly_budget_usd: float = float(os.getenv("LV_MONTHLY_BUDGET_USD", "0"))
+    # --- OCR (제3.2장 교체 가능한 OCR Adapter) ---
+    ocr_lang: str = os.getenv("LV_OCR_LANG", "kor+eng")
+    ocr_psm: int = int(os.getenv("LV_OCR_PSM", "6"))
+    ocr_dpi: int = int(os.getenv("LV_OCR_DPI", "200"))
+    ocr_min_confidence: float = float(os.getenv("LV_OCR_MIN_CONFIDENCE", "0.55"))
+    ocr_max_pages: int = int(os.getenv("LV_OCR_MAX_PAGES", "20"))
+    independent_ocr_pages: int = int(os.getenv("LV_INDEPENDENT_OCR_PAGES", "3"))
+    independent_ocr_mode: str = os.getenv("LV_INDEPENDENT_OCR", "auto")
+    """auto: 위험 신호가 있는 문서에만 수행 / always / off (제7.3장 독립 OCR)."""
+    # --- Worker (제3.1장) ---
+    celery_broker: str = os.getenv("LV_CELERY_BROKER", "")
+    celery_backend: str = os.getenv("LV_CELERY_BACKEND", "")
+    worker_mode: str = os.getenv("LV_WORKER_MODE", "auto")
+    """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
     rule_version: str = "2026.08.25"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = os.getenv("LV_SEAL_META", "1") not in ("0", "false")
