@@ -1,0 +1,14 @@
+[
+  {
+    "_synthetic": true,
+    "_notice": "테스트 전용 가상 데이터이다. 실제 판례가 아니며 실무에 사용해서는 안 된다.",
+    "case_number": "2099도99999",
+    "court": "대법원",
+    "decision_date": "2099-01-15",
+    "case_name": "테스트용 가상 사건",
+    "case_kind": "판결",
+    "holding": "테스트를 위한 가상의 판시사항이다. 이 문장은 인용문 대조 검증의 기준 문자열로만 사용된다.",
+    "summary": "테스트를 위한 가상의 판결요지이다.",
+    "detail_link": "local://synthetic"
+  }
+]

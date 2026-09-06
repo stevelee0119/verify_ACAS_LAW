@@ -1,0 +1,7 @@
+{
+  "_comment": "제22.3장: Provider 가격은 코드에 고정하지 않고 본 테이블로 관리한다. 단위 USD / 1M tokens.",
+  "openai": {"input": 2.0, "output": 8.0},
+  "anthropic": {"input": 3.0, "output": 15.0},
+  "gemini": {"input": 1.25, "output": 10.0},
+  "local": {"input": 0.0, "output": 0.0}
+}
