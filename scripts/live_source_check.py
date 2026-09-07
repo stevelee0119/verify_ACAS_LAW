@@ -58,6 +58,8 @@ class CheckResult:
     detail: str = ""
     records: Optional[int] = None
     fields: List[str] = field(default_factory=list)
+    requires_key: bool = False
+    """키가 필요한 Source의 실패는 키 문제일 가능성이 높아 판정을 가른다."""
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -92,6 +94,7 @@ def check_adapters(registry) -> List[CheckResult]:
                 status=str(state.status),
                 ok=state.status == AdapterStatus.READY,
                 detail=sanitize(state.note),
+                requires_key=state.requires_key,
             )
         )
     return out
@@ -150,6 +153,7 @@ def check_law_go_kr(registry) -> List[CheckResult]:
             detail=_diagnose(response),
             records=len(response.records),
             fields=_record_fields(response.records),
+            requires_key=True,
         )
     )
 
@@ -164,6 +168,7 @@ def check_law_go_kr(registry) -> List[CheckResult]:
             detail=_diagnose(response),
             records=len(response.records),
             fields=_record_fields(response.records),
+            requires_key=True,
         )
     )
     return out
@@ -185,6 +190,7 @@ def check_academic(registry) -> List[CheckResult]:
                 detail=_diagnose(response),
                 records=len(response.records),
                 fields=_record_fields(response.records),
+                requires_key=adapter.requires_key,
             )
         )
     return out
@@ -201,13 +207,13 @@ async def check_llm(include: bool) -> List[CheckResult]:
         configured = provider.config.has_key
         if not include:
             out.append(
-                CheckResult(name=name, category="llm", configured=configured,
+                CheckResult(name=name, category="llm", configured=configured, requires_key=True,
                             status="SKIPPED", ok=False,
                             detail=f"모델 {provider.config.model} — --with-llm 미지정으로 호출하지 않음"))
             continue
         if not provider.available:
             out.append(
-                CheckResult(name=name, category="llm", configured=configured,
+                CheckResult(name=name, category="llm", configured=configured, requires_key=True,
                             status="MISSING_KEY" if not configured else "DISABLED", ok=False,
                             detail=f"모델 {provider.config.model} — 키 없음 또는 비활성"))
             continue
@@ -224,6 +230,7 @@ async def check_llm(include: bool) -> List[CheckResult]:
                 name=name,
                 category="llm",
                 configured=configured,
+                requires_key=True,
                 status="OK" if response.ok else "ERROR",
                 ok=response.ok,
                 detail=(
@@ -238,6 +245,20 @@ async def check_llm(include: bool) -> List[CheckResult]:
 
 
 # ---------------------------------------------------------------------------
+def partition_failures(groups: Dict[str, List[CheckResult]]):
+    """치명적 실패(키 문제)와 경고(공개 Source 일시 장애)를 나눈다."""
+    fatal: List[CheckResult] = []
+    warnings: List[CheckResult] = []
+    for items in groups.values():
+        for item in items:
+            if item.category == "secret" or item.ok or item.status == "SKIPPED":
+                continue
+            if not item.configured:
+                continue
+            (fatal if item.requires_key else warnings).append(item)
+    return fatal, warnings
+
+
 def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
     lines: List[str] = ["# 외부 Source 실연동 점검 결과", ""]
     settings = get_settings()
@@ -274,15 +295,25 @@ def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
         mark = "✅" if item.ok else ("⚪" if item.status in ("SKIPPED", "MISSING_KEY") else "❌")
         lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
 
-    failures = [i for g in groups.values() for i in g
-                if i.category != "secret" and i.configured and not i.ok and i.status != "SKIPPED"]
+    fatal, warnings = partition_failures(groups)
     lines += ["", "## 판정", ""]
-    if failures:
-        lines.append(f"❌ 키가 설정되었는데도 실패한 항목 **{len(failures)}건**")
-        for item in failures:
+    if fatal:
+        lines.append(f"❌ **키가 설정되었는데도 실패한 항목 {len(fatal)}건** — 키 값·권한·모델 ID를 확인한다.")
+        for item in fatal:
             lines.append(f"- `{item.name}` — {item.status}: {item.detail}")
-    else:
+        lines.append("")
+    if warnings:
+        lines.append(
+            f"⚠️ 키가 필요 없는 공개 Source {len(warnings)}건이 실패했다. "
+            "공용 러너 IP의 요청한도·일시 장애일 수 있으므로 판정을 실패로 보지 않는다."
+        )
+        for item in warnings:
+            lines.append(f"- `{item.name}` — {item.status}: {item.detail}")
+        lines.append("")
+    if not fatal and not warnings:
         lines.append("✅ 설정된 Source가 모두 정상 응답했다. 키 미설정 항목은 설계대로 UNVERIFIED로 남는다.")
+    elif not fatal:
+        lines.append("✅ 키가 설정된 Source는 모두 정상 응답했다.")
     lines += [
         "",
         "> 비밀값은 어떤 항목에도 출력되지 않는다. 존재 여부와 길이만 기록한다.",
@@ -320,9 +351,8 @@ def main() -> int:
         payload = {key: [item.to_dict() for item in items] for key, items in groups.items()}
         Path(args.json_out).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    failures = [i for g in groups.values() for i in g
-                if i.category != "secret" and i.configured and not i.ok and i.status != "SKIPPED"]
-    return 1 if (failures and args.strict) else 0
+    fatal, _warnings = partition_failures(groups)
+    return 1 if (fatal and args.strict) else 0
 
 
 if __name__ == "__main__":

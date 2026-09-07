@@ -132,7 +132,12 @@ def test_audit_events_are_append_only_in_db():
             text("select count(*) from pg_trigger where tgname='audit_events_no_update_delete'")
         ).scalar_one()
     if not has_trigger:
-        pytest.skip("마이그레이션으로 생성되는 트리거이다 (create_all 경로에서는 없음)")
+        # create_all 경로에는 트리거가 없다. 마이그레이션을 적용한 환경(CI)에서는
+        # 반드시 있어야 하므로 LV_REQUIRE_AUDIT_TRIGGER=1이면 실패시킨다.
+        message = "감사추적 append-only 트리거가 없다. alembic upgrade head를 적용했는지 확인한다."
+        if os.getenv("LV_REQUIRE_AUDIT_TRIGGER") == "1":
+            pytest.fail(message)
+        pytest.skip(message + " (create_all 경로에서는 정상)")
 
     session = get_session_factory()()
     try:

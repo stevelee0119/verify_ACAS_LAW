@@ -39,6 +39,9 @@ jobs:
       # 결정론적 엔진만으로 통과해야 한다는 것이 이 잡의 전제이다.
       LV_ALLOW_NETWORK: "0"
       LV_PSEUDONYM_SECRET: ci-only-not-a-real-secret
+      # 마이그레이션으로 만들어지는 감사추적 append-only 트리거가 없으면
+      # 건너뛰지 말고 실패시킨다.
+      LV_REQUIRE_AUDIT_TRIGGER: "1"
 
     steps:
       - uses: actions/checkout@v4
@@ -72,19 +75,3 @@ jobs:
           LV_TEST_DATABASE_URL: postgresql+psycopg://legal:legal@localhost:5432/legal_verifier
           LV_TEST_CELERY_BROKER: redis://localhost:6379/0
         run: pytest -q
-
-      - name: 감사추적 append-only 제약 확인
-        env:
-          PGPASSWORD: legal
-        run: |
-          set +e
-          OUT=$(psql -h localhost -U legal -d legal_verifier \
-            -c "insert into audit_events (sequence,event_type,previous_hash,event_hash,created_at)
-                values (990001,'UPLOAD','0','ci_probe_${{ github.run_id }}',now());" 2>&1)
-          echo "$OUT"
-          OUT=$(psql -h localhost -U legal -d legal_verifier \
-            -c "update audit_events set event_type='TAMPERED' where event_hash='ci_probe_${{ github.run_id }}';" 2>&1)
-          echo "$OUT"
-          echo "$OUT" | grep -q "append-only" \
-            && echo "✅ UPDATE가 DB 트리거로 거부되었다" \
-            || { echo "❌ append-only 트리거가 동작하지 않는다"; exit 1; }
