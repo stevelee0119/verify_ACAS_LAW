@@ -1,0 +1,81 @@
+name: 외부 Source 실연동 점검
+
+# 이그레스가 열린 러너에서 실제 API를 호출해 Secret과 연동 상태를 확인한다.
+# 실행 방법
+#  1) Actions 탭 → "외부 Source 실연동 점검" → Run workflow
+#     (workflow_dispatch 버튼은 워크플로 파일이 기본 브랜치에 있어야 나타난다)
+#  2) 기본 브랜치에 병합하기 전이라면, 커밋 메시지에 [live-check] 를 넣어 push
+on:
+  workflow_dispatch:
+    inputs:
+      with_llm:
+        description: "LLM Provider를 실제로 1회 호출한다 (소액 과금)"
+        type: boolean
+        default: false
+      strict:
+        description: "키가 설정된 Source가 실패하면 잡을 실패시킨다"
+        type: boolean
+        default: true
+  push:
+    branches: ["main", "claude/**"]
+
+concurrency:
+  group: live-source-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Secret·Adapter·실호출 점검
+    # push로 들어온 경우에는 커밋 메시지에 [live-check]가 있을 때만 돈다.
+    # 포크에서 온 실행에는 Secret이 주입되지 않으므로 제외한다.
+    if: >-
+      github.event.repository.fork == false &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[live-check]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    env:
+      # Secret 이름이 다르면 아래 우변만 바꾸면 된다.
+      LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
+      LV_KCI_KEY: ${{ secrets.LV_KCI_KEY }}
+      LV_CROSSREF_MAILTO: ${{ secrets.LV_CROSSREF_MAILTO }}
+      LV_SEMANTIC_SCHOLAR_KEY: ${{ secrets.LV_SEMANTIC_SCHOLAR_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # 모델 ID는 공급자 사정으로 바뀌므로 Variables로 덮어쓸 수 있게 둔다.
+      LV_OPENAI_MODEL: ${{ vars.LV_OPENAI_MODEL }}
+      LV_ANTHROPIC_MODEL: ${{ vars.LV_ANTHROPIC_MODEL }}
+      LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
+      LV_ALLOW_NETWORK: "1"
+      LV_HTTP_TIMEOUT: "20"
+      LV_PSEUDONYM_SECRET: live-check-only
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 실연동 점검
+        run: |
+          python scripts/live_source_check.py \
+            --json-out live-source-check.json \
+            ${{ (github.event_name == 'workflow_dispatch' && inputs.with_llm) && '--with-llm' || '' }} \
+            ${{ (github.event_name != 'workflow_dispatch' || inputs.strict) && '--strict' || '' }}
+
+      - name: 결과 아티팩트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-source-check
+          path: live-source-check.json
+          retention-days: 14

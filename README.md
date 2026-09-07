@@ -134,6 +134,31 @@ MM-2·MM-3 원문은 봉인 상태로 저장된다. 열람은 사용자의 명�
 관할별 입장 차이(ABA Formal Opinion 06-442, NYSBA Opinion 749)를 경고문으로 안내하되
 시스템은 법적·윤리적 결론을 내리지 않는다.
 
+## GitHub Actions
+
+| 워크플로 | 트리거 | 하는 일 |
+|---|---|---|
+| `CI` | push·PR | SQLite와 PostgreSQL/pgvector+Redis 양쪽에서 전체 테스트, 감사추적 append-only 트리거 확인. Secret을 쓰지 않는다. |
+| `외부 Source 실연동 점검` | 수동 실행 또는 커밋 메시지에 `[live-check]` | Secret 주입 상태 → Adapter 상태 → **실제 API 호출** → LLM Provider 순으로 점검하고 요약표를 남긴다. |
+
+실연동 점검이 기대하는 Secret 이름이다. 다르게 등록했다면 워크플로의 `env:` 우변만 바꾸면 된다.
+
+```
+LV_LAW_GO_KR_OC   LV_KCI_KEY   LV_CROSSREF_MAILTO   LV_SEMANTIC_SCHOLAR_KEY
+OPENAI_API_KEY    ANTHROPIC_API_KEY   GEMINI_API_KEY
+```
+
+모델 ID는 공급자 사정으로 바뀌므로 Repository **Variables**(`LV_ANTHROPIC_MODEL` 등)로 덮어쓸 수 있다.
+
+호출이 성공했는데 정규화가 0건이면 응답 구조를 함께 보고하므로, 한 번의 실행으로
+매핑 불일치 지점을 알 수 있다. **비밀값은 어떤 경로로도 출력하지 않는다.**
+존재 여부와 길이만 기록한다.
+
+```bash
+# 로컬에서도 같은 점검을 할 수 있다
+python scripts/live_source_check.py --with-llm --strict
+```
+
 ## Release Gate
 
 `tests/test_release_gates.py`가 제24.3장과 부록 C를 코드로 강제한다.

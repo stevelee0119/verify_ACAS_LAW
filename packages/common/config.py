@@ -9,7 +9,23 @@ from typing import Any, Dict, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG_DIR = REPO_ROOT / "config"
-DATA_DIR = Path(os.getenv("LV_DATA_DIR", REPO_ROOT / "data"))
+def data_dir() -> Path:
+    """LV_DATA_DIR을 매번 읽는다. 설정 초기화 후 변경이 반영되어야 한다."""
+    return Path(os.getenv("LV_DATA_DIR") or (REPO_ROOT / "data"))
+
+
+DATA_DIR = data_dir()
+
+
+FALSE_VALUES = {"0", "false", "no", "off", ""}
+
+
+def _flag(name: str, default: bool) -> bool:
+    """환경변수를 불리언으로 읽는다. 미설정이면 default를 쓴다."""
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() not in FALSE_VALUES
 
 
 def _load_json(path: Path) -> Dict[str, Any]:
@@ -42,42 +58,48 @@ class ProviderConfig:
 class Settings:
     app_name: str = "Legal Document Verification Platform"
     version: str = "0.2.0"
-    database_url: str = field(default_factory=lambda: os.getenv("LV_DATABASE_URL", f"sqlite:///{DATA_DIR}/legal_verifier.db"))
-    storage_root: Path = field(default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT", str(DATA_DIR / "storage"))))
-    max_upload_mb: int = int(os.getenv("LV_MAX_UPLOAD_MB", "80"))
-    default_external_ai_policy: str = os.getenv("LV_DEFAULT_AI_POLICY", "MASKED")
-    default_profile: str = os.getenv("LV_DEFAULT_PROFILE", "STANDARD")
-    pseudonym_secret: str = os.getenv("LV_PSEUDONYM_SECRET", "dev-only-not-for-production")
-    allow_network: bool = os.getenv("LV_ALLOW_NETWORK", "1") not in ("0", "false", "False")
-    http_timeout: float = float(os.getenv("LV_HTTP_TIMEOUT", "12"))
-    law_go_kr_oc: Optional[str] = os.getenv("LV_LAW_GO_KR_OC")
-    kci_key: Optional[str] = os.getenv("LV_KCI_KEY")
-    semantic_scholar_key: Optional[str] = os.getenv("LV_SEMANTIC_SCHOLAR_KEY")
-    crossref_mailto: Optional[str] = os.getenv("LV_CROSSREF_MAILTO")
-    monthly_budget_usd: float = float(os.getenv("LV_MONTHLY_BUDGET_USD", "0"))
+    database_url: str = field(
+        default_factory=lambda: os.getenv("LV_DATABASE_URL") or f"sqlite:///{data_dir()}/legal_verifier.db"
+    )
+    storage_root: Path = field(
+        default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
+    )
+    max_upload_mb: int = field(default_factory=lambda: int(os.getenv("LV_MAX_UPLOAD_MB", "80")))
+    default_external_ai_policy: str = field(default_factory=lambda: os.getenv("LV_DEFAULT_AI_POLICY", "MASKED"))
+    default_profile: str = field(default_factory=lambda: os.getenv("LV_DEFAULT_PROFILE", "STANDARD"))
+    pseudonym_secret: str = field(
+        default_factory=lambda: os.getenv("LV_PSEUDONYM_SECRET", "dev-only-not-for-production")
+    )
+    allow_network: bool = field(default_factory=lambda: _flag("LV_ALLOW_NETWORK", True))
+    http_timeout: float = field(default_factory=lambda: float(os.getenv("LV_HTTP_TIMEOUT", "12")))
+    law_go_kr_oc: Optional[str] = field(default_factory=lambda: os.getenv("LV_LAW_GO_KR_OC"))
+    kci_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_KCI_KEY"))
+    semantic_scholar_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_SEMANTIC_SCHOLAR_KEY"))
+    crossref_mailto: Optional[str] = field(default_factory=lambda: os.getenv("LV_CROSSREF_MAILTO"))
+    monthly_budget_usd: float = field(default_factory=lambda: float(os.getenv("LV_MONTHLY_BUDGET_USD", "0")))
     # --- OCR (제3.2장 교체 가능한 OCR Adapter) ---
-    ocr_lang: str = os.getenv("LV_OCR_LANG", "kor+eng")
-    ocr_psm: int = int(os.getenv("LV_OCR_PSM", "6"))
-    ocr_dpi: int = int(os.getenv("LV_OCR_DPI", "200"))
-    ocr_min_confidence: float = float(os.getenv("LV_OCR_MIN_CONFIDENCE", "0.55"))
-    ocr_max_pages: int = int(os.getenv("LV_OCR_MAX_PAGES", "20"))
-    independent_ocr_pages: int = int(os.getenv("LV_INDEPENDENT_OCR_PAGES", "3"))
-    independent_ocr_mode: str = os.getenv("LV_INDEPENDENT_OCR", "auto")
+    ocr_lang: str = field(default_factory=lambda: os.getenv("LV_OCR_LANG", "kor+eng"))
+    ocr_psm: int = field(default_factory=lambda: int(os.getenv("LV_OCR_PSM", "6")))
+    ocr_dpi: int = field(default_factory=lambda: int(os.getenv("LV_OCR_DPI", "200")))
+    ocr_min_confidence: float = field(default_factory=lambda: float(os.getenv("LV_OCR_MIN_CONFIDENCE", "0.55")))
+    ocr_max_pages: int = field(default_factory=lambda: int(os.getenv("LV_OCR_MAX_PAGES", "20")))
+    independent_ocr_pages: int = field(default_factory=lambda: int(os.getenv("LV_INDEPENDENT_OCR_PAGES", "3")))
+    independent_ocr_mode: str = field(default_factory=lambda: os.getenv("LV_INDEPENDENT_OCR", "auto"))
     """auto: 위험 신호가 있는 문서에만 수행 / always / off (제7.3장 독립 OCR)."""
     # --- Worker (제3.1장) ---
-    celery_broker: str = os.getenv("LV_CELERY_BROKER", "")
-    celery_backend: str = os.getenv("LV_CELERY_BACKEND", "")
-    worker_mode: str = os.getenv("LV_WORKER_MODE", "auto")
+    celery_broker: str = field(default_factory=lambda: os.getenv("LV_CELERY_BROKER", ""))
+    celery_backend: str = field(default_factory=lambda: os.getenv("LV_CELERY_BACKEND", ""))
+    worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
     rule_version: str = "2026.08.25"
     prompt_version: str = "v0.2"
-    seal_meta_message_content: bool = os.getenv("LV_SEAL_META", "1") not in ("0", "false")
-    allow_sealed_reveal: bool = os.getenv("LV_ALLOW_SEALED_REVEAL", "1") not in ("0", "false")
+    seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
+    allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     pricing: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        data_dir().mkdir(parents=True, exist_ok=True)
         self.storage_root.mkdir(parents=True, exist_ok=True)
         if not self.providers:
             self.providers = _default_providers()
@@ -90,10 +112,18 @@ class Settings:
 
 
 def _default_providers() -> Dict[str, ProviderConfig]:
+    """providers.json을 읽고 LV_<PROVIDER>_MODEL 환경변수로 모델을 덮어쓴다.
+
+    모델 ID는 공급자 사정으로 바뀌므로 배포본 수정 없이 교체할 수 있어야 한다.
+    """
     raw = _load_json(CONFIG_DIR / "providers.json")
     out: Dict[str, ProviderConfig] = {}
     for name, cfg in raw.items():
-        out[name] = ProviderConfig(name=name, **cfg)
+        config = ProviderConfig(name=name, **cfg)
+        override = os.getenv(f"LV_{name.upper()}_MODEL")
+        if override:
+            config.model = override
+        out[name] = config
     return out
 
 
