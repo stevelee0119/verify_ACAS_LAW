@@ -28,6 +28,32 @@ def _flag(name: str, default: bool) -> bool:
     return raw.strip().lower() not in FALSE_VALUES
 
 
+# PaaS는 보통 DATABASE_URL·REDIS_URL이라는 이름으로 접속정보를 주입한다.
+# 또 PostgreSQL URL을 postgres:// 형식으로 주는데 SQLAlchemy는 이를 인식하지 못하고,
+# postgresql:// 은 기본 드라이버로 psycopg2를 찾는다(본 프로젝트는 psycopg3를 쓴다).
+# 배포처마다 손으로 고치지 않아도 되도록 여기서 정규화한다.
+def normalize_database_url(url: str) -> str:
+    if not url:
+        return url
+    if url.startswith("postgres://"):
+        url = "postgresql://" + url[len("postgres://") :]
+    if url.startswith("postgresql://"):
+        url = "postgresql+psycopg://" + url[len("postgresql://") :]
+    return url
+
+
+def resolve_database_url() -> str:
+    raw = os.getenv("LV_DATABASE_URL") or os.getenv("DATABASE_URL") or ""
+    if raw:
+        return normalize_database_url(raw)
+    return f"sqlite:///{data_dir()}/legal_verifier.db"
+
+
+def resolve_broker_url() -> str:
+    """LV_CELERY_BROKER가 없으면 PaaS가 주는 REDIS_URL을 쓴다."""
+    return os.getenv("LV_CELERY_BROKER") or os.getenv("REDIS_URL") or ""
+
+
 def _load_json(path: Path) -> Dict[str, Any]:
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
@@ -58,9 +84,7 @@ class ProviderConfig:
 class Settings:
     app_name: str = "Legal Document Verification Platform"
     version: str = "0.2.0"
-    database_url: str = field(
-        default_factory=lambda: os.getenv("LV_DATABASE_URL") or f"sqlite:///{data_dir()}/legal_verifier.db"
-    )
+    database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
     )
@@ -87,8 +111,10 @@ class Settings:
     independent_ocr_mode: str = field(default_factory=lambda: os.getenv("LV_INDEPENDENT_OCR", "auto"))
     """auto: 위험 신호가 있는 문서에만 수행 / always / off (제7.3장 독립 OCR)."""
     # --- Worker (제3.1장) ---
-    celery_broker: str = field(default_factory=lambda: os.getenv("LV_CELERY_BROKER", ""))
-    celery_backend: str = field(default_factory=lambda: os.getenv("LV_CELERY_BACKEND", ""))
+    celery_broker: str = field(default_factory=resolve_broker_url)
+    celery_backend: str = field(
+        default_factory=lambda: os.getenv("LV_CELERY_BACKEND") or resolve_broker_url()
+    )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
     rule_version: str = "2026.08.25"

@@ -180,3 +180,53 @@ def test_vector_similarity_search_works(owned_document):
         {"doc": document_id, "q": query},
     ).all()
     assert rows[0][0] == "blk_near"
+
+
+# --- PaaS 접속정보 정규화 -------------------------------------------------
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        # Render·Heroku 계열이 주는 형식
+        ("postgres://u:p@h:5432/db", "postgresql+psycopg://u:p@h:5432/db"),
+        # 드라이버 미지정 형식 (기본값 psycopg2를 찾아 실패한다)
+        ("postgresql://u:p@h:5432/db", "postgresql+psycopg://u:p@h:5432/db"),
+        # 이미 올바른 형식은 그대로 둔다
+        ("postgresql+psycopg://u:p@h/db", "postgresql+psycopg://u:p@h/db"),
+        ("sqlite:///x.db", "sqlite:///x.db"),
+        ("", ""),
+    ],
+)
+def test_database_url_normalization(raw, expected):
+    from packages.common.config import normalize_database_url
+
+    assert normalize_database_url(raw) == expected
+
+
+def test_paas_standard_env_names_are_honoured(monkeypatch):
+    """PaaS가 주입하는 DATABASE_URL·REDIS_URL을 별도 매핑 없이 인식한다."""
+    from packages.common import config
+
+    monkeypatch.delenv("LV_DATABASE_URL", raising=False)
+    monkeypatch.delenv("LV_CELERY_BROKER", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgres://u:p@h:5432/db")
+    monkeypatch.setenv("REDIS_URL", "redis://cache:6379")
+    config.reset_settings()
+    try:
+        settings = config.get_settings()
+        assert settings.database_url == "postgresql+psycopg://u:p@h:5432/db"
+        assert settings.celery_broker == "redis://cache:6379"
+        assert settings.celery_backend == "redis://cache:6379"
+    finally:
+        config.reset_settings()
+
+
+def test_explicit_lv_vars_take_precedence(monkeypatch):
+    from packages.common import config
+
+    monkeypatch.setenv("DATABASE_URL", "postgres://ignored:p@h/db")
+    monkeypatch.setenv("LV_DATABASE_URL", "postgresql+psycopg://chosen:p@h/db")
+    config.reset_settings()
+    try:
+        assert "chosen" in config.get_settings().database_url
+    finally:
+        config.reset_settings()

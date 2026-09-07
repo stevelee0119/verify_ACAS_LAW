@@ -189,6 +189,26 @@ python scripts/verify_cli.py --input samples --out out \
 
 **실제 사건 문서를 공개 저장소에 커밋하지 말 것.** `samples/`는 `.gitignore` 대상이다.
 
+## Render 배포
+
+```
+# Docker 런타임 (OCR 포함, 권장)
+sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+
+# Native Python 런타임 (OCR 없음)
+alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
+
+# Background Worker (선택)
+celery -A workers.celery_app worker -l info -Q verification,report --concurrency 2
+```
+
+`render.yaml` 블루프린트로 웹 서비스·PostgreSQL·디스크·환경변수를 한 번에 만들 수 있다.
+Render가 주는 `postgres://` 형식 URL은 코드가 `postgresql+psycopg://`로 정규화하므로
+Internal Database URL을 그대로 붙여넣어도 된다.
+
+**영구 디스크 없이 배포하면 업로드 원본이 재배포 때 사라져 Chain of Custody가
+성립하지 않는다.** 자세한 내용은 [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md).
+
 ## Release Gate
 
 `tests/test_release_gates.py`가 제24.3장과 부록 C를 코드로 강제한다.
