@@ -1,0 +1,32 @@
+{
+  "name": "법률문서 검증 플랫폼",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+  },
+  "postCreateCommand": "bash .devcontainer/setup.sh",
+  "forwardPorts": [8000],
+  "portsAttributes": {
+    "8000": { "label": "검증 콘솔", "onAutoForward": "openBrowser" }
+  },
+  "remoteEnv": {
+    "PYTHONPATH": "${containerWorkspaceFolder}",
+    "LV_DATA_DIR": "${containerWorkspaceFolder}/data",
+    "LV_PSEUDONYM_SECRET": "codespaces-dev-only-교체필요",
+    "LV_LAW_GO_KR_OC": "${localEnv:LV_LAW_GO_KR_OC}",
+    "LV_KCI_KEY": "${localEnv:LV_KCI_KEY}",
+    "LV_CROSSREF_MAILTO": "${localEnv:LV_CROSSREF_MAILTO}",
+    "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}",
+    "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
+    "GEMINI_API_KEY": "${localEnv:GEMINI_API_KEY}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-python.python", "ms-python.vscode-pylance"],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.testing.pytestEnabled": true
+      }
+    }
+  }
+}

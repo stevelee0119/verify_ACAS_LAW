@@ -134,12 +134,26 @@ MM-2·MM-3 원문은 봉인 상태로 저장된다. 열람은 사용자의 명�
 관할별 입장 차이(ABA Formal Opinion 06-442, NYSBA Opinion 749)를 경고문으로 안내하되
 시스템은 법적·윤리적 결론을 내리지 않는다.
 
-## GitHub Actions
+## GitHub에서 실행하기
 
 | 워크플로 | 트리거 | 하는 일 |
 |---|---|---|
 | `CI` | push·PR | SQLite와 PostgreSQL/pgvector+Redis 양쪽에서 전체 테스트, 감사추적 append-only 트리거 확인. Secret을 쓰지 않는다. |
-| `외부 Source 실연동 점검` | 수동 실행 또는 커밋 메시지에 `[live-check]` | Secret 주입 상태 → Adapter 상태 → **실제 API 호출** → LLM Provider 순으로 점검하고 요약표를 남긴다. |
+| `외부 Source 실연동 점검` | 수동 또는 `[live-check]` 커밋 | Secret 주입 상태 → Adapter 상태 → **실제 API 호출** → LLM Provider 순으로 점검한다. |
+| `문서 검증 실행` | 수동 또는 `[run-verify]` 커밋 | **검증 파이프라인을 끝까지 돌리고** 보고서 6종을 아티팩트로 남긴다. |
+
+`workflow_dispatch` 버튼은 워크플로 파일이 **기본 브랜치에 있어야** Actions 탭에 나타난다.
+병합 전이라면 커밋 메시지 트리거를 쓴다.
+
+```bash
+git commit --allow-empty -m "연동 확인 [live-check]"
+git commit --allow-empty -m "검증 실행 [run-verify]"
+```
+
+Actions는 잡이 끝나면 사라지는 실행기이므로 **웹 콘솔을 상시 띄우는 용도로는 쓸 수 없다.**
+UI를 직접 다루려면 Codespaces를 쓴다. `.devcontainer/`가 OCR·의존성·포트 8000을
+자동 구성하므로, 컨테이너가 뜬 뒤 `uvicorn apps.api.main:app --host 0.0.0.0 --port 8000`만 실행하면 된다.
+API Key는 **Settings → Codespaces → Repository secrets**에 등록하면 자동 주입된다.
 
 실연동 점검이 기대하는 Secret 이름이다. 다르게 등록했다면 워크플로의 `env:` 우변만 바꾸면 된다.
 
@@ -158,6 +172,22 @@ OPENAI_API_KEY    ANTHROPIC_API_KEY   GEMINI_API_KEY
 # 로컬에서도 같은 점검을 할 수 있다
 python scripts/live_source_check.py --with-llm --strict
 ```
+
+### CLI 일괄 검증
+
+서버 없이 파이프라인을 돌린다. CI 실행과 폐쇄망 일괄 처리에 쓴다.
+
+```bash
+python scripts/make_sample_documents.py --out samples   # 예시 문서 생성(선택)
+python scripts/verify_cli.py --input samples --out out \
+    --project-name "손해배상 사건" --case-number 2026가합1234 --incident-date 2015-06-01
+```
+
+`out/`에 PDF 검증보고서·Highlight PDF·XLSX·CSV·JSON·Chain of Custody Manifest와
+요약 텍스트가 생성된다. `--fail-on CRITICAL`을 주면 해당 등급 이상 Finding이 있을 때
+종료코드 1을 반환하므로 파이프라인 게이트로 쓸 수 있다.
+
+**실제 사건 문서를 공개 저장소에 커밋하지 말 것.** `samples/`는 `.gitignore` 대상이다.
 
 ## Release Gate
 
