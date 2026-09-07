@@ -25,6 +25,7 @@ PERCENT_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*%")
 UNIT_MULTIPLIER = {None: 1, "천": 1_000, "만": 10_000, "백만": 1_000_000, "천만": 10_000_000, "억": 100_000_000}
 
 TOLERANCE = Decimal("0.01")
+MIN_LINE_ITEMS = 2  # 줄 단위 내역은 최소 2건이 모여야 합계를 검산한다
 
 
 @dataclass
@@ -92,11 +93,59 @@ class CalculationEngine:
 
     def verify_document(self, doc: NormalizedDocument) -> List[Finding]:
         findings: List[Finding] = []
+        seen_blocks: set = set()
         for block in doc.body_blocks():
             if block.block_type == "table":
                 continue  # 표는 _verify_table_totals에서 행 단위로 검산한다
-            findings.extend(self._verify_block(doc, block))
+            found = self._verify_block(doc, block)
+            if found:
+                seen_blocks.add(block.block_id)
+            findings.extend(found)
         findings.extend(self._verify_table_totals(doc))
+        # 실무 서면은 항목이 줄마다 나뉘므로 줄 단위 내역-합계도 검산한다
+        findings.extend(self._verify_line_items(doc, seen_blocks))
+        return findings
+
+    def _verify_line_items(self, doc: NormalizedDocument, seen_blocks: set) -> List[Finding]:
+        """연속된 금액 줄 다음에 오는 합계 줄을 검산한다.
+
+        같은 면에서 금액이 하나씩 적힌 줄이 연이어 나오고 그 뒤에 합계 줄이 오는
+        서면 표준 형식을 대상으로 한다. 중간에 금액 없는 줄이 끼면 묶음을 끊어
+        서로 무관한 금액을 합산하지 않는다.
+        """
+        findings: List[Finding] = []
+        for page in doc.pages:
+            blocks = [
+                b for b in page.blocks
+                if b.visible and b.block_type != "table" and b.text.strip()
+                and b.source_layer in ("visible_text", "ocr_layer")
+            ]
+            run: List[Amount] = []
+            for block in blocks:
+                if block.block_id in seen_blocks:
+                    run = []
+                    continue
+                amounts = parse_amounts(block.text, block_id=block.block_id, page=block.page)
+                is_total = bool(TOTAL_LABEL_RE.search(block.text))
+
+                if is_total and amounts and len(run) >= MIN_LINE_ITEMS:
+                    check = check_sum(run, amounts[-1])
+                    if not check.matches:
+                        excerpt = "\n".join(
+                            [f"{a.raw}" for a in run] + [f"{TOTAL_LABEL_RE.search(block.text).group(0)} {amounts[-1].raw}"]
+                        )
+                        findings.append(self._mismatch_finding(doc, check, block.block_id, block.page, excerpt))
+                    run = []
+                    continue
+
+                if is_total:
+                    run = []
+                elif len(amounts) == 1:
+                    run.append(amounts[0])
+                elif amounts:
+                    run = []  # 한 줄에 금액이 여럿이면 내역 줄로 보지 않는다
+                else:
+                    run = []  # 금액 없는 줄에서 묶음을 끊는다
         return findings
 
     def _verify_block(self, doc: NormalizedDocument, block) -> List[Finding]:
