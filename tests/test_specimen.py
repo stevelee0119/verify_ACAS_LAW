@@ -130,3 +130,42 @@ def test_standard_contract_clauses_are_not_flagged(line):
 def test_body_that_was_never_read_yields_nothing():
     """본문이 없으면 아무 판단도 하지 않는다(빈 문서에 근거 없는 결론 금지)."""
     assert scan_specimen(_doc([])) == []
+
+
+# --- 한국어 OCR 출력 대응 -------------------------------------------------
+OCR_LEASE = [
+    # 실제 tesseract(kor) 출력. 글자 사이에 공백이 들어간다.
+    "가 상 의 예시 문 서 입니다 ㆍ 실 존 인 물 ㆍ 부 동 산 과 무관 ㆍ 법적 효력 없음",
+    "임대인 김 민 석 과 임차인 박 지 현 은 아래 표시 부 동 산 에 관하여",
+    "800101-1234567( 예 시)",
+    "010-2345-6789",
+    "※ 본 문서는 가 상 의 인물ㆍ주소ㆍ번호로 작성된 예시( 연습용 ) 서식이며, 실제 법적 효력이 없습니다.",
+]
+
+
+def test_specimen_survives_korean_ocr_spacing():
+    """한국어 OCR이 글자 사이에 넣는 공백 때문에 탐지를 놓치면 안 된다.
+
+    실제 이미지 입력을 tesseract(kor)로 읽으면 "가 상 의 예시 문 서"처럼 나온다.
+    원문 그대로 대조하면 고지 문구 6종 중 4종을 놓친다.
+    """
+    findings = scan_specimen(_doc(OCR_LEASE))
+    types = {f.type for f in findings}
+    assert FindingType.SPECIMEN_DOCUMENT_DECLARED in types, "공백이 섞인 고지 문구를 놓쳤다"
+    assert FindingType.INVALID_IDENTIFIER in types
+
+
+def test_declaration_spanning_two_lines_is_detected():
+    """줄바꿈으로 잘린 고지 문구도 페이지 단위 검사로 잡는다."""
+    findings = scan_specimen(_doc(["본 문서는 가상의", "예시 서식이며 법적 효력이 없습니다."]))
+    assert [f for f in findings if f.type == FindingType.SPECIMEN_DOCUMENT_DECLARED]
+
+
+def test_ocr_spacing_does_not_create_false_positives():
+    """공백을 지우고 본다고 해서 평범한 문장이 걸리면 안 된다."""
+    lines = [
+        "임 대 인 과 임 차 인 은 아래 표시 부 동 산 에 관하여 임 대 차 계 약 을 체 결 한다.",
+        "제 2 조 ( 존 속 기 간 ) 임대차 기간은 2028년 10월 31일까지로 한다.",
+        "실제 발생한 손해에 대하여 배상을 청구할 수 있다.",
+    ]
+    assert scan_specimen(_doc(lines)) == []
