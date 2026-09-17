@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 from packages.common.enums import AuditEventType
 
@@ -51,24 +52,43 @@ class AuditEvent:
         }
 
 
+class AuditChainConflict(RuntimeError):
+    """동시 기록 경합을 해소하지 못했다. 체인을 깨뜨리는 대신 실패시킨다."""
+
+
 class AuditSink(Protocol):
     def append(self, event: AuditEvent) -> None: ...
     def last(self) -> Optional[AuditEvent]: ...
     def all(self) -> List[AuditEvent]: ...
 
+    # 선택 규약. 구현하면 "직전 이벤트 조회 → 해시 계산 → 적재"를 Sink가
+    # 하나의 임계구역으로 묶는다. 이 구간이 쪼개지면 두 기록자가 같은
+    # previous_hash를 읽어 체인이 갈라진다.
+    # def append_chained(self, build: Callable[[Optional[AuditEvent]], AuditEvent]) -> AuditEvent: ...
+
 
 class InMemoryAuditSink:
     def __init__(self) -> None:
         self._events: List[AuditEvent] = []
+        self._lock = threading.Lock()
 
     def append(self, event: AuditEvent) -> None:
-        self._events.append(event)
+        with self._lock:
+            self._events.append(event)
 
     def last(self) -> Optional[AuditEvent]:
-        return self._events[-1] if self._events else None
+        with self._lock:
+            return self._events[-1] if self._events else None
 
     def all(self) -> List[AuditEvent]:
-        return list(self._events)
+        with self._lock:
+            return list(self._events)
+
+    def append_chained(self, build):
+        with self._lock:
+            event = build(self._events[-1] if self._events else None)
+            self._events.append(event)
+            return event
 
 
 class AuditChain:
@@ -86,27 +106,35 @@ class AuditChain:
         project_id: Optional[str] = None,
         document_id: Optional[str] = None,
     ) -> AuditEvent:
-        last = self.sink.last()
-        previous_hash = last.event_hash if last else GENESIS_HASH
-        sequence = (last.sequence + 1) if last else 1
-        body = {
-            "sequence": sequence,
-            "event_type": str(event_type),
-            "actor": actor,
-            "project_id": project_id,
-            "document_id": document_id,
-            "payload": payload,
-        }
-        event = AuditEvent(
-            sequence=sequence,
-            event_type=event_type,
-            payload=payload,
-            previous_hash=previous_hash,
-            event_hash=compute_event_hash(previous_hash, body),
-            actor=actor,
-            project_id=project_id,
-            document_id=document_id,
-        )
+        def build(last: Optional[AuditEvent]) -> AuditEvent:
+            previous_hash = last.event_hash if last else GENESIS_HASH
+            sequence = (last.sequence + 1) if last else 1
+            body = {
+                "sequence": sequence,
+                "event_type": str(event_type),
+                "actor": actor,
+                "project_id": project_id,
+                "document_id": document_id,
+                "payload": payload,
+            }
+            return AuditEvent(
+                sequence=sequence,
+                event_type=event_type,
+                payload=payload,
+                previous_hash=previous_hash,
+                event_hash=compute_event_hash(previous_hash, body),
+                actor=actor,
+                project_id=project_id,
+                document_id=document_id,
+            )
+
+        # 직전 이벤트를 읽고 적재하기까지가 하나의 임계구역이어야 한다.
+        # 이 사이에 다른 기록자가 끼어들면 두 이벤트가 같은 previous_hash를
+        # 물고 들어가 체인이 갈라진다. Sink가 그 보장을 제공하면 위임한다.
+        chained: Optional[Callable[..., AuditEvent]] = getattr(self.sink, "append_chained", None)
+        if chained is not None:
+            return chained(build)
+        event = build(self.sink.last())
         self.sink.append(event)
         return event
 
