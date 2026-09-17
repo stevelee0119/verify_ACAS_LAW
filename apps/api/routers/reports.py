@@ -13,6 +13,7 @@ from packages.common.enums import AuditEventType
 from packages.common.storage import get_storage, sha256_bytes
 from packages.report_engine import build_highlight_pdf, build_report_pdf, to_csv, to_json, to_manifest, to_xlsx
 
+from ..auth import accessible_report, current_user, editable_project, is_editor
 from ..db import (
     Document,
     EvidenceRow,
@@ -20,6 +21,7 @@ from ..db import (
     FindingRow,
     Project,
     ReportRow,
+    User,
     VerificationRun,
     get_db,
 )
@@ -151,10 +153,12 @@ def _load_run_view(session: Session, run: VerificationRun, reveal_sealed: bool) 
 
 
 @router.post("/projects/{project_id}/reports", status_code=201)
-def create_report(project_id: str, payload: ReportRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
+def create_report(project_id: str, payload: ReportRequest,
+                  user: User = Depends(current_user),
+                  session: Session = Depends(get_db)) -> Dict[str, Any]:
+    project = editable_project(session, user, project_id)
+    if getattr(payload, "include_sealed", False) and not is_editor(user):
+        raise HTTPException(403, "읽기 전용 권한으로는 봉인 원문을 포함할 수 없다")
 
     run = (
         session.get(VerificationRun, payload.run_id)
@@ -244,10 +248,9 @@ def _render(fmt: str, view: _RunView, project: Project, manifest: Dict[str, Any]
 
 
 @router.get("/reports/{report_id}")
-def get_report(report_id: str, session: Session = Depends(get_db)) -> Dict[str, Any]:
-    report = session.get(ReportRow, report_id)
-    if report is None:
-        raise HTTPException(404, "보고서를 찾을 수 없다")
+def get_report(report_id: str, user: User = Depends(current_user),
+               session: Session = Depends(get_db)) -> Dict[str, Any]:
+    report = accessible_report(session, user, report_id)
     return {
         "report_id": report.id,
         "project_id": report.project_id,
@@ -260,10 +263,12 @@ def get_report(report_id: str, session: Session = Depends(get_db)) -> Dict[str, 
 
 
 @router.get("/reports/{report_id}/download/{fmt}")
-def download_report(report_id: str, fmt: str, session: Session = Depends(get_db)) -> Response:
-    report = session.get(ReportRow, report_id)
-    if report is None:
-        raise HTTPException(404, "보고서를 찾을 수 없다")
+def download_report(report_id: str, fmt: str, user: User = Depends(current_user),
+                    session: Session = Depends(get_db)) -> Response:
+    """보고서 산출물 내려받기. 봉인 원문이 포함될 수 있으므로 접근통제가 필수다."""
+    report = accessible_report(session, user, report_id)
+    if report.include_sealed and not is_editor(user):
+        raise HTTPException(403, "읽기 전용 권한으로는 봉인 원문 포함 보고서를 내려받을 수 없다")
     artifact = (report.artifacts or {}).get(fmt)
     if not artifact or "storage_key" not in artifact:
         raise HTTPException(404, f"{fmt} 산출물이 없다")

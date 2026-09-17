@@ -13,7 +13,8 @@ from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine, inspect_outbound, sanitize
 
-from ..db import Document, DocumentBlock, DocumentPage, DocumentVersion, FindingRow, Project, get_db
+from ..auth import accessible_document, current_user, editable_document
+from ..db import User, Document, DocumentBlock, DocumentPage, DocumentVersion, FindingRow, Project, get_db
 from ..schemas import OutboundRequest
 from ..services import make_audit
 
@@ -25,11 +26,10 @@ def get_blocks(
     document_id: str,
     page: Optional[int] = None,
     include_hidden: bool = Query(default=True, description="숨은 레이어 overlay 표시용"),
+    user: User = Depends(current_user),
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+    document = accessible_document(session, user, document_id)
     query = select(DocumentBlock).where(DocumentBlock.document_id == document_id)
     if page is not None:
         query = query.where(DocumentBlock.page == page)
@@ -64,10 +64,10 @@ def get_blocks(
 
 
 @router.get("/documents/{document_id}/original")
-def get_original(document_id: str, session: Session = Depends(get_db)) -> Response:
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+def get_original(document_id: str, user: User = Depends(current_user),
+                 session: Session = Depends(get_db)) -> Response:
+    """원본 바이트를 그대로 내보낸다. 사건 자료 자체이므로 접근통제가 필수다."""
+    document = accessible_document(session, user, document_id)
     data = get_storage().get(document.storage_key)
     return Response(
         content=data,
@@ -77,7 +77,9 @@ def get_original(document_id: str, session: Session = Depends(get_db)) -> Respon
 
 
 @router.get("/documents/{document_id}/versions")
-def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+def list_versions(document_id: str, user: User = Depends(current_user),
+                  session: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+    accessible_document(session, user, document_id)
     versions = session.execute(
         select(DocumentVersion).where(DocumentVersion.document_id == document_id).order_by(DocumentVersion.version)
     ).scalars().all()
@@ -95,11 +97,11 @@ def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[
 
 
 @router.post("/documents/{document_id}/outbound-guard")
-def outbound_guard(document_id: str, payload: OutboundRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
+def outbound_guard(document_id: str, payload: OutboundRequest,
+                   user: User = Depends(current_user),
+                   session: Session = Depends(get_db)) -> Dict[str, Any]:
     """발신 전 자체검사. 원본은 보존하고 정제본을 새 버전으로 등록한다(제7-A.7장)."""
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+    document = editable_document(session, user, document_id)
 
     storage = get_storage()
     path = str(storage.path(document.storage_key))

@@ -8,6 +8,30 @@
 <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
+<!-- 로그인 화면. 인증 전에는 본문을 감춘다. -->
+<div id="login-overlay" class="login-overlay">
+  <form id="login-form" class="login-card" autocomplete="on">
+    <div class="brand">
+      <span class="logo">LV</span>
+      <div>
+        <h1>법률문서 검증 플랫폼</h1>
+        <p class="sub">계속하려면 로그인한다</p>
+      </div>
+    </div>
+    <label for="login-email">이메일</label>
+    <input id="login-email" name="email" type="email" autocomplete="username" required />
+    <label for="login-password">비밀번호</label>
+    <input id="login-password" name="password" type="password" autocomplete="current-password" required />
+    <p id="login-error" class="login-error" role="alert"></p>
+    <button id="login-submit" type="submit" class="primary">로그인</button>
+    <p class="login-note">
+      계정이 없으면 관리자에게 요청한다. 최초 설치라면
+      <code>scripts/create_admin.py</code>로 관리자 계정을 만든다.
+    </p>
+  </form>
+</div>
+
+<div id="app-body" class="hidden">
 <header class="topbar">
   <div class="brand">
     <span class="logo">LV</span>
@@ -16,7 +40,11 @@
       <p class="sub">Source First · Evidence First · Human Final Decision</p>
     </div>
   </div>
-  <div class="runtime" id="runtime"></div>
+  <div class="topbar-right">
+    <span class="current-user" id="current-user"></span>
+    <button id="logout" type="button" class="ghost">로그아웃</button>
+    <div class="runtime" id="runtime"></div>
+  </div>
 </header>
 
 <main>
@@ -122,6 +150,7 @@
     </div>
   </section>
 </main>
+</div><!-- /#app-body -->
 
 <div id="toast" class="toast hidden"></div>
 <script src="/static/app.js"></script>
