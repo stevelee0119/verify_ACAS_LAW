@@ -125,3 +125,19 @@ def test_normalized_document_serialization(tmp_path):
     data = doc.to_dict()
     assert data["document_id"] == "D" and data["pages"][0]["blocks"]
     assert data["pages"][0]["blocks"][0]["bbox"] is not None
+
+
+def test_justified_prose_is_not_duplicated_as_table(tmp_path):
+    """정렬된 문단이 표로 오검출되어 " | " 파편을 만들면 안 된다.
+
+    실제 보고서에서 주장 101건 중 16건이
+    "[ | 인용 판례 | 1 — | ] | 대법원 | 2023. 11. 16. | ..." 형태의 중복이었다.
+    """
+    from packages.document_engine.pdf_parser import _covered_by, _text_signature
+
+    line_text = "[인용 판례 1 — 가공 판례 테스트] 대법원 2023. 11. 16. 선고 2023다284910 판결"
+    rows = [["[", "인용 판례", "1 —", "가공 판례 테스트", "]"], ["대법원", "2023. 11. 16.", "선고"]]
+    assert _covered_by(_text_signature(line_text), rows) is True, "줄 텍스트와 중복된 표는 버려야 한다"
+
+    real_rows = [["항목", "금액"], ["착수금", "300,000,000"], ["합계", "300,000,000"]]
+    assert _covered_by(_text_signature("본문에는 없는 내용"), real_rows) is False, "진짜 표는 남겨야 한다"

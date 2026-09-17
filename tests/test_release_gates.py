@@ -281,3 +281,29 @@ def test_scores_are_reported_per_axis(pipeline, tmp_path):
     ):
         assert key in axes
     assert "total_score" not in result.scores
+
+
+def test_segment_verdicts_group_lines_into_paragraphs():
+    """줄 블록을 그대로 문단으로 보아 전 구간이 ABSTAIN이 되던 문제.
+
+    실제 보고서에서 95개 구간이 전부 ABSTAIN이었다. PDF 파서는 시각적 '줄'을
+    블록으로 만들므로, 한 줄에 문장 3개가 있을 수 없어 항상 분량 부족이 된다.
+    """
+    from packages.common.schemas import Block, NormalizedDocument, Page
+    from packages.verification_engine.authorship import _paragraph_units, _segment_verdicts
+
+    doc = NormalizedDocument(document_id="D", filename="f.pdf", mime_type="application/pdf", sha256="x")
+    page = Page(page_number=1)
+    lines = [
+        "원고는 피고와 도급계약을 체결하였다.", "피고는 목적물을 완성하지 못하였다.",
+        "따라서 원고는 손해배상을 구한다.", "이에 대하여 피고는 항변한다.",
+        "그러나 그 항변은 이유 없다.", "그러므로 청구를 인용하여야 한다.",
+    ]
+    for index, text in enumerate(lines):
+        page.blocks.append(Block(block_id=f"B{index}", text=text, page=1, source_layer="visible_text"))
+    doc.pages.append(page)
+
+    units = _paragraph_units(doc)
+    assert len(units) < len(lines), "줄이 문단으로 묶여야 한다"
+    verdicts = _segment_verdicts(doc)
+    assert any(v["verdict"] != "ABSTAIN" for v in verdicts), "전 구간이 ABSTAIN이 되면 안 된다"

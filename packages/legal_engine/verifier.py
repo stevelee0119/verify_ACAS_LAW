@@ -28,6 +28,8 @@ from packages.common.schemas import Citation, EngineResult, Evidence, Finding, S
 from packages.common.textutil import contains_fuzzy, normalize_quote, similarity
 from packages.source_adapters import SourceRegistry
 
+from .normalize import canonical_article, same_case_number
+
 ENGINE_NAME = "legal_engine"
 
 QUOTE_EXACT_THRESHOLD = 0.98
@@ -112,16 +114,23 @@ class LegalVerifier:
             verdict.findings.append(self._unverified_finding(citation, response.message, response.source_record))
             return verdict
 
-        if not response.records:
-            # 재검색: 선고일+사건유형, 사건명, 법원+사건번호 일부 (제9.3장)
+        official = self._match_official(citation, response.records)
+        if official is None:
+            # 재검색: 선고일+사건번호, 법원+사건번호 (제9.3장)
             retry = self._retry_search(citation)
             if retry is not None:
                 response, retried_query = retry
                 verdict.notes.append(f"재검색으로 확인: {retried_query}")
                 if response.source_record:
                     verdict.source_records.append(response.source_record)
+                official = self._match_official(citation, response.records)
+            if official is None and response.records:
+                # 조회는 되었으나 같은 사건번호가 없다. 다른 사건에 붙이지 않는다.
+                verdict.notes.append(
+                    f"조회 결과 {len(response.records)}건 중 사건번호가 일치하는 기록이 없다"
+                )
 
-        if not response.records:
+        if official is None:
             verdict.levels["level1"] = "NOT_FOUND"
             verdict.status = VerificationStatus.NOT_FOUND
             features = {"official_source_absent": True, "deterministic_rule": True, "source_count": 1}
@@ -133,9 +142,10 @@ class LegalVerifier:
                     evidence_grade=EvidenceGrade.B,
                     title=f"공식 Source에서 확인되지 않는 판례 인용: {citation.raw_text}",
                     detail=(
-                        f"사건번호 {case_number}를 공식 Source에서 확인하지 못했다(NOT_FOUND_IN_PRIMARY_SOURCE). "
-                        "재검색에도 확인되지 않았으나, 미공개 판결이거나 DB 수록 범위 밖일 수 있으므로 "
-                        "'존재하지 않는 판례'라고 단정하지 않는다. 원문 확인이 필요하다."
+                        f"사건번호 {case_number}와 일치하는 기록을 공식 Source에서 확인하지 못했다"
+                        "(NOT_FOUND_IN_PRIMARY_SOURCE). 검색 결과에 다른 사건이 포함되어 있더라도 "
+                        "사건번호가 다르면 그 사건에 결부시키지 않는다. 미공개 판결이거나 DB 수록 범위 "
+                        "밖일 수 있으므로 '존재하지 않는 판례'라고 단정하지 않는다. 원문 확인이 필요하다."
                     ),
                     confidence=confidence_score(features),
                     confidence_features=features,
@@ -160,7 +170,6 @@ class LegalVerifier:
             )
             return verdict
 
-        official = response.records[0]
         verdict.official_record = official
         verdict.levels["level1"] = "VERIFIED"
 
@@ -269,18 +278,39 @@ class LegalVerifier:
         return verdict
 
     def _retry_search(self, citation: Citation) -> Optional[Tuple[Any, str]]:
-        """Exact 검색 실패 시 선고일+사건유형, 사건명, 법원+사건번호 일부 순으로 재검색한다."""
+        """Exact 검색 실패 시 선고일·법원을 덧붙여 재검색한다.
+
+        사건번호를 잘라 검색하지 않는다. 공식 Source의 사건 검색은 키워드 검색이므로
+        "2023다284910"을 "2023다284"로 자르면 전혀 다른 사건(2024도12341)이 1순위로
+        돌아온다. 그 결과를 그대로 받아들이면 존재하지 않는 판례가 "확인됨"이 되고,
+        차이는 '선고일 불일치'로 보고되어 이용자를 오도한다.
+
+        재검색 결과도 아래 _match_official()의 사건번호 완전일치 검사를 통과해야 한다.
+        """
         queries: List[str] = []
         if citation.decision_date and citation.case_number:
             queries.append(f"{citation.decision_date} {citation.case_number}")
         if citation.court and citation.case_number:
             queries.append(f"{citation.court} {citation.case_number}")
-        if citation.case_number:
-            queries.append(citation.case_number[:8])
         for query in queries:
             response = self.registry.law.search_case(query, court=citation.court)
-            if response.found:
+            if response.found and self._match_official(citation, response.records) is not None:
                 return response, query
+        return None
+
+    @staticmethod
+    def _match_official(citation: Citation, records: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        """조회 결과 중 인용 사건번호와 같은 사건만 고른다.
+
+        키워드 검색은 질의와 무관한 사건도 돌려준다. 1순위 결과를 무조건 '공식 기록'으로
+        바인딩하면, 가공된 사건번호가 실재하는 다른 판례에 붙어 존재가 확인된 것처럼 된다.
+        """
+        target = citation.canonical_case_number or citation.case_number
+        if not target:
+            return None
+        for record in records:
+            if same_case_number(target, str(record.get("case_number") or "")):
+                return record
         return None
 
     @staticmethod
@@ -362,6 +392,12 @@ class LegalVerifier:
         verdict.status = VerificationStatus.VERIFIED
         verdict.levels["existence"] = "VERIFIED"
 
+        # 제9.4장 조문 단위 실존 확인.
+        # 법령명이 맞아도 그 조문이 실재하는지는 별개다. 확인하지 않으면
+        # 가공 조문이 법령만 맞다는 이유로 VERIFIED가 된다.
+        if citation.article:
+            verdict.levels["article"] = self._verify_article(citation, official, verdict)
+
         # 제9.4장 기준시점 검증
         if as_of:
             effective_from = official.get("effective_from")
@@ -415,6 +451,67 @@ class LegalVerifier:
             else:
                 verdict.levels["temporal"] = "VERIFIED"
         return verdict
+
+    def _verify_article(self, citation: Citation, official: Dict[str, Any], verdict: "CitationVerdict") -> str:
+        """인용된 조문 번호가 해당 법령에 실재하는지 확인한다."""
+        articles = official.get("articles")
+        if articles is None:
+            fetch = getattr(self.registry.law, "fetch_articles", None)
+            articles = fetch(official) if fetch is not None else None
+
+        wanted = canonical_article(citation.article)
+        if articles is None:
+            # 확인 불가는 '없음'이 아니다. 확인되지 않은 채로 VERIFIED를 주지 않는다.
+            verdict.status = VerificationStatus.UNVERIFIED
+            verdict.notes.append(f"조문 목록을 조회하지 못해 제{citation.article}조 실존을 확인하지 못했다")
+            verdict.findings.append(
+                self._unverified_finding(
+                    citation,
+                    f"법령 '{citation.law_name}'은 확인했으나 제{citation.article}조의 실존은 확인하지 못했다.",
+                    verdict.source_records[-1] if verdict.source_records else None,
+                )
+            )
+            return "UNVERIFIED"
+
+        if wanted in {canonical_article(a) for a in articles}:
+            return "VERIFIED"
+
+        verdict.status = VerificationStatus.NOT_FOUND
+        features = {"official_source_match": True, "official_source_absent": True, "deterministic_rule": True}
+        verdict.findings.append(
+            Finding.create(
+                type=FindingType.LAW_CITATION_ERROR,
+                status=VerificationStatus.NOT_FOUND,
+                severity=Severity.HIGH,
+                evidence_grade=EvidenceGrade.A,
+                title=f"실재하지 않는 조문 인용: {citation.raw_text}",
+                detail=(
+                    f"'{official.get('law_name')}'은 공식 Source에서 확인되었으나, "
+                    f"제{citation.article}조는 수록 조문 {len(articles)}건에 존재하지 않는다. "
+                    "조문 번호 오기 또는 생성형 AI의 조문 창작을 의심할 수 있다."
+                ),
+                confidence=confidence_score(features),
+                confidence_features=features,
+                document_id=citation.document_id,
+                block_id=citation.block_id,
+                page=citation.page,
+                span=citation.span,
+                engine=ENGINE_NAME,
+                source_record_ids=[r.source_record_id for r in verdict.source_records],
+                tags=["LEGAL", "STATUTE", "ARTICLE"],
+                evidence=[
+                    Evidence.create(
+                        description="공식 Source 조문 목록에서 미확인",
+                        grade=EvidenceGrade.A,
+                        document_id=citation.document_id,
+                        block_id=citation.block_id,
+                        excerpt=citation.raw_text,
+                        supports=False,
+                    )
+                ],
+            )
+        )
+        return "NOT_FOUND"
 
     # -- 학술 -------------------------------------------------------------
     def verify_academic(self, citation: Citation) -> CitationVerdict:

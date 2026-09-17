@@ -153,22 +153,68 @@ def _style_shift(sents: List[str]) -> Dict[str, Any]:
     }
 
 
+MIN_SENTENCES_PER_SEGMENT = 3
+
+
+def _paragraph_units(doc: NormalizedDocument) -> List[Dict[str, Any]]:
+    """줄 블록을 문단 단위로 묶는다.
+
+    PDF 파서는 시각적 '줄'을 블록으로 만든다. 한 줄에 문장이 3개 들어갈 일은
+    거의 없으므로, 줄을 그대로 문단으로 보면 모든 구간이 분량 부족으로
+    ABSTAIN이 된다. 실제 검증보고서에서 95개 블록이 전부 ABSTAIN이었던 원인이다.
+
+    같은 페이지의 연속된 줄을 문장 수가 기준에 찰 때까지 이어 붙인다.
+    """
+    units: List[Dict[str, Any]] = []
+    current: List[Any] = []
+
+    def flush() -> None:
+        if not current:
+            return
+        text = " ".join(b.text.strip() for b in current if b.text.strip())
+        if text:
+            units.append(
+                {
+                    "block_id": current[0].block_id,
+                    "block_ids": [b.block_id for b in current],
+                    "page": current[0].page,
+                    "text": text,
+                }
+            )
+        current.clear()
+
+    for block in doc.prose_blocks():
+        if current and block.page != current[0].page:
+            flush()
+        current.append(block)
+        if len(sentences(" ".join(b.text for b in current))) >= MIN_SENTENCES_PER_SEGMENT:
+            flush()
+    flush()
+    return units
+
+
 def _segment_verdicts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """문단 단위 표시(제13장). 짧은 문단은 판단을 유보한다."""
     out: List[Dict[str, Any]] = []
-    for block in doc.body_blocks():
-        sents = sentences(block.text)
-        if len(sents) < 3:
-            out.append({"block_id": block.block_id, "page": block.page, "verdict": str(AuthorshipVerdict.ABSTAIN)})
+    for unit in _paragraph_units(doc):
+        sents = sentences(unit["text"])
+        if len(sents) < MIN_SENTENCES_PER_SEGMENT:
+            out.append({
+                "block_id": unit["block_id"], "block_ids": unit["block_ids"],
+                "page": unit["page"], "verdict": str(AuthorshipVerdict.ABSTAIN),
+                "reason": f"문장 {len(sents)}개로 분량이 부족하다",
+            })
             continue
         lengths = [len(s) for s in sents]
         cv = statistics.pstdev(lengths) / statistics.mean(lengths) if statistics.mean(lengths) else 1.0
         verdict = AuthorshipVerdict.AI_LIKELY if cv < 0.25 else AuthorshipVerdict.UNCERTAIN
         out.append(
             {
-                "block_id": block.block_id,
-                "page": block.page,
+                "block_id": unit["block_id"],
+                "block_ids": unit["block_ids"],
+                "page": unit["page"],
                 "verdict": str(verdict),
+                "sentence_count": len(sents),
                 "sentence_length_cv": round(cv, 3),
             }
         )

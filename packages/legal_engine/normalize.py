@@ -37,6 +37,20 @@ def canonical_case_number(raw: str) -> Optional[str]:
     return f"{m.group('year')}{m.group('code')}{int(m.group('serial'))}"
 
 
+def same_case_number(a: str, b: str) -> bool:
+    """두 사건번호가 같은 사건을 가리키는지 판정한다.
+
+    공식 Source는 "서울행정법원-2021-구합-70769"처럼 법원명과 구분자를 붙여 돌려주기도 한다.
+    연도·사건부호·일련번호 세 요소가 모두 같을 때만 같은 사건으로 본다.
+    부분 일치(예: 2023다284910 vs 2024도12341)를 같은 사건으로 보면
+    존재하지 않는 판례가 "확인됨"으로 둔갑한다.
+    """
+    left, right = split_case_number(a or ""), split_case_number(b or "")
+    if left is None or right is None:
+        return False
+    return left == right
+
+
 def split_case_number(raw: str):
     m = CONSTITUTIONAL_RE.search(raw or "") or CASE_NUMBER_RE.search(raw or "")
     if not m:
@@ -101,6 +115,19 @@ LAW_NAME_PREFIX_NOISE = [
 
 # 법령명 앞 토큰이 조사로 끝나면 법령명이 아니다(예: "적용법조는 테스트법" -> "테스트법").
 JOSA_TAILS = set("는은이가을를의에로과와도만며고서")
+
+
+ARTICLE_RE = re.compile(r"(?P<no>\d+)\s*(?:조)?\s*(?:의\s*(?P<sub>\d+))?")
+
+
+def canonical_article(raw: str) -> str:
+    """'390의2', '제390조의2', '390-2'를 같은 표기로 만든다."""
+    text = re.sub(r"[\s제조]", "", str(raw or "")).replace("-", "의")
+    m = ARTICLE_RE.search(text)
+    if not m:
+        return text
+    base = str(int(m.group("no")))
+    return f"{base}의{int(m.group('sub'))}" if m.group("sub") else base
 
 
 def canonical_law_name(raw: str) -> str:

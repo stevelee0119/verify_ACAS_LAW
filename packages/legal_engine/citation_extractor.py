@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from typing import List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument
@@ -48,10 +48,15 @@ INTERPRETATION_RE = re.compile(
 ADMIN_APPEAL_RE = re.compile(r"(중앙행정심판위원회|행정심판위원회)\s*(?P<no>\d{4}[-가-힣\d]{2,15})?\s*(재결)?")
 # 학술: 저자, 「제목」, 학술지 권(호), 연도 / DOI
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
+# 학술: 저자, 「논문 제목」 또는 『단행본 제목』, 게재지·출판사, 연도
+#
+# 국내 표기 관행은 논문에 「」, 단행본에 『』를 쓴다. 『』가 빠져 있어
+# 단행본 인용(예: 홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)이
+# 전혀 추출되지 않았다. 단행본은 권·호가 없으므로 그 부분도 선택으로 둔다.
 ACADEMIC_RE = re.compile(
-    r"(?P<authors>[가-힣]{2,4}(?:\s*·\s*[가-힣]{2,4})*)\s*,\s*"
-    r"[「\"“](?P<title>[^」\"”]{5,120})[」\"”]\s*,\s*"
-    r"(?P<journal>[가-힣A-Za-z\s]{2,40})\s*"
+    r"(?P<authors>[가-힣]{2,4}(?:\s*[·,]\s*[가-힣]{2,4})*)\s*,\s*"
+    r"(?:[「『\"“](?P<title>[^」』\"”]{5,120})[」』\"”])\s*,\s*"
+    r"(?P<journal>[가-힣A-Za-z\s]{2,40}?)\s*"
     r"(?:제?\s*(?P<volume>\d+)\s*권)?\s*(?:제?\s*(?P<issue>\d+)\s*호)?\s*[,(]?\s*"
     r"(?P<year>(?:19|20)\d{2})"
 )
@@ -214,11 +219,76 @@ def extract_from_text(
     return citations
 
 
+def _identity(citation: Citation) -> Tuple[Any, ...]:
+    """같은 인용인지 판정할 키. 블록 경계가 달라도 중복으로 세지 않기 위해 쓴다."""
+    return (
+        str(citation.type),
+        citation.canonical_case_number,
+        citation.law_name,
+        citation.article,
+        (citation.title or "").strip(),
+    )
+
+
+def _joined_pages(doc: NormalizedDocument) -> List[Tuple[str, List[Tuple[int, Any]]]]:
+    """페이지별로 줄 블록을 이어 붙인 텍스트와, 각 블록의 시작 위치를 만든다."""
+    pages: Dict[Any, List[Any]] = {}
+    for block in doc.body_blocks():
+        pages.setdefault(block.page, []).append(block)
+
+    out: List[Tuple[str, List[Tuple[int, Any]]]] = []
+    for blocks in pages.values():
+        parts: List[str] = []
+        offsets: List[Tuple[int, Any]] = []
+        cursor = 0
+        for block in blocks:
+            text = block.text.strip()
+            if not text:
+                continue
+            offsets.append((cursor, block))
+            parts.append(text)
+            cursor += len(text) + 1  # 이어 붙일 때 넣는 공백 한 칸
+        if parts:
+            out.append((" ".join(parts), offsets))
+    return out
+
+
+def _owner_block(offsets: List[Tuple[int, Any]], index: int) -> Any:
+    """이어 붙인 텍스트의 위치가 어느 블록에서 시작하는지 찾는다."""
+    owner = offsets[0][1] if offsets else None
+    for start, block in offsets:
+        if start > index:
+            break
+        owner = block
+    return owner
+
+
 def extract_citations(doc: NormalizedDocument) -> List[Citation]:
     """본문(표시 텍스트·스캔본 OCR)에서 인용을 추출한다. 숨은 레이어는 적대적 콘텐츠로 별도 처리한다."""
     out: List[Citation] = []
+    seen: set = set()
     for block in doc.body_blocks():
-        out.extend(
-            extract_from_text(block.text, document_id=doc.document_id, block_id=block.block_id, page=block.page)
-        )
+        for citation in extract_from_text(
+            block.text, document_id=doc.document_id, block_id=block.block_id, page=block.page
+        ):
+            key = _identity(citation)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(citation)
+
+    # 줄바꿈으로 잘린 인용을 위해 페이지 단위로 이어 붙여 한 번 더 훑는다.
+    # PDF의 블록은 시각적 '줄'이므로 "홍길동, 『현대 계약법과 알고리즘 / 책임론』, 법문사, 2024"처럼
+    # 인용이 두 줄에 걸치면 블록 단위 검사로는 영원히 잡히지 않는다.
+    for joined, offsets in _joined_pages(doc):
+        for citation in extract_from_text(joined, document_id=doc.document_id, block_id=None, page=None):
+            key = _identity(citation)
+            if key in seen:
+                continue
+            seen.add(key)
+            owner = _owner_block(offsets, citation.span[0] if citation.span else 0)
+            if owner is not None:
+                citation.block_id = owner.block_id
+                citation.page = owner.page
+            out.append(citation)
     return out
