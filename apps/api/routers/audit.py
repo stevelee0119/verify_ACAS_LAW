@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from ..db import AuditEventRow, get_db
+from ..auth import accessible_project, current_user, require_admin
+from ..db import AuditEventRow, User, get_db
 from ..services import make_audit
 
 router = APIRouter(tags=["audit"])
@@ -17,8 +18,10 @@ router = APIRouter(tags=["audit"])
 def list_audit(
     project_id: str,
     limit: int = Query(default=200, le=1000),
+    user: User = Depends(current_user),
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
+    accessible_project(session, user, project_id)
     rows = (
         session.execute(
             select(AuditEventRow)
@@ -48,11 +51,18 @@ def list_audit(
 
 
 @router.get("/audit/verify")
-def verify_chain(session: Session = Depends(get_db)) -> Dict[str, Any]:
-    """Audit Hash Chain 무결성 검증."""
+def verify_chain(admin: User = Depends(require_admin),
+                 session: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Audit Hash Chain 무결성 검증.
+
+    체인은 기관 전체를 가로지르므로 프로젝트 단위로 나눌 수 없다.
+    따라서 관리자만 조회한다.
+    """
     return make_audit(session).verify()
 
 
 @router.get("/projects/{project_id}/manifest")
-def get_manifest(project_id: str, session: Session = Depends(get_db)) -> Dict[str, Any]:
+def get_manifest(project_id: str, user: User = Depends(current_user),
+                 session: Session = Depends(get_db)) -> Dict[str, Any]:
+    accessible_project(session, user, project_id)
     return make_audit(session).manifest(project_id=project_id)

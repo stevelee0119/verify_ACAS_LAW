@@ -43,8 +43,23 @@ function toast(message) {
   clearTimeout(toast._t);
   toast._t = setTimeout(() => box.classList.add("hidden"), 4200);
 }
+/* ---------- 인증 ----------
+   토큰은 sessionStorage에 둔다. 탭을 닫으면 사라지므로 공용 PC에서
+   다음 사용자가 그대로 이어받는 상황을 줄인다. 서버 세션은 별도로 만료된다. */
+const TOKEN_KEY = "lv_token";
+const getToken = () => sessionStorage.getItem(TOKEN_KEY) || "";
+const setToken = (t) => t ? sessionStorage.setItem(TOKEN_KEY, t) : sessionStorage.removeItem(TOKEN_KEY);
+
 async function api(path, options = {}) {
-  const response = await fetch(API + path, options);
+  const headers = new Headers(options.headers || {});
+  const token = getToken();
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const response = await fetch(API + path, { ...options, headers });
+  if (response.status === 401) {
+    setToken("");
+    showLogin("세션이 만료되었다. 다시 로그인한다.");
+    throw new Error("인증이 필요하다");
+  }
   if (!response.ok) {
     let message = response.statusText;
     try { message = (await response.json()).detail || message; } catch (_) {}
@@ -53,10 +68,71 @@ async function api(path, options = {}) {
   const type = response.headers.get("content-type") || "";
   return type.includes("json") ? response.json() : response.text();
 }
+
+function showLogin(message) {
+  const overlay = $("#login-overlay");
+  if (!overlay) return;
+  overlay.classList.remove("hidden");
+  $("#login-error").textContent = message || "";
+  $("#app-body").classList.add("hidden");
+}
+
+function hideLogin() {
+  $("#login-overlay").classList.add("hidden");
+  $("#app-body").classList.remove("hidden");
+}
+
+async function doLogin(event) {
+  event.preventDefault();
+  const button = $("#login-submit");
+  button.disabled = true;
+  try {
+    const response = await fetch(API + "/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email: $("#login-email").value, password: $("#login-password").value }),
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      $("#login-error").textContent = body.detail || "로그인에 실패했다";
+      return;
+    }
+    setToken(body.access_token);
+    $("#login-password").value = "";
+    $("#current-user").textContent = `${body.user.display_name || body.user.email} (${body.user.role})`;
+    hideLogin();
+    await boot();
+  } catch (error) {
+    $("#login-error").textContent = String(error.message || error);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function doLogout() {
+  try { await api("/auth/logout", { method: "POST" }); } catch (_) {}
+  setToken("");
+  $("#current-user").textContent = "";
+  showLogin("로그아웃되었다.");
+}
 const jsonPost = (path, body) =>
   api(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
 
 /* ---------- 부팅 ---------- */
+async function start() {
+  $("#login-form").addEventListener("submit", doLogin);
+  $("#logout").addEventListener("click", doLogout);
+  if (!getToken()) { showLogin(""); return; }
+  try {
+    const me = await api("/auth/me");
+    $("#current-user").textContent = `${me.display_name || me.email} (${me.role})`;
+    hideLogin();
+    await boot();
+  } catch (_) {
+    showLogin("");
+  }
+}
+
 async function boot() {
   try {
     const runtime = await api("/settings/runtime");
@@ -570,4 +646,4 @@ async function outboundGuard(documentId) {
   } catch (err) { toast("발신 전 검사 실패: " + err.message); }
 }
 
-boot();
+start();

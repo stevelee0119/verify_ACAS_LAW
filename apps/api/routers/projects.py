@@ -14,7 +14,14 @@ from packages.common.enums import AuditEventType
 from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
-from ..db import Document, DocumentVersion, Project, get_db
+from ..auth import (
+    accessible_project,
+    current_user,
+    editable_project,
+    require_editor,
+    visible_project_ids,
+)
+from ..db import User, Document, DocumentVersion, Project, get_db
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut
 from ..services import make_audit
 from ..security import scan_upload
@@ -46,8 +53,14 @@ def _project_out(session: Session, project: Project) -> ProjectOut:
 
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
-def create_project(payload: ProjectCreate, session: Session = Depends(get_db)) -> ProjectOut:
+def create_project(
+    payload: ProjectCreate,
+    user: User = Depends(require_editor),
+    session: Session = Depends(get_db),
+) -> ProjectOut:
     project = Project(
+        owner_id=user.id,
+        organization_id=user.organization_id,
         name=payload.name,
         case_number=payload.case_number,
         court=payload.court,
@@ -69,17 +82,29 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_db)) -
 
 
 @router.get("/projects", response_model=List[ProjectOut])
-def list_projects(session: Session = Depends(get_db)) -> List[ProjectOut]:
-    projects = session.execute(select(Project).order_by(Project.created_at.desc())).scalars().all()
+def list_projects(
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> List[ProjectOut]:
+    """접근 가능한 프로젝트만 돌려준다. 남의 사건을 목록에서 보여주지 않는다."""
+    allowed = visible_project_ids(session, user)
+    if not allowed:
+        return []
+    projects = (
+        session.execute(
+            select(Project).where(Project.id.in_(allowed)).order_by(Project.created_at.desc())
+        ).scalars().all()
+    )
     return [_project_out(session, p) for p in projects]
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
-def get_project(project_id: str, session: Session = Depends(get_db)) -> ProjectOut:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
-    return _project_out(session, project)
+def get_project(
+    project_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> ProjectOut:
+    return _project_out(session, accessible_project(session, user, project_id))
 
 
 @router.post("/projects/{project_id}/documents", response_model=DocumentOut, status_code=201)
@@ -88,12 +113,11 @@ async def upload_document(
     file: UploadFile = File(...),
     document_kind: str = Form(""),
     is_own_document: bool = Form(False),
+    user: User = Depends(current_user),
     session: Session = Depends(get_db),
 ) -> DocumentOut:
     """업로드 → 검증 → SHA-256 → Immutable Original 저장 (제6장, 제15.1장)."""
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
+    project = editable_project(session, user, project_id)
 
     settings = get_settings()
     filename = _safe_filename(file.filename or "unnamed")
@@ -159,7 +183,12 @@ async def upload_document(
 
 
 @router.get("/projects/{project_id}/documents", response_model=List[DocumentOut])
-def list_documents(project_id: str, session: Session = Depends(get_db)) -> List[DocumentOut]:
+def list_documents(
+    project_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> List[DocumentOut]:
+    accessible_project(session, user, project_id)
     documents = (
         session.execute(
             select(Document).where(Document.project_id == project_id).order_by(Document.uploaded_at)
@@ -171,10 +200,16 @@ def list_documents(project_id: str, session: Session = Depends(get_db)) -> List[
 
 
 @router.get("/documents/{document_id}", response_model=DocumentOut)
-def get_document(document_id: str, session: Session = Depends(get_db)) -> DocumentOut:
+def get_document(
+    document_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> DocumentOut:
     document = session.get(Document, document_id)
     if document is None:
         raise HTTPException(404, "문서를 찾을 수 없다")
+    # 문서가 속한 프로젝트에 접근할 수 없으면 문서의 존재도 알리지 않는다
+    accessible_project(session, user, document.project_id)
     return _document_out(session, document)
 
 

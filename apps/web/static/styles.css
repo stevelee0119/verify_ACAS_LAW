@@ -96,3 +96,53 @@ main{display:grid;grid-template-columns:280px 1fr;gap:14px;padding:14px;align-it
 .timeline-item:before{content:"";position:absolute;left:-5px;top:4px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
 .timeline-item .date{font-weight:600;font-size:12px}
 .toast{position:fixed;right:16px;bottom:16px;background:#1b1f27;color:#fff;padding:9px 13px;border-radius:8px;font-size:13px;z-index:50;max-width:420px}
+
+
+/* ---------- 로그인 ---------- */
+.login-overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #f4f6fa;
+  z-index: 50;
+  padding: 24px;
+}
+.login-card {
+  width: 100%;
+  max-width: 380px;
+  background: #fff;
+  border: 1px solid #dfe4ec;
+  border-radius: 10px;
+  padding: 28px;
+  box-shadow: 0 6px 24px rgba(20, 35, 60, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.login-card .brand { margin-bottom: 12px; }
+.login-card label { font-size: 13px; color: #44506a; margin-top: 8px; }
+.login-card input {
+  padding: 10px 12px;
+  border: 1px solid #cfd6e2;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.login-card button { margin-top: 16px; }
+.login-error { color: #b3261e; font-size: 13px; min-height: 18px; margin: 4px 0 0; }
+.login-note { font-size: 12px; color: #6b7588; margin-top: 14px; line-height: 1.6; }
+.login-note code { background: #eef1f6; padding: 1px 5px; border-radius: 3px; }
+
+.topbar-right { display: flex; align-items: center; gap: 12px; }
+.current-user { font-size: 13px; color: #44506a; }
+button.ghost {
+  background: transparent;
+  border: 1px solid #cfd6e2;
+  color: #44506a;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+button.ghost:hover { background: #eef1f6; }

@@ -137,3 +137,52 @@ curl -s https://<서비스>.onrender.com/api/diagnostics | jq
 `render.yaml`을 사용하는 Blueprint로 다시 만드는 편이 확실하다. 대시보드에서 수동
 생성한 서비스는 `render.yaml`을 읽지 않으므로, `runtime: docker`뿐 아니라
 `LV_ALLOW_NETWORK`·`LV_DATA_DIR` 같은 환경변수도 적용되지 않는다.
+
+## 인증 설정 (배포 전 필수)
+
+인증을 끄는 스위치는 없다. 계정이 하나도 없으면 API는 503으로 거부한다.
+배포 전에 최초 관리자를 만들어야 한다.
+
+### Render 환경변수로 부트스트랩
+
+Environment 탭에 아래를 넣고 배포하면 기동 시 관리자 계정이 생성된다.
+
+| Key | 값 |
+|---|---|
+| `LV_BOOTSTRAP_ADMIN_EMAIL` | 관리자 이메일 |
+| `LV_BOOTSTRAP_ADMIN_PASSWORD` | 10자 이상 비밀번호 |
+| `LV_BOOTSTRAP_ADMIN_NAME` | 표시 이름(선택) |
+| `LV_SESSION_TTL_HOURS` | 세션 유효시간(기본 12) |
+
+계정이 만들어진 뒤에는 이 변수들이 무시된다. **첫 로그인 후 비밀번호를 바꾸고
+두 환경변수를 삭제한다.** 환경변수는 대시보드에서 다시 볼 수 있다.
+
+### 셸에서 직접 생성
+
+```bash
+python scripts/create_admin.py --email admin@example.com
+```
+
+비밀번호는 인자로 받지 않는다. 명령행 인자는 프로세스 목록과 셸 기록에 남는다.
+
+### 역할
+
+| 역할 | 권한 |
+|---|---|
+| `ADMIN` | 계정 관리, 기관 내 모든 사건, 감사 체인 검증, 런타임 진단 |
+| `MEMBER` | 사건 생성·문서 업로드·검증 실행·봉인 원문 열람 |
+| `VIEWER` | 읽기 전용. 봉인 원문 열람과 변경 불가 |
+
+접근 권한이 없는 사건은 403이 아니라 **404**를 돌려준다. 403은 그 ID의 사건이
+존재한다는 사실을 알려 주기 때문이다.
+
+### 마이그레이션
+
+기존 배포본이 있으면 인증 스키마를 적용해야 한다.
+
+```bash
+alembic upgrade head   # b2d5f88c0e31
+```
+
+기존 사용자 행이 있다면 `password_hash`가 비어 있어 로그인할 수 없다.
+관리자가 계정을 다시 만들거나 비밀번호를 설정해야 한다.

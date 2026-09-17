@@ -131,7 +131,31 @@ class User(Base):
     display_name = Column(String(120), default="")
     role = Column(String(30), default="MEMBER")  # ADMIN | MEMBER | VIEWER
     organization_id = Column(String(40), ForeignKey("organizations.id"))
+    # 비밀번호는 KDF 결과만 보관한다. 원문도, 되돌릴 수 있는 형태도 저장하지 않는다.
+    password_hash = Column(String(255))
+    is_active = Column(Boolean, default=True, nullable=False)
+    last_login_at = Column(DateTime)
+    failed_login_count = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+
+class SessionToken(Base):
+    """로그인 세션. 토큰 원문이 아니라 해시를 보관한다.
+
+    무상태 토큰(JWT 등)을 쓰지 않는 이유는 폐기 때문이다. 봉인 원문 열람과
+    감사추적 조회가 가능한 도구에서 '이미 발급한 토큰을 취소할 수 없다'는
+    성질은 받아들이기 어렵다.
+    """
+
+    __tablename__ = "session_tokens"
+    id = Column(String(40), primary_key=True, default=lambda: new_uuid("ses_"))
+    user_id = Column(String(40), ForeignKey("users.id"), nullable=False, index=True)
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    issued_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    revoked_at = Column(DateTime)
+    user_agent = Column(String(300), default="")
 
 
 class Project(Base):

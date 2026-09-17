@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from packages.common.config import get_settings
 from packages.llm_router import LLMRouter
@@ -14,11 +14,14 @@ from packages.llm_router import LLMRouter
 from ..schemas import ProviderOut, ProviderPatch
 from ..services import get_registry
 
+from ..auth import current_user, require_admin
+from ..db import User
+
 router = APIRouter(tags=["settings"])
 
 
 @router.get("/settings/providers", response_model=List[ProviderOut])
-def list_providers() -> List[ProviderOut]:
+def list_providers(user: User = Depends(current_user)) -> List[ProviderOut]:
     settings = get_settings()
     return [
         ProviderOut(
@@ -34,7 +37,8 @@ def list_providers() -> List[ProviderOut]:
 
 
 @router.patch("/settings/providers/{name}", response_model=ProviderOut)
-def patch_provider(name: str, payload: ProviderPatch) -> ProviderOut:
+def patch_provider(name: str, payload: ProviderPatch,
+                   admin: User = Depends(require_admin)) -> ProviderOut:
     settings = get_settings()
     config = settings.providers.get(name)
     if config is None:
@@ -50,7 +54,7 @@ def patch_provider(name: str, payload: ProviderPatch) -> ProviderOut:
 
 
 @router.get("/settings/sources")
-def list_sources() -> Dict[str, Any]:
+def list_sources(user: User = Depends(current_user)) -> Dict[str, Any]:
     registry = get_registry()
     return {
         "adapters": [s.to_dict() for s in registry.states()],
@@ -60,7 +64,7 @@ def list_sources() -> Dict[str, Any]:
 
 
 @router.get("/settings/runtime")
-def runtime_info() -> Dict[str, Any]:
+def runtime_info(admin: User = Depends(require_admin)) -> Dict[str, Any]:
     settings = get_settings()
     router_instance = LLMRouter()
     return {
