@@ -372,7 +372,9 @@ class AuditEventRow(Base):
 
     __tablename__ = "audit_events"
     id = Column(Integer, primary_key=True, autoincrement=True)
-    sequence = Column(Integer, nullable=False)
+    # UNIQUE. 프로세스가 여럿이어도 같은 자리를 두 이벤트가 차지하지 못한다.
+    # 뒤늦은 기록은 여기서 거부되고 DBAuditSink가 직전 이벤트를 다시 읽어 재시도한다.
+    sequence = Column(Integer, nullable=False, unique=True)
     project_id = Column(String(40), index=True)
     document_id = Column(String(40))
     event_type = Column(String(40), nullable=False)

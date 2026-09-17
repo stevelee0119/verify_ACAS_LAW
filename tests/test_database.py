@@ -163,6 +163,65 @@ def test_audit_events_are_append_only_in_db():
         session.close()
 
 
+def test_concurrent_audit_records_keep_chain_valid():
+    """동시 기록에도 해시 체인이 갈라지지 않는다(제15장).
+
+    API 요청 스레드와 Worker는 각자의 세션으로 동시에 감사 이벤트를 남긴다.
+    "직전 이벤트 조회 → 해시 계산 → 적재"가 직렬화되지 않으면 두 이벤트가
+    같은 previous_hash를 물고 들어가 /api/audit/verify가 false를 돌려준다.
+    """
+    import threading
+
+    from packages.audit_engine import AuditChain
+    from packages.common.enums import AuditEventType
+
+    from apps.api.audit_sink import DBAuditSink
+    from apps.api.db import get_session_factory
+
+    init_db()
+    factory = get_session_factory()
+    errors: list = []
+
+    def writer(worker: int) -> None:
+        session = factory()
+        try:
+            for index in range(10):
+                AuditChain(sink=DBAuditSink(session)).record(
+                    AuditEventType.UPLOAD,
+                    {"worker": worker, "index": index},
+                    project_id="concurrency_probe",
+                )
+        except Exception as exc:  # noqa: BLE001 - 테스트에서 원인을 그대로 드러낸다
+            errors.append(repr(exc))
+        finally:
+            session.close()
+
+    threads = [threading.Thread(target=writer, args=(n,)) for n in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(30)
+
+    assert errors == [], f"동시 기록이 실패했다: {errors}"
+
+    session = factory()
+    try:
+        verification = AuditChain(sink=DBAuditSink(session)).verify()
+    finally:
+        session.close()
+    assert verification["valid"] is True, (
+        f"체인이 {verification['broken_at_index']}번째에서 끊겼다. 동시 기록이 직렬화되지 않았다."
+    )
+    assert verification["event_count"] >= 40
+
+    # 같은 자리를 두 이벤트가 차지하지 못하게 DB 제약으로도 막는다
+    sequences = [
+        row[0]
+        for row in get_engine().connect().execute(text("select sequence from audit_events")).all()
+    ]
+    assert len(sequences) == len(set(sequences)), "sequence가 중복되었다"
+
+
 @postgres_required
 def test_vector_similarity_search_works(owned_document):
     """pgvector 근사 검색이 동작한다(제3.2장 임베딩 검색 기반)."""

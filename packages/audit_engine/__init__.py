@@ -1,6 +1,7 @@
 from .chain import (
     GENESIS_HASH,
     AuditChain,
+    AuditChainConflict,
     AuditEvent,
     AuditSink,
     InMemoryAuditSink,
@@ -10,6 +11,7 @@ from .chain import (
 
 __all__ = [
     "AuditChain",
+    "AuditChainConflict",
     "AuditEvent",
     "AuditSink",
     "InMemoryAuditSink",
