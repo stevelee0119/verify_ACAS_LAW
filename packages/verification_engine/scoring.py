@@ -33,6 +33,9 @@ CONSISTENCY_TYPES = {
     FindingType.ARITHMETIC_MISMATCH,
 }
 AUTHENTICITY_TYPES = {
+    FindingType.SPECIMEN_DOCUMENT_DECLARED,
+    FindingType.INVALID_IDENTIFIER,
+    FindingType.PLACEHOLDER_IDENTIFIER,
     FindingType.REDACTION_FAILURE,
     FindingType.HIDDEN_TEXT_MISMATCH,
     FindingType.OCR_LAYER_MISMATCH,
@@ -75,6 +78,23 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
 
     authorship_verdicts = [d.authorship.get("verdict") for d in result.documents if d.authorship]
 
+    # 본문을 읽지 못한 문서. 내용 기반 축은 "위험 없음"이 아니라 "판정 불가"이다.
+    # 이 구분이 없으면, 검증해서 깨끗한 문서와 아무것도 못 읽은 문서가 같은 보고서를 낳는다.
+    unreadable = [
+        item.get("document_id")
+        for item in result.unverified_items
+        if item.get("kind") in ("document", "document_body")
+    ]
+    analyzed_documents = [d for d in result.documents if d.document_id not in unreadable]
+    nothing_analyzed = bool(result.documents) and not analyzed_documents
+
+    def content_risk(items: List[Finding]) -> str:
+        """내용 기반 축의 위험도. 읽은 문서가 하나도 없으면 NONE을 쓰지 않는다."""
+        risk = _risk_from(items)
+        if risk == "NONE" and nothing_analyzed:
+            return "UNVERIFIED"
+        return risk
+
     return {
         "severity_counts": severity_counts,
         "status_counts": status_counts,
@@ -90,9 +110,9 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 "verified": verified_citations,
                 "unverified": unverified_citations,
                 "issue_count": len(legal),
-                "risk": _risk_from(legal),
+                "risk": content_risk(legal),
             },
-            "factual_reliability": {"issue_count": len(consistency), "risk": _risk_from(consistency)},
+            "factual_reliability": {"issue_count": len(consistency), "risk": content_risk(consistency)},
             "internal_consistency": {
                 "cross_document_issues": sum(
                     1 for f in findings if f.type == FindingType.CROSS_DOCUMENT_CONTRADICTION
@@ -100,7 +120,7 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 "timeline_issues": sum(1 for f in findings if f.type == FindingType.TIMELINE_CONTRADICTION),
                 "arithmetic_issues": sum(1 for f in findings if f.type == FindingType.ARITHMETIC_MISMATCH),
             },
-            "authenticity_risk": {"issue_count": len(authenticity), "risk": _risk_from(authenticity)},
+            "authenticity_risk": {"issue_count": len(authenticity), "risk": content_risk(authenticity)},
             "forgery_risk": {
                 "issue_count": len(forgery),
                 "risk": _risk_from(forgery),
@@ -108,14 +128,25 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
             },
             "adversarial_manipulation_risk": {
                 "issue_count": len(adversarial),
-                "risk": _risk_from(adversarial),
+                "risk": content_risk(adversarial),
             },
             "unverified_ratio": {
                 "unverified_items": len(result.unverified_items),
                 "unavailable_sources": [s["name"] for s in result.unavailable_sources],
                 "ratio": round(len(result.unverified_items) / citation_total, 3) if citation_total else None,
+                "unreadable_documents": [d for d in unreadable if d],
+                "analyzed_documents": len(analyzed_documents),
+                "total_documents": len(result.documents),
             },
         },
         "quarantined_documents": [d.document_id for d in result.documents if d.quarantined],
-        "note": "축별 위험도를 하나의 종합점수로 합산하지 않는다(제20.1장).",
+        "note": (
+            "축별 위험도를 하나의 종합점수로 합산하지 않는다(제20.1장). "
+            + (
+                "본문을 읽지 못해 내용 검증을 수행하지 못했다. 내용 기반 축의 UNVERIFIED는 "
+                "'이상 없음'이 아니라 '확인하지 못함'이다."
+                if nothing_analyzed
+                else ""
+            )
+        ).strip(),
     }

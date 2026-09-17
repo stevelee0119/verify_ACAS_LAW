@@ -22,6 +22,7 @@ from .document_forensics import analyze_image_lsb, scan_document_forensics
 from .privilege import PrivilegeGate
 from .redaction import scan_redaction
 from .residual import scan_residual
+from .specimen import scan_specimen
 from .template_residue import scan_template_residue
 
 ENGINE_NAME = "forensic_engine"
@@ -62,6 +63,7 @@ class ForensicEngine:
             )
         )
         findings.extend(scan_document_forensics(doc))
+        findings.extend(scan_specimen(doc))
 
         advisory_context = context.advisory or AdvisoryContext()
         if context.enabled_advisory_signals is not None:

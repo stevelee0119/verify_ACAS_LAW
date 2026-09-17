@@ -307,3 +307,49 @@ def test_segment_verdicts_group_lines_into_paragraphs():
     assert len(units) < len(lines), "줄이 문단으로 묶여야 한다"
     verdicts = _segment_verdicts(doc)
     assert any(v["verdict"] != "ABSTAIN" for v in verdicts), "전 구간이 ABSTAIN이 되면 안 된다"
+
+
+def test_unread_document_does_not_report_risk_none():
+    """본문을 읽지 못했는데 모든 축이 '위험 없음'으로 보고되면 안 된다.
+
+    실제 실행(verification_rpt_104aadabb3b04159)에서 OCR 미설치로 이미지 본문을
+    한 글자도 읽지 못했는데, 모든 내용 기반 축이 NONE, unverified_items가 0이었다.
+    검증해서 깨끗한 문서와 아무것도 못 읽은 문서가 같은 보고서를 냈다.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from PIL import Image
+
+    from packages.document_engine.ocr import NullOCRAdapter, get_ocr_adapter, set_ocr_adapter
+    from packages.llm_router import LLMRouter
+    from packages.source_adapters import SourceRegistry
+    from packages.verification_engine.pipeline import DocumentInput, ProjectContext, VerificationPipeline
+    from packages.verification_engine.scoring import aggregate_scores
+
+    original = get_ocr_adapter()
+    set_ocr_adapter(NullOCRAdapter())
+    try:
+        tmp = Path(tempfile.mkdtemp())
+        image = tmp / "contract.png"
+        Image.new("RGB", (600, 800), "white").save(image)
+        result = VerificationPipeline(registry=SourceRegistry(), router=LLMRouter()).run(
+            "run_probe",
+            ProjectContext(project_id="P"),
+            [DocumentInput(document_id="D1", path=str(image), filename="contract.png",
+                           mime_type="image/png", sha256="x")],
+        )
+        scores = aggregate_scores(result)
+    finally:
+        set_ocr_adapter(original)
+
+    axes = scores["axes"]
+    for name in ("legal_citation_accuracy", "factual_reliability",
+                 "authenticity_risk", "adversarial_manipulation_risk"):
+        assert axes[name]["risk"] == "UNVERIFIED", f"{name}이 '{axes[name]['risk']}'로 보고되었다"
+
+    ratio = axes["unverified_ratio"]
+    assert ratio["analyzed_documents"] == 0
+    assert ratio["unreadable_documents"] == ["D1"]
+    assert ratio["unverified_items"] >= 1, "본문 추출 실패가 unverified_items에 남아야 한다"
+    assert "확인하지 못함" in scores["note"]

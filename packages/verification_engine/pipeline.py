@@ -265,6 +265,32 @@ class VerificationPipeline:
             project_id=context.project_id,
             document_id=doc.document_id,
         )
+        # 본문을 한 글자도 읽지 못한 경우. 파싱 자체는 성공했으므로 parse_error가 아니지만,
+        # 검증 관점에서는 아무것도 확인하지 못한 것이다. 조용히 넘어가면 모든 위험 축이
+        # "문제 없음"으로 보고되어, 검증한 결과 깨끗한 문서와 구별되지 않는다.
+        if doc.structure.get("body_extraction_failed") and not doc.body_blocks():
+            result.findings.append(
+                Finding.create(
+                    type=FindingType.PARSE_ERROR,
+                    status=VerificationStatus.UNVERIFIED,
+                    severity=Severity.MEDIUM,
+                    evidence_grade=EvidenceGrade.U,
+                    title=f"본문을 읽지 못해 내용 검증을 수행하지 못했다: {document.filename}",
+                    detail=(
+                        "; ".join(doc.parse_warnings)
+                        + " 본 문서에 대한 인용·주장·적대적 콘텐츠 검사 결과는 '이상 없음'이 아니라 "
+                        "'확인하지 못함'이다."
+                    ),
+                    document_id=doc.document_id,
+                    engine=ENGINE_NAME,
+                    tags=["UNVERIFIED"],
+                )
+            )
+            result.unverified_items.append(
+                {"kind": "document_body", "document_id": doc.document_id,
+                 "reason": "본문 추출 실패(OCR 미설치 등)로 내용 검증 미수행"}
+            )
+
         if doc.structure.get("unsupported_format") or doc.structure.get("parse_error"):
             result.findings.append(
                 Finding.create(

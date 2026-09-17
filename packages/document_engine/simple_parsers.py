@@ -240,7 +240,10 @@ class ImageParser(DocumentParser):
         doc.raw_layers["raw_text"] = ocr_text
         doc.raw_layers["metadata_text"] = "\n".join(f"{k}: {v}" for k, v in doc.metadata.items())
         if not ocr.available:
+            # 경고 문자열에만 남기면 후속 단계가 알아채지 못한다. 구조 플래그로 남긴다.
+            doc.structure["body_extraction_failed"] = True
             doc.parse_warnings.append(
-                "OCR Adapter가 사용 불가하여 이미지 본문을 추출하지 못했다. 관련 검증 항목은 UNVERIFIED로 표시한다."
+                "OCR Adapter가 사용 불가하여 이미지 본문을 추출하지 못했다. 관련 검증 항목은 UNVERIFIED로 표시한다. "
+                "이미지 문서를 검증하려면 tesseract-ocr과 한국어 데이터(tesseract-ocr-kor) 설치가 필요하다."
             )
         return doc

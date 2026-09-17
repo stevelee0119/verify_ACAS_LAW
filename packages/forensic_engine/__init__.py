@@ -6,6 +6,7 @@ from .outbound_guard import OutboundReport, inspect_outbound, sanitize
 from .privilege import PrivilegeGate, RevealDecision
 from .redaction import scan_redaction
 from .residual import scan_residual
+from .specimen import rrn_is_valid, scan_specimen
 from .template_residue import scan_template_residue
 
 __all__ = [
@@ -16,6 +17,8 @@ __all__ = [
     "scan_redaction",
     "scan_covert",
     "scan_template_residue",
+    "scan_specimen",
+    "rrn_is_valid",
     "scan_document_forensics",
     "analyze_image_lsb",
     "scan_advisory",
