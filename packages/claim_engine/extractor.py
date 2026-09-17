@@ -44,12 +44,38 @@ PARTY_ROLE_WORDS = {
 }
 ORG_WORDS = {"주식회사", "유한회사", "합자회사", "재단법인", "사단법인", "법인"}
 
+# 당사자 표기 바로 뒤에 올 수 있으나 사람 이름이 아닌 토큰.
+# 조사가 그대로 이름으로 잡히면 "피고는 원고에게" 에서 '에게'가 PERSON이 된다.
+NON_NAME_TOKENS = {
+    # 조사·어미
+    "에게", "에게서", "으로", "에서", "부터", "까지", "에는", "에도", "라고", "이라",
+    "한테", "께서", "께는", "이며", "이고", "라는", "이라는",
+    # 당사자 표기 뒤에 흔히 오는 일반명사
+    "제출", "주장", "진술", "청구", "답변", "준비", "서면", "대리", "본인", "측은", "측이",
+    "소송", "대리인", "당사자", "사건", "회사", "법인", "명의", "프로젝트", "계약", "합의",
+    "이행", "손해", "배상", "지급", "반환", "확인", "신청", "요청", "통지", "최고",
+}
+
 # 당사자 표기 뒤의 이름. 뒤에 법인 표시가 오면 사람 이름이 아니다.
+# 이름 뒤 조사는 선택이 아니라 '조사 또는 경계'로 못박는다.
 PERSON_CONTEXT_RE = re.compile(
     r"(?:원고|피고인|피고|참고인|피의자|증인|고소인|고발인|신청인|피신청인|채권자|채무자|망|소외)\s*"
     r"(?!주식회사|유한회사|합자회사|재단법인|사단법인)"
     r"([가-힣]{2,4}?)(?:은|는|이|가|을|를|과|와|의|에게|에|도)?(?![가-힣])"
 )
+
+
+def is_person_name(token: str) -> bool:
+    """당사자 표기 뒤에 잡힌 토큰이 사람 이름일 수 있는지 본다."""
+    name = (token or "").strip()
+    if len(name) < 2 or len(name) > 4:
+        return False
+    if name in NON_NAME_TOKENS:
+        return False
+    # 조사만으로 이루어진 토큰은 이름이 아니다
+    if all(ch in "은는이가을를과와의에도로서만며고" for ch in name):
+        return False
+    return True
 COMPANY_CONTEXT_RE = re.compile(
     r"(?<![가-힣])([가-힣A-Za-z0-9]{2,10})\s*(?:주식회사|㈜)|(?:주식회사|㈜)\s+([가-힣A-Za-z0-9]{1,20})"
 )
@@ -126,6 +152,8 @@ def extract_entities(doc: NormalizedDocument) -> List[Entity]:
 
     for block in doc.body_blocks():
         for m in PERSON_CONTEXT_RE.finditer(block.text):
+            if not is_person_name(m.group(1)):
+                continue
             add(EntityType.PERSON, m.group(1), block, (m.start(1), m.end(1)))
         for m in COMPANY_CONTEXT_RE.finditer(block.text):
             name = (m.group(1) or m.group(2) or "").strip()

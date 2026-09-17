@@ -154,3 +154,20 @@ def test_unknown_response_shape_yields_zero_records_not_crash(monkeypatch):
     assert _normalize_case_payload({"UnexpectedRoot": {"items": [1, 2]}}) == []
     assert _normalize_law_payload({"UnexpectedRoot": []}) == []
     assert _normalize_case_payload(None) == []
+
+
+def test_oc_credential_never_reaches_source_records():
+    """상세링크에 실려 오는 OC(OPEN API 식별자)가 보고서로 새어나가면 안 된다."""
+    from packages.source_adapters.law_go_kr import _normalize_case_payload, _normalize_law_payload
+
+    case = _normalize_case_payload({"PrecSearch": {"prec": [{
+        "사건번호": "2024도12341",
+        "판례상세링크": "/DRF/lawService.do?OC=DL_stevelaw&target=prec&ID=619505",
+    }]}})[0]
+    law = _normalize_law_payload({"LawSearch": {"law": [{
+        "법령명한글": "민법",
+        "법령상세링크": "/DRF/lawService.do?OC=DL_stevelaw&target=law&MST=1",
+    }]}})[0]
+    for record in (case, law):
+        assert "DL_stevelaw" not in str(record)
+        assert "[REDACTED]" in str(record["detail_link"])

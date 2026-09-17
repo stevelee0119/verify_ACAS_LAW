@@ -155,3 +155,155 @@ def test_source_record_created_for_every_query(registry):
         assert record.query and record.retrieved_at
         if record.status == AdapterStatus.READY:
             assert record.response_hash
+
+
+# --- 실제 보고서(verification_rpt_251392c6e1a044f7)에서 드러난 허위 일치 회귀 ---
+class _StubLawAdapter:
+    """국가법령정보 키워드 검색의 실제 동작(무관한 결과 반환)을 재현한다."""
+
+    def __init__(self, case_records=None, law_records=None, articles=None):
+        self.case_records = case_records or []
+        self.law_records = law_records or []
+        self.articles = articles
+        self.queries = []
+
+    def search_case(self, query, *, court=None):
+        from packages.common.enums import AdapterStatus
+        from packages.source_adapters.base import AdapterResponse
+
+        self.queries.append(query)
+        return AdapterResponse(AdapterStatus.READY, list(self.case_records), None, "")
+
+    def search_law(self, law_name, *, article=None, as_of=None):
+        from packages.common.enums import AdapterStatus
+        from packages.source_adapters.base import AdapterResponse
+
+        self.queries.append(law_name)
+        return AdapterResponse(AdapterStatus.READY, list(self.law_records), None, "")
+
+    def fetch_articles(self, law):
+        return self.articles
+
+
+def _registry_with(adapter):
+    from packages.source_adapters import SourceRegistry
+
+    registry = SourceRegistry()
+    registry.legal[0] = adapter  # law는 legal[0]을 가리키는 property이다
+    return registry
+
+
+def _citation(**kwargs):
+    from packages.common.enums import CitationType
+    from packages.common.schemas import Citation
+
+    base = dict(
+        citation_id="CIT_test",
+        type=CitationType.STATUTE if kwargs.get("law_name") else CitationType.CASE,
+        document_id="D", block_id="B", page=1, span=(0, 10), raw_text="x",
+    )
+    base.update(kwargs)
+    return Citation(**base)
+
+
+def test_unrelated_case_result_is_not_bound_as_official():
+    """가공 사건번호가 전혀 다른 실재 판례에 결부되어서는 안 된다.
+
+    실제 보고서에서 '2023다284910'이 접두 재검색('2023다284')으로 '2024도12341'에
+    매칭되어 level1=VERIFIED, 선고일 불일치(CONTRADICTED)로 보고되었다.
+    존재하지 않는 판례가 '존재는 확인됨'으로 둔갑한 것이다.
+    """
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+
+    adapter = _StubLawAdapter(case_records=[{
+        "case_number": "2024도12341", "court": "대법원", "decision_date": "2026-04-16",
+    }])
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_case(
+        _citation(canonical_case_number="2023다284910", case_number="2023다284910",
+                  court="대법원", decision_date="2023-11-16",
+                  raw_text="대법원 2023. 11. 16. 선고 2023다284910 판결")
+    )
+    assert verdict.status == VerificationStatus.NOT_FOUND
+    assert verdict.official_record is None
+    assert verdict.levels.get("level1") == "NOT_FOUND"
+    assert all("2023다284" != q for q in adapter.queries), "사건번호를 잘라 검색하지 않는다"
+
+
+def test_substring_law_match_is_rejected():
+    """'민법' 조회가 '난민법'에 매칭되어 VERIFIED가 되어서는 안 된다."""
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+    from packages.source_adapters.law_go_kr import _same_law_name
+
+    assert _same_law_name("민법", "난민법") is False
+
+    adapter = _StubLawAdapter(law_records=[])  # 이름 완전일치 필터를 통과한 결과가 없다
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_statute(
+        _citation(law_name="민법", article="390의2", raw_text="민법 제390조의2")
+    )
+    assert verdict.status == VerificationStatus.NOT_FOUND
+
+
+def test_nonexistent_article_is_not_verified():
+    """법령명이 맞아도 실재하지 않는 조문은 VERIFIED가 될 수 없다."""
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+
+    adapter = _StubLawAdapter(
+        law_records=[{"law_name": "민법", "effective_from": "1958-02-22", "raw": {"법령일련번호": "1"}}],
+        articles=["389", "390", "391"],
+    )
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_statute(
+        _citation(law_name="민법", article="390의2", raw_text="민법 제390조의2")
+    )
+    assert verdict.status == VerificationStatus.NOT_FOUND
+    assert verdict.levels.get("article") == "NOT_FOUND"
+    assert any("실재하지 않는 조문" in f.title for f in verdict.findings)
+
+
+def test_article_lookup_failure_does_not_claim_verified():
+    """조문 목록을 조회하지 못하면 VERIFIED가 아니라 UNVERIFIED다."""
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+
+    adapter = _StubLawAdapter(
+        law_records=[{"law_name": "민법", "effective_from": "1958-02-22", "raw": {"법령일련번호": "1"}}],
+        articles=None,
+    )
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_statute(
+        _citation(law_name="민법", article="390의2", raw_text="민법 제390조의2")
+    )
+    assert verdict.status == VerificationStatus.UNVERIFIED
+
+
+def test_existing_article_still_verifies():
+    """정상 인용은 그대로 VERIFIED여야 한다(과잉 차단 방지)."""
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+
+    adapter = _StubLawAdapter(
+        law_records=[{"law_name": "민법", "effective_from": "1958-02-22", "raw": {"법령일련번호": "1"}}],
+        articles=["389", "390", "391"],
+    )
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_statute(
+        _citation(law_name="민법", article="390", raw_text="민법 제390조")
+    )
+    assert verdict.status == VerificationStatus.VERIFIED
+    assert verdict.levels.get("article") == "VERIFIED"
+
+
+def test_matching_case_number_still_verifies():
+    """사건번호가 일치하면 종전대로 확인된다."""
+    from packages.common.enums import VerificationStatus
+    from packages.legal_engine.verifier import LegalVerifier
+
+    adapter = _StubLawAdapter(case_records=[{
+        "case_number": "2023다284910", "court": "대법원", "decision_date": "2023-11-16",
+    }])
+    verdict = LegalVerifier(registry=_registry_with(adapter)).verify_case(
+        _citation(canonical_case_number="2023다284910", case_number="2023다284910",
+                  court="대법원", decision_date="2023-11-16")
+    )
+    assert verdict.status != VerificationStatus.NOT_FOUND
+    assert verdict.official_record is not None

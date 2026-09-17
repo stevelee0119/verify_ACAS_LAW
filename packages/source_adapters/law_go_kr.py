@@ -116,17 +116,64 @@ class LawGoKrAdapter(SourceAdapter):
             return self._unavailable(law_name, status, f"조회 실패: {exc}")
 
         records = _normalize_law_payload(payload)
+        # lawSearch.do는 키워드 검색이다. "민법"으로 조회하면 "난민법"·"주민법" 등
+        # 부분 문자열을 포함한 법령이 함께 돌아온다. 이름이 정확히 같은 것만 남긴다.
+        exact = [r for r in records if _same_law_name(law_name, r.get("law_name"))]
         return AdapterResponse(
             AdapterStatus.READY,
-            records,
+            exact,
             self._record(law_name, AdapterStatus.READY, payload=payload, url=SEARCH_URL,
                          used_fields=["법령명한글", "시행일자", "공포일자"]),
+            "이름이 정확히 일치하는 법령이 없다" if records and not exact else "",
         )
+
+    # -- 조문 실존 확인 -----------------------------------------------------
+    def fetch_articles(self, law: Dict[str, Any]) -> Optional[List[str]]:
+        """법령 본문을 조회해 수록된 조문 번호 목록을 만든다.
+
+        검색 API는 법령의 존재만 알려줄 뿐 조문 목록을 주지 않는다. 조문 번호를 확인하지
+        않으면 '민법 제390조의2'처럼 실재하지 않는 조문이 법령만 맞다는 이유로
+        확인된 것처럼 처리된다.
+
+        조회에 실패하면 빈 목록이 아니라 None을 돌려준다. 빈 목록을 돌려주면
+        "조문이 없음(=허위)"과 "확인 불가"가 구분되지 않는다.
+        """
+        raw = law.get("raw") or {}
+        mst = _first(raw, "법령일련번호", "MST") or law.get("law_id")
+        if not mst or self.status() != AdapterStatus.READY:
+            return None
+        try:
+            response = self._http_get(
+                SERVICE_URL,
+                params={"OC": self.api_key, "target": "law", "type": "JSON", "MST": mst},
+            )
+            if response.status_code >= 400:
+                return None
+            payload = response.json()
+        except Exception:
+            return None
+        return _article_numbers(payload)
 
     def search(self, query: str, **kwargs: Any) -> AdapterResponse:
         if kwargs.get("target") == "law":
             return self.search_law(query, article=kwargs.get("article"), as_of=kwargs.get("as_of"))
         return self.search_case(query, court=kwargs.get("court"))
+
+
+# 국가법령정보 응답의 상세링크에는 요청에 쓴 OC가 그대로 들어온다.
+# 이 값이 검증보고서에 실려 나가면 이용자의 OPEN API 식별자가 문서와 함께 유출된다.
+OC_IN_URL_RE = re.compile(r"([?&]OC=)[^&\s\"']+", re.IGNORECASE)
+
+
+def mask_oc(value: Any) -> Any:
+    """URL 안의 OC 파라미터를 가린다. 문자열이 아니면 그대로 둔다."""
+    if isinstance(value, str):
+        return OC_IN_URL_RE.sub(r"\1[REDACTED]", value)
+    if isinstance(value, dict):
+        return {k: mask_oc(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_oc(v) for v in value]
+    return value
 
 
 def _first(d: Dict[str, Any], *keys: str) -> Optional[str]:
@@ -158,8 +205,8 @@ def _normalize_case_payload(payload: Any) -> List[Dict[str, Any]]:
                 "case_kind": _first(item, "판결유형", "선고", "case_kind"),
                 "holding": _first(item, "판시사항", "holding"),
                 "summary": _first(item, "판결요지", "summary"),
-                "detail_link": _first(item, "판례상세링크", "detail_link"),
-                "raw": item,
+                "detail_link": mask_oc(_first(item, "판례상세링크", "detail_link")),
+                "raw": mask_oc(item),
             }
         )
     return out
@@ -181,11 +228,54 @@ def _normalize_law_payload(payload: Any) -> List[Dict[str, Any]]:
                 "promulgation_date": _canon_date(_first(item, "공포일자", "") or ""),
                 "effective_from": _canon_date(_first(item, "시행일자", "") or ""),
                 "law_id": _first(item, "법령ID", "법령일련번호"),
-                "detail_link": _first(item, "법령상세링크"),
-                "raw": item,
+                "detail_link": mask_oc(_first(item, "법령상세링크")),
+                "raw": mask_oc(item),
             }
         )
     return out
+
+
+def _same_law_name(left: Optional[str], right: Optional[str]) -> bool:
+    """공백·괄호 표기를 무시하고 법령명이 같은지 본다. 부분 포함은 같다고 보지 않는다."""
+    from packages.legal_engine.normalize import canonical_law_name
+
+    if not left or not right:
+        return False
+    return canonical_law_name(left).replace(" ", "") == canonical_law_name(right).replace(" ", "")
+
+
+def _article_numbers(payload: Any) -> List[str]:
+    """응답 어디에 중첩되어 있든 조문번호·조문가지번호를 모아 정규화한다.
+
+    국가법령정보 본문 응답의 중첩 구조는 법령 종류에 따라 다르므로,
+    고정 경로를 가정하지 않고 재귀 탐색한다.
+    """
+    found: List[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            number = node.get("조문번호")
+            if number not in (None, ""):
+                branch = str(node.get("조문가지번호") or "").strip()
+                try:
+                    base = str(int(str(number).strip()))
+                except ValueError:
+                    base = str(number).strip()
+                if branch and branch not in ("0",):
+                    try:
+                        found.append(f"{base}의{int(branch)}")
+                    except ValueError:
+                        found.append(f"{base}의{branch}")
+                else:
+                    found.append(base)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for value in node:
+                walk(value)
+
+    walk(payload)
+    return found
 
 
 def _canon_date(value: str) -> Optional[str]:

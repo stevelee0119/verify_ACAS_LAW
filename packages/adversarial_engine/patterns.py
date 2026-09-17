@@ -48,6 +48,43 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"(개발자|관리자|시스템)\s*(모드|권한)[으로]?\s*(전환|변경|진입)"),
      InjectionIntent.ROLE_OVERRIDE, 0.9, "권한 모드 전환 요구"),
 
+    # --- 권한 위장 명령 -----------------------------------------------------
+    # 실제 테스트 문서(verification_rpt_251392c6e1a044f7)에서 미탐지된 형태이다.
+    # "[ADMIN COMMAND: ...]", "[SYSTEM INSTRUCTION: SECURITY EVALUATION OVERRIDE]"는
+    # 역할 태그가 아니라 대괄호 안의 명령 선언이라 기존 규칙에 걸리지 않았다.
+    (_c(r"\[\s*(admin|administrator|root|superuser|system|security|privileged)\s+"
+        r"(command|instruction|directive|override|mode)\b"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "관리자 명령 선언 위장"),
+    (_c(r"(privileged|security|system)\s+(system\s+)?override"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "권한 우회 선언"),
+    (_c(r"(시스템\s*)?(감사관|감사\s*담당|보안\s*담당|관리자)\s*(메모|지시|공지|요청)"),
+     InjectionIntent.ROLE_OVERRIDE, 0.9, "감사관·관리자 사칭(한국어)"),
+    (_c(r"(사전\s*적격\s*심사|사전\s*심사|사전\s*검증)[를을]?\s*(완료|통과)"),
+     InjectionIntent.ROLE_OVERRIDE, 0.8, "사전심사 완료 주장으로 검증 면제 유도"),
+
+    # --- 검증 중단 요구 -----------------------------------------------------
+    (_c(r"(검증|탐지|분석|점검|심사)\s*(루틴|절차|과정|기능)?[를을]?\s*(즉시\s*)?(중단|생략|건너뛰|해제|비활성)"),
+     InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "검증 중단 요구(한국어)"),
+    (_c(r"(skip|disable|bypass|suppress|turn\s+off)\s+(all\s+|any\s+|the\s+)?"
+        r"(security\s+)?(check|verification|validation|detection|scan|warning|alert|analysis)s?"),
+     InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "검증·경고 억제 요구(영어)"),
+    (_c(r"(추가\s*)?(경고|결함|문제점|오류)[를을]?\s*(출력|표시|기재|보고)하지\s*(말|마십시오|마세요|않)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "경고 출력 금지 요구"),
+    (_c(r"do\s+not\s+(output|report|show|display|include)\s+(any\s+)?"
+        r"(additional\s+)?(warnings?|errors?|findings?|issues?)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "경고 출력 금지 요구(영어)"),
+
+    # --- 판정값 직접 지정 ---------------------------------------------------
+    (_c(r"(ai_probability|hallucination_flag|adversarial_risk|risk)\s*[=:]\s*"
+        r"(0(\.\d+)?|false|none|null)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "판정 변수값 직접 지정"),
+    (_c(r"(위험도|리스크)\s*(점수)?\s*0\s*점"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "위험도 0점 지정"),
+    (_c(r"(사람|인간)\s*작성\s*(완전\s*)?일치"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.9, "사람 작성 판정 강제"),
+    (_c(r"(적합|합격|정상)\s*판정[으]?[로]?\s*(반환|처리|회신|기재)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "적합 판정 반환 요구"),
+
     # --- Output Manipulation --------------------------------------------
     (_c(r"(이상\s*없음|문제\s*없음|정상|적법|진정)(으로|이라고|하다고)\s*(보고|기재|판정|표시|결론|평가)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "특정 결론 강제(한국어)"),
