@@ -270,8 +270,10 @@ class PdfParser(DocumentParser):
 
         if not adapter.available:
             if not has_visible_text:
+                doc.structure["body_extraction_failed"] = True
                 doc.parse_warnings.append(
-                    "OCR Adapter를 사용할 수 없어 스캔 PDF 본문을 추출하지 못했다. 본문 검증 항목은 UNVERIFIED로 표시한다."
+                    "OCR Adapter를 사용할 수 없어 스캔 PDF 본문을 추출하지 못했다. 본문 검증 항목은 UNVERIFIED로 표시한다. "
+                    "스캔 문서를 검증하려면 tesseract-ocr과 한국어 데이터(tesseract-ocr-kor) 설치가 필요하다."
                 )
             return
 

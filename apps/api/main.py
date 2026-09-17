@@ -13,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from packages.common.config import get_settings
 
+from .capabilities import runtime_capabilities
 from .db import init_db
 from .routers import audit, projects, reports, settings_router, verification, viewer
 
@@ -82,6 +83,34 @@ def create_app() -> FastAPI:
             "app": settings.app_name,
             "version": settings.version,
             "principles": ["Source First", "Evidence First", "Human Final Decision"],
+            "capabilities": runtime_capabilities(),
+        }
+
+    @app.get("/api/diagnostics")
+    def diagnostics() -> Dict[str, Any]:
+        """배포 환경이 무엇을 할 수 있는지 스스로 밝힌다.
+
+        OCR이 없으면 스캔본·이미지 문서의 본문 검증은 수행되지 않고 UNVERIFIED로
+        남는다. 배포 직후 이 값을 확인하지 않으면, 아무것도 읽지 못한 실행을
+        정상 실행으로 오인하게 된다.
+
+        비밀값은 담지 않는다. 키의 존재 여부(불리언)만 알린다.
+        """
+        capabilities = runtime_capabilities()
+        blocking = [name for name, ready in (
+            ("ocr", capabilities["ocr"]["available"]),
+            ("rasterizer", capabilities["rasterizer"]["available"]),
+        ) if not ready]
+        return {
+            "capabilities": capabilities,
+            "blocking": blocking,
+            "verdict": "READY" if not blocking else "DEGRADED",
+            "note": (
+                "OCR을 사용할 수 없다. 이미지·스캔 PDF는 본문을 읽지 못해 "
+                "내용 검증이 UNVERIFIED로 남는다. Render라면 runtime이 docker인지 확인한다."
+                if "ocr" in blocking
+                else "이미지·스캔 문서를 포함해 본문 추출이 가능하다."
+            ),
         }
 
     web_dir = Path(__file__).resolve().parents[1] / "web"

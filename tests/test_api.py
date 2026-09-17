@@ -316,3 +316,43 @@ def test_terminal_state_never_visible_without_results(client, project, tmp_path)
     assert final["scores"]["axes"], "완료 상태에서는 축별 점수가 있어야 한다"
     findings = client.get(f"/api/projects/{project['id']}/findings?run_id={run_id}").json()
     assert findings, "완료 상태에서는 Finding을 조회할 수 있어야 한다"
+
+
+def test_diagnostics_reports_runtime_capabilities(client):
+    """배포 환경이 이미지·스캔 문서를 읽을 수 있는지 스스로 밝혀야 한다."""
+    payload = client.get("/api/diagnostics").json()
+    assert payload["verdict"] in ("READY", "DEGRADED")
+    ocr = payload["capabilities"]["ocr"]
+    assert set(ocr) >= {"engine", "available", "languages", "missing_languages"}
+    if not ocr["available"]:
+        assert "ocr" in payload["blocking"]
+        assert "UNVERIFIED" in payload["note"]
+
+
+def test_diagnostics_never_exposes_secret_values(client, monkeypatch):
+    """키의 존재 여부만 알리고 값은 절대 담지 않는다."""
+    monkeypatch.setenv("LV_LAW_GO_KR_OC", "SECRET_OC_VALUE")
+    monkeypatch.setenv("LV_KCI_KEY", "SECRET_KCI_VALUE")
+    body = client.get("/api/diagnostics").text
+    assert "SECRET_OC_VALUE" not in body
+    assert "SECRET_KCI_VALUE" not in body
+    keys = client.get("/api/diagnostics").json()["capabilities"]["source_keys_present"]
+    assert keys["law_go_kr"] is True and keys["kci"] is True
+
+
+def test_health_includes_capabilities(client):
+    assert "capabilities" in client.get("/api/health").json()
+
+
+def test_ocr_unavailable_is_reported_as_degraded(client):
+    """OCR이 없으면 READY라고 말하지 않는다."""
+    from packages.document_engine.ocr import NullOCRAdapter, get_ocr_adapter, set_ocr_adapter
+
+    original = get_ocr_adapter()
+    set_ocr_adapter(NullOCRAdapter())
+    try:
+        payload = client.get("/api/diagnostics").json()
+    finally:
+        set_ocr_adapter(original)
+    assert payload["verdict"] == "DEGRADED"
+    assert "ocr" in payload["blocking"]
