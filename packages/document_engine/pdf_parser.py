@@ -56,6 +56,26 @@ def _is_dark(color: Any) -> bool:
     return all(v <= 0.2 for v in rgb)
 
 
+_SIGNATURE_RE = re.compile(r"\s+")
+
+
+def _text_signature(text: str) -> str:
+    """공백을 지운 비교용 문자열. 줄바꿈 위치 차이를 무시한다."""
+    return _SIGNATURE_RE.sub("", text or "")
+
+
+def _covered_by(line_signature: str, rows: List[List[str]]) -> bool:
+    """표의 셀 내용이 이미 줄 텍스트에 모두 들어 있는지 본다.
+
+    한 셀이라도 줄 텍스트에 없으면 진짜 표로 보고 남긴다.
+    """
+    cells = [_text_signature(c) for row in rows for c in row]
+    meaningful = [c for c in cells if len(c) >= 2]
+    if not meaningful:
+        return True
+    return all(c in line_signature for c in meaningful)
+
+
 class PdfParser(DocumentParser):
     name = "PdfParser"
     extensions = [".pdf"]
@@ -116,19 +136,34 @@ class PdfParser(DocumentParser):
                         rendered_parts.append(text)
 
                 # 표
+                #
+                # pdfplumber의 표 검출은 글자 정렬만 보므로, 들여쓰기가 규칙적인
+                # 법률 서면의 일반 문단도 표로 잡아낸다. 그 결과가 줄 블록과 함께
+                # 남으면 같은 문장이 두 벌 생기고, 그중 한 벌은 셀이 " | "로 이어진
+                # 파편이 된다. 실제 검증보고서에서 주장 101건 중 16건이 이 파편이었다.
+                # 이미 줄 블록으로 읽은 내용과 같은 표는 버린다.
                 try:
+                    line_signature = _text_signature("".join(raw_parts))
                     for t_index, table in enumerate(page.extract_tables() or []):
-                        flat = "\n".join(" | ".join(str(c) if c else "" for c in row) for row in table)
-                        if flat.strip():
-                            blk = Block(
-                                block_id=new_id("B"),
-                                text=flat,
-                                page=index,
-                                source_layer="visible_text",
-                                block_type="table",
-                                attributes={"table_index": t_index},
+                        rows = [[str(c) if c else "" for c in row] for row in table]
+                        flat = "\n".join(" | ".join(row) for row in rows)
+                        if not flat.strip():
+                            continue
+                        if _covered_by(line_signature, rows):
+                            doc.parse_warnings.append(
+                                f"page {index} table {t_index}: 줄 텍스트와 중복되어 표 블록을 만들지 않았다"
                             )
-                            p.blocks.append(blk)
+                            continue
+                        blk = Block(
+                            block_id=new_id("B"),
+                            text=flat,
+                            page=index,
+                            source_layer="visible_text",
+                            block_type="table",
+                            # 셀 구조를 남겨 두면 검산이 " | " 재파싱에 의존하지 않는다
+                            attributes={"table_index": t_index, "cells": rows},
+                        )
+                        p.blocks.append(blk)
                 except Exception as exc:  # pragma: no cover - 파서 방어
                     doc.parse_warnings.append(f"page {index} table extraction failed: {exc}")
 

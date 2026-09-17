@@ -142,6 +142,15 @@ class NormalizedDocument:
         """
         return [b for b in self.blocks if b.visible and b.source_layer in BODY_LAYERS]
 
+    def prose_blocks(self) -> List[Block]:
+        """문장 단위 분석(주장·사건·개체명)에 쓸 블록.
+
+        표 블록은 셀을 " | "로 이어 붙인 표현이므로 문장이 아니다.
+        그대로 주장 추출에 넣으면 "[ | 인용 판례 | 1 — | ] | 대법원 | ..." 같은
+        파편이 주장으로 등록된다. 표는 계산 검증에서 행 단위로 따로 다룬다.
+        """
+        return [b for b in self.body_blocks() if b.block_type != "table"]
+
     @property
     def visible_text(self) -> str:
         return "\n".join(b.text for b in self.body_blocks())

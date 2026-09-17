@@ -307,3 +307,27 @@ def test_matching_case_number_still_verifies():
     )
     assert verdict.status != VerificationStatus.NOT_FOUND
     assert verdict.official_record is not None
+
+
+@pytest.mark.parametrize("text,expected_title", [
+    ("(홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)", "현대 계약법과 알고리즘 책임론"),
+    ("김철수, 「도급계약상 하자담보책임」, 법조 제70권 제3호, 2021, 55면", "도급계약상 하자담보책임"),
+])
+def test_book_and_article_citations_are_extracted(text, expected_title):
+    """단행본 표기 『』가 누락되어 문헌 인용이 전혀 추출되지 않던 문제."""
+    from packages.legal_engine.citation_extractor import ACADEMIC_RE
+
+    matches = list(ACADEMIC_RE.finditer(text))
+    assert matches, "문헌 인용이 추출되어야 한다"
+    assert matches[0].group("title") == expected_title
+
+
+@pytest.mark.parametrize("text", [
+    "원고와 피고는 2025. 4. 15. 총 계약금액 12억 원 규모의 『차세대 관제』 계약을 체결하였다.",
+    "피고는 원고에게 금원을 지급하라.",
+])
+def test_non_citation_brackets_are_not_extracted(text):
+    """계약명 등 일반 『』 표기를 문헌 인용으로 오인하지 않는다."""
+    from packages.legal_engine.citation_extractor import ACADEMIC_RE
+
+    assert not list(ACADEMIC_RE.finditer(text))
