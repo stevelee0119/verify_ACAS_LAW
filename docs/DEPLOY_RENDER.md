@@ -1,5 +1,25 @@
 # Render 배포
 
+## 먼저: 배포 브랜치를 확인한다
+
+Render 서비스가 가리키는 브랜치에 `render.yaml`·`alembic.ini`·`migrations/`가 있어야 한다.
+이것들이 없는 브랜치를 배포하면 Start Command의 첫 단계에서 끝난다.
+
+```
+FAILED: No 'script_location' key found in configuration.   ← alembic 설정·마이그레이션 없음
+Can't load plugin: sqlalchemy.dialects:postgres            ← URL 정규화 없음
+No module named 'psycopg2'                                  ← psycopg 미설치
+```
+
+세 가지 모두 배포 지원 커밋이 빠진 브랜치에서 나타난다. 확인 방법은 다음과 같다.
+
+```bash
+git ls-tree --name-only <배포브랜치> -- render.yaml alembic.ini migrations
+grep -E "^(psycopg|pgvector)" requirements.txt
+```
+
+Render 대시보드에서는 서비스 → **Settings → Build & Deploy → Branch**에서 바꿀 수 있다.
+
 ## Start Command
 
 런타임 선택에 따라 다르다. **OCR이 필요하면 Docker를 쓴다.**
