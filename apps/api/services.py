@@ -46,6 +46,14 @@ from .db import (
     get_session_factory,
 )
 
+# 결과 적재가 끝나야 최종 상태로 본다(제18.2장 Job State).
+TERMINAL_JOB_STATES = {
+    JobState.COMPLETED,
+    JobState.PARTIAL_COMPLETED,
+    JobState.FAILED,
+    JobState.CANCELLED,
+}
+
 _registry: Optional[SourceRegistry] = None
 
 
@@ -128,6 +136,14 @@ def execute_run(run_id: str) -> None:
         pipeline = VerificationPipeline(registry=get_registry(), router=LLMRouter(), audit=audit)
 
         def progress(state: JobState, message: str, ratio: float) -> None:
+            # 최종 상태는 여기서 쓰지 않는다. 결과(scores·findings) 적재보다 먼저
+            # 완료로 바뀌면, SSE를 보고 결과를 가져가는 화면이 빈 값을 받는다.
+            # 종료 상태는 persist_result가 결과와 함께 한 번에 기록한다.
+            if state in TERMINAL_JOB_STATES:
+                session.add(VerificationCheck(run_id=run.id, name=str(state), state="PERSISTING",
+                                              detail={"message": message, "progress": ratio}))
+                session.commit()
+                return
             run.state = str(state)
             run.stage_message = message
             run.progress = round(ratio, 3)
