@@ -145,6 +145,7 @@ async function refreshProject() {
   } catch (_) { state.run = null; }
   await loadFindings();
   await renderSources();
+  await loadProjects(); // 업로드·검증 후 좌측 목록의 문서 수를 최신으로 유지한다
 }
 
 async function uploadFile(file) {

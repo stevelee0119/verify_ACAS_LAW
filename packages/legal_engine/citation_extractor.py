@@ -215,9 +215,9 @@ def extract_from_text(
 
 
 def extract_citations(doc: NormalizedDocument) -> List[Citation]:
-    """표시 본문에서만 인용을 추출한다. 숨은 레이어는 적대적 콘텐츠로 별도 처리한다."""
+    """본문(표시 텍스트·스캔본 OCR)에서 인용을 추출한다. 숨은 레이어는 적대적 콘텐츠로 별도 처리한다."""
     out: List[Citation] = []
-    for block in doc.visible_blocks():
+    for block in doc.body_blocks():
         out.extend(
             extract_from_text(block.text, document_id=doc.document_id, block_id=block.block_id, page=block.page)
         )

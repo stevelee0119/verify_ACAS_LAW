@@ -168,6 +168,46 @@ def test_table_total_mismatch():
     assert findings[0].type == FindingType.ARITHMETIC_MISMATCH
 
 
+def test_line_item_sum_mismatch_detected():
+    """실무 서면처럼 항목이 줄마다 나뉜 경우도 검산한다(제11.5장)."""
+    doc = make_doc(
+        "가. 직접손해   금 12,000,000원",
+        "나. 일실이익   금 8,000,000원",
+        "다. 위자료     금 5,000,000원",
+        "라. 합계       금 30,000,000원을 청구한다.",
+    )
+    findings = CalculationEngine().verify_document(doc)
+    assert len(findings) == 1
+    assert findings[0].type == FindingType.ARITHMETIC_MISMATCH
+    assert findings[0].evidence_grade == EvidenceGrade.A
+    assert "5,000,000" in findings[0].title
+
+
+def test_line_item_sum_correct_produces_no_finding():
+    doc = make_doc(
+        "가. 직접손해   금 12,000,000원",
+        "나. 일실이익   금 8,000,000원",
+        "다. 위자료     금 5,000,000원",
+        "라. 합계       금 25,000,000원을 청구한다.",
+    )
+    assert CalculationEngine().verify_document(doc) == []
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        # 금액 없는 줄이 끼면 서로 무관한 금액을 합산하지 않는다
+        ("계약금은 금 1,000,000원이었다.", "피고는 이를 부인한다.", "원고 주장 합계 금 5,000,000원"),
+        # 내역이 1건뿐이면 검산하지 않는다
+        ("가. 치료비 금 1,000,000원", "나. 합계 금 2,000,000원"),
+        # 합계 표기가 없으면 대상이 아니다
+        ("가. 치료비 금 1,000,000원", "나. 위자료 금 2,000,000원"),
+    ],
+)
+def test_line_item_scan_avoids_false_positives(lines):
+    assert CalculationEngine().verify_document(make_doc(*lines)) == []
+
+
 def test_interest_and_day_count_are_deterministic():
     from decimal import Decimal
 

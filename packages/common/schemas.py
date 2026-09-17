@@ -45,6 +45,9 @@ def sha256_text(text: str) -> str:
 # ---------------------------------------------------------------------------
 SourceLayer = str  # visible_text | hidden_text | ocr_layer | xml | metadata | image | annotation
 
+# 본문으로 취급하는 레이어. 스캔본은 OCR 결과가 본문이다.
+BODY_LAYERS = ("visible_text", "ocr_layer")
+
 
 @dataclass
 class BBox:
@@ -128,11 +131,20 @@ class NormalizedDocument:
         return [b for p in self.pages for b in p.blocks]
 
     def visible_blocks(self) -> List[Block]:
+        """화면에 표시되는 텍스트 블록만."""
         return [b for b in self.blocks if b.visible and b.source_layer == "visible_text"]
+
+    def body_blocks(self) -> List[Block]:
+        """본문으로 취급할 블록.
+
+        스캔 문서는 OCR 결과가 곧 본문이므로 ocr_layer를 포함한다.
+        숨은 텍스트·메타데이터·주석은 적대적 콘텐츠로 별도 처리하므로 제외한다.
+        """
+        return [b for b in self.blocks if b.visible and b.source_layer in BODY_LAYERS]
 
     @property
     def visible_text(self) -> str:
-        return "\n".join(b.text for b in self.visible_blocks())
+        return "\n".join(b.text for b in self.body_blocks())
 
     @property
     def full_text(self) -> str:

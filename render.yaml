@@ -1,0 +1,60 @@
+# Render 배포 청사진(Blueprint).
+# Dashboard → New → Blueprint → 저장소 선택 시 이 파일대로 생성된다.
+#
+# 주의
+#  - OCR(tesseract)이 필요하므로 runtime은 docker를 쓴다. Native Python 런타임에는
+#    시스템 패키지를 설치할 수 없어 스캔 문서 본문 추출이 UNVERIFIED로 남는다.
+#  - 원본 보존(제15.1장)에는 영구 디스크가 필요하다. 디스크 없이 배포하면
+#    재배포·재시작 때 업로드 원본과 감사 산출물이 사라진다. 무료 플랜은 디스크를
+#    지원하지 않으므로 증거 보존이 필요하면 유료 플랜을 쓴다.
+#  - API Key는 이 파일에 적지 않는다. sync:false 항목은 대시보드에서 직접 입력한다.
+
+services:
+  - type: web
+    name: legal-verifier-api
+    runtime: docker
+    dockerfilePath: ./docker/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /api/health
+    # 마이그레이션을 먼저 적용한 뒤 기동한다.
+    dockerCommand: sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+    disk:
+      name: lv-data
+      mountPath: /data
+      sizeGB: 10
+    envVars:
+      - key: LV_DATA_DIR
+        value: /data
+      - key: LV_DATABASE_URL
+        fromDatabase:
+          name: legal-verifier-db
+          property: connectionString
+      # Worker를 함께 띄우지 않는다면 inprocess로 두면 Redis 없이 동작한다.
+      - key: LV_WORKER_MODE
+        value: inprocess
+      - key: LV_DEFAULT_AI_POLICY
+        value: MASKED
+      - key: LV_DEFAULT_PROFILE
+        value: STANDARD
+      - key: LV_ALLOW_NETWORK
+        value: "1"
+      - key: LV_PSEUDONYM_SECRET
+        generateValue: true
+      - key: LV_LAW_GO_KR_OC
+        sync: false
+      - key: LV_KCI_KEY
+        sync: false
+      - key: LV_CROSSREF_MAILTO
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+databases:
+  - name: legal-verifier-db
+    plan: basic-256mb
+    postgresMajorVersion: "16"

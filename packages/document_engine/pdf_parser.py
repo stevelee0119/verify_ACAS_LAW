@@ -14,7 +14,11 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, NormalizedDocument, Page, new_id
 
+from packages.common.config import get_settings
+
 from .base import DocumentParser, ParserError
+from .ocr import get_ocr_adapter
+from .rasterize import render_pages
 
 HIDDEN_MIN_FONT_SIZE = 3.5
 WHITE_THRESHOLD = 0.92
@@ -161,6 +165,9 @@ class PdfParser(DocumentParser):
                     )
                 )
 
+        # 스캔 PDF 본문 OCR 및 독립 OCR 교차검증 (제6장, 제7.3장)
+        self._apply_ocr(doc, path, rendered_parts)
+
         doc.raw_layers["rendered_text"] = "\n".join(rendered_parts)
         doc.raw_layers["raw_text"] = "\n".join(raw_parts)
         doc.raw_layers["hidden_text"] = "\n".join(hidden_parts)
@@ -171,7 +178,14 @@ class PdfParser(DocumentParser):
         if ann_text.strip():
             doc.raw_layers["annotation_text"] = ann_text
 
-        if not doc.raw_layers["rendered_text"].strip():
+        if doc.structure.get("scanned_pdf_ocr_applied"):
+            doc.structure["scanned_pdf"] = True
+            doc.parse_warnings.append(
+                f"표시 텍스트가 없어 스캔 PDF로 판단되어 OCR을 적용했다"
+                f"(엔진 {doc.structure.get('ocr_engine')}, {doc.structure.get('ocr_pages')}면). "
+                "OCR 결과는 원문과 다를 수 있으므로 인용문 대조는 원본 확인이 필요하다."
+            )
+        elif not doc.raw_layers["rendered_text"].strip():
             doc.parse_warnings.append(
                 "표시 텍스트가 없어 스캔 PDF로 판단된다. OCR Adapter 결과가 없으면 본문 검증은 UNVERIFIED로 처리한다."
             )
@@ -210,6 +224,78 @@ class PdfParser(DocumentParser):
         if bbox.x1 < 0 or bbox.y1 < 0 or bbox.x0 > float(page.width) or bbox.y0 > float(page.height):
             return "OFF_PAGE"
         return None
+
+    # -- OCR ---------------------------------------------------------------
+    def _apply_ocr(self, doc: NormalizedDocument, path: str, rendered_parts: List[str]) -> None:
+        """스캔 PDF는 본문을 OCR하고, 위험 신호가 있으면 독립 OCR로 텍스트 레이어를 대조한다."""
+        settings = get_settings()
+        adapter = get_ocr_adapter()
+        has_visible_text = bool("".join(rendered_parts).strip())
+        doc.structure["ocr_engine"] = adapter.name
+
+        if not adapter.available:
+            if not has_visible_text:
+                doc.parse_warnings.append(
+                    "OCR Adapter를 사용할 수 없어 스캔 PDF 본문을 추출하지 못했다. 본문 검증 항목은 UNVERIFIED로 표시한다."
+                )
+            return
+
+        scanned = not has_visible_text
+        risky = bool(
+            doc.structure.get("has_invisible_render_mode")
+            or doc.raw_layers.get("hidden_text", "").strip()
+            or any(not block.visible for block in doc.blocks)
+        )
+        mode = settings.independent_ocr_mode.lower()
+        run_independent = mode == "always" or (mode == "auto" and (risky or scanned))
+        if mode == "off" and not scanned:
+            return
+
+        target_pages = [p.page_number for p in doc.pages]
+        if scanned:
+            target_pages = target_pages[: settings.ocr_max_pages]
+        elif run_independent:
+            target_pages = target_pages[: settings.independent_ocr_pages]
+        else:
+            return
+
+        independent_parts: List[str] = []
+        recognized_pages = 0
+        for raster in render_pages(path, target_pages, dpi=settings.ocr_dpi):
+            lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale)
+            # 신뢰도 미달 라인은 버린다. 남은 것이 없으면 그 면은 인식 실패로 취급한다.
+            kept = [line for line in lines if line.confidence >= settings.ocr_min_confidence]
+            if not kept:
+                continue
+            recognized_pages += 1
+            page = next((p for p in doc.pages if p.page_number == raster.page_number), None)
+            for line in kept:
+                independent_parts.append(line.text)
+                if scanned and page is not None:
+                    page.blocks.append(
+                        Block(
+                            block_id=new_id("B"),
+                            text=line.text,
+                            page=raster.page_number,
+                            bbox=line.bbox,
+                            source_layer="ocr_layer",
+                            attributes={"ocr_confidence": round(line.confidence, 3), "ocr_engine": adapter.name},
+                        )
+                    )
+
+        if not recognized_pages:
+            return
+
+        joined = "\n".join(independent_parts)
+        doc.structure["ocr_pages"] = recognized_pages
+        if scanned:
+            doc.raw_layers["ocr_layer"] = joined
+            rendered_parts.extend(independent_parts)
+            doc.structure["scanned_pdf_ocr_applied"] = True
+        else:
+            # 화면 렌더링 결과와 내장 텍스트 레이어를 비교하기 위한 독립 OCR 산출물
+            doc.raw_layers["independent_ocr"] = joined
+            doc.structure["independent_ocr_pages"] = recognized_pages
 
     @staticmethod
     def _collect_pdf_structure(raw: bytes, doc: NormalizedDocument) -> None:

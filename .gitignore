@@ -13,3 +13,7 @@ htmlcov/
 node_modules/
 .DS_Store
 config/legal_mirror/*.json
+
+# 실제 사건 문서가 실수로 커밋되는 것을 막는다 (README와 생성기만 추적)
+samples/*
+!samples/README.md

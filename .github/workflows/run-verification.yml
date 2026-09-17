@@ -1,0 +1,131 @@
+name: 문서 검증 실행
+
+# 실제 API Key를 사용해 검증 파이프라인을 끝까지 돌리고 보고서를 아티팩트로 남긴다.
+# 실행 방법
+#  1) Actions 탭 → "문서 검증 실행" → Run workflow
+#     (버튼은 워크플로 파일이 기본 브랜치에 있어야 나타난다)
+#  2) 병합 전이라면 커밋 메시지에 [run-verify] 를 넣어 push
+#
+# 검증할 문서는 저장소의 samples/ 디렉터리에 넣는다.
+# 실제 사건 문서를 공개 저장소에 커밋하지 말 것. 비공개 저장소에서만 쓰거나
+# 예시 문서 생성기로 동작만 확인한다.
+on:
+  workflow_dispatch:
+    inputs:
+      input_dir:
+        description: "검증할 문서 디렉터리 (비어 있으면 예시 문서를 생성한다)"
+        type: string
+        default: "samples"
+      project_name:
+        description: "프로젝트명"
+        type: string
+        default: "GitHub Actions 검증"
+      case_number:
+        description: "사건번호"
+        type: string
+        default: ""
+      incident_date:
+        description: "사건 발생일 YYYY-MM-DD (시행법 기준일)"
+        type: string
+        default: ""
+      profile:
+        description: "검증 프로파일"
+        type: choice
+        options: ["QUICK", "STANDARD", "DEEP_VERIFY"]
+        default: "STANDARD"
+      ai_policy:
+        description: "외부 AI 사용정책"
+        type: choice
+        options: ["MASKED", "LOCAL_ONLY", "ORIGINAL"]
+        default: "MASKED"
+  push:
+    branches: ["main", "claude/**"]
+
+concurrency:
+  group: run-verification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: 검증 파이프라인 실행
+    if: >-
+      github.event.repository.fork == false &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[run-verify]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
+      LV_KCI_KEY: ${{ secrets.LV_KCI_KEY }}
+      LV_CROSSREF_MAILTO: ${{ secrets.LV_CROSSREF_MAILTO }}
+      LV_SEMANTIC_SCHOLAR_KEY: ${{ secrets.LV_SEMANTIC_SCHOLAR_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LV_OPENAI_MODEL: ${{ vars.LV_OPENAI_MODEL }}
+      LV_ANTHROPIC_MODEL: ${{ vars.LV_ANTHROPIC_MODEL }}
+      LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
+      LV_ALLOW_NETWORK: "1"
+      LV_HTTP_TIMEOUT: "20"
+      LV_PSEUDONYM_SECRET: ${{ secrets.LV_PSEUDONYM_SECRET || 'actions-run-only' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 한국어 OCR 엔진 설치
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor
+
+      - name: 의존성 설치
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 검증 대상 준비
+        id: prepare
+        run: |
+          DIR="${{ inputs.input_dir || 'samples' }}"
+          if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+            echo "$DIR 가 비어 있어 예시 문서를 생성한다."
+            python scripts/make_sample_documents.py --out "$DIR"
+          fi
+          echo "dir=$DIR" >> "$GITHUB_OUTPUT"
+          ls -la "$DIR"
+
+      - name: 검증 실행
+        run: |
+          python scripts/verify_cli.py \
+            --input "${{ steps.prepare.outputs.dir }}" \
+            --out out \
+            --project-name "${{ inputs.project_name || 'GitHub Actions 검증' }}" \
+            ${{ inputs.case_number && format('--case-number "{0}"', inputs.case_number) || '' }} \
+            ${{ inputs.incident_date && format('--incident-date "{0}"', inputs.incident_date) || '' }} \
+            --profile "${{ inputs.profile || 'STANDARD' }}" \
+            --ai-policy "${{ inputs.ai_policy || 'MASKED' }}" \
+            --formats pdf,highlight,xlsx,csv,json,manifest
+
+      - name: 요약을 Job Summary에 기록
+        if: always()
+        run: |
+          {
+            echo "# 검증 결과"
+            echo
+            echo '```'
+            cat out/summary.txt 2>/dev/null || echo "요약 없음"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 보고서 아티팩트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-report
+          path: out/
+          retention-days: 14

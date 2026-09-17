@@ -6,6 +6,7 @@ embedding 컬럼은 pgvector 전환을 고려해 JSON으로 보관한다.
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from datetime import datetime
 from typing import Any, Dict, Generator, List, Optional
@@ -34,16 +35,77 @@ class Base(DeclarativeBase):
 
 
 class JSONType(TypeDecorator):
-    """SQLite/PostgreSQL 공통 JSON 컬럼."""
+    """SQLite/PostgreSQL 공통 JSON 컬럼.
+
+    PostgreSQL에서는 JSONB로 저장하여 인덱싱·질의가 가능하게 하고,
+    SQLite에서는 TEXT에 직렬화한다.
+    """
 
     impl = Text
     cache_ok = True
 
-    def process_bind_param(self, value: Any, dialect: Any) -> Optional[str]:
-        return None if value is None else json.dumps(value, ensure_ascii=False, default=str)
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "postgresql":
+            from sqlalchemy.dialects.postgresql import JSONB
+
+            return dialect.type_descriptor(JSONB())
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        if dialect.name == "postgresql":
+            return value  # JSONB는 psycopg가 직렬화한다
+        return json.dumps(value, ensure_ascii=False, default=str)
 
     def process_result_value(self, value: Any, dialect: Any) -> Any:
-        return None if value is None else json.loads(value)
+        if value is None or not isinstance(value, str):
+            return value
+        return json.loads(value)
+
+
+EMBEDDING_DIM = int(os.getenv("LV_EMBEDDING_DIM", "1536"))
+
+
+class EmbeddingType(TypeDecorator):
+    """제3.2장 pgvector.
+
+    pgvector가 설치된 PostgreSQL에서는 vector 타입을, 그 외에는 JSON 배열을 쓴다.
+    양쪽 모두 파이썬에서는 float 리스트로 다룬다.
+    """
+
+    impl = Text
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect: Any) -> Any:
+        if dialect.name == "postgresql" and _pgvector_available():
+            from pgvector.sqlalchemy import Vector
+
+            return dialect.type_descriptor(Vector(EMBEDDING_DIM))
+        return dialect.type_descriptor(Text())
+
+    def process_bind_param(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        if dialect.name == "postgresql" and _pgvector_available():
+            return list(value)
+        return json.dumps(list(value))
+
+    def process_result_value(self, value: Any, dialect: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return json.loads(value)
+        return list(value)
+
+
+def _pgvector_available() -> bool:
+    try:
+        import pgvector.sqlalchemy  # noqa: F401
+
+        return True
+    except Exception:
+        return False
 
 
 def new_uuid(prefix: str = "") -> str:
@@ -164,7 +226,7 @@ class DocumentBlock(Base):
     block_type = Column(String(30), default="paragraph")
     visible = Column(Boolean, default=True)
     attributes = Column(JSONType, default=dict)
-    embedding = Column(JSONType)  # pgvector 전환 대상
+    embedding = Column(EmbeddingType)  # PostgreSQL+pgvector에서는 vector 타입
 
 
 class CitationRow(Base):
@@ -352,9 +414,19 @@ def get_engine():
     global _engine
     if _engine is None:
         settings = get_settings()
-        connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
-        _engine = create_engine(settings.database_url, connect_args=connect_args, future=True)
-        if settings.database_url.startswith("sqlite"):
+        url = settings.database_url
+        if url.startswith("sqlite"):
+            _engine = create_engine(url, connect_args={"check_same_thread": False}, future=True)
+        else:
+            # 운영 DB는 커넥션 풀과 연결 상태 확인을 켠다
+            _engine = create_engine(
+                url,
+                future=True,
+                pool_pre_ping=True,
+                pool_size=int(os.getenv("LV_DB_POOL_SIZE", "5")),
+                max_overflow=int(os.getenv("LV_DB_MAX_OVERFLOW", "10")),
+            )
+        if url.startswith("sqlite"):
 
             @event.listens_for(_engine, "connect")
             def _set_sqlite_pragma(dbapi_connection, connection_record):  # pragma: no cover
@@ -374,7 +446,18 @@ def get_session_factory():
 
 
 def init_db() -> None:
-    Base.metadata.create_all(bind=get_engine())
+    """스키마를 생성한다. 운영에서는 Alembic migration을 사용한다."""
+    engine = get_engine()
+    if engine.dialect.name == "postgresql" and _pgvector_available():
+        from sqlalchemy import text
+
+        try:
+            with engine.begin() as connection:
+                connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+        except Exception:
+            # 확장 생성 권한이 없으면 JSON fallback으로 동작한다
+            pass
+    Base.metadata.create_all(bind=engine)
 
 
 def get_db() -> Generator[Session, None, None]:

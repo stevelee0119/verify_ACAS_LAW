@@ -70,11 +70,11 @@ class PIIEngine:
         if policy == ExternalAIPolicy.ORIGINAL:
             masked.blocks = [
                 {"block_id": b.block_id, "page": b.page, "text": b.text, "layer": b.source_layer}
-                for b in doc.visible_blocks()
+                for b in doc.body_blocks()
             ]
             return masked
 
-        for block in doc.visible_blocks():
+        for block in doc.body_blocks():
             result = self.mask_text(block.text, block_id=block.block_id, page=block.page)
             masked.blocks.append(
                 {"block_id": block.block_id, "page": block.page, "text": result.masked_text,

@@ -144,7 +144,7 @@ def scan_advisory(doc: NormalizedDocument, context: Optional[AdvisoryContext] = 
         if name not in enabled:
             continue
         hits = []
-        for block in doc.visible_blocks():
+        for block in doc.body_blocks():
             for m in regex.finditer(block.text):
                 hits.append((block, m))
         if not hits:
@@ -180,7 +180,7 @@ def scan_advisory(doc: NormalizedDocument, context: Optional[AdvisoryContext] = 
         )
 
     # 2) 절차 지연은 반복 패턴일 때만
-    delay_hits = [(b, m) for b in doc.visible_blocks() for m in DELAY_RE.finditer(b.text)]
+    delay_hits = [(b, m) for b in doc.body_blocks() for m in DELAY_RE.finditer(b.text)]
     if len(delay_hits) >= 2 and "ISSUE_EVASION_SIGNAL" in enabled:
         block, m = delay_hits[0]
         out.append(
@@ -198,7 +198,7 @@ def scan_advisory(doc: NormalizedDocument, context: Optional[AdvisoryContext] = 
         )
 
     # 3) 입증책임 전가
-    burden_hits = [(b, m) for b in doc.visible_blocks() for m in BURDEN_SHIFT_RE.finditer(b.text)]
+    burden_hits = [(b, m) for b in doc.body_blocks() for m in BURDEN_SHIFT_RE.finditer(b.text)]
     if burden_hits and "LIABILITY_HEDGING_SIGNAL" in enabled:
         block, m = burden_hits[0]
         out.append(
@@ -219,8 +219,8 @@ def scan_advisory(doc: NormalizedDocument, context: Optional[AdvisoryContext] = 
     if context.requested_issues and "ISSUE_EVASION_SIGNAL" in enabled:
         body = doc.visible_text
         missing = [issue for issue in context.requested_issues if issue and issue not in body]
-        if missing and doc.visible_blocks():
-            block = doc.visible_blocks()[0]
+        if missing and doc.body_blocks():
+            block = doc.body_blocks()[0]
             out.append(
                 _advisory_finding(
                     doc,
