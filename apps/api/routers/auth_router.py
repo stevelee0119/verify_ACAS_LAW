@@ -108,9 +108,14 @@ def login(
         actor=user.email,
     )
     # 브라우저 편의를 위한 쿠키. 토큰은 스크립트가 읽지 못하게 HttpOnly로 둔다.
+    # Render 같은 관리형 프록시 뒤에서는 컨테이너가 보는 scheme이 http이므로
+    # X-Forwarded-Proto도 함께 본다. 그러지 않으면 HTTPS 사이트인데 쿠키에
+    # Secure가 붙지 않는다.
+    forwarded = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip().lower()
+    is_https = request.url.scheme == "https" or forwarded == "https"
     response.set_cookie(
         "lv_session", token, httponly=True, samesite="strict",
-        secure=request.url.scheme == "https", max_age=SESSION_TTL_HOURS * 3600,
+        secure=is_https, max_age=SESSION_TTL_HOURS * 3600,
     )
     return {"access_token": token, "token_type": "bearer",
             "expires_in": SESSION_TTL_HOURS * 3600, "user": _out(user).model_dump()}
