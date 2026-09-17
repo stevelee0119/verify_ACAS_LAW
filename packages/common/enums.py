@@ -220,6 +220,61 @@ class AuthorshipVerdict(StrEnum):
     ABSTAIN = "ABSTAIN"
 
 
+class AIInvolvementVerdict(StrEnum):
+    """제8.1장 범위별 AI 관여 판정.
+
+    AuthorshipVerdict(AI_LIKELY/HUMAN_LIKELY)와 달리 '누가 썼는가'를 맞히지 않는다.
+    "확인 가능한 기록이 무엇을 말하는가"만 말한다. 흔적이 없다는 결과를
+    사람이 작성했다는 증거로 바꾸지 않기 위해 HUMAN에 해당하는 값이 없다.
+    """
+
+    VERIFIED_AI_RECORD = "VERIFIED_AI_RECORD"          # 검증 게이트를 모두 통과한 AI 진술
+    AI_INDICATION_UNVERIFIED = "AI_INDICATION_UNVERIFIED"  # 표기는 있으나 진위 미검증
+    INCONCLUSIVE = "INCONCLUSIVE"                      # 정상 검사했으나 판단 불가
+    UNAVAILABLE = "UNAVAILABLE"                        # 판단에 필요한 검사를 못 함
+
+
+class ProvenanceScope(StrEnum):
+    """제7.1장 근거가 적용되는 대상.
+
+    범위를 섞지 않는 것이 이 모델의 요점이다. 삽입 이미지의 AI 생성 기록을
+    문서 본문의 AI 작성 근거로 쓰지 않는다.
+    """
+
+    FILE_CONTAINER = "file_container"    # 파일을 만든 도구·패키지 수준
+    DOCUMENT_TEXT = "document_text"      # 문서 본문
+    TEXT_REGION = "text_region"          # 본문 일부 구간
+    EMBEDDED_IMAGE = "embedded_image"    # 삽입 이미지
+    ATTACHMENT = "attachment"            # 첨부 문서
+
+
+class CheckStatus(StrEnum):
+    """제9.1장 검사 수행 상태.
+
+    unsupported를 not_found로 매핑하면 안 된다. '검사했는데 없었다'와
+    '검사할 수 없었다'가 같은 값이 되면, 분석 실패가 무해한 결과로 둔갑한다.
+    """
+
+    SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
+    NOT_FOUND = "not_found"            # 검사 완료, 해당 정보 없음
+    UNSUPPORTED = "unsupported"        # 검증기·파서 미구현
+    BLOCKED = "blocked"                # 암호화·자원한도 등으로 차단
+    FAILED = "failed"
+    NOT_REQUESTED = "not_requested"
+    NOT_APPLICABLE = "not_applicable"
+
+
+class ProvenanceAction(StrEnum):
+    """제8.3장 기록된 제작 행위. 생성과 수정을 합치지 않는다."""
+
+    GENERATE = "generate"
+    EDIT = "edit"
+    FORMAT = "format"
+    CONVERT = "convert"
+    UNKNOWN = "unknown"
+
+
 class AttributionLevel(StrEnum):
     PROVEN = "PROVEN"
     STRONG_INDICATION = "STRONG_INDICATION"

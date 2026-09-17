@@ -22,6 +22,7 @@ from .document_forensics import analyze_image_lsb, scan_document_forensics
 from .privilege import PrivilegeGate
 from .redaction import scan_redaction
 from .residual import scan_residual
+from .ai_provenance import analyze_ai_provenance
 from .specimen import scan_specimen
 from .template_residue import scan_template_residue
 
@@ -73,6 +74,9 @@ class ForensicEngine:
         # 특권·윤리 게이트 적용 (봉인 유지 + 열람 경고)
         gate = PrivilegeGate(org_block_reveal=context.org_block_reveal, allow_reveal=context.allow_reveal)
         findings.extend(gate.apply(findings, counterparty_document=context.counterparty_document))
+
+        # 설계서 제7·8장 범위별 AI 관여 흔적. 판정이 아니라 관측과 검사 상태를 싣는다.
+        result.data["ai_provenance"] = analyze_ai_provenance(doc).to_dict()
 
         result.findings = findings + advisory_findings
         result.data["mm2_count"] = sum(1 for f in findings if f.meta_message_type == MetaMessageType.MM2_RESIDUAL)

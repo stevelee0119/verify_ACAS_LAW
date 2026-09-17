@@ -78,17 +78,25 @@ def analyze_authorship(doc: NormalizedDocument) -> AuthorshipAssessment:
     signals["style_shift"] = shift
 
     # --- 종합 -------------------------------------------------------------
+    #
+    # 문서 속성의 AI 표기는 "AI 관련 문자열이 존재한다"는 사실일 뿐이다.
+    # 속성은 누구나 편집할 수 있으므로 그것으로 작성 주체를 확정하지 않는다.
+    # C2PA 후보를 발견한 것도 검증이 아니다. 서명·자산 결합을 확인하는 검증기가
+    # 없는 상태에서 PROVEN을 주면, 작성자 칸에 이름을 적어 넣은 문서가
+    # 암호학적으로 증명된 것처럼 보고된다.
+    # 범위별 판정은 forensic_engine.ai_provenance가 담당한다.
     if provenance_hits or signals["has_c2pa"]:
         return AuthorshipAssessment(
-            verdict=AuthorshipVerdict.AI_LIKELY,
-            score=0.9,
+            verdict=AuthorshipVerdict.ABSTAIN,
+            score=0.0,
             signals=signals,
-            attribution=AttributionLevel.PROVEN if signals["has_c2pa"] else AttributionLevel.STRONG_INDICATION,
-            attributed_model=provenance_hits[0] if provenance_hits else None,
+            attribution=AttributionLevel.WEAK_INDICATION,
+            attributed_model=None,
             notes=notes
             + [
-                "생성 metadata 또는 provenance에 기반한 판단이다. "
-                "다만 metadata는 편집될 수 있으므로 원본 확인이 필요하다."
+                "문서 속성 또는 출처 기록 후보에 AI 관련 표기가 있다. 속성은 편집할 수 있고 "
+                "출처 기록의 서명·자산 결합은 검증하지 않았으므로, 표기의 존재만 사실로 남기고 "
+                "작성 주체는 판단하지 않는다(설계서 제8.1장 미검증 표기).",
             ],
         )
 
@@ -113,16 +121,24 @@ def analyze_authorship(doc: NormalizedDocument) -> AuthorshipAssessment:
     if shift.get("detected"):
         score += 0.10
 
-    if score >= 0.5:
-        verdict = AuthorshipVerdict.AI_LIKELY
-    elif score <= 0.15:
-        verdict = AuthorshipVerdict.HUMAN_LIKELY
-    else:
-        verdict = AuthorshipVerdict.UNCERTAIN
+    # 문체 통계는 판정에 쓰지 않는다(설계서 제8.4장).
+    #
+    # 종전에는 score >= 0.5면 AI_LIKELY, <= 0.15면 HUMAN_LIKELY를 냈다. 둘 다
+    # 문제가 있다. 문장 길이 변동계수와 어휘 다양도는 장르·번역·교정·OCR에 따라
+    # 크게 흔들리고, 한국어 법률문서에 대해 검증된 임계값이 아니다.
+    # 특히 HUMAN_LIKELY는 "흔적이 없다"를 "사람이 썼다"로 바꾸는 것이어서
+    # 잘못된 안심을 준다(제1.1장). AI가 쓴 글을 사람이 붙여 넣으면 파일에는
+    # 아무 기록도 남지 않는다.
+    #
+    # 지표는 근거로 계속 보관하되, 사용자 판정은 판단 보류로 둔다.
+    signals["stylometry_score"] = round(score, 3)
+    signals["stylometry_is_advisory_only"] = True
+    verdict = AuthorshipVerdict.UNCERTAIN
 
     notes.append(
-        "문체·구조 통계에 기반한 확률적 추정이다. 특정 AI 제품이 작성했다고 확정할 수 없으며, "
-        "AI 작성 여부에 관한 최종 판단은 사용자에게 있다."
+        "문체·구조 통계는 참고 지표로만 싣는다. 장르·번역·교정·OCR에 따라 크게 달라지므로 "
+        "이것만으로 AI 작성 여부를 판정하지 않으며, 흔적이 없다는 것을 사람이 작성했다는 "
+        "근거로도 쓰지 않는다. 작성 주체에 관한 판단은 검증된 출처 기록이 있을 때에만 가능하다."
     )
     return AuthorshipAssessment(
         verdict=verdict,
@@ -207,7 +223,9 @@ def _segment_verdicts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             continue
         lengths = [len(s) for s in sents]
         cv = statistics.pstdev(lengths) / statistics.mean(lengths) if statistics.mean(lengths) else 1.0
-        verdict = AuthorshipVerdict.AI_LIKELY if cv < 0.25 else AuthorshipVerdict.UNCERTAIN
+        # 문단 단위로 AI를 지목하지 않는다(제8.3장). 강한 범위 식별 없이
+        # 특정 문단을 AI 작성으로 표시하면 근거 없는 지목이 된다.
+        verdict = AuthorshipVerdict.UNCERTAIN
         out.append(
             {
                 "block_id": unit["block_id"],
