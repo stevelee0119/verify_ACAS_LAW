@@ -96,3 +96,44 @@ Render에 그대로 올리면 URL을 아는 누구나 문서를 열람·업로�
 
 Dashboard → **New → Blueprint** → 저장소 선택 → Apply.
 `sync: false`로 표시된 API Key만 대시보드에서 직접 입력하면 된다.
+
+## 배포 후 첫 확인 — 런타임이 docker인지, OCR이 살아 있는지
+
+배포가 끝났다고 검증이 되는 것은 아니다. OCR이 없으면 이미지·스캔 PDF는 본문을
+읽지 못하고, 그 실행 결과는 "이상 없음"이 아니라 "확인하지 못함"이다.
+배포 직후 반드시 아래를 확인한다.
+
+```bash
+curl -s https://<서비스>.onrender.com/api/diagnostics | jq
+```
+
+- `verdict: "READY"` → 이미지·스캔 문서까지 본문 추출이 가능하다.
+- `verdict: "DEGRADED"`, `blocking: ["ocr"]` → **런타임이 docker가 아니다.**
+  Native Python 런타임에는 시스템 패키지(tesseract)를 설치할 수 없다.
+
+확인할 필드:
+
+| 필드 | 정상값 | 뜻 |
+|---|---|---|
+| `capabilities.ocr.available` | `true` | tesseract 실행 가능 |
+| `capabilities.ocr.binary_path` | `/usr/bin/tesseract` | 바이너리 위치 |
+| `capabilities.ocr.missing_languages` | `[]` | 한국어 데이터 설치됨 |
+| `capabilities.rasterizer.available` | `true` | 스캔 PDF 래스터화 가능 |
+| `capabilities.database.dialect` | `postgresql` | 운영 DB 연결됨 |
+| `capabilities.source_keys_present` | 필요한 키가 `true` | Render Environment에 입력됨 |
+
+`source_keys_present`는 **존재 여부만** 알린다. 값은 담지 않는다.
+
+### 런타임을 확인하는 다른 방법
+
+1. **Render 대시보드** — 서비스의 Settings에서 런타임과 Dockerfile 경로를 확인한다.
+   docker 런타임이면 `dockerfilePath`가 `./docker/Dockerfile`로 지정되어 있다.
+2. **배포 로그** — docker 런타임은 이미지 빌드 단계(`Dockerfile` 각 `RUN` 명령,
+   `apt-get install ... tesseract-ocr`)가 로그에 찍힌다. Native 런타임은
+   빌드 명령(`pip install -r requirements.txt`)만 찍히고 apt 단계가 없다.
+
+### docker가 아니었다면
+
+`render.yaml`을 사용하는 Blueprint로 다시 만드는 편이 확실하다. 대시보드에서 수동
+생성한 서비스는 `render.yaml`을 읽지 않으므로, `runtime: docker`뿐 아니라
+`LV_ALLOW_NETWORK`·`LV_DATA_DIR` 같은 환경변수도 적용되지 않는다.
