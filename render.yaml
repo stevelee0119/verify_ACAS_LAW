@@ -8,6 +8,8 @@
 #    재배포·재시작 때 업로드 원본과 감사 산출물이 사라진다. 무료 플랜은 디스크를
 #    지원하지 않으므로 증거 보존이 필요하면 유료 플랜을 쓴다.
 #  - API Key는 이 파일에 적지 않는다. sync:false 항목은 대시보드에서 직접 입력한다.
+#  - 인증은 항상 켜져 있다. LV_BOOTSTRAP_ADMIN_EMAIL/PASSWORD를 넣지 않으면
+#    계정이 하나도 없어 모든 API가 503을 돌려준다.
 
 services:
   - type: web
@@ -18,7 +20,7 @@ services:
     plan: starter
     healthCheckPath: /api/health
     # 마이그레이션을 먼저 적용한 뒤 기동한다.
-    dockerCommand: sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+    dockerCommand: sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"
     disk:
       name: lv-data
       mountPath: /data
@@ -41,6 +43,16 @@ services:
         value: "1"
       - key: LV_PSEUDONYM_SECRET
         generateValue: true
+      # 최초 관리자. 인증을 끄는 스위치가 없으므로 이 값이 없으면 API는 503으로
+      # 거부한다. 첫 로그인 후 비밀번호를 바꾸고 아래 두 값을 삭제한다.
+      - key: LV_BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: LV_BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: LV_BOOTSTRAP_ADMIN_NAME
+        value: 관리자
+      - key: LV_SESSION_TTL_HOURS
+        value: "12"
       - key: LV_LAW_GO_KR_OC
         sync: false
       - key: LV_KCI_KEY
