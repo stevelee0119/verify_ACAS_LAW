@@ -19,12 +19,13 @@ from fastapi import HTTPException, Request
 from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueConstraint, or_, select
 from sqlalchemy.orm import Session
 
-from .db import Base, Organization, Project, ProjectMember, User, new_uuid
+from .db import Base, Organization, Project, ProjectMember, SessionToken, User, new_uuid
 
 ROLES = {"VIEWER": 1, "MEMBER": 2, "ADMIN": 3}
 LOCAL_OWNER = "local-owner"
 TOKEN_PREFIX = "acas_"
 SESSION_COOKIE = "acas_session"
+PASSWORD_SESSION_COOKIE = "lv_session"
 
 
 class IdentityAccount(Base):
@@ -95,9 +96,15 @@ def actor_id(request: Request | None = None) -> str:
 
 
 def auth_mode() -> str:
-    mode = os.getenv("LV_AUTH_MODE", "local").strip().lower()
+    # Render documents these deployment markers. A hosted service must never
+    # become the local owner, even when the auth-mode variable was omitted.
+    hosted = any(os.getenv(name) for name in ("RENDER", "RENDER_SERVICE_ID", "RENDER_EXTERNAL_HOSTNAME",
+                                             "K_SERVICE", "WEBSITE_SITE_NAME", "DYNO"))
+    mode = os.getenv("LV_AUTH_MODE", "multi-user" if hosted else "local").strip().lower()
     if mode not in {"local", "multi-user"}:
         raise ValueError("LV_AUTH_MODE must be local or multi-user")
+    if hosted and mode != "multi-user":
+        raise ValueError("Hosted deployments require LV_AUTH_MODE=multi-user")
     return mode
 
 
@@ -105,14 +112,82 @@ def _unauthorized() -> HTTPException:
     return HTTPException(401, "Invalid or expired credentials", headers={"WWW-Authenticate": "Bearer"})
 
 
+def user_is_enabled(session: Session, user: User | None) -> bool:
+    # Existing password users predate IdentityAccount. Only that explicitly
+    # provisioned legacy population is accepted before startup reconciliation.
+    legacy = user is not None and bool(user.password_hash and user.password_hash.startswith("scrypt$"))
+    account = session.get(IdentityAccount, user.id) if user is not None else None
+    return bool(user is not None and user.is_active and (account.enabled if account else legacy))
+
+
 def principal_for_user(session: Session, user_id: str, authentication: str,
                        credential_id: str | None = None, expires_at: datetime | None = None) -> Principal:
     user = session.get(User, user_id)
-    account = session.get(IdentityAccount, user_id)
-    if (user is None or account is None or not account.enabled or user.role not in ROLES
-            or not user.organization_id or session.get(Organization, user.organization_id) is None):
+    if (not user_is_enabled(session, user) or user.role not in ROLES
+            or (user.organization_id and session.get(Organization, user.organization_id) is None)):
         raise _unauthorized()
     return Principal(user.id, user.organization_id, user.role, authentication, credential_id, expires_at)
+
+
+def revoke_user_credentials(session: Session, user_id: str) -> int:
+    """Stage revocation atomically with a password/activity change; caller commits."""
+    count = 0
+    now = datetime.utcnow()
+    for model in (SessionToken, BrowserSession, ApiToken):
+        for row in session.scalars(select(model).where(model.user_id == user_id, model.revoked_at.is_(None))):
+            row.revoked_at = now
+            count += 1
+    return count
+
+
+def set_account_enabled(session: Session, user: User, enabled: bool) -> int:
+    account = session.get(IdentityAccount, user.id)
+    if account is None:
+        account = IdentityAccount(user_id=user.id)
+        session.add(account)
+    user.is_active = account.enabled = enabled
+    return revoke_user_credentials(session, user.id) if not enabled else 0
+
+
+def reconcile_password_accounts(session: Session) -> int:
+    """Startup bridge: preserve credentials, IDs, organizations and memberships.
+
+    Never re-enable an account when either activity flag has been disabled.
+    Existing unprovisioned, passwordless users are not silently enrolled.
+    """
+    added = 0
+    for user in session.scalars(select(User)):
+        account = session.get(IdentityAccount, user.id)
+        if account is None:
+            if not user.password_hash or not user.password_hash.startswith("scrypt$"):
+                continue
+            account = IdentityAccount(user_id=user.id, enabled=bool(user.is_active))
+            session.add(account)
+            added += 1
+        if not user.is_active or not account.enabled:
+            user.is_active = account.enabled = False
+            revoke_user_credentials(session, user.id)
+    session.flush()
+    return added
+
+
+def authenticate_password_session(session: Session, secret: str) -> Principal:
+    if not secret or len(secret) > 128 or not secret.isascii():
+        raise _unauthorized()
+    row = session.scalar(select(SessionToken).where(
+        SessionToken.token_hash == hashlib.sha256(secret.encode("ascii")).hexdigest()))
+    if row is None or row.revoked_at is not None or row.expires_at <= datetime.utcnow():
+        raise _unauthorized()
+    return principal_for_user(session, row.user_id, "password", row.id, row.expires_at)
+
+
+def revoke_principal_credential(session: Session, principal: Principal) -> bool:
+    model = {"password": SessionToken, "session": BrowserSession, "token": ApiToken}.get(principal.authentication)
+    row = session.get(model, principal.credential_id) if model and principal.credential_id else None
+    if row is None or row.user_id != principal.user_id or row.revoked_at is not None:
+        return False
+    row.revoked_at = datetime.utcnow()
+    return True
 
 
 def issue_token(session: Session, user_id: str, *, label: str = "", days: int = 30) -> tuple[ApiToken, str]:
@@ -204,9 +279,13 @@ def authenticate_bearer(session: Session, token: str) -> Principal:
         except UnicodeEncodeError:
             raise _unauthorized() from None
         row = session.scalar(select(ApiToken).where(ApiToken.token_hash == digest))
-        if row is None or not hmac.compare_digest(row.token_hash, digest) or row.revoked_at is not None or row.expires_at <= datetime.utcnow():
+        if row is None:
+            return authenticate_password_session(session, token)
+        if not hmac.compare_digest(row.token_hash, digest) or row.revoked_at is not None or row.expires_at <= datetime.utcnow():
             raise _unauthorized()
         return principal_for_user(session, row.user_id, "token", row.id, row.expires_at)
+    if "." not in token:
+        return authenticate_password_session(session, token)
     settings = OIDCSettings.from_env()
     if settings is None:
         raise _unauthorized()
@@ -219,7 +298,7 @@ def authenticate_bearer(session: Session, token: str) -> Principal:
 
 
 def issue_browser_session(session: Session, principal: Principal) -> tuple[BrowserSession, str]:
-    if principal.authentication not in {"token", "oidc"} or not principal.credential_id or not principal.expires_at:
+    if principal.authentication not in {"token", "oidc", "password"} or not principal.credential_id or not principal.expires_at:
         raise HTTPException(401, "Exchange requires a valid bearer credential")
     secret = secrets.token_urlsafe(32)
     row = BrowserSession(user_id=principal.user_id, secret_hash=hashlib.sha256(secret.encode("ascii")).hexdigest(),
@@ -238,8 +317,8 @@ def authenticate_session(session: Session, secret: str) -> Principal:
     now = datetime.utcnow()
     if row is None or row.revoked_at is not None or row.expires_at <= now:
         raise _unauthorized()
-    if row.source_kind == "token":
-        source = session.get(ApiToken, row.source_id)
+    if row.source_kind in {"token", "password"}:
+        source = session.get(ApiToken if row.source_kind == "token" else SessionToken, row.source_id)
         if source is None or source.user_id != row.user_id or source.revoked_at is not None or source.expires_at <= now:
             raise _unauthorized()
     elif row.source_kind == "oidc":
@@ -256,9 +335,9 @@ def project_role(session: Session, project: Project, principal: Principal | None
     principal = principal or current_principal()
     if principal.is_local:
         return "ADMIN"
-    if not principal.organization_id or project.organization_id != principal.organization_id:
+    if project.organization_id != principal.organization_id:
         return None
-    if principal.role == "ADMIN":
+    if principal.role == "ADMIN" and principal.organization_id:
         return "ADMIN"
     member = session.scalar(select(ProjectMember).where(
         ProjectMember.project_id == project.id, ProjectMember.user_id == principal.user_id))
@@ -292,10 +371,10 @@ def visible_project_ids(session: Session, principal: Principal | None = None) ->
     principal = principal or current_principal()
     if principal.is_local:
         return None
-    if not principal.organization_id or principal.role not in ROLES:
+    if principal.role not in ROLES:
         return []
     query = select(Project.id).where(Project.organization_id == principal.organization_id)
-    if principal.role != "ADMIN":
+    if principal.role != "ADMIN" or not principal.organization_id:
         memberships = select(ProjectMember.project_id).where(
             ProjectMember.user_id == principal.user_id, ProjectMember.role.in_(ROLES))
         query = query.where(or_(Project.owner_id == principal.user_id, Project.id.in_(memberships)))
@@ -315,7 +394,7 @@ def project_creation_defaults(session: Session) -> dict:
             session.add(User(id=LOCAL_OWNER, email="local-owner@localhost", display_name="Local owner", role="ADMIN"))
             session.flush()
         return {"owner_id": LOCAL_OWNER, "organization_id": None}
-    if principal.role not in {"MEMBER", "ADMIN"} or not principal.organization_id:
+    if principal.role not in {"MEMBER", "ADMIN"}:
         raise HTTPException(403, "Project creation requires membership")
     return {"owner_id": principal.user_id, "organization_id": principal.organization_id}
 
@@ -353,9 +432,23 @@ def provision_user(session: Session, *, organization_id: str, email: str,
     return user
 
 
+def has_provisioned_users(session: Session) -> bool:
+    """A migrated synthetic local owner is not a remotely provisioned account."""
+    if session.scalar(select(User.id).where(User.id != LOCAL_OWNER).limit(1)) is not None:
+        return True
+    local = session.get(User, LOCAL_OWNER)
+    if local is None:
+        return False
+    if (local.email != "local-owner@localhost" or local.organization_id is not None
+            or local.role != "ADMIN" or local.password_hash is not None):
+        return True
+    return any(session.scalar(select(model.id).where(model.user_id == LOCAL_OWNER).limit(1)) is not None
+               for model in (SessionToken, ApiToken, BrowserSession, ExternalIdentity))
+
+
 def bootstrap_admin(session: Session, *, email: str, organization_name: str) -> tuple[User, str]:
     """One-time offline bootstrap. Never exposed as an HTTP endpoint."""
-    if session.scalar(select(IdentityAccount.user_id).limit(1)) is not None:
+    if has_provisioned_users(session):
         raise ValueError("Identity is already bootstrapped; use an organization administrator")
     if not organization_name.strip() or len(organization_name) > 200:
         raise ValueError("Invalid organization name")

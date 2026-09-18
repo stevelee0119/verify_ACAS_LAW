@@ -32,7 +32,7 @@ Dockerfile에 tesseract 한국어팩이 들어 있어 스캔 문서까지 처리
 |---|---|
 | Runtime | Docker |
 | Dockerfile Path | `./docker/Dockerfile` |
-| Docker Command | `sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"` |
+| Docker Command | `sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"` |
 | Health Check Path | `/api/health` |
 
 ### Native Python 런타임
@@ -43,7 +43,7 @@ Dockerfile에 tesseract 한국어팩이 들어 있어 스캔 문서까지 처리
 | 항목 | 값 |
 |---|---|
 | Build Command | `pip install -r requirements.txt` |
-| Start Command | `alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT` |
+| Start Command | `alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*` |
 
 ### Background Worker (선택)
 
@@ -54,7 +54,8 @@ Dockerfile에 tesseract 한국어팩이 들어 있어 스캔 문서까지 처리
 | Start Command | `celery -A workers.celery_app worker -l info -Q verification,report --concurrency 2` |
 
 Worker를 두지 않으면 웹 서비스에 `LV_WORKER_MODE=inprocess`를 설정한다.
-Redis 없이 동작하며, 브로커 장애 시에도 인프로세스로 강등되므로 기능이 멈추지 않는다.
+Redis 없이 DB 작업 큐와 임대 기반 복구를 사용한다. 다중 프로세스의 작업 중복 실행은
+임대와 실행 세대 번호로 차단한다. 장애 복구 시 재시도 여부는 작업 상태에서 확인한다.
 
 ## `$PORT`
 
@@ -79,16 +80,19 @@ Render가 주는 PostgreSQL URL은 `postgres://` 형식이라 SQLAlchemy가 인�
 성립하지 않는다. Disk를 `/data`에 마운트하고 `LV_DATA_DIR=/data`를 설정한다.
 무료 플랜은 디스크를 지원하지 않는다.
 
-**2. 인증이 없다.** 이 애플리케이션에는 로그인·RBAC이 구현되어 있지 않다.
-Render에 그대로 올리면 URL을 아는 누구나 문서를 열람·업로드할 수 있다.
-공개 배포 전에 인증을 붙이거나, 최소한 접근을 제한한 상태로만 사용한다.
+**2. 운영 인증을 명시한다.** `LV_AUTH_MODE=multi-user`를 설정한다.
+비밀번호 로그인, API 토큰, 등록된 OIDC 계정 모두 기관·사건별 권한 검사를 사용한다.
+Render에서는 모드가 누락되어도 로컬 관리자 모드로 열리지 않는다.
+`local` 모드는 개인 PC의 로컬 작업용이며 공개 배포에 사용하지 않는다.
 
 **3. `LV_PSEUDONYM_SECRET`을 교체한다.** 실명-가명 매핑 암호화 키다.
 블루프린트는 `generateValue: true`로 자동 생성하지만 운영에서는 KMS·Vault로 관리한다.
 **이 값을 잃으면 기존 가명의 원본을 복원할 수 없다.**
 
-**4. pgvector가 없어도 동작한다.** Render PostgreSQL에서 `vector` 확장을 쓸 수 없으면
-`embedding` 컬럼이 JSON으로 자동 대체되며 마이그레이션은 실패하지 않는다.
+**4. PostgreSQL 마이그레이션에는 pgvector가 필요하다.** 최초 운영 마이그레이션은
+`CREATE EXTENSION IF NOT EXISTS vector`와 벡터 인덱스를 생성한다. 확장 설치 및
+생성 권한을 사전에 확인한다. 이 단계가 실패했는데 JSON으로 자동 강등되었다고
+판단하지 않는다. 기존 운영 데이터베이스에는 검증 없이 스키마를 다시 만들지 않는다.
 
 ## 블루프린트로 한 번에 만들기
 
@@ -104,8 +108,12 @@ Dashboard → **New → Blueprint** → 저장소 선택 → Apply.
 배포 직후 반드시 아래를 확인한다.
 
 ```bash
-curl -s https://<서비스>.onrender.com/api/diagnostics | jq
+curl -s https://<서비스>.onrender.com/api/health | jq
 ```
+
+헬스체크의 `version`과 `commit`을 배포한 Git 커밋과 대조한다. 헬스체크에는
+자격 증명이나 내부 설정을 노출하지 않는다. 아래 진단은 관리자 로그인 후
+`/api/diagnostics`에서 확인한다.
 
 - `verdict: "READY"` → 이미지·스캔 문서까지 본문 추출이 가능하다.
 - `verdict: "DEGRADED"`, `blocking: ["ocr"]` → **런타임이 docker가 아니다.**
@@ -137,3 +145,73 @@ curl -s https://<서비스>.onrender.com/api/diagnostics | jq
 `render.yaml`을 사용하는 Blueprint로 다시 만드는 편이 확실하다. 대시보드에서 수동
 생성한 서비스는 `render.yaml`을 읽지 않으므로, `runtime: docker`뿐 아니라
 `LV_ALLOW_NETWORK`·`LV_DATA_DIR` 같은 환경변수도 적용되지 않는다.
+
+## 인증 설정 (배포 전 필수)
+
+운영 모드는 `multi-user`다. 최초 관리자 없이 사건 API가 열리지는 않는다.
+배포 전에 최초 관리자를 만들고 비밀번호 로그인부터 확인한다.
+브라우저 세션은 HttpOnly 쿠키를 사용하고, 변경 요청은 동일 출처 검사로 보호한다.
+`LV_PUBLIC_ORIGIN`에는 실제 HTTPS 접속 주소를 설정하는 것이 좋다.
+위의 프록시 신뢰 옵션은 Render가 서비스 앞에서 TLS를 종료하는 환경용이다.
+일반 서버에서는 `*` 대신 실제 신뢰할 프록시 주소를 지정한다.
+
+### Render 환경변수로 부트스트랩
+
+Environment 탭에 아래를 넣고 배포하면 기동 시 관리자 계정이 생성된다.
+
+| Key | 값 |
+|---|---|
+| `LV_AUTH_MODE` | `multi-user` |
+| `LV_PUBLIC_ORIGIN` | 실제 서비스의 HTTPS 주소 |
+| `LV_BOOTSTRAP_ADMIN_EMAIL` | 관리자 이메일 |
+| `LV_BOOTSTRAP_ADMIN_PASSWORD` | 10자 이상 비밀번호 |
+| `LV_BOOTSTRAP_ADMIN_NAME` | 표시 이름(선택) |
+| `LV_SESSION_TTL_HOURS` | 세션 유효시간(기본 12) |
+
+계정이 만들어진 뒤에는 이 변수들이 무시된다. **첫 로그인 후 비밀번호를 바꾸고
+두 환경변수를 삭제한다.** 환경변수는 대시보드에서 다시 볼 수 있다.
+
+### 셸에서 직접 생성
+
+```bash
+python scripts/create_admin.py --email admin@example.com
+```
+
+비밀번호는 인자로 받지 않는다. 명령행 인자는 프로세스 목록과 셸 기록에 남는다.
+
+### 역할
+
+| 역할 | 권한 |
+|---|---|
+| `ADMIN` | 기관 내 계정·사건 관리, 사건별 감사 이력, 런타임 진단 |
+| `MEMBER` | 사건 생성·문서 업로드·검증 실행·봉인 원문 열람 |
+| `VIEWER` | 읽기 전용. 봉인 원문 열람과 변경 불가 |
+
+접근 권한이 없는 사건은 403이 아니라 **404**를 돌려준다. 403은 그 ID의 사건이
+존재한다는 사실을 알려 주기 때문이다.
+
+전체 기관에 걸친 감사 체인 검증과 전역 설정 변경은 로컬 운영자에게만 허용한다.
+사건별 내보내기는 해당 사건의 이벤트 해시 검증과 전체 체인 검증을 구분하여 기록한다.
+
+### 마이그레이션
+
+기존 배포본이 있으면 인증 스키마를 적용해야 한다.
+
+```bash
+alembic heads          # 통합 head 1개인지 확인
+alembic upgrade head
+```
+
+배포 전에 운영 DB 백업과 영구 디스크 상태를 확인한다. 두 브랜치의 기존 이력은
+재작성하지 않고 merge revision으로 연결한다. 기존 사용자 ID·비밀번호 해시·세션·
+사건 소유권·멤버십을 보존하고 기존 사용자에 필요한 신원 계정만 보완한다.
+비밀번호가 없는 토큰 전용 사용자는 토큰/OIDC 경로를 사용하며, 비밀번호 로그인이
+필요하면 관리자가 기존 계정에 비밀번호를 설정한다. 계정을 중복 생성하지 않는다.
+
+## 기존 서비스 갱신
+
+기존 서비스의 배포 브랜치를 `main`으로 확인하고 테스트를 통과한 커밋을 배포한다.
+자동 배포가 꺼져 있으면 Dashboard의 Manual Deploy를 사용한다. 기존 환경변수,
+DB, 디스크는 보존한다. Blueprint를 새로 적용하여 서비스를 중복 생성하지 않는다.
+Deploys의 실제 가동 커밋과 `/api/health`의 `commit`이 일치해야 배포 완료로 판정한다.
+실패 시 먼저 배포 로그와 마이그레이션을 확인하고, 검토 없이 DB downgrade를 실행하지 않는다.

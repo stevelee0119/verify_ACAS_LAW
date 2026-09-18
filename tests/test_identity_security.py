@@ -616,6 +616,33 @@ def test_outbound_export_requires_member_and_uses_trusted_actor(viewer_audit, tm
         assert len(versions) == 1 and versions[0].kind == "SANITIZED"
 
 
+def test_legacy_sealed_reports_require_editor_before_storage(secured, monkeypatch):
+    from apps.api.routers import reports
+    s = secured
+
+    def forbidden_storage():
+        pytest.fail("Read-only user reached sealed report storage")
+
+    monkeypatch.setattr(reports, "get_storage", forbidden_storage)
+    with s.factory() as session:
+        report = session.get(ReportRow, "ra")
+        report.include_sealed = True
+        report.artifacts = {"pdf": {"storage_key": "sealed.pdf"}}
+        session.commit()
+        token = identity._principal.set(identity.principal_for_user(session, s.users["viewer"], "token"))
+        try:
+            with pytest.raises(HTTPException) as error:
+                reports.download_report("ra", "pdf", session)
+            assert error.value.status_code == 403
+        finally:
+            identity._principal.reset(token)
+        token = identity._principal.set(identity.principal_for_user(session, s.users["member"], "token"))
+        try:
+            assert reports._report_or_404(session, "ra")[0].id == "ra"
+        finally:
+            identity._principal.reset(token)
+
+
 def envelope(path):
     return json.loads(base64.b64decode(path.read_bytes()[9:]))
 

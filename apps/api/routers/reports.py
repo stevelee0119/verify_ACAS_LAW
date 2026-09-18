@@ -369,6 +369,8 @@ def _report_or_404(session, report_id, minimum="VIEWER"):
     if report is None:
         raise HTTPException(404, "보고서를 찾을 수 없습니다")
     require_project(session, report.project_id, minimum)
+    if report.include_sealed:
+        require_project(session, report.project_id, "MEMBER")
     run = session.get(VerificationRun, report.run_id)
     if not run or run.project_id != report.project_id:
         raise HTTPException(404, "현재 프로젝트의 검증 결과가 아닙니다")

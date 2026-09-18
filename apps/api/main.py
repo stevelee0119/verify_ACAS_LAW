@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -14,10 +15,15 @@ from fastapi.staticfiles import StaticFiles
 
 from packages.common.config import get_settings
 
+from fastapi import Depends
+
+from .auth import require_admin
 from .capabilities import runtime_capabilities
+from .db import User
 from .db import init_db
 from .access import workspace_access
-from .routers import audit, projects, reports, settings_router, verification, viewer, calculations, workspace, document_review, identity, jobs
+from .routers import (audit, auth_router, projects, reports, settings_router, verification,
+                      viewer, calculations, workspace, document_review, identity, jobs)
 
 # 제21.1장: 로그에 실명·주민번호·API Key·원문 전체를 남기지 않는다
 SENSITIVE_PATTERNS = [
@@ -37,6 +43,26 @@ class RedactingFilter(logging.Filter):
         record.msg = message
         record.args = ()
         return True
+
+
+def _bootstrap_admin() -> None:
+    """환경변수로 최초 관리자를 만든다.
+
+    운영 모드에서는 유효한 계정 없이 보호된 API에 접근할 수 없다.
+    무인증으로 열지 않으므로 최초 관리자 부트스트랩 경로를 제공한다.
+    """
+    from .auth import bootstrap_admin_from_env
+    from .db import get_session_factory
+
+    session = get_session_factory()()
+    try:
+        user = bootstrap_admin_from_env(session)
+        if user is not None:
+            logging.getLogger(__name__).info("최초 관리자 계정을 생성했다")
+    except Exception as exc:  # pragma: no cover - 부트스트랩 실패가 기동을 막지 않게 한다
+        logging.getLogger(__name__).warning("관리자 부트스트랩 실패: %s", type(exc).__name__)
+    finally:
+        session.close()
 
 
 def create_app() -> FastAPI:
@@ -87,22 +113,27 @@ def create_app() -> FastAPI:
 
     # 스키마는 앱 생성 시점에 준비한다(운영에서는 Alembic migration을 사용한다).
     init_db()
+    _bootstrap_admin()
 
     for module in (projects, verification, reports, settings_router, viewer, audit, calculations, workspace, document_review, identity, jobs):
         app.include_router(module.router, prefix="/api")
+    # auth_router는 경로에 이미 /api가 들어 있으므로 prefix를 붙이지 않는다
+    app.include_router(auth_router.router)
 
     @app.get("/api/health")
     def health() -> Dict[str, Any]:
+        """무인증 헬스체크. 배포 플랫폼이 호출하므로 설정을 노출하지 않는다."""
         return {
             "status": "ok",
             "app": settings.app_name,
             "version": settings.version,
+            "commit": (os.getenv("RENDER_GIT_COMMIT") if re.fullmatch(
+                r"[0-9a-fA-F]{40}", os.getenv("RENDER_GIT_COMMIT", "")) else None),
             "principles": ["Source First", "Evidence First", "Human Final Decision"],
-            "capabilities": runtime_capabilities(),
         }
 
     @app.get("/api/diagnostics")
-    def diagnostics() -> Dict[str, Any]:
+    def diagnostics(admin: User = Depends(require_admin)) -> Dict[str, Any]:
         """배포 환경이 무엇을 할 수 있는지 스스로 밝힌다.
 
         OCR이 없으면 스캔본·이미지 문서의 본문 검증은 수행되지 않고 UNVERIFIED로

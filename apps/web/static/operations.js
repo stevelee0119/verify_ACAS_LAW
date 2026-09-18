@@ -3,31 +3,77 @@
 const operationsUI = (() => {
   let loginPromise = null, identity = null;
   const roles = {ADMIN:"관리자", MEMBER:"검토자", VIEWER:"열람자"};
+  async function authRequest(path, options = {}) {
+    const response = await fetch(`/api${path}`, {...options, credentials:"same-origin"});
+    const result = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(typeof result?.detail === "string" ? result.detail : result?.detail?.message || `인증 요청 실패 (${response.status})`);
+    return result;
+  }
   function authenticate() {
     if (loginPromise) return loginPromise;
     loginPromise = new Promise((resolve, reject) => {
-      const dialog = node("dialog", null, "workflow-dialog");
+      const dialog = node("dialog", null, "workflow-dialog login-dialog");
       dialog.setAttribute("aria-label", "작업 공간 로그인");
       const form = node("form"), error = node("p", "", "error");
       error.setAttribute("role", "alert");
+      const emailField = workflowUI.field("email", "이메일", "", "email");
+      const passwordField = workflowUI.field("password", "비밀번호", "", "password");
       const credential = workflowUI.field("token", "개인 접속 토큰 또는 SSO ID 토큰", "", "password");
-      const input = credential.querySelector("input"); input.required = true; input.autocomplete = "off";
+      const email = emailField.querySelector("input"), password = passwordField.querySelector("input"), token = credential.querySelector("input");
+      email.required = password.required = token.required = true;
+      email.autocomplete = "username"; password.autocomplete = "current-password"; token.autocomplete = "off";
+      email.maxLength = 200;
+      const modes = node("div", null, "login-modes"); modes.setAttribute("role", "tablist"); modes.setAttribute("aria-label", "로그인 방식");
+      const passwordPanel = node("div", null, "login-fields"), tokenPanel = node("div", null, "login-fields");
+      passwordPanel.append(emailField, passwordField); tokenPanel.append(credential);
+      let mode = "password";
+      const modeButtons = [];
+      function selectMode(next, focus = true) {
+        mode = next; error.textContent = ""; password.value = token.value = "";
+        passwordPanel.hidden = mode !== "password"; tokenPanel.hidden = mode !== "token";
+        email.disabled = password.disabled = mode !== "password"; token.disabled = mode !== "token";
+        modeButtons.forEach(tab => {
+          const selected = tab.dataset.mode === mode;
+          tab.setAttribute("aria-selected", String(selected)); tab.tabIndex = selected ? 0 : -1;
+        });
+        if (focus) (mode === "password" ? email : token).focus();
+      }
+      for (const [key, title, panel] of [["password", "이메일 로그인", passwordPanel], ["token", "토큰·SSO", tokenPanel]]) {
+        const tab = button(title, () => selectMode(key)); tab.dataset.mode = key; tab.id = `login-tab-${key}`;
+        tab.setAttribute("role", "tab"); tab.setAttribute("aria-controls", `login-panel-${key}`);
+        panel.id = `login-panel-${key}`; panel.setAttribute("role", "tabpanel"); panel.setAttribute("aria-labelledby", tab.id);
+        tab.addEventListener("keydown", event => {
+          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+          event.preventDefault();
+          const next = event.key === "Home" ? "password" : event.key === "End" ? "token" : mode === "password" ? "token" : "password";
+          selectMode(next, false); modeButtons.find(item => item.dataset.mode === next).focus();
+        });
+        modeButtons.push(tab); modes.append(tab);
+      }
       const submit = node("button", "로그인", "primary"); submit.type = "submit";
-      form.append(node("h2", "작업 공간 로그인"), credential, error, submit);
+      form.append(node("h2", "ACAS_LAW Verifier"), modes, passwordPanel, tokenPanel, error, submit);
       dialog.append(form); document.body.append(dialog);
       let authenticated = false;
-      dialog.addEventListener("close", () => {dialog.remove(); if (!authenticated) reject(new Error("로그인이 필요합니다."));}, {once:true});
+      dialog.addEventListener("cancel", event => {if (submit.disabled) event.preventDefault();});
+      dialog.addEventListener("close", () => {
+        password.value = token.value = ""; dialog.remove();
+        if (!authenticated) reject(new Error("로그인이 필요합니다."));
+      }, {once:true});
       form.onsubmit = async event => {
-        event.preventDefault(); submit.disabled = true; error.textContent = "";
+        event.preventDefault(); if (submit.disabled) return; submit.disabled = true; error.textContent = "";
+        modeButtons.forEach(tab => tab.disabled = true);
         try {
-          const response = await fetch("/api/identity/session", {method:"POST", credentials:"same-origin", headers:{Authorization:`Bearer ${input.value.trim()}`}});
-          const result = await response.json().catch(()=>({}));
-          if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "접속 정보를 확인하세요.");
-          input.value = ""; identity = result; authenticated = true; dialog.close(); resolve();
+          if (mode === "password") await authRequest("/auth/login", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({email:email.value.trim(), password:password.value})});
+          else await authRequest("/identity/session", {method:"POST", headers:{Authorization:`Bearer ${token.value.trim()}`}});
+          const nextIdentity = await authRequest("/identity/me");
+          const changedUser = identity && identity.user_id !== nextIdentity.user_id;
+          identity = nextIdentity; authenticated = true; dialog.close();
+          if (changedUser) { location.reload(); reject(new Error("다른 계정으로 로그인하여 작업 공간을 새로 불러옵니다.")); }
+          else resolve();
         } catch (e) { error.textContent = e.message; }
-        finally { submit.disabled = false; }
+        finally { password.value = token.value = ""; submit.disabled = false; modeButtons.forEach(tab => tab.disabled = false); }
       };
-      dialog.showModal(); input.focus();
+      selectMode("password", false); dialog.showModal(); email.focus();
     }).finally(() => {loginPromise = null;});
     return loginPromise;
   }
@@ -46,18 +92,44 @@ const operationsUI = (() => {
       content.append(button("내 접속 토큰", () => tokens(me.user_id)));
       if (me.role === "ADMIN") content.append(button("조직 사용자", users));
       if (state.project) content.append(button("이 프로젝트 접근 권한", members));
-      content.append(button("로그아웃", async () => {await api("/identity/session", {method:"DELETE"}); location.reload();}));
+    }
+    if (me.authentication !== "local") {
+      if (me.authentication === "password") content.append(button("비밀번호 변경", changePassword));
+      content.append(button("로그아웃", async () => {await authRequest("/identity/session", {method:"DELETE"}); location.reload();}));
     }
     const view = workflowUI.modal("계정·접근 권한", [content], async()=>{}); view.submit.hidden = true;
+  }
+  function changePassword() {
+    const current = workflowUI.field("current_password", "현재 비밀번호", "", "password");
+    const next = workflowUI.field("new_password", "새 비밀번호 (10자 이상)", "", "password");
+    const confirmation = workflowUI.field("confirmation", "새 비밀번호 확인", "", "password");
+    current.querySelector("input").autocomplete = "current-password";
+    for (const field of [next, confirmation]) {field.querySelector("input").autocomplete = "new-password"; field.querySelector("input").minLength = 10;}
+    for (const field of [current, next, confirmation]) field.querySelector("input").required = true;
+    const view = workflowUI.modal("비밀번호 변경", [current, next, confirmation], async values => {
+      if (values.new_password !== values.confirmation) throw new Error("새 비밀번호가 서로 다릅니다.");
+      await authRequest("/auth/password", {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({current_password:values.current_password, new_password:values.new_password})});
+      location.reload();
+    });
+    view.submit.textContent = "변경 후 다시 로그인";
+    view.dialog.addEventListener("close", () => {for (const field of [current, next, confirmation]) field.querySelector("input").value = "";}, {once:true});
   }
   async function users() {
     const content = node("div", null, "full");
     const view = workflowUI.modal("조직 사용자", [content], async()=>{}, true); view.submit.hidden = true;
     async function draw() {
       const list = await api("/identity/users"); content.replaceChildren();
-      content.append(button("사용자 등록", () => workflowUI.modal("사용자 등록", [workflowUI.field("email","이메일","","email"), workflowUI.field("display_name","이름"), workflowUI.field("role","역할","MEMBER","text",roles)], async values=>{
-        await api("/identity/users",{method:"POST",body:values}); await draw();
-      })));
+      content.append(button("사용자 등록", () => {
+        const email = workflowUI.field("email", "이메일", "", "email"); email.querySelector("input").required = true;
+        const password = workflowUI.field("password", "초기 비밀번호 (선택, 10자 이상)", "", "password");
+        password.querySelector("input").minLength = 10; password.querySelector("input").autocomplete = "new-password";
+        const view = workflowUI.modal("사용자 등록", [email, workflowUI.field("display_name","이름"), workflowUI.field("role","역할","MEMBER","text",roles), password], async values => {
+          const {password:initialPassword, ...user} = values;
+          await api(initialPassword ? "/auth/users" : "/identity/users", {method:"POST", body:initialPassword ? {...user,password:initialPassword} : user});
+          password.querySelector("input").value = ""; await draw();
+        });
+        view.dialog.addEventListener("close", () => {password.querySelector("input").value = "";}, {once:true});
+      }));
       content.append(workflowUI.table(["사용자","역할","상태","관리"],list.map(user=>{
         const actions = node("div",null,"actions");
         actions.append(button("수정",()=>workflowUI.modal("사용자 권한", [workflowUI.field("role","역할",user.role,"text",roles),workflowUI.field("enabled","계정 활성",user.enabled,"checkbox")], async (values,form)=>{

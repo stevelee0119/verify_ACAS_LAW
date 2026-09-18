@@ -17,7 +17,17 @@ from packages.common.storage import get_storage
 from packages.forensic_engine import PrivilegeGate
 from packages.verification_engine import verification_key
 
-from ..db import Document, EvidenceRow, FindingRow, Project, VerificationRun, get_db, get_session_factory
+from ..auth import (
+    accessible_document,
+    accessible_finding,
+    accessible_project,
+    accessible_run,
+    current_user,
+    editable_document,
+    editable_project,
+    is_editor,
+)
+from ..db import User, Document, EvidenceRow, FindingRow, Project, VerificationRun, get_db, get_session_factory
 from ..identity import actor_id, current_principal, require_project
 from ..job_control import JobConflict, enqueue_run, execution_security, execution_settings_snapshot
 from ..workspace import CaseIssue, FindingWorkflow, as_dict
@@ -116,20 +126,18 @@ def _start_run(session: Session, project: Project, document_ids: List[str], payl
 
 @router.post("/documents/{document_id}/verify", response_model=RunOut, status_code=202)
 def verify_document(document_id: str, payload: VerifyRequest = VerifyRequest(),
+                    user: User = Depends(current_user),
                     session: Session = Depends(get_db)) -> RunOut:
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+    document = editable_document(session, user, document_id)
     project = session.get(Project, document.project_id)
     return _start_run(session, project, [document.id], payload)
 
 
 @router.post("/projects/{project_id}/verify", response_model=RunOut, status_code=202)
 def verify_project(project_id: str, payload: VerifyRequest = VerifyRequest(),
+                   user: User = Depends(current_user),
                    session: Session = Depends(get_db)) -> RunOut:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
+    project = editable_project(session, user, project_id)
     ids = payload.document_ids if payload.document_ids is not None else [
         d.id for d in session.execute(select(Document).where(Document.project_id == project_id,
             Document.included_in_verification.is_(True))).scalars().all()
@@ -139,8 +147,10 @@ def verify_project(project_id: str, payload: VerifyRequest = VerifyRequest(),
 
 @router.get("/projects/{project_id}/runs", response_model=List[RunOut])
 def list_runs(project_id: str, limit: int = Query(default=10, le=100),
+              user: User = Depends(current_user),
               session: Session = Depends(get_db)) -> List[RunOut]:
     """프로젝트의 검증 Run 목록(최신순). 화면 재진입 시 최신 결과를 복원하는 데 사용한다."""
+    accessible_project(session, user, project_id)
     require_project(session, project_id)
     runs = (
         session.execute(
@@ -156,26 +166,33 @@ def list_runs(project_id: str, limit: int = Query(default=10, le=100),
 
 
 @router.get("/verification-runs/{run_id}", response_model=RunOut)
-def get_run(run_id: str, session: Session = Depends(get_db)) -> RunOut:
-    run = session.get(VerificationRun, run_id)
-    if run is None:
-        raise HTTPException(404, "Run을 찾을 수 없다")
+def get_run(run_id: str, user: User = Depends(current_user),
+            session: Session = Depends(get_db)) -> RunOut:
+    run = accessible_run(session, user, run_id)
     require_project(session, run.project_id)
     return _run_out(run)
 
 
 @router.get("/verification-runs/{run_id}/result")
-def get_run_result(run_id: str, session: Session = Depends(get_db)) -> Dict[str, Any]:
-    run = session.get(VerificationRun, run_id)
-    if run is None:
-        raise HTTPException(404, "Run을 찾을 수 없다")
+def get_run_result(run_id: str, user: User = Depends(current_user),
+                   session: Session = Depends(get_db)) -> Dict[str, Any]:
+    run = accessible_run(session, user, run_id)
     require_project(session, run.project_id)
     return run.result_json or {}
 
 
 @router.get("/verification-runs/{run_id}/events")
-async def stream_progress(run_id: str) -> StreamingResponse:
-    """제18.2장 SSE 진행률."""
+async def stream_progress(
+    run_id: str,
+    user: User = Depends(current_user),
+    session: Session = Depends(get_db),
+) -> StreamingResponse:
+    """제18.2장 SSE 진행률.
+
+    EventSource는 요청 헤더를 붙이지 못하므로 브라우저는 세션 쿠키로 인증한다.
+    스트림을 열기 전에 접근 권한을 확인한다. 진행률·상태도 사건 정보이다.
+    """
+    accessible_run(session, user, run_id)
 
     principal = current_principal()
     with get_session_factory()() as session:
@@ -265,8 +282,10 @@ def list_findings(
     review_status: Optional[str] = None,
     advisory: Optional[bool] = Query(default=None, description="true면 참고 신호(MM-4)만 반환한다"),
     tag: Optional[str] = None,
+    user: User = Depends(current_user),
     session: Session = Depends(get_db),
 ) -> List[FindingOut]:
+    accessible_project(session, user, project_id)
     require_project(session, project_id)
     if run_id:
         selected_run = session.get(VerificationRun, run_id)
@@ -304,20 +323,21 @@ def list_findings(
 
 
 @router.get("/findings/{finding_id}", response_model=FindingOut)
-def get_finding(finding_id: str, session: Session = Depends(get_db)) -> FindingOut:
-    row = session.get(FindingRow, finding_id)
-    if row is None:
-        raise HTTPException(404, "Finding을 찾을 수 없다")
+def get_finding(finding_id: str, user: User = Depends(current_user),
+                session: Session = Depends(get_db)) -> FindingOut:
+    row = accessible_finding(session, user, finding_id)
     require_project(session, row.project_id)
     return _finding_out(session, row)
 
 
 @router.patch("/findings/{finding_id}/review", response_model=FindingOut)
-def review_finding(finding_id: str, payload: ReviewRequest, session: Session = Depends(get_db)) -> FindingOut:
+def review_finding(finding_id: str, payload: ReviewRequest,
+                   user: User = Depends(current_user),
+                   session: Session = Depends(get_db)) -> FindingOut:
     """제19.4장. 사용자 판단은 AI Finding을 삭제하지 않고 별도 review layer로 남긴다."""
-    row = session.get(FindingRow, finding_id)
-    if row is None:
-        raise HTTPException(404, "Finding을 찾을 수 없다")
+    row = accessible_finding(session, user, finding_id)
+    if not is_editor(user):
+        raise HTTPException(403, "읽기 전용 권한으로는 Review 상태를 바꿀 수 없다")
     try:
         status = ReviewStatus(payload.review_status.upper())
     except ValueError:
@@ -353,11 +373,16 @@ def review_finding(finding_id: str, payload: ReviewRequest, session: Session = D
 
 
 @router.post("/findings/{finding_id}/reveal")
-def reveal_sealed(finding_id: str, payload: RevealRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
-    """제7-A.6장 특권·윤리 게이트. 사용자가 명시적으로 선택한 경우에만 원문을 공개하고 열람을 기록한다."""
-    row = session.get(FindingRow, finding_id)
-    if row is None:
-        raise HTTPException(404, "Finding을 찾을 수 없다")
+def reveal_sealed(finding_id: str, payload: RevealRequest,
+                  user: User = Depends(current_user),
+                  session: Session = Depends(get_db)) -> Dict[str, Any]:
+    """제7-A.6장 특권·윤리 게이트. 사용자가 명시적으로 선택한 경우에만 원문을 공개하고 열람을 기록한다.
+
+    봉인 원문은 이 시스템에서 가장 민감한 자료이므로 읽기 전용 권한으로는 열 수 없다.
+    """
+    row = accessible_finding(session, user, finding_id)
+    if not is_editor(user):
+        raise HTTPException(403, "읽기 전용 권한으로는 봉인 원문을 열람할 수 없다")
     settings = get_settings()
     project = require_project(session, row.project_id, "MEMBER")
     organization_block = False

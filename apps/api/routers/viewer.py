@@ -15,7 +15,8 @@ from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine, inspect_outbound, sanitize
 
-from ..db import Document, DocumentBlock, DocumentPage, DocumentVersion, Project, VerificationRun, get_db
+from ..auth import accessible_document, current_user, editable_document
+from ..db import User, Document, DocumentBlock, DocumentPage, DocumentVersion, Project, VerificationRun, get_db
 from ..identity import actor_id, filter_project_query, require_project
 from ..schemas import OutboundRequest
 from ..services import make_audit
@@ -40,8 +41,10 @@ def get_blocks(
     include_hidden: bool = Query(default=False, description="보호된 레이어는 별도 열람 승인 필요"),
     run_id: Optional[str] = None,
     session: Session = Depends(get_db),
+    user: User = Depends(current_user),
 ) -> Dict[str, Any]:
     document = _authorized_document(session, document_id)
+    accessible_document(session, user, document_id)
     if include_hidden:
         raise HTTPException(403, "보호된 내용은 확인 항목의 개별 열람 절차를 이용해야 합니다")
     if run_id:
@@ -92,8 +95,10 @@ def get_blocks(
 
 
 @router.get("/documents/{document_id}/original")
-def get_original(document_id: str, session: Session = Depends(get_db)) -> Response:
+def get_original(document_id: str, session: Session = Depends(get_db),
+                 user: User = Depends(current_user)) -> Response:
     document = _authorized_document(session, document_id)
+    accessible_document(session, user, document_id)
     data = get_storage().get(document.storage_key)
     make_audit(session).record(
         AuditEventType.EXPORT, {"action": "ORIGINAL_DOWNLOAD", "sha256": document.sha256},
@@ -138,8 +143,10 @@ def render_page(document_id: str, page_number: int, session: Session = Depends(g
 
 
 @router.get("/documents/{document_id}/versions")
-def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+def list_versions(document_id: str, session: Session = Depends(get_db),
+                 user: User = Depends(current_user)) -> List[Dict[str, Any]]:
     document = _authorized_document(session, document_id)
+    accessible_document(session, user, document_id)
     versions = session.execute(
         select(DocumentVersion).where(DocumentVersion.document_id == document.id).order_by(DocumentVersion.version)
     ).scalars().all()
@@ -157,9 +164,12 @@ def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[
 
 
 @router.post("/documents/{document_id}/outbound-guard")
-def outbound_guard(document_id: str, payload: OutboundRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
+def outbound_guard(document_id: str, payload: OutboundRequest,
+                   session: Session = Depends(get_db),
+                   user: User = Depends(current_user)) -> Dict[str, Any]:
     """발신 전 자체검사. 원본은 보존하고 정제본을 새 버전으로 등록한다(제7-A.7장)."""
     document = _authorized_document(session, document_id, "MEMBER")
+    document = editable_document(session, user, document_id)
 
     storage = get_storage()
     path = str(storage.path(document.storage_key))

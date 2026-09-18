@@ -12,14 +12,47 @@ from packages.common.enums import JobState
 
 @pytest.fixture()
 def client(registry, tmp_path_factory):
+    """관리자로 로그인한 클라이언트.
+
+    인증을 우회하지 않고 실제 로그인 경로를 통과시킨다. 그래야 테스트가
+    운영과 같은 경로를 검사한다.
+    """
+    import uuid
+
     from apps.api import db as db_module
+    from apps.api.auth import ROLE_ADMIN, hash_password, issue_session
+    from apps.api.db import Organization, User, get_session_factory
     from apps.api.main import create_app
     from apps.api.services import set_registry
     from fastapi.testclient import TestClient
 
     set_registry(registry)
     db_module.reset_engine()
-    return TestClient(create_app())
+    app = create_app()
+
+    session = get_session_factory()()
+    try:
+        organization = session.query(Organization).first()
+        if organization is None:
+            organization = Organization(name="테스트 기관")
+            session.add(organization)
+            session.flush()
+        user = User(
+            email=f"tester-{uuid.uuid4().hex[:8]}@example.com",
+            display_name="테스트 관리자",
+            role=ROLE_ADMIN,
+            organization_id=organization.id,
+            password_hash=hash_password("test-password-1234"),
+        )
+        session.add(user)
+        session.commit()
+        token = issue_session(session, user)
+    finally:
+        session.close()
+
+    test_client = TestClient(app)
+    test_client.headers.update({"Authorization": f"Bearer {token}"})
+    return test_client
 
 
 @pytest.fixture()
@@ -341,8 +374,23 @@ def test_diagnostics_never_exposes_secret_values(client, monkeypatch):
     assert keys["law_go_kr"] is True and keys["kci"] is True
 
 
-def test_health_includes_capabilities(client):
-    assert "capabilities" in client.get("/api/health").json()
+def test_health_stays_minimal_because_it_is_public(client):
+    """헬스체크는 인증 없이 열려 있으므로 설정을 담지 않는다.
+
+    종전에는 capabilities를 함께 실었다. 배포 플랫폼이 호출하는 무인증 경로에
+    어떤 키가 설정되어 있는지가 드러나므로, 그 정보는 관리자 전용
+    /api/diagnostics로 옮겼다.
+    """
+    body = client.get("/api/health").json()
+    assert body["status"] == "ok"
+    assert "capabilities" not in body
+
+
+def test_health_exposes_only_valid_deployment_commit(client, monkeypatch):
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "a" * 40)
+    assert client.get("/api/health").json()["commit"] == "a" * 40
+    monkeypatch.setenv("RENDER_GIT_COMMIT", "not-a-commit-or-safe-metadata")
+    assert client.get("/api/health").json()["commit"] is None
 
 
 def test_ocr_unavailable_is_reported_as_degraded(client):

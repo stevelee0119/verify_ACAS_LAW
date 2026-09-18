@@ -9,9 +9,11 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import ProjectMember, User, get_db
-from ..identity import (ApiToken, BrowserSession, ExternalIdentity, IdentityAccount, OIDCSettings,
+from ..identity import (ApiToken, ExternalIdentity, OIDCSettings,
                         current_principal, issue_token, provision_user,
-                        require_org_admin, require_project, issue_browser_session, SESSION_COOKIE)
+                        require_org_admin, require_project, issue_browser_session, SESSION_COOKIE,
+                        PASSWORD_SESSION_COOKIE, revoke_principal_credential, set_account_enabled,
+                        user_is_enabled)
 
 router = APIRouter(tags=["identity"])
 Role = Literal["ADMIN", "MEMBER", "VIEWER"]
@@ -48,7 +50,8 @@ class Membership(Input):
 def _user(session: Session, user_id: str) -> User:
     principal = current_principal()
     user = session.get(User, user_id)
-    if principal.is_local or user is None or user.organization_id != principal.organization_id:
+    if (principal.is_local or user is None or user.organization_id != principal.organization_id
+            or (not principal.organization_id and user.id != principal.user_id)):
         raise HTTPException(404, "Identity resource not found")
     return user
 
@@ -62,10 +65,9 @@ def _commit(session: Session):
 
 
 def _user_out(session, user):
-    account = session.get(IdentityAccount, user.id)
     return {"id": user.id, "email": user.email, "display_name": user.display_name,
             "role": user.role, "organization_id": user.organization_id,
-            "enabled": bool(account and account.enabled)}
+            "enabled": user_is_enabled(session, user)}
 
 
 @router.get("/identity/me")
@@ -82,20 +84,21 @@ def exchange_session(request: Request, response: Response, session: Session = De
     response.set_cookie(SESSION_COOKIE, secret, httponly=True, secure=request.state.secure_transport,
                         samesite="lax", path="/api", expires=row.expires_at.replace(tzinfo=timezone.utc),
                         max_age=max(0, int((row.expires_at - datetime.utcnow()).total_seconds())))
+    response.delete_cookie(PASSWORD_SESSION_COOKIE, path="/", httponly=True,
+                           secure=request.state.secure_transport, samesite="strict")
     return {**me(), "expires_at": row.expires_at.isoformat() + "Z"}
 
 
 @router.delete("/identity/session", status_code=204)
 def logout(request: Request, session: Session = Depends(get_db)):
     principal = current_principal()
-    if principal.authentication == "session":
-        row = session.get(BrowserSession, principal.credential_id)
-        if row is not None:
-            row.revoked_at = datetime.utcnow()
-            _commit(session)
+    revoke_principal_credential(session, principal)
+    _commit(session)
     response = Response(status_code=204)
     response.delete_cookie(SESSION_COOKIE, path="/api", httponly=True,
                            secure=request.state.secure_transport, samesite="lax")
+    response.delete_cookie(PASSWORD_SESSION_COOKIE, path="/", httponly=True,
+                           secure=request.state.secure_transport, samesite="strict")
     return response
 
 
@@ -124,18 +127,10 @@ def update_user(user_id: str, payload: UserUpdate, session: Session = Depends(ge
     user = _user(session, user_id)
     if user.id == principal.user_id and (payload.enabled is False or payload.role not in {None, "ADMIN"}):
         raise HTTPException(409, "Administrators cannot disable or demote themselves")
-    account = session.get(IdentityAccount, user.id)
-    if account is None:
-        raise HTTPException(404, "User is not provisioned")
     if payload.role is not None:
         user.role = payload.role
     if payload.enabled is not None:
-        account.enabled = payload.enabled
-        if not payload.enabled:
-            for token in session.scalars(select(ApiToken).where(ApiToken.user_id == user.id, ApiToken.revoked_at.is_(None))):
-                token.revoked_at = datetime.utcnow()
-            for browser in session.scalars(select(BrowserSession).where(BrowserSession.user_id == user.id, BrowserSession.revoked_at.is_(None))):
-                browser.revoked_at = datetime.utcnow()
+        set_account_enabled(session, user, payload.enabled)
     _commit(session)
     return _user_out(session, user)
 
@@ -209,8 +204,7 @@ def members(project_id: str, session: Session = Depends(get_db)):
 def set_member(project_id: str, user_id: str, payload: Membership, session: Session = Depends(get_db)):
     project = require_project(session, project_id, "ADMIN")
     user = _user(session, user_id)
-    account = session.get(IdentityAccount, user_id)
-    if user.organization_id != project.organization_id or account is None or not account.enabled:
+    if user.organization_id != project.organization_id or not user_is_enabled(session, user):
         raise HTTPException(404, "Identity resource not found")
     row = session.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
     if row is None:

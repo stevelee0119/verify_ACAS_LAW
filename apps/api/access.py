@@ -15,7 +15,8 @@ from starlette.routing import Match
 from .db import (Document, ExportArtifactRow, FindingRow, ReportRow, VerificationRun,
                  get_session_factory)
 from .identity import (LOCAL_OWNER, Principal, _principal, auth_mode, authenticate_bearer,
-                       authenticate_session, require_project, SESSION_COOKIE)
+                       authenticate_session, authenticate_password_session, require_project,
+                       SESSION_COOKIE, PASSWORD_SESSION_COOKIE)
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 RESOURCE_MODELS = {"document_id": Document, "run_id": VerificationRun,
@@ -118,14 +119,18 @@ def _authorize(session, request, principal, route, params, payload):
         if not getattr(getattr(route, "endpoint", None), "__project_scoped__", False):
             raise HTTPException(503, "Project collection identity integration is required")
         return
-    if "/identity/" in template:
+    if "/identity/" in template or template.startswith("/api/auth/"):
         return
     if template.endswith("/audit/verify") or "/audit" in template:
         raise HTTPException(403, "Global audit access is available only in local mode")
     if "/settings/" in template:
+        if principal.role != "ADMIN":
+            raise HTTPException(403, "Administrator required")
         if not read:
             raise HTTPException(403, "Global settings changes require local administration")
         return
+    if template.endswith("/diagnostics") and principal.role != "ADMIN":
+        raise HTTPException(403, "Administrator required")
     if read and template.endswith(("/health", "/diagnostics", "/project-defaults")):
         return
     if template.endswith("/calculations/interest") and principal.role in {"MEMBER", "ADMIN"}:
@@ -155,15 +160,21 @@ def _authenticate_local(request) -> Principal:
 
 
 def _authenticate(request):
+    request.state.cookie_authenticated = False
     if auth_mode() == "local":
         return _authenticate_local(request)
     authorization = request.headers.getlist("authorization")
     if not authorization:
-        cookies = [part.strip() for header in request.headers.getlist("cookie") for part in header.split(";")
-                   if part.strip().startswith(SESSION_COOKIE + "=")]
+        cookies = [part.strip().partition("=")[0] for header in request.headers.getlist("cookie")
+                   for part in header.split(";")
+                   if part.strip().partition("=")[0] in {SESSION_COOKIE, PASSWORD_SESSION_COOKIE}]
         if len(cookies) == 1:
             with get_session_factory()() as session:
-                return authenticate_session(session, request.cookies.get(SESSION_COOKIE, ""))
+                name = cookies[0]
+                authenticate = authenticate_session if name == SESSION_COOKIE else authenticate_password_session
+                principal = authenticate(session, request.cookies.get(name, ""))
+                request.state.cookie_authenticated = True
+                return principal
     if len(authorization) != 1:
         raise HTTPException(401, "Bearer authentication required", headers={"WWW-Authenticate": "Bearer"})
     scheme, _, token = authorization[0].partition(" ")
@@ -181,6 +192,8 @@ def _check_policy(request, principal, route, params, payload):
 
 def _origin(url):
     parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise HTTPException(403, "Invalid request origin")
     return parsed.scheme.lower(), parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80)
 
 
@@ -197,26 +210,44 @@ def _public_shell(request) -> bool:
     return request.method in {"GET", "HEAD"} and (request.url.path == "/" or request.url.path.startswith("/static/"))
 
 
+def check_origin(request, *, secure: bool, required: bool = False):
+    origins = request.headers.getlist("origin")
+    if len(origins) > 1 or (required and not origins):
+        raise HTTPException(403, "Cookie-authenticated changes require one Origin header")
+    expected = os.getenv("LV_PUBLIC_ORIGIN") or str(request.url.replace(scheme="https" if secure else request.url.scheme))
+    if origins and _origin(origins[0]) != _origin(expected):
+        raise HTTPException(403, "Cross-origin changes are not allowed")
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        raise HTTPException(403, "Cross-site changes are not allowed")
+
+
 async def workspace_access(request, call_next):
     try:
         mode = auth_mode()
         if mode == "multi-user" and _public_shell(request):
             return await call_next(request)
+        if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path == "/api/health":
+            # Readiness probes are public, never configuration or principal data.
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            return response
         secure = secure_transport(request)
         loopback = (request.client and request.client.host in {"127.0.0.1", "::1", "testclient"}
                     and request.url.hostname in {"localhost", "127.0.0.1", "::1", "testserver"})
-        if mode == "multi-user" and not secure and not loopback:
+        if (mode == "multi-user" or os.getenv("LV_ACCESS_TOKEN")) and not secure and not loopback:
             raise HTTPException(403, "HTTPS is required for multi-user authentication")
+        request.state.secure_transport = secure
+        if mode == "multi-user" and request.method == "POST" and request.url.path.rstrip("/") == "/api/auth/login":
+            # Login CSRF must be checked even though no principal exists yet.
+            check_origin(request, secure=secure,
+                         required=bool(request.headers.get("sec-fetch-site") or request.headers.get("cookie")))
+            response = await call_next(request)
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Vary"] = "Origin, Cookie, Authorization"
+            return response
         principal = await run_in_threadpool(_authenticate, request)
         if request.method not in READ_METHODS:
-            origin = request.headers.get("origin")
-            if principal.authentication == "session" and not origin:
-                raise HTTPException(403, "Cookie-authenticated changes require an Origin header")
-            expected = os.getenv("LV_PUBLIC_ORIGIN") or str(request.url.replace(scheme="https" if secure else request.url.scheme))
-            if origin and _origin(origin) != _origin(expected):
-                raise HTTPException(403, "Cross-origin changes are not allowed")
-            if request.headers.get("sec-fetch-site") == "cross-site":
-                raise HTTPException(403, "Cross-site changes are not allowed")
+            check_origin(request, secure=secure, required=request.state.cookie_authenticated)
         route, params = _route(request)
         payload = None
         media_type = request.headers.get("content-type", "").split(";")[0].strip().lower()
@@ -234,6 +265,7 @@ async def workspace_access(request, call_next):
             request._body = json.dumps(payload).encode("utf-8")
         request.state.principal = principal
         request.state.actor = principal.user_id
+        request.state.user_id = principal.user_id
         request.state.secure_transport = secure
         context_token = _principal.set(principal)
         try:
