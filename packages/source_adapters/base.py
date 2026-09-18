@@ -23,6 +23,15 @@ class AdapterResponse:
     records: List[Dict[str, Any]] = field(default_factory=list)
     source_record: Optional[SourceRecord] = None
     message: str = ""
+    source_records: List[SourceRecord] = field(default_factory=list)
+    complete: bool = False
+
+    def __post_init__(self) -> None:
+        if self.source_record and not any(
+            record.source_record_id == self.source_record.source_record_id
+            for record in self.source_records
+        ):
+            self.source_records.insert(0, self.source_record)
 
     @property
     def ok(self) -> bool:

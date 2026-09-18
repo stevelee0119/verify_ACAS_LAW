@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
+from io import BytesIO
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
@@ -13,31 +15,57 @@ from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine, inspect_outbound, sanitize
 
-from ..db import Document, DocumentBlock, DocumentPage, DocumentVersion, FindingRow, Project, get_db
+from ..db import Document, DocumentBlock, DocumentPage, DocumentVersion, Project, VerificationRun, get_db
+from ..identity import actor_id, filter_project_query, require_project
 from ..schemas import OutboundRequest
 from ..services import make_audit
 
 router = APIRouter(tags=["viewer"])
 
 
+def _authorized_document(session: Session, document_id: str, minimum: str = "VIEWER") -> Document:
+    query = filter_project_query(
+        select(Document).where(Document.id == document_id), session, Document.project_id)
+    document = session.scalar(query)
+    if document is None:
+        raise HTTPException(404, "Document not found")
+    require_project(session, document.project_id, minimum)
+    return document
+
+
 @router.get("/documents/{document_id}/blocks")
 def get_blocks(
     document_id: str,
     page: Optional[int] = None,
-    include_hidden: bool = Query(default=True, description="숨은 레이어 overlay 표시용"),
+    include_hidden: bool = Query(default=False, description="보호된 레이어는 별도 열람 승인 필요"),
+    run_id: Optional[str] = None,
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
-    query = select(DocumentBlock).where(DocumentBlock.document_id == document_id)
+    document = _authorized_document(session, document_id)
+    if include_hidden:
+        raise HTTPException(403, "보호된 내용은 확인 항목의 개별 열람 절차를 이용해야 합니다")
+    if run_id:
+        run = session.scalar(select(VerificationRun).where(
+            VerificationRun.id == run_id, VerificationRun.project_id == document.project_id))
+        if run is None:
+            raise HTTPException(404, "검증 결과를 찾을 수 없습니다")
+        entry = next((d for d in (run.result_json or {}).get("documents", [])
+                      if d.get("document_id") == document_id), None)
+        if entry and "pages" in entry:
+            pages = entry["pages"]
+            return {"document_id": document_id, "filename": document.filename,
+                    "pages": [{k: v for k, v in p.items() if k != "blocks"} for p in pages],
+                    "blocks": [b for p in pages if page is None or p["page_number"] == page
+                               for b in p.get("blocks", []) if b.get("visible") is True
+                               and b.get("source_layer") in ("visible_text", "ocr_layer")]}
+    query = select(DocumentBlock).where(
+        DocumentBlock.document_id == document.id, DocumentBlock.visible.is_(True),
+        DocumentBlock.source_layer.in_(("visible_text", "ocr_layer")))
     if page is not None:
         query = query.where(DocumentBlock.page == page)
     blocks = session.execute(query).scalars().all()
-    if not include_hidden:
-        blocks = [b for b in blocks if b.visible]
     pages = session.execute(
-        select(DocumentPage).where(DocumentPage.document_id == document_id).order_by(DocumentPage.page_number)
+        select(DocumentPage).where(DocumentPage.document_id == document.id).order_by(DocumentPage.page_number)
     ).scalars().all()
     return {
         "document_id": document_id,
@@ -65,21 +93,55 @@ def get_blocks(
 
 @router.get("/documents/{document_id}/original")
 def get_original(document_id: str, session: Session = Depends(get_db)) -> Response:
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+    document = _authorized_document(session, document_id)
     data = get_storage().get(document.storage_key)
+    make_audit(session).record(
+        AuditEventType.EXPORT, {"action": "ORIGINAL_DOWNLOAD", "sha256": document.sha256},
+        actor=actor_id(), project_id=document.project_id, document_id=document.id)
     return Response(
         content=data,
         media_type=document.mime_type or "application/octet-stream",
-        headers={"Content-Disposition": f'inline; filename="{document.filename}"'},
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(document.filename)}",
+                 "Cache-Control": "no-store"},
     )
+
+
+@router.get("/documents/{document_id}/pages/{page_number}.png")
+def render_page(document_id: str, page_number: int, session: Session = Depends(get_db)):
+    document = _authorized_document(session, document_id)
+    if not document.filename.lower().endswith(".pdf"):
+        raise HTTPException(404, "PDF 문서를 찾을 수 없습니다")
+    import pypdfium2 as pdfium
+    pdf = pdfium.PdfDocument(get_storage().get(document.storage_key))
+    try:
+        if not 1 <= page_number <= len(pdf):
+            raise HTTPException(404, "페이지를 찾을 수 없습니다")
+        page = pdf[page_number - 1]
+        try:
+            width, height = page.get_size()
+            bitmap = page.render(scale=min(1.5, 2000 / max(width, height)))
+            try:
+                image = bitmap.to_pil()
+                output = BytesIO()
+                image.save(output, format="PNG")
+                image.close()
+            finally:
+                bitmap.close()
+        finally:
+            page.close()
+    finally:
+        pdf.close()
+    make_audit(session).record(
+        AuditEventType.EXPORT, {"action": "PAGE_RENDER", "page_number": page_number},
+        actor=actor_id(), project_id=document.project_id, document_id=document.id)
+    return Response(output.getvalue(), media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @router.get("/documents/{document_id}/versions")
 def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[Dict[str, Any]]:
+    document = _authorized_document(session, document_id)
     versions = session.execute(
-        select(DocumentVersion).where(DocumentVersion.document_id == document_id).order_by(DocumentVersion.version)
+        select(DocumentVersion).where(DocumentVersion.document_id == document.id).order_by(DocumentVersion.version)
     ).scalars().all()
     return [
         {
@@ -97,9 +159,7 @@ def list_versions(document_id: str, session: Session = Depends(get_db)) -> List[
 @router.post("/documents/{document_id}/outbound-guard")
 def outbound_guard(document_id: str, payload: OutboundRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
     """발신 전 자체검사. 원본은 보존하고 정제본을 새 버전으로 등록한다(제7-A.7장)."""
-    document = session.get(Document, document_id)
-    if document is None:
-        raise HTTPException(404, "문서를 찾을 수 없다")
+    document = _authorized_document(session, document_id, "MEMBER")
 
     storage = get_storage()
     path = str(storage.path(document.storage_key))
@@ -169,5 +229,6 @@ def outbound_guard(document_id: str, payload: OutboundRequest, session: Session 
              "sanitized_sha256": digest},
             project_id=document.project_id,
             document_id=document.id,
+            actor=actor_id(),
         )
     return result

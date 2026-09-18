@@ -9,10 +9,13 @@
 from __future__ import annotations
 
 import io
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.common.enums import MM4_ADVISORY_TYPES, Severity
+from .snapshot import json_lines, technical_payload, xml_text
 
 KOREAN_FONT = "HYSMyeongJo-Medium"
 
@@ -20,6 +23,19 @@ KOREAN_FONT = "HYSMyeongJo-Medium"
 def _register_font() -> str:
     from reportlab.pdfbase import pdfmetrics
     from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfbase.ttfonts import TTFont
+
+    embedded = "ACASKorean"
+    if embedded in pdfmetrics.getRegisteredFontNames():
+        return embedded
+    for candidate in (os.getenv("LV_REPORT_FONT_PATH", ""), "C:/Windows/Fonts/malgun.ttf",
+                      "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"):
+        if candidate and Path(candidate).is_file():
+            try:
+                pdfmetrics.registerFont(TTFont(embedded, candidate))
+                return embedded
+            except (OSError, ValueError):
+                continue
 
     try:
         pdfmetrics.getFont(KOREAN_FONT)
@@ -62,7 +78,7 @@ def _sanitize(text: str) -> str:
 
 def _escape(text: Any) -> str:
     return (
-        _sanitize(str(text if text is not None else ""))
+        _sanitize(xml_text(text))
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
@@ -87,7 +103,7 @@ def build_report_pdf(
     buffer = io.BytesIO()
     document = SimpleDocTemplate(
         buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
-        title="법률문서 검증보고서",
+        title="ACAS_LAW Verifier 법률문서 검증보고서",
     )
     story: List[Any] = []
     findings = run_result.all_findings
@@ -96,7 +112,7 @@ def build_report_pdf(
 
     def table(rows: List[List[str]], widths: List[float]) -> Any:
         data = [[Paragraph(_escape(cell), styles["small"]) for cell in row] for row in rows]
-        t = Table(data, colWidths=widths, repeatRows=1)
+        t = Table(data, colWidths=widths, repeatRows=1, splitInRow=1)
         t.setStyle(
             TableStyle(
                 [
@@ -112,7 +128,15 @@ def build_report_pdf(
         return t
 
     # --- 표지 / 1. 검증개요 ------------------------------------------------
-    story.append(Paragraph("법률문서 검증보고서", styles["title"]))
+    story.append(Paragraph("ACAS_LAW Verifier", styles["title"]))
+    story.append(Paragraph("법률문서 검증보고서", styles["h1"]))
+    metadata = getattr(run_result, "report_metadata", {})
+    if metadata:
+        story.append(Paragraph(_escape(metadata["label"]), styles["h1"]))
+        for key in ("source_run_id", "source_run_hash", "snapshot_hash", "export_snapshot_hash",
+                    "created_by", "created_at", "finalized_by", "finalized_at", "note", "review_notice"):
+            if metadata.get(key) is not None:
+                story.append(Paragraph(_escape(f"{key}: {metadata[key]}"), styles["small"]))
     story.append(Spacer(1, 6))
     story.append(Paragraph(_escape("1. 검증개요·대상문서·방법론"), styles["h1"]))
     overview = [
@@ -139,7 +163,7 @@ def build_report_pdf(
         integrity.append(
             [
                 d.filename,
-                (d.normalized.sha256 if d.normalized else "-")[:32] + "…",
+                d.normalized.sha256 if d.normalized else "-",
                 d.normalized.parser_name if d.normalized else "-",
                 "QUARANTINED" if d.quarantined else "-",
                 str(len(d.warnings)),
@@ -155,7 +179,7 @@ def build_report_pdf(
         for f in sorted(critical, key=lambda x: -x.severity.rank):
             rows.append(
                 [str(f.severity), str(f.type), str(f.evidence_grade), f"{f.confidence:.2f}",
-                 f"{f.title}\n{f.detail[:260]}"]
+                 f"{f.title}\n{f.detail}"]
             )
         story.append(table(rows, [50, 110, 34, 40, 256]))
     else:
@@ -172,7 +196,7 @@ def build_report_pdf(
                 [
                     d.filename,
                     str(citation.get("page") or "-"),
-                    (citation.get("raw_text") or "")[:60],
+                    (citation.get("raw_text") or ""),
                     str(citation.get("type")),
                     verdict.get("status", "UNVERIFIED"),
                     "A" if verdict.get("official_record") else "U",
@@ -195,7 +219,7 @@ def build_report_pdf(
         a = d.authorship or {}
         ai_rows.append(
             [d.filename, a.get("verdict", "-"), str(a.get("score", "-")), a.get("attribution", "-"),
-             " ".join(a.get("notes", []))[:180]]
+             " ".join(a.get("notes", []))]
         )
     story.append(table(ai_rows, [90, 70, 40, 90, 200]))
 
@@ -233,11 +257,11 @@ def build_report_pdf(
     # --- 8. 미검증 항목 / 사용하지 못한 Source -------------------------------
     story.append(Paragraph(_escape("8. 미검증 항목 및 사용하지 못한 Source"), styles["h1"]))
     unverified_rows = [["구분", "대상", "사유"]]
-    for item in run_result.unverified_items[:60]:
-        unverified_rows.append([item.get("kind", "-"), (item.get("raw_text") or item.get("document_id") or "-")[:70],
-                                (item.get("reason") or "-")[:120]])
+    for item in run_result.unverified_items:
+        unverified_rows.append([item.get("kind", "-"), (item.get("raw_text") or item.get("document_id") or "-"),
+                                (item.get("reason") or "-")])
     for source in run_result.unavailable_sources:
-        unverified_rows.append(["source", source["name"], f"{source['status']} {source.get('note', '')}"[:120]])
+        unverified_rows.append(["source", source.get("name", "-"), f"{source.get('status', 'UNVERIFIED')} {source.get('note', '')}"])
     if len(unverified_rows) > 1:
         story.append(table(unverified_rows, [50, 190, 250]))
     else:
@@ -258,7 +282,7 @@ def build_report_pdf(
         rows = [["유형", "근거 위치", "내용"]]
         for f in advisory_findings:
             rows.append([str(f.type), f"{f.document_id or '-'} p{f.page or '-'} {f.block_id or ''}",
-                         f"{f.title} / {f.detail[:200]}"])
+                         f"{f.title} / {f.detail}"])
         story.append(table(rows, [120, 110, 260]))
     else:
         story.append(Paragraph("해당 없음.", styles["body"]))
@@ -283,7 +307,8 @@ def build_report_pdf(
                 [
                     ["항목", "값"],
                     ["이벤트 수", str(manifest.get("event_count"))],
-                    ["체인 무결성", "정상" if manifest.get("chain_valid") else "손상"],
+                    ["전체 체인 무결성", "정상" if manifest.get("chain_valid") is True else
+                     "손상" if manifest.get("chain_valid") is False else "미검증 (사건별 기록만 조회)"],
                     ["Head Hash", str(manifest.get("head_hash"))],
                     ["생성시각", str(manifest.get("generated_at"))],
                 ],
@@ -293,6 +318,55 @@ def build_report_pdf(
     else:
         story.append(Paragraph("Manifest가 제공되지 않았다.", styles["body"]))
 
+    story.append(Paragraph("12. 실행 범위 및 기술적 부록", styles["h1"]))
+    snapshot = getattr(run_result, "input_snapshot", {})
+    context = snapshot.get("context", {})
+    story.append(table([["항목", "실행 당시 설정"],
+        ["범위 변경 번호", str(snapshot.get("scope_revision", "기록 없음"))],
+        ["검증 프로필", str(context.get("profile", "기록 없음"))],
+        ["외부 AI 정책", str(context.get("external_ai_policy", "기록 없음"))],
+        ["법령 기준일", str(context.get("case_date") or "미지정: 시행법 적합성 미검증")],
+        ["판정 한계", "VERIFIED는 해당 검사 단계의 확인 결과이며 문서 전체의 적법성 보증이 아니다. 신뢰도 지표는 통계적으로 보정된 확률이 아니다."]], [100, 390]))
+    for item in run_result.documents:
+        for verdict in item.engine_data.get("legal_verdicts", []):
+            story.append(Paragraph(_escape(f"{item.filename} / {verdict.get('citation_id')}: {verdict.get('levels')}"), styles["small"]))
+        for coverage in item.engine_data.get("page_coverage", []):
+            story.append(Paragraph(_escape(f"{item.filename}: {coverage}"), styles["small"]))
+        for record in item.source_records:
+            source = record.to_dict() if hasattr(record, "to_dict") else record
+            story.append(Paragraph(_escape(f"Source: {source.get('adapter')} / {source.get('retrieved_at')} / SHA-256 {source.get('response_hash')} / {source.get('url')}"), styles["small"]))
+        for review in item.engine_data.get("semantic_reviews", []):
+            story.append(Paragraph(_escape(f"AI 참고 의견 / {review.get('citation_id')} / 근거 문구 대조 {review.get('source_quotes_validated', False)}: {review.get('reason')}"), styles["small"]))
+    executions = getattr(run_result, "model_executions", [])
+    story.append(Paragraph(_escape(f"모델 호출 기록: {executions}" if executions else "실행된 모델 호출 없음. 의미·법리 적용 검토를 완료한 것으로 해석할 수 없음."), styles["small"]))
+    story.append(Paragraph("실행에 저장된 검토 기록", styles["h2"]))
+    for finding in findings:
+        data = finding.to_dict()
+        story.append(Paragraph(_escape(f"{finding.title}: {data.get('review_status', 'NEEDS_REVIEW')} / {data.get('review_note', '')}"), styles["small"]))
+    snapshot = getattr(run_result, "review_snapshot", {})
+    story.append(Paragraph("13. 사람의 검토 기록", styles["h1"]))
+    rows = [["항목", "시스템 결과", "검토 진행", "검토 의견", "담당자와 메모"]]
+    for item in snapshot.get("workflow", []):
+        rows.append([item.get("finding_id"), item.get("system_status"), item.get("workflow_state"),
+                     item.get("decision"), f"{item.get('updated_by', '')} / {item.get('note', '')}"])
+    story.append(table(rows, [105, 70, 80, 80, 155]))
+    story.append(Paragraph("14. 쟁점과 주장 및 증거 관계", styles["h1"]))
+    for issue in snapshot.get("matrix", {}).get("issues", []):
+        story.append(Paragraph(_escape(f"{issue.get('title')} / {issue.get('legal_basis', '')}"), styles["body"]))
+        story.append(Paragraph(_escape(f"요건사실: {issue.get('elements', [])} / 기준일: {issue.get('reference_date')}"), styles["body"]))
+    rows = [["주장", "쟁점과 입장", "증거 검토", "연결 증거와 부족 자료"]]
+    for item in snapshot.get("matrix", {}).get("claims", []):
+        assessment = item.get("assessment", {})
+        rows.append([item["claim"].get("text", ""), f"{assessment.get('issue_id', '')} / {assessment.get('position', 'UNASSESSED')}",
+                     item.get("review_status", "UNASSESSED"),
+                     f"{assessment.get('evidence_links', [])} / {assessment.get('missing_material', '')}"])
+    story.append(table(rows, [140, 95, 85, 170]))
+    story.append(Paragraph("15. 전체 기술 기록", styles["h1"]))
+    story.append(Paragraph(_escape("실행 당시 기록된 검사 상태와 사용 불가 단계, 전체 출처, 모델 실행, 증거 및 검토 스냅샷을 수록합니다. 기록 부재는 검사 성공을 뜻하지 않습니다. 공유용에서 제외한 내용은 공유 정책에 표시합니다."), styles["body"]))
+    for path, value in json_lines(technical_payload(run_result)):
+        story.append(Paragraph(_escape(path), styles["small"]))
+        for offset in range(0, max(1, len(value)), 1600):
+            story.append(Paragraph(_escape(value[offset:offset + 1600]), styles["small"]))
     document.build(story)
     return buffer.getvalue()
 
@@ -311,7 +385,7 @@ def _section_table(table_fn, findings: List[Any], types: set, styles) -> Any:
                 str(f.type),
                 str(f.evidence_grade),
                 f"p{f.page or '-'}",
-                f"{f.title} / {f.detail[:200]}",
+                f"{f.title} / {f.detail}",
             ]
         )
     return table_fn(rows, [50, 118, 30, 32, 260])

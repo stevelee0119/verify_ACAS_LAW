@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import re
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict
 
@@ -15,7 +16,8 @@ from packages.common.config import get_settings
 
 from .capabilities import runtime_capabilities
 from .db import init_db
-from .routers import audit, projects, reports, settings_router, verification, viewer
+from .access import workspace_access
+from .routers import audit, projects, reports, settings_router, verification, viewer, calculations, workspace, document_review, identity, jobs
 
 # 제21.1장: 로그에 실명·주민번호·API Key·원문 전체를 남기지 않는다
 SENSITIVE_PATTERNS = [
@@ -41,9 +43,21 @@ def create_app() -> FastAPI:
     settings = get_settings()
     logging.getLogger().addFilter(RedactingFilter())
 
+    @asynccontextmanager
+    async def lifespan(app):
+        import asyncio
+        from .services import get_runner
+        runner = get_runner()
+        await asyncio.to_thread(runner.start)
+        try:
+            yield
+        finally:
+            await asyncio.to_thread(runner.stop)
+
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
+        lifespan=lifespan,
         description=(
             "법률 분야 AI 문서 검증 및 위조 식별 시스템. "
             "Source First / Evidence First / Human Final Decision 원칙에 따라 동작한다."
@@ -56,6 +70,7 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    app.middleware("http")(workspace_access)
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -73,7 +88,7 @@ def create_app() -> FastAPI:
     # 스키마는 앱 생성 시점에 준비한다(운영에서는 Alembic migration을 사용한다).
     init_db()
 
-    for module in (projects, verification, reports, settings_router, viewer, audit):
+    for module in (projects, verification, reports, settings_router, viewer, audit, calculations, workspace, document_review, identity, jobs):
         app.include_router(module.router, prefix="/api")
 
     @app.get("/api/health")

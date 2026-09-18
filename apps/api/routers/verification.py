@@ -18,8 +18,11 @@ from packages.forensic_engine import PrivilegeGate
 from packages.verification_engine import verification_key
 
 from ..db import Document, EvidenceRow, FindingRow, Project, VerificationRun, get_db, get_session_factory
+from ..identity import actor_id, current_principal, require_project
+from ..job_control import JobConflict, enqueue_run, execution_security, execution_settings_snapshot
+from ..workspace import CaseIssue, FindingWorkflow, as_dict
 from ..schemas import FindingOut, RevealRequest, ReviewRequest, RunOut, VerifyRequest
-from ..services import build_context, find_reusable_run, get_runner, make_audit
+from ..services import build_context, get_runner, make_audit, get_registry
 
 router = APIRouter(tags=["verification"])
 
@@ -40,41 +43,75 @@ def _run_out(run: VerificationRun, reused: bool = False) -> RunOut:
         started_at=run.started_at,
         finished_at=run.finished_at,
         reused=reused,
+        timeline=run.timeline or [],
+        input_snapshot=run.input_snapshot or {},
     )
 
 
 def _start_run(session: Session, project: Project, document_ids: List[str], payload: VerifyRequest) -> RunOut:
+    require_project(session, project.id, "MEMBER")
     if not document_ids:
         raise HTTPException(400, "검증할 문서가 없다")
     settings = get_settings()
-    documents = session.execute(select(Document).where(Document.id.in_(document_ids))).scalars().all()
+    document_ids = list(dict.fromkeys(document_ids))
+    documents = session.execute(select(Document).where(Document.id.in_(document_ids),
+        Document.project_id == project.id, Document.included_in_verification.is_(True)).order_by(Document.id)).scalars().all()
     if len(documents) != len(document_ids):
         raise HTTPException(404, "문서를 찾을 수 없다")
 
     profile = VerificationProfile(payload.profile or project.verification_profile or "STANDARD")
+    context = build_context(project)
+    try:
+        security = execution_security(session, project.id, context.external_ai_policy)
+        execution = execution_settings_snapshot()
+    except JobConflict as exc:
+        raise HTTPException(409, str(exc)) from exc
+    context.external_ai_policy = security["external_ai_policy"]
+    context.org_block_reveal = bool(context.org_block_reveal or security["block_sealed_reveal"])
+    snapshot = {
+        "scope_revision": project.scope_revision or 0,
+        "project": {"name": project.name, "case_number": project.case_number, "court": project.court},
+        "versions": {"rule": settings.rule_version, "prompt": settings.prompt_version,
+                     "model_config": settings.model_config_version()},
+        "context": {**context.__dict__, "profile": str(profile),
+                    "enabled_advisory_signals": sorted(context.enabled_advisory_signals) if context.enabled_advisory_signals is not None else None},
+        "documents": [{"document_id": d.id, "sha256": d.sha256, "filename": d.filename,
+                       "evidence_number": d.evidence_number, "submitted_by": d.submitted_by,
+                       "is_own_document": d.is_own_document, "storage_key": d.storage_key,
+                       "mime_type": d.mime_type or ""} for d in documents],
+        "source_states": [s.to_dict() for s in get_registry().states()],
+        "execution": execution,
+        "security": security,
+        "issues": [as_dict(issue) for issue in session.scalars(
+            select(CaseIssue).where(CaseIssue.project_id == project.id).order_by(CaseIssue.id))],
+    }
     key = verification_key(
         [d.sha256 for d in documents],
         profile,
         rule_version=settings.rule_version,
         prompt_version=settings.prompt_version,
         model_config_version=settings.model_config_version(),
+        context_snapshot=snapshot,
     )
-    if not payload.force:
-        existing = find_reusable_run(session, project.id, key)
-        if existing is not None:
-            return _run_out(existing, reused=True)
-
+    principal = current_principal()
+    snapshot["submission"] = {"actor_id": principal.user_id, "organization_id": project.organization_id,
+                              "authentication": principal.authentication}
     run = VerificationRun(
         project_id=project.id,
         document_ids=[d.id for d in documents],
         profile=str(profile),
         state=str(JobState.QUEUED),
         verification_key=key,
+        input_snapshot=snapshot,
     )
-    session.add(run)
-    session.commit()
+    try:
+        run, reused = enqueue_run(session, run, force=payload.force)
+        session.commit()
+    except JobConflict as exc:
+        session.rollback()
+        raise HTTPException(409, str(exc)) from exc
     get_runner().submit(run.id)
-    return _run_out(run)
+    return _run_out(run, reused=reused)
 
 
 @router.post("/documents/{document_id}/verify", response_model=RunOut, status_code=202)
@@ -93,8 +130,9 @@ def verify_project(project_id: str, payload: VerifyRequest = VerifyRequest(),
     project = session.get(Project, project_id)
     if project is None:
         raise HTTPException(404, "프로젝트를 찾을 수 없다")
-    ids = payload.document_ids or [
-        d.id for d in session.execute(select(Document).where(Document.project_id == project_id)).scalars().all()
+    ids = payload.document_ids if payload.document_ids is not None else [
+        d.id for d in session.execute(select(Document).where(Document.project_id == project_id,
+            Document.included_in_verification.is_(True))).scalars().all()
     ]
     return _start_run(session, project, ids, payload)
 
@@ -103,6 +141,7 @@ def verify_project(project_id: str, payload: VerifyRequest = VerifyRequest(),
 def list_runs(project_id: str, limit: int = Query(default=10, le=100),
               session: Session = Depends(get_db)) -> List[RunOut]:
     """프로젝트의 검증 Run 목록(최신순). 화면 재진입 시 최신 결과를 복원하는 데 사용한다."""
+    require_project(session, project_id)
     runs = (
         session.execute(
             select(VerificationRun)
@@ -121,6 +160,7 @@ def get_run(run_id: str, session: Session = Depends(get_db)) -> RunOut:
     run = session.get(VerificationRun, run_id)
     if run is None:
         raise HTTPException(404, "Run을 찾을 수 없다")
+    require_project(session, run.project_id)
     return _run_out(run)
 
 
@@ -129,12 +169,20 @@ def get_run_result(run_id: str, session: Session = Depends(get_db)) -> Dict[str,
     run = session.get(VerificationRun, run_id)
     if run is None:
         raise HTTPException(404, "Run을 찾을 수 없다")
+    require_project(session, run.project_id)
     return run.result_json or {}
 
 
 @router.get("/verification-runs/{run_id}/events")
 async def stream_progress(run_id: str) -> StreamingResponse:
     """제18.2장 SSE 진행률."""
+
+    principal = current_principal()
+    with get_session_factory()() as session:
+        run = session.get(VerificationRun, run_id)
+        if run is None:
+            raise HTTPException(404, "Run not found")
+        require_project(session, run.project_id, principal=principal)
 
     async def generator():
         last = None
@@ -145,6 +193,7 @@ async def stream_progress(run_id: str) -> StreamingResponse:
                 if run is None:
                     yield f"event: error\ndata: {json.dumps({'message': 'Run 없음'})}\n\n"
                     return
+                require_project(session, run.project_id, principal=principal)
                 payload = {
                     "state": run.state,
                     "progress": run.progress,
@@ -218,6 +267,11 @@ def list_findings(
     tag: Optional[str] = None,
     session: Session = Depends(get_db),
 ) -> List[FindingOut]:
+    require_project(session, project_id)
+    if run_id:
+        selected_run = session.get(VerificationRun, run_id)
+        if selected_run is None or selected_run.project_id != project_id:
+            raise HTTPException(404, "Run not found")
     query = select(FindingRow).where(FindingRow.project_id == project_id)
     if run_id:
         query = query.where(FindingRow.run_id == run_id)
@@ -254,6 +308,7 @@ def get_finding(finding_id: str, session: Session = Depends(get_db)) -> FindingO
     row = session.get(FindingRow, finding_id)
     if row is None:
         raise HTTPException(404, "Finding을 찾을 수 없다")
+    require_project(session, row.project_id)
     return _finding_out(session, row)
 
 
@@ -268,11 +323,17 @@ def review_finding(finding_id: str, payload: ReviewRequest, session: Session = D
     except ValueError:
         raise HTTPException(400, f"허용되지 않는 review 상태이다: {payload.review_status}")
 
+    require_project(session, row.project_id, "MEMBER")
+    if session.get(FindingWorkflow, finding_id) is not None:
+        raise HTTPException(409, "Structured review exists; use PUT /findings/{id}/workflow with its revision")
+    from .workspace import WorkflowInput, update_workflow
     previous = row.review_status
-    row.review_status = str(status)
-    row.review_note = payload.note
-    row.reviewed_by = payload.reviewer
-    row.reviewed_at = datetime.utcnow()
+    decision = {"ACCEPTED": "AGREED", "FALSE_POSITIVE": "FALSE_POSITIVE"}.get(str(status), "UNDECIDED")
+    values = WorkflowInput(
+        workflow_state="NOT_STARTED" if str(status) == "NEEDS_REVIEW" else "COMPLETED",
+        decision=decision, note=payload.note, revision=0,
+    )
+    update_workflow(session, row, values, actor_id())
     session.commit()
 
     make_audit(session).record(
@@ -284,7 +345,7 @@ def review_finding(finding_id: str, payload: ReviewRequest, session: Session = D
             "note": payload.note,
             "notice": "원래 Finding과 Audit Trail은 삭제되지 않는다.",
         },
-        actor=payload.reviewer,
+        actor=actor_id(),
         project_id=row.project_id,
         document_id=row.document_id,
     )
@@ -298,7 +359,7 @@ def reveal_sealed(finding_id: str, payload: RevealRequest, session: Session = De
     if row is None:
         raise HTTPException(404, "Finding을 찾을 수 없다")
     settings = get_settings()
-    project = session.get(Project, row.project_id)
+    project = require_project(session, row.project_id, "MEMBER")
     organization_block = False
     if project is not None and project.organization_id:
         from ..db import Organization
@@ -320,7 +381,7 @@ def reveal_sealed(finding_id: str, payload: RevealRequest, session: Session = De
     make_audit(session).record(
         AuditEventType.SEALED_CONTENT_REVEALED,
         {"finding_id": finding_id, "reason": payload.reason, "type": row.type},
-        actor=payload.reviewer,
+        actor=actor_id(),
         project_id=row.project_id,
         document_id=row.document_id,
     )

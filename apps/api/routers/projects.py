@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
+from uuid import uuid4
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
@@ -15,9 +17,12 @@ from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
 from ..db import Document, DocumentVersion, Project, get_db
-from ..schemas import DocumentOut, ProjectCreate, ProjectOut
+from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
 from ..services import make_audit
 from ..security import scan_upload
+from ..access import project_scoped
+from ..identity import (actor_id, apply_organization_policy, filter_project_query,
+                        project_creation_defaults, require_project)
 
 router = APIRouter(tags=["projects"])
 
@@ -42,13 +47,25 @@ def _project_out(session: Session, project: Project) -> ProjectOut:
         requested_issues=list(project.requested_issues or []),
         created_at=project.created_at,
         document_count=count,
+        included_document_count=session.scalar(select(func.count(Document.id)).where(
+            Document.project_id == project.id, Document.included_in_verification.is_(True))) or 0,
+        scope_revision=project.scope_revision or 0,
+        key_dates=project.key_dates or {},
     )
 
 
 @router.post("/projects", response_model=ProjectOut, status_code=201)
-def create_project(payload: ProjectCreate, session: Session = Depends(get_db)) -> ProjectOut:
+@project_scoped
+def create_project(payload: ProjectCreate = ProjectCreate(), session: Session = Depends(get_db)) -> ProjectOut:
+    defaults = project_creation_defaults(session)
+    if payload.creation_key:
+        existing = session.scalar(select(Project).where(Project.creation_key == payload.creation_key))
+        if existing:
+            require_project(session, existing.id, "MEMBER")
+            return _project_out(session, existing)
     project = Project(
-        name=payload.name,
+        name=payload.name or default_project_name(),
+        creation_key=payload.creation_key,
         case_number=payload.case_number,
         court=payload.court,
         case_type=payload.case_type,
@@ -58,27 +75,119 @@ def create_project(payload: ProjectCreate, session: Session = Depends(get_db)) -
         purpose=payload.purpose,
         tags=payload.tags,
         memo=payload.memo,
-        external_ai_policy=payload.external_ai_policy,
+        external_ai_policy=apply_organization_policy(session, {"external_ai_policy": payload.external_ai_policy})["external_ai_policy"],
         verification_profile=payload.verification_profile,
         requested_issues=payload.requested_issues,
         enabled_advisory_signals=payload.enabled_advisory_signals,
+        **defaults,
     )
     session.add(project)
-    session.commit()
+    try:
+        session.commit()
+    except IntegrityError:
+        session.rollback()
+        existing = session.scalar(select(Project).where(Project.creation_key == payload.creation_key)) if payload.creation_key else None
+        if existing is None:
+            raise
+        require_project(session, existing.id, "MEMBER")
+        return _project_out(session, existing)
+    make_audit(session).record(AuditEventType.USER_OVERRIDE, {"action": "PROJECT_CREATED"},
+                              project_id=project.id, actor=actor_id())
     return _project_out(session, project)
 
 
+def default_project_name() -> str:
+    return f"새 검토 {datetime.now().astimezone():%Y-%m-%d} {uuid4().hex[:6]}"
+
+
+@router.get("/project-defaults")
+def project_defaults():
+    return {**ProjectCreate().model_dump(), "name": default_project_name(), "creation_key": uuid4().hex}
+
+
+def bump_scope(session: Session, project_id: str) -> None:
+    session.execute(update(Project).where(Project.id == project_id).values(scope_revision=Project.scope_revision + 1))
+
+
+@router.patch("/projects/{project_id}", response_model=ProjectOut)
+def update_project(project_id: str, payload: ProjectUpdate, session: Session = Depends(get_db)):
+    project = require_project(session, project_id, "MEMBER")
+    changes = apply_organization_policy(session, payload.model_dump(exclude_unset=True, exclude={"creation_key"}), project)
+    if "name" in changes and not changes["name"]:
+        changes["name"] = default_project_name()
+    for key, value in changes.items():
+        setattr(project, key, value)
+    if changes:
+        session.flush()
+        bump_scope(session, project_id)
+    session.commit()
+    session.refresh(project)
+    make_audit(session).record(AuditEventType.USER_OVERRIDE, {"action": "PROJECT_UPDATED", "fields": list(changes)}, project_id=project_id, actor=actor_id())
+    return _project_out(session, project)
+
+
+@router.patch("/projects/{project_id}/document-scope", response_model=List[DocumentOut])
+def update_scope(project_id: str, payload: DocumentScopeUpdate, session: Session = Depends(get_db)):
+    require_project(session, project_id, "MEMBER")
+    documents = session.scalars(select(Document).where(Document.project_id == project_id,
+        Document.id.in_(set(payload.document_ids)))).all()
+    if len(documents) != len(set(payload.document_ids)):
+        raise HTTPException(404, "현재 사건에 속한 문서만 선택할 수 있습니다")
+    changed = []
+    for document in documents:
+        if document.included_in_verification != payload.included_in_verification:
+            document.included_in_verification = payload.included_in_verification
+            document.exclusion_reason = payload.exclusion_reason if not payload.included_in_verification else ""
+            document.scope_changed_at = datetime.utcnow()
+            document.scope_changed_by = actor_id()
+            changed.append(document.id)
+    if changed:
+        session.flush()
+        bump_scope(session, project_id)
+    session.commit()
+    if changed:
+        make_audit(session).record(AuditEventType.USER_OVERRIDE,
+            {"action": "DOCUMENT_SCOPE_CHANGED", "document_ids": changed,
+             "included": payload.included_in_verification, "reason": payload.exclusion_reason}, project_id=project_id, actor=actor_id())
+    return [_document_out(session, d) for d in documents]
+
+
+@router.patch("/documents/{document_id}", response_model=DocumentOut)
+def update_document(document_id: str, payload: DocumentUpdate, session: Session = Depends(get_db)):
+    document = session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(404, "문서를 찾을 수 없습니다")
+    require_project(session, document.project_id, "MEMBER")
+    changes = payload.model_dump(exclude_unset=True, exclude={"included_in_verification", "exclusion_reason"})
+    for key, value in changes.items():
+        if value is not None or key == "submitted_on":
+            setattr(document, key, value)
+    if payload.submitted_by:
+        document.is_own_document = payload.submitted_by == "OWN"
+    if changes:
+        session.flush()
+        bump_scope(session, document.project_id)
+    session.commit()
+    if changes:
+        make_audit(session).record(AuditEventType.USER_OVERRIDE,
+            {"action": "DOCUMENT_UPDATED", "fields": list(changes)}, project_id=document.project_id,
+            document_id=document.id, actor=actor_id())
+    if payload.included_in_verification is not None:
+        update_scope(document.project_id, DocumentScopeUpdate(document_ids=[document.id],
+            included_in_verification=payload.included_in_verification, exclusion_reason=payload.exclusion_reason), session)
+    return _document_out(session, document)
+
+
 @router.get("/projects", response_model=List[ProjectOut])
+@project_scoped
 def list_projects(session: Session = Depends(get_db)) -> List[ProjectOut]:
-    projects = session.execute(select(Project).order_by(Project.created_at.desc())).scalars().all()
+    projects = session.execute(filter_project_query(select(Project), session).order_by(Project.created_at.desc())).scalars().all()
     return [_project_out(session, p) for p in projects]
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
 def get_project(project_id: str, session: Session = Depends(get_db)) -> ProjectOut:
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
+    project = require_project(session, project_id)
     return _project_out(session, project)
 
 
@@ -91,13 +200,17 @@ async def upload_document(
     session: Session = Depends(get_db),
 ) -> DocumentOut:
     """업로드 → 검증 → SHA-256 → Immutable Original 저장 (제6장, 제15.1장)."""
-    project = session.get(Project, project_id)
-    if project is None:
-        raise HTTPException(404, "프로젝트를 찾을 수 없다")
+    project = require_project(session, project_id, "MEMBER")
 
     settings = get_settings()
     filename = _safe_filename(file.filename or "unnamed")
-    data = await file.read()
+    chunks, size = [], 0
+    while chunk := await file.read(1024 * 1024):
+        size += len(chunk)
+        if size > settings.max_upload_mb * 1024 * 1024:
+            raise HTTPException(413, f"파일 크기가 {settings.max_upload_mb}MB를 초과합니다")
+        chunks.append(chunk)
+    data = b"".join(chunks)
     if not data:
         raise HTTPException(400, "빈 파일이다")
     if len(data) > settings.max_upload_mb * 1024 * 1024:
@@ -140,6 +253,7 @@ async def upload_document(
         DocumentVersion(document_id=document.id, version=1, sha256=digest, storage_key=storage_key,
                         kind="ORIGINAL", note="최초 업로드 원본")
     )
+    bump_scope(session, project_id)
     session.commit()
 
     audit = make_audit(session)
@@ -148,18 +262,21 @@ async def upload_document(
         {"filename": filename, "size": len(data), "mime": document.mime_type, "storage_key": storage_key},
         project_id=project_id,
         document_id=document.id,
+        actor=actor_id(),
     )
     audit.record(
         AuditEventType.HASH_CREATED,
         {"algorithm": "SHA-256", "sha256": digest},
         project_id=project_id,
         document_id=document.id,
+        actor=actor_id(),
     )
     return _document_out(session, document)
 
 
 @router.get("/projects/{project_id}/documents", response_model=List[DocumentOut])
 def list_documents(project_id: str, session: Session = Depends(get_db)) -> List[DocumentOut]:
+    require_project(session, project_id)
     documents = (
         session.execute(
             select(Document).where(Document.project_id == project_id).order_by(Document.uploaded_at)
@@ -175,6 +292,7 @@ def get_document(document_id: str, session: Session = Depends(get_db)) -> Docume
     document = session.get(Document, document_id)
     if document is None:
         raise HTTPException(404, "문서를 찾을 수 없다")
+    require_project(session, document.project_id)
     return _document_out(session, document)
 
 
@@ -195,6 +313,11 @@ def _document_out(session: Session, document: Document) -> DocumentOut:
         rag_indexable=bool(document.rag_indexable),
         uploaded_at=document.uploaded_at,
         version_count=versions or 1,
+        included_in_verification=bool(document.included_in_verification),
+        exclusion_reason=document.exclusion_reason or "",
+        evidence_number=document.evidence_number or "",
+        submitted_by=document.submitted_by or "UNSPECIFIED",
+        submitted_on=document.submitted_on,
     )
 
 

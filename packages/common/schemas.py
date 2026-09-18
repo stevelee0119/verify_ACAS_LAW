@@ -396,6 +396,31 @@ class Claim:
     status: VerificationStatus = VerificationStatus.UNVERIFIED
     evidence: List[Evidence] = field(default_factory=list)
     attributes: Dict[str, Any] = field(default_factory=dict)
+    project_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    source_document_sha256: Optional[str] = None
+    span: Optional[Tuple[int, int]] = None
+    speaker_id: Optional[str] = None
+    speaker_text: Optional[str] = None
+    target_id: Optional[str] = None
+    target_text: Optional[str] = None
+    transaction_id: Optional[str] = None
+    object_id: Optional[str] = None
+    event_identity: Optional[str] = None
+    action: Optional[str] = None
+    asserted_date: Optional[str] = None
+    amount: Optional[str] = None
+    currency: Optional[str] = None
+    amount_scope: Optional[str] = None
+    explicit_identifiers: Dict[str, str] = field(default_factory=dict)
+    negated: bool = False
+    hearsay: bool = False
+    quoted: bool = False
+    conditional: bool = False
+    alternative: bool = False
+    stance: str = "UNSPECIFIED"
+    extraction_confidence: Optional[float] = None
+    evidence_references: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def create(type: ClaimType, text: str, **kw: Any) -> "Claim":
@@ -413,6 +438,15 @@ class Claim:
             "entity_ids": self.entity_ids,
             "status": str(self.status),
             "attributes": self.attributes,
+            **{name: getattr(self, name) for name in (
+                "project_id", "source_run_id", "source_document_sha256", "span",
+                "speaker_id", "speaker_text", "target_id", "target_text",
+                "transaction_id", "object_id", "event_identity", "action",
+                "asserted_date", "amount", "currency", "amount_scope",
+                "explicit_identifiers", "negated", "hearsay", "quoted",
+                "conditional", "alternative", "stance", "extraction_confidence",
+                "evidence_references",
+            )},
         }
 
 
@@ -426,6 +460,10 @@ class Entity:
     merge_confidence: float = 1.0
     needs_user_confirmation: bool = False
     attributes: Dict[str, Any] = field(default_factory=dict)
+    project_id: Optional[str] = None
+    explicit_identifiers: Dict[str, str] = field(default_factory=dict)
+    explicit_aliases: List[str] = field(default_factory=list)
+    resolution_basis: Optional[str] = None
 
     @staticmethod
     def create(type: EntityType, name: str, **kw: Any) -> "Entity":
@@ -448,6 +486,30 @@ class Event:
     entity_ids: List[str] = field(default_factory=list)
     event_kind: str = "GENERIC"
     raw_date_text: str = ""
+    project_id: Optional[str] = None
+    source_run_id: Optional[str] = None
+    source_document_sha256: Optional[str] = None
+    span: Optional[Tuple[int, int]] = None
+    speaker_id: Optional[str] = None
+    speaker_text: Optional[str] = None
+    target_id: Optional[str] = None
+    target_text: Optional[str] = None
+    transaction_id: Optional[str] = None
+    object_id: Optional[str] = None
+    event_identity: Optional[str] = None
+    action: Optional[str] = None
+    amount: Optional[str] = None
+    currency: Optional[str] = None
+    amount_scope: Optional[str] = None
+    explicit_identifiers: Dict[str, str] = field(default_factory=dict)
+    negated: bool = False
+    hearsay: bool = False
+    quoted: bool = False
+    conditional: bool = False
+    alternative: bool = False
+    stance: str = "UNSPECIFIED"
+    extraction_confidence: Optional[float] = None
+    evidence_references: List[Dict[str, Any]] = field(default_factory=list)
 
     @staticmethod
     def create(date_value: Optional[date], description: str, **kw: Any) -> "Event":

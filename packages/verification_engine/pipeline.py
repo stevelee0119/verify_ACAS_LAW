@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -24,6 +25,7 @@ from packages.claim_engine import (
     analyze_timeline,
     build_timeline,
     cross_document_contradictions,
+    claim_contradictions,
     extract_claims,
     extract_entities,
     extract_events,
@@ -32,6 +34,7 @@ from packages.claim_engine import (
 from packages.common.config import get_settings
 from packages.common.enums import (
     AuditEventType,
+    CitationType,
     EvidenceGrade,
     ExternalAIPolicy,
     FindingType,
@@ -41,11 +44,13 @@ from packages.common.enums import (
     VerificationProfile,
     VerificationStatus,
 )
-from packages.common.schemas import Finding, NormalizedDocument, SourceRecord
+from packages.common.schemas import Claim, Finding, NormalizedDocument, SourceRecord
 from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine
 from packages.forensic_engine.advisory import AdvisoryContext
 from packages.legal_engine import LegalVerifier, extract_citations
+from packages.legal_engine.source_review import case_applicability_review
+from packages.source_adapters.legal_history import today_korea
 from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
 from packages.source_adapters import SourceRegistry
@@ -72,6 +77,7 @@ class ProjectContext:
     org_block_reveal: bool = False
     enabled_advisory_signals: Optional[set] = None
     requested_issues: List[str] = field(default_factory=list)
+    issue_dates: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -81,6 +87,7 @@ class DocumentInput:
     filename: str
     mime_type: str = ""
     sha256: str = ""
+    is_own_document: Optional[bool] = None
 
 
 @dataclass
@@ -132,9 +139,12 @@ def verification_key(
     rule_version: str,
     prompt_version: str,
     model_config_version: str,
+    context_snapshot: Optional[Dict[str, Any]] = None,
 ) -> str:
     """제18.3장 Idempotency."""
     payload = "|".join(sorted(document_hashes)) + f"|{profile}|{rule_version}|{prompt_version}|{model_config_version}"
+    if context_snapshot is not None:
+        payload += "|" + json.dumps(context_snapshot, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -177,6 +187,12 @@ class VerificationPipeline:
             rule_version=self.settings.rule_version,
             prompt_version=self.settings.prompt_version,
             model_config_version=self.settings.model_config_version(),
+            context_snapshot={
+                "case_date": context.case_date, "issue_dates": dict(context.issue_dates),
+                "current_date": today_korea(), "external_ai_policy": str(context.external_ai_policy),
+                "requested_issues": list(context.requested_issues),
+                "document_ownership": {d.document_id: d.is_own_document for d in documents},
+            },
         )
         result = VerificationRunResult(
             run_id=run_id, project_id=context.project_id, state=JobState.QUEUED, verification_key=key
@@ -188,13 +204,15 @@ class VerificationPipeline:
         for index, document in enumerate(documents):
             base = index / total
             try:
-                document_result = self._run_document(document, context, pii, emit, base, 1 / total)
+                document_result = self._run_document(document, context, pii, emit, base, 1 / total,
+                                                     source_run_id=run_id)
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
                 result.errors.append(f"{document.filename}: {exc}")
                 result.documents.append(
                     DocumentResult(document_id=document.document_id, filename=document.filename,
-                                   warnings=[f"처리 실패: {exc}"])
+                                   warnings=[f"처리 실패: {exc}"], unverified_items=[{
+                                       "kind": "document", "document_id": document.document_id, "reason": "처리 실패"}])
                 )
 
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------
@@ -210,13 +228,15 @@ class VerificationPipeline:
         emit(JobState.AGGREGATING, "결과 집계", 0.95)
         result.unavailable_sources = self.registry.unavailable()
         result.unverified_items = [item for d in result.documents for item in d.unverified_items]
+        result.model_executions = [execution for d in result.documents
+                                   for execution in d.engine_data.get("model_executions", [])]
         result.scores = aggregate_scores(result)
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )
         result.finished_at = datetime.utcnow()
 
-        degraded = bool(result.errors or result.unavailable_sources)
+        degraded = bool(result.errors or result.unverified_items)
         result.state = JobState.PARTIAL_COMPLETED if degraded else JobState.COMPLETED
         if all(d.normalized is None for d in result.documents) and result.documents:
             result.state = JobState.FAILED
@@ -244,7 +264,12 @@ class VerificationPipeline:
         emit: Callable[[JobState, str, float], None],
         base: float,
         span: float,
+        *,
+        source_run_id: Optional[str] = None,
     ) -> DocumentResult:
+        if document.is_own_document is not None:
+            from dataclasses import replace
+            context = replace(context, counterparty_document=not document.is_own_document)
         result = DocumentResult(document_id=document.document_id, filename=document.filename)
 
         # 1) PARSING
@@ -258,6 +283,9 @@ class VerificationPipeline:
         )
         result.normalized = doc
         result.warnings.extend(doc.parse_warnings)
+        result.engine_data["page_coverage"] = doc.structure.get("page_coverage", [])
+        result.unverified_items.extend({"kind": "page", "document_id": doc.document_id, **item}
+            for item in doc.structure.get("page_coverage", []) if item["status"] == "UNVERIFIED")
         self.audit.record(
             AuditEventType.OCR if doc.structure.get("scanned_pdf") else AuditEventType.UPLOAD,
             {"document_id": doc.document_id, "parser": doc.parser_name, "sha256": doc.sha256,
@@ -376,13 +404,9 @@ class VerificationPipeline:
         emit(JobState.VERIFYING, f"{document.filename} 법률 인용 검증", base + span * 0.7)
         citations = extract_citations(doc)
         result.citations = [c.to_dict() for c in citations]
-        legal = self.legal.verify_citations(citations, case_date=context.case_date)
-        result.findings.extend(legal.findings)
-        result.source_records.extend(legal.source_records)
-        result.unverified_items.extend(legal.unverified_items)
-        result.engine_data["legal"] = {k: v for k, v in legal.data.items() if k != "verdicts"}
-        result.engine_data["legal_verdicts"] = legal.data.get("verdicts", [])
-        for record in legal.source_records:
+        self._legal_reviews(result, citations, context)
+        self._semantic_review(result, citations, context, pii)
+        for record in result.source_records:
             self.audit.record(
                 AuditEventType.API_QUERY,
                 {"adapter": record.adapter, "query": record.query, "status": str(record.status),
@@ -392,9 +416,10 @@ class VerificationPipeline:
             )
 
         # 7) Claim / Entity / Event / 계산 검증
-        claims = extract_claims(doc, citations)
-        entities = resolve_entities(extract_entities(doc))
-        events = extract_events(doc)
+        claims = extract_claims(doc, citations, project_id=context.project_id, source_run_id=source_run_id)
+        entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
+                                    project_id=context.project_id)
+        events = extract_events(doc, project_id=context.project_id, source_run_id=source_run_id)
         result.claims = [c.to_dict() for c in claims]
         result.entities = [e.to_dict() for e in entities]
         result.events = [e.to_dict() for e in events]
@@ -410,17 +435,132 @@ class VerificationPipeline:
             finding.document_id = finding.document_id or doc.document_id
         return result
 
+    def _legal_reviews(self, result, citations, context):
+        """Keep the incident-date review and every issue-date review distinct."""
+        current = today_korea()
+        scopes = [("incident", None, context.case_date, citations)]
+        statutes = [c for c in citations if c.type == CitationType.STATUTE]
+        scopes.extend(("issue", issue_id, when, statutes)
+                      for issue_id, when in sorted(context.issue_dates.items()))
+        grouped, verdicts, applicability = [], [], []
+        by_id = {c.citation_id: c for c in citations}
+        for scope, issue_id, when, review_citations in scopes:
+            review_id = f"issue:{issue_id}" if issue_id is not None else "incident"
+            legal = self.legal.verify_citations(
+                review_citations, case_date=when, incident_date=context.case_date, current_date=current)
+            label = {"review_id": review_id, "scope": scope, "issue_id": issue_id,
+                     "reference_date": when, "incident_date": context.case_date, "current_date": current}
+            for verdict in legal.data.get("verdicts", []):
+                verdict.update(label)
+                citation = by_id.get(verdict["citation_id"])
+                if citation and citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
+                    review = case_applicability_review(
+                        citation, verdict.get("official_record"),
+                        source_record_ids=verdict.get("source_record_ids", []))
+                    review.update(label)
+                    applicability.append(review)
+                verdicts.append(verdict)
+            for finding in legal.findings:
+                finding.confidence_features["legal_review"] = dict(label)
+                if issue_id is not None:
+                    finding.tags.extend(["ISSUE_DATE_REVIEW", f"ISSUE:{issue_id}"])
+                    finding.detail = f"쟁점 {issue_id}, 검토 기준일 {when or '미입력'}. " + finding.detail
+            result.findings.extend(legal.findings)
+            result.source_records.extend(legal.source_records)
+            result.unverified_items.extend({**item, **label} for item in legal.unverified_items)
+            grouped.append({
+                **label, "advisory_only": True,
+                "citation_ids": [c.citation_id for c in review_citations],
+                "finding_ids": [f.finding_id for f in legal.findings],
+                "source_record_ids": [r.source_record_id for r in legal.source_records],
+                "verdicts": legal.data.get("verdicts", []),
+            })
+            if scope == "incident":
+                result.engine_data["legal"] = {k: v for k, v in legal.data.items() if k != "verdicts"}
+        result.engine_data["legal"]["dated_review_count"] = len(grouped)
+        result.engine_data["legal_reviews"] = grouped
+        result.engine_data["legal_verdicts"] = verdicts
+        result.engine_data["case_applicability_reviews"] = applicability
+
+    def _semantic_review(self, result, citations, context, pii):
+        """Source-grounded model advice never replaces deterministic findings."""
+        by_id = {c.citation_id: c for c in citations}
+        reviews = []
+        for verdict in result.engine_data.get("legal_verdicts", []):
+            citation = by_id.get(verdict.get("citation_id"))
+            official = verdict.get("official_record") or {}
+            if not citation or not any(k in verdict.get("levels", {}) for k in ("level4", "level5")):
+                continue
+            reason = ""
+            if result.quarantined:
+                reason = "격리 문서이므로 AI 검토를 수행하지 않음"
+            elif context.profile == VerificationProfile.QUICK:
+                reason = "빠른 검토에서는 의미·적용 검토를 수행하지 않음"
+            elif not official.get("full_text"):
+                reason = "공식 판결 전문이 없어 의미·적용 검토를 수행하지 않음"
+            if reason:
+                reviews.append({"citation_id": citation.citation_id, "status": "UNVERIFIED", "reason": reason,
+                                "review_id": verdict.get("review_id"), "advisory_only": True})
+                continue
+            source_text = str(official["full_text"])[:24000]
+            document_text = citation.context[:8000]
+            if context.external_ai_policy != ExternalAIPolicy.ORIGINAL:
+                source_text = pii.mask_text(source_text).masked_text
+                document_text = pii.mask_text(document_text).masked_text
+            outcome = asyncio.run(self.router.cascade(
+                question="인용된 판결의 취지와 문서의 주장이 부합하는지, 사실관계 차이와 적용상 한계를 검토하라. 반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라.",
+                evidence={"official": {"case_number": official.get("case_number"), "full_text": source_text},
+                          "document": document_text},
+                profile=context.profile, policy=context.external_ai_policy))
+            result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
+            model_verdicts = [s["verdict"] for s in outcome.stages if s.get("used") and s.get("verdict")]
+            quotes = [q for v in model_verdicts for q in v.get("evidence_quotes", [])]
+            grounded = bool(quotes) and all(q.strip() and q in source_text for q in quotes)
+            review = {"citation_id": citation.citation_id, "status": "UNVERIFIED",
+                      "review_id": verdict.get("review_id"),
+                      "source_record_ids": verdict.get("source_record_ids", []),
+                      "advisory_only": True, "source_quotes_validated": grounded,
+                      "source_truncated": len(str(official["full_text"])) > len(source_text),
+                      "reason": outcome.rationale if grounded else "공식 전문에 있는 근거 인용이 확인되지 않아 AI 의견을 채택하지 않음",
+                      "stages": outcome.stages if grounded else [], "evidence_quotes": quotes if grounded else []}
+            reviews.append(review)
+            for level in ("level4", "level5"):
+                verdict["levels"][level] = "ADVISORY_REVIEWED" if grounded else "UNVERIFIED"
+        result.engine_data["semantic_reviews"] = reviews
+
     # -- 프로젝트 단위 ----------------------------------------------------
     def _cross_check(self, result: VerificationRunResult) -> List[Finding]:
+        from dataclasses import fields
+        import json
+
         events_by_document: Dict[str, List[Any]] = {}
+        claims = []
+        claim_fields = {item.name for item in fields(Claim)}
         for document in result.documents:
+            if document.quarantined:
+                continue
             events = _events_from(document)
             if events:
                 events_by_document[document.document_id] = events
-        return cross_document_contradictions(events_by_document)
+            claims.extend(Claim(**{key: value for key, value in raw.items() if key in claim_fields})
+                          for raw in document.claims)
+        candidates = claim_contradictions(claims, project_id=result.project_id)
+        candidates.extend(cross_document_contradictions(events_by_document))
+        findings, seen = [], set()
+        for finding in candidates:
+            features = finding.confidence_features
+            locations = sorted((source.get("document_id") or "", source.get("block_id") or "",
+                                tuple(source.get("span") or ()))
+                               for source in features.get("sources", []))
+            key = json.dumps([locations, features.get("differences")], sort_keys=True)
+            if key not in seen:
+                seen.add(key)
+                findings.append(finding)
+        return findings
 
 
 def _events_from(document: DocumentResult) -> List[Any]:
+    from dataclasses import fields
     from datetime import date as date_cls
 
     from packages.common.schemas import Event
@@ -434,17 +574,6 @@ def _events_from(document: DocumentResult) -> List[Any]:
                 value = date_cls(y, m, d)
             except Exception:
                 value = None
-        out.append(
-            Event(
-                event_id=raw["event_id"],
-                date=value,
-                description=raw["description"],
-                document_id=raw.get("document_id"),
-                block_id=raw.get("block_id"),
-                page=raw.get("page"),
-                entity_ids=raw.get("entity_ids", []),
-                event_kind=raw.get("event_kind", "GENERIC"),
-                raw_date_text=raw.get("raw_date_text", ""),
-            )
-        )
+        preserved = {item.name for item in fields(Event)} - {"date"}
+        out.append(Event(date=value, **{key: val for key, val in raw.items() if key in preserved}))
     return out

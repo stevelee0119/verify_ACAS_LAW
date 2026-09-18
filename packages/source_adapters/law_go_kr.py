@@ -12,13 +12,14 @@ from packages.common.enums import AdapterStatus
 
 from .base import AdapterResponse, SourceAdapter
 from .local_mirror import LocalLegalMirror
+from .official_legal import OfficialLegalMixin
 
 BASE = "https://www.law.go.kr/DRF"
 SEARCH_URL = f"{BASE}/lawSearch.do"
 SERVICE_URL = f"{BASE}/lawService.do"
 
 
-class LawGoKrAdapter(SourceAdapter):
+class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
     name = "law_go_kr"
     kind = "legal"
     requires_key = True
@@ -59,7 +60,7 @@ class LawGoKrAdapter(SourceAdapter):
         try:
             response = self._http_get(
                 SEARCH_URL,
-                params={"OC": self.api_key, "target": "prec", "type": "JSON", "search": 2, "query": case_number},
+                params={"OC": self.api_key, "target": "detc" if court == "헌법재판소" else "prec", "type": "JSON", "search": 2, "query": case_number},
             )
             if response.status_code == 429:
                 return self._unavailable(case_number, AdapterStatus.RATE_LIMITED, "요청 한도 초과")
@@ -87,6 +88,8 @@ class LawGoKrAdapter(SourceAdapter):
     # -- 법령 -------------------------------------------------------------
     def search_law(self, law_name: str, *, article: Optional[str] = None, as_of: Optional[str] = None) -> AdapterResponse:
         """법령 조문을 조회한다. as_of가 있으면 그 시점 시행 version을 확인한다(제9.4장)."""
+        if as_of is not None and not self.mirror.all_versions(law_name, article):
+            return self.resolve_statute(law_name, as_of=as_of)
         mirrored = self.mirror.find_law(law_name, article=article, as_of=as_of)
         if mirrored is not None:
             record = self._record(
@@ -105,8 +108,7 @@ class LawGoKrAdapter(SourceAdapter):
             return self._unavailable(law_name, status, "국가법령정보 OC가 없거나 네트워크가 비활성이다.")
         try:
             params: Dict[str, Any] = {"OC": self.api_key, "target": "law", "type": "JSON", "query": law_name}
-            if as_of:
-                params["ancYd"] = as_of.replace("-", "")
+            # A promulgation-date filter is not a historical applicability query.
             response = self._http_get(SEARCH_URL, params=params)
             if response.status_code >= 400:
                 return self._unavailable(law_name, AdapterStatus.ERROR, f"HTTP {response.status_code}")
@@ -119,6 +121,9 @@ class LawGoKrAdapter(SourceAdapter):
         # lawSearch.do는 키워드 검색이다. "민법"으로 조회하면 "난민법"·"주민법" 등
         # 부분 문자열을 포함한 법령이 함께 돌아온다. 이름이 정확히 같은 것만 남긴다.
         exact = [r for r in records if _same_law_name(law_name, r.get("law_name"))]
+        for record in exact:
+            record["requested_as_of"] = as_of
+            record["temporal_scope"] = "CURRENT_LIST_ONLY"
         return AdapterResponse(
             AdapterStatus.READY,
             exact,
@@ -128,6 +133,29 @@ class LawGoKrAdapter(SourceAdapter):
         )
 
     # -- 조문 실존 확인 -----------------------------------------------------
+    def fetch_case(self, case: Dict[str, Any], *, constitutional: bool = False) -> AdapterResponse:
+        target = "detc" if constitutional else "prec"
+        raw = case.get("raw") or {}
+        identifier = case.get("source_id") or _first(raw, "판례일련번호", "판례정보일련번호", "헌재결정례일련번호")
+        if not identifier or self.status() != AdapterStatus.READY:
+            return self._unavailable(str(case.get("case_number")), self.status() if self.status() != AdapterStatus.READY else AdapterStatus.ERROR, "판례 전문을 조회할 수 없다")
+        try:
+            response = self._http_get(SERVICE_URL, params={"OC": self.api_key, "target": target, "type": "JSON", "ID": identifier})
+            response.raise_for_status()
+            payload = response.json()
+            raw_detail = payload.get("PrecService") or payload.get("DetcService") or payload
+            if not isinstance(raw_detail, dict):
+                raise ValueError("unexpected detail payload")
+            normalized = _normalize_case_payload([raw_detail])[0]
+            from html import unescape
+            normalized = {k: unescape(re.sub(r"<[^>]+>", " ", v)) if isinstance(v, str) else v for k, v in normalized.items()}
+            normalized = {k: v for k, v in normalized.items() if v is not None}
+            record = self._record(str(case.get("case_number")), AdapterStatus.READY, payload=mask_oc(payload),
+                result_id=str(identifier), url=f"{SERVICE_URL}?target={target}&ID={identifier}", used_fields=["판례내용", "판시사항", "판결요지"])
+            return AdapterResponse(AdapterStatus.READY, [normalized], record)
+        except Exception:
+            return self._unavailable(str(case.get("case_number")), AdapterStatus.ERROR, "판례 전문 조회 실패")
+
     def fetch_articles(self, law: Dict[str, Any]) -> Optional[List[str]]:
         """법령 본문을 조회해 수록된 조문 번호 목록을 만든다.
 
@@ -139,7 +167,9 @@ class LawGoKrAdapter(SourceAdapter):
         "조문이 없음(=허위)"과 "확인 불가"가 구분되지 않는다.
         """
         raw = law.get("raw") or {}
-        mst = _first(raw, "법령일련번호", "MST") or law.get("law_id")
+        if law.get("body_complete"):
+            return list(law.get("articles", []))
+        mst = law.get("version_id") or _first(raw, "법령일련번호", "MST")
         if not mst or self.status() != AdapterStatus.READY:
             return None
         try:
@@ -152,17 +182,29 @@ class LawGoKrAdapter(SourceAdapter):
             payload = response.json()
         except Exception:
             return None
+        law["article_source_record"] = self._record(str(law.get("law_name")), AdapterStatus.READY,
+            payload=mask_oc(payload), result_id=str(mst), url=f"{SERVICE_URL}?target=law&MST={mst}",
+            used_fields=["조문번호", "조문가지번호", "조문내용"]).to_dict()
+        law["article_payload"] = mask_oc(payload)
         return _article_numbers(payload)
 
     def search(self, query: str, **kwargs: Any) -> AdapterResponse:
-        if kwargs.get("target") == "law":
+        if kwargs.get("target") in ("expc", "interpretation"):
+            return self.search_interpretation(query)
+        if kwargs.get("target") in ("decc", "admin_decision", "admin_appeal"):
+            return self.search_admin_decision(query)
+        if kwargs.get("target") in ("law", "eflaw"):
             return self.search_law(query, article=kwargs.get("article"), as_of=kwargs.get("as_of"))
+        if kwargs.get("target") not in (None, "prec", "detc", "case"):
+            return self._unavailable(query, AdapterStatus.ERROR, "Unsupported official legal source target")
+        if kwargs.get("target") == "detc":
+            return self.search_case(query, court="헌법재판소")
         return self.search_case(query, court=kwargs.get("court"))
 
 
 # 국가법령정보 응답의 상세링크에는 요청에 쓴 OC가 그대로 들어온다.
 # 이 값이 검증보고서에 실려 나가면 이용자의 OPEN API 식별자가 문서와 함께 유출된다.
-OC_IN_URL_RE = re.compile(r"([?&]OC=)[^&\s\"']+", re.IGNORECASE)
+OC_IN_URL_RE = re.compile(r"((?:[?&]|&amp;)OC=)[^&\s\"'<>]+", re.IGNORECASE)
 
 
 def mask_oc(value: Any) -> Any:
@@ -170,7 +212,7 @@ def mask_oc(value: Any) -> Any:
     if isinstance(value, str):
         return OC_IN_URL_RE.sub(r"\1[REDACTED]", value)
     if isinstance(value, dict):
-        return {k: mask_oc(v) for k, v in value.items()}
+        return {k: "[REDACTED]" if str(k).lower() == "oc" else mask_oc(v) for k, v in value.items()}
     if isinstance(value, list):
         return [mask_oc(v) for v in value]
     return value
@@ -186,10 +228,10 @@ def _first(d: Dict[str, Any], *keys: str) -> Optional[str]:
 def _normalize_case_payload(payload: Any) -> List[Dict[str, Any]]:
     """국가법령정보 응답을 내부 표준 형태로 변환한다."""
     out: List[Dict[str, Any]] = []
-    container = payload.get("PrecSearch") if isinstance(payload, dict) else None
+    container = (payload.get("PrecSearch") or payload.get("DetcSearch")) if isinstance(payload, dict) else None
     items = []
     if isinstance(container, dict):
-        raw = container.get("prec") or container.get("Prec") or []
+        raw = container.get("prec") or container.get("Prec") or container.get("detc") or []
         items = raw if isinstance(raw, list) else [raw]
     elif isinstance(payload, list):
         items = payload
@@ -199,8 +241,10 @@ def _normalize_case_payload(payload: Any) -> List[Dict[str, Any]]:
         out.append(
             {
                 "case_number": _first(item, "사건번호", "case_number"),
+                "source_id": _first(item, "판례일련번호", "판례정보일련번호", "헌재결정례일련번호"),
+                "full_text": _first(item, "판례내용", "전문", "full_text"),
                 "court": _first(item, "법원명", "court"),
-                "decision_date": _canon_date(_first(item, "선고일자", "decision_date") or ""),
+                "decision_date": _canon_date(_first(item, "선고일자", "종국일자", "decision_date") or ""),
                 "case_name": _first(item, "사건명", "case_name"),
                 "case_kind": _first(item, "판결유형", "선고", "case_kind"),
                 "holding": _first(item, "판시사항", "holding"),
@@ -227,7 +271,10 @@ def _normalize_law_payload(payload: Any) -> List[Dict[str, Any]]:
                 "law_name": _first(item, "법령명한글", "law_name"),
                 "promulgation_date": _canon_date(_first(item, "공포일자", "") or ""),
                 "effective_from": _canon_date(_first(item, "시행일자", "") or ""),
-                "law_id": _first(item, "법령ID", "법령일련번호"),
+                "law_id": _first(item, "법령ID"),
+                "version_id": _first(item, "법령일련번호", "MST"),
+                "promulgation_number": _first(item, "공포번호"),
+                "amendment_type": _first(item, "제개정구분명"),
                 "detail_link": mask_oc(_first(item, "법령상세링크")),
                 "raw": mask_oc(item),
             }

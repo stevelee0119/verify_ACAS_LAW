@@ -15,6 +15,8 @@ from packages.common.schemas import Claim, Citation, Entity, Event, NormalizedDo
 from packages.common.textutil import sentences
 
 from .calculation import AMOUNT_RE, parse_amounts
+from .entity_resolution import resolve_entities
+from .structure import extract_evidence_references, structure_claim_text
 
 # --- Claim 유형 판별 규칙 ----------------------------------------------------
 OPINION_RE = re.compile(r"(생각한다|사료된다|보아야\s*한다|타당하다|부당하다|바람직하다|판단된다|여겨진다|믿는다)")
@@ -100,7 +102,8 @@ def classify_claim(sentence: str) -> ClaimType:
     return ClaimType.OPINION
 
 
-def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] = None) -> List[Claim]:
+def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] = None,
+                   *, project_id: Optional[str] = None, source_run_id: Optional[str] = None) -> List[Claim]:
     """표시 본문에서 Claim을 추출한다."""
     citations = citations or []
     by_block: Dict[str, List[Citation]] = {}
@@ -110,7 +113,12 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
 
     claims: List[Claim] = []
     for block in doc.prose_blocks():
+        cursor = 0
         for sentence in sentences(block.text):
+            start = block.text.find(sentence, cursor)
+            if start < 0:
+                continue
+            cursor = start + len(sentence)
             if len(sentence) < 10:
                 continue
             claim_type = classify_claim(sentence)
@@ -127,13 +135,23 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
                     block_id=block.block_id,
                     page=block.page,
                     citation_ids=related,
-                    attributes={"length": len(sentence)},
+                    attributes={"length": len(sentence), "extraction_method": "LEXICAL_RULES",
+                                "evidence_relationship": "UNASSESSED"},
+                    project_id=project_id or doc.metadata.get("project_id"),
+                    source_run_id=source_run_id,
+                    source_document_sha256=doc.sha256,
+                    span=(start, cursor),
+                    evidence_references=extract_evidence_references(
+                        sentence, document_id=doc.document_id, block_id=block.block_id,
+                        page=block.page, source_run_id=source_run_id,
+                        document_sha256=doc.sha256, offset=start),
+                    **structure_claim_text(sentence),
                 )
             )
     return claims
 
 
-def extract_entities(doc: NormalizedDocument) -> List[Entity]:
+def extract_entities(doc: NormalizedDocument, *, project_id: Optional[str] = None) -> List[Entity]:
     """사람·법인·법원 등을 추출한다. 동일 대상 통합은 resolve_entities가 담당한다."""
     found: Dict[Tuple[str, str], Entity] = {}
 
@@ -144,7 +162,8 @@ def extract_entities(doc: NormalizedDocument) -> List[Entity]:
         key = (str(entity_type), name)
         entity = found.get(key)
         if entity is None:
-            entity = Entity.create(entity_type, name)
+            entity = Entity.create(entity_type, name, project_id=project_id or doc.metadata.get("project_id"),
+                                   needs_user_confirmation=True, resolution_basis="DOCUMENT_MENTIONS_ONLY")
             found[key] = entity
         entity.mentions.append(
             {"document_id": doc.document_id, "block_id": block.block_id, "page": block.page, "span": list(span)}
@@ -167,40 +186,19 @@ def extract_entities(doc: NormalizedDocument) -> List[Entity]:
     return list(found.values())
 
 
-def resolve_entities(entities: List[Entity]) -> List[Entity]:
-    """제11.3장. 동일 대상 가능성이 높은 표현을 프로젝트 단위로 통합한다.
-
-    Confidence가 낮은 Merge는 사용자 확인 대상으로 남긴다.
-    """
-    merged: List[Entity] = []
-    for entity in sorted(entities, key=lambda e: (-len(e.name), e.name)):
-        target = None
-        for candidate in merged:
-            if candidate.type != entity.type:
-                continue
-            if candidate.name == entity.name:
-                target = candidate
-                break
-            if entity.name in candidate.name or candidate.name in entity.name:
-                target = candidate
-                break
-        if target is None:
-            merged.append(entity)
-            continue
-        confidence = 1.0 if target.name == entity.name else 0.7
-        if entity.name not in target.aliases and entity.name != target.name:
-            target.aliases.append(entity.name)
-        target.mentions.extend(entity.mentions)
-        target.merge_confidence = min(target.merge_confidence, confidence)
-        target.needs_user_confirmation = target.merge_confidence < 0.9
-    return merged
-
-
-def extract_events(doc: NormalizedDocument) -> List[Event]:
+def extract_events(doc: NormalizedDocument, *, project_id: Optional[str] = None,
+                   source_run_id: Optional[str] = None) -> List[Event]:
     """제11.4장 Timeline 입력. 날짜와 같은 문장의 사건 서술을 결합한다."""
     events: List[Event] = []
     for block in doc.prose_blocks():
+        cursor = 0
         for sentence in sentences(block.text):
+            start = block.text.find(sentence, cursor)
+            if start < 0:
+                continue
+            cursor = start + len(sentence)
+            structure = structure_claim_text(sentence)
+            structure.pop("asserted_date")
             for m in DATE_RE.finditer(sentence):
                 try:
                     value = date(int(m.group("y")), int(m.group("m")), int(m.group("d")))
@@ -220,6 +218,14 @@ def extract_events(doc: NormalizedDocument) -> List[Event]:
                         page=block.page,
                         event_kind=kind,
                         raw_date_text=m.group(0),
+                        project_id=project_id or doc.metadata.get("project_id"),
+                        source_run_id=source_run_id, source_document_sha256=doc.sha256,
+                        span=(start, cursor),
+                        evidence_references=extract_evidence_references(
+                            sentence, document_id=doc.document_id, block_id=block.block_id,
+                            page=block.page, source_run_id=source_run_id,
+                            document_sha256=doc.sha256, offset=start),
+                        **structure,
                     )
                 )
     return events

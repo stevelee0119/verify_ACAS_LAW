@@ -135,7 +135,8 @@ def test_vertical_slice_end_to_end(client, project, tmp_path):
     assert highlightable, "Highlight를 위한 bbox가 있어야 한다"
 
     blocks = client.get(f"/api/documents/{document['id']}/blocks").json()
-    assert any(not b["visible"] for b in blocks["blocks"])
+    assert all(b["visible"] for b in blocks["blocks"])
+    assert client.get(f"/api/documents/{document['id']}/blocks?include_hidden=true").status_code == 403
 
     # 문서 격리 상태
     assert client.get(f"/api/documents/{document['id']}").json()["quarantined"] is True

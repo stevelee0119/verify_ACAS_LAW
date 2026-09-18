@@ -1,0 +1,406 @@
+"""Report snapshots, review guards, audience privacy and editable exports."""
+from __future__ import annotations
+
+import copy
+import csv
+import io
+import json
+import os
+import zipfile
+from datetime import datetime
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import Mock
+
+import openpyxl
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+from pypdf import PdfReader
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
+from sqlalchemy.pool import StaticPool
+
+from apps.api import identity
+from apps.api.db import Base, Document, FindingRow, Project, ReportRow, VerificationRun, get_db
+from apps.api.routers import reports
+from apps.api.schemas import ReportRequest
+from apps.api.workspace import CaseIssue, ClaimAssessment, FindingWorkflow, ReportReview, ReviewRevision
+from packages.common.storage import LocalObjectStorage, sha256_bytes
+from packages.common.terminology import TERMINOLOGY_VERSION, term_label
+from packages.report_engine.snapshot import canonical_hash
+
+
+@pytest.fixture()
+def report_case(tmp_path, monkeypatch):
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    Base.metadata.create_all(engine)
+    session = Session(engine, expire_on_commit=False)
+    storage = LocalObjectStorage(tmp_path / "storage")
+    monkeypatch.setattr(reports, "get_storage", lambda: storage)
+    audit = SimpleNamespace(manifest=lambda **kw: {"event_count": 0, "chain_valid": True,
+                                                  "head_hash": "audit-head", "generated_at": "2026-01-01"}, record=Mock())
+    monkeypatch.setattr(reports, "make_audit", lambda _: audit)
+    project = Project(id="p1", name="Report case", scope_revision=1)
+    other = Project(id="p2", name="Another project", scope_revision=0)
+    session.add_all([project, other])
+    session.flush()
+    source = b"source bytes"
+    document = Document(id="d1", project_id="p1", filename="case.pdf", sha256=sha256_bytes(source),
+                        storage_key=storage.put_original("case", source), included_in_verification=True)
+    session.add(document)
+    session.flush()
+    data = {"finding_id": "f1", "type": "CASE_NOT_FOUND", "status": "UNVERIFIED", "severity": "HIGH",
+            "evidence_grade": "U", "confidence": 0.2, "document_id": "d1", "page": 1, "block_id": "b1",
+            "title": "=HYPERLINK(\"https://invalid.example\")", "detail": "Unverified finding <script>literal</script>",
+            "advisory_only": False, "engine": "legal", "has_sealed_content": True,
+            "sealed_excerpt": "DO_NOT_EXPORT_SEALED", "review_note": "", "review_status": "NEEDS_REVIEW",
+            "evidence": [{"sealed": True, "excerpt": "DO_NOT_EXPORT_SEALED"}], "sources": []}
+    input_snapshot = {"scope_revision": 1, "project": {"name": "Report case", "parties": ["홍길동"]},
+                      "context": {"profile": "STANDARD", "case_date": None, "external_ai_policy": "LOCAL_ONLY"},
+                      "documents": [{"document_id": "d1", "sha256": document.sha256}]}
+    document_result = {"document_id": "d1", "filename": "case.pdf", "sha256": document.sha256,
+                       "parser": "fixture", "quarantined": True, "rag_indexable": False,
+                       "warnings": [], "authorship": {}, "masked_preview": {}, "entities": [], "events": [],
+                       "citations": [], "claims": [{"claim_id": "c1", "text": "홍길동 user@example.com 주장"}],
+                       "engine_data": {"page_coverage": [{"page": 1, "status": "unsupported"}],
+                                       "unavailable_stages": ["signature verification unavailable"],
+                                       "legal_verdicts": [{"citation_id": "citation1", "levels": {"temporal": "UNVERIFIED"}}]},
+                       "source_records": [{"adapter": "fixture", "url": "https://official.example/full/source",
+                                           "response_hash": "source-digest", "retrieved_at": "2026-01-01",
+                                           "status": "TIMEOUT", "note": "full source note"}],
+                       "pages": [{"page_number": 1, "blocks": [{"text": "raw-private-page"}]}], "findings": [data]}
+    run = VerificationRun(id="r1", project_id="p1", document_ids=["d1"], state="PARTIAL_COMPLETED",
+                          started_at=datetime(2026, 1, 1), finished_at=datetime(2026, 1, 1, 1),
+                          verification_key="key", input_snapshot=input_snapshot,
+                          unavailable_sources=[{"name": "law", "status": "MISSING_KEY", "note": "not executed"}],
+                          unverified_items=[{"kind": "citation", "raw_text": "citation", "reason": "source unavailable"}],
+                          result_json={"documents": [document_result], "project_findings": [], "model_executions": []})
+    session.add(run)
+    session.flush()
+    finding = FindingRow(id="f1", project_id="p1", run_id="r1", document_id="d1", type="CASE_NOT_FOUND",
+                         status="UNVERIFIED", severity="HIGH", evidence_grade="U", confidence=0.2,
+                         title=data["title"], detail=data["detail"], data=data, sealed_excerpt="DO_NOT_EXPORT_SEALED")
+    issue = CaseIssue(id="i1", project_id="p1", title="계약상 책임", elements=["계약 성립"], updated_by="reviewer")
+    session.add_all([finding, issue])
+    session.commit()
+    app = FastAPI()
+    app.include_router(reports.router, prefix="/api")
+
+    def database():
+        yield session
+    app.dependency_overrides[get_db] = database
+
+    @app.middleware("http")
+    async def authenticated(request, call_next):
+        principal = identity.Principal("outsider", "unrelated-org", "MEMBER", "token") if request.headers.get("x-test-outsider") else identity.Principal("local-owner", None, "ADMIN", "local")
+        token = identity._principal.set(principal)
+        try:
+            return await call_next(request)
+        finally:
+            identity._principal.reset(token)
+
+    with TestClient(app) as client:
+        yield SimpleNamespace(client=client, session=session, project=project, run=run,
+                              document=document, finding=finding, storage=storage, tmp_path=tmp_path)
+    session.close()
+    engine.dispose()
+
+
+def create(case, formats=None, audience="INTERNAL"):
+    payload = {"audience": audience}
+    if formats is not None:
+        payload["formats"] = formats
+    response = case.client.post("/api/projects/p1/reports", json=payload)
+    assert response.status_code == 201, response.text
+    report = response.json()
+    assert not any("error" in a for a in report["artifacts"].values()), report
+    return report
+
+
+def finalize(case, draft, **values):
+    return case.client.post(f"/api/reports/{draft['report_id']}/finalize", json={
+        "note": "Reviewed with recorded limitations", "acknowledge_unresolved": True,
+        "acknowledge_stale_scope": True, "acknowledge_privacy": True, **values})
+
+
+def download(case, report, fmt):
+    response = case.client.get(f"/api/reports/{report['report_id']}/download/{fmt}")
+    assert response.status_code == 200, response.text
+    return response.content
+
+
+def test_default_formats_and_schema_validation():
+    assert ReportRequest().formats == ["pdf", "xlsx", "csv", "json", "manifest"]
+    assert ReportRequest(audience="shareable").audience == "SHAREABLE"
+    for formats in ([], ["docx", "docx"], ["unknown"]):
+        with pytest.raises(ValueError):
+            ReportRequest(formats=formats)
+    assert TERMINOLOGY_VERSION == "2"
+    assert term_label("position", "UNKNOWN") == "부지"
+    assert term_label("position", "ALTERNATIVE") == "예비적 주장"
+
+
+def test_terminology_catalog_requires_project_access(report_case):
+    response = report_case.client.get("/api/projects/p1/report-terminology")
+    assert response.status_code == 200 and response.json()["version"] == "2"
+    assert response.json()["groups"]["verification_status"]["UNVERIFIED"]["label"] == "미검증"
+    assert report_case.client.get("/api/projects/p1/report-terminology", headers={"x-test-outsider": "yes"}).status_code == 404
+
+
+def test_finalize_requires_acknowledgments_and_preserves_draft(report_case):
+    case = report_case
+    draft = create(case, ["json"])
+    original_bytes = download(case, draft, "json")
+    original_review = copy.deepcopy(case.session.get(ReportReview, draft["report_id"]).review_snapshot)
+    case.project.scope_revision += 1
+    case.session.commit()
+    preflight = case.client.get(f"/api/reports/{draft['report_id']}/preflight").json()
+    assert preflight["incomplete_reviews"] and preflight["stale_scope"] and preflight["sensitive_concerns"]
+    assert any(item["type"] == "PERSONAL_DATA" for item in preflight["sensitive_concerns"])
+    for name in ("acknowledge_unresolved", "acknowledge_stale_scope", "acknowledge_privacy"):
+        rejected = finalize(case, draft, **{name: False})
+        assert rejected.status_code == 409
+        assert name in rejected.json()["detail"]["missing_acknowledgments"]
+    invalid = finalize(case, draft, acknowledge_privacy="true")
+    assert invalid.status_code == 422
+    case.session.add(FindingWorkflow(finding_id="f1", workflow_state="COMPLETED", decision="AGREED",
+                                    note="human snapshot note", updated_by="reviewer"))
+    case.session.add(ClaimAssessment(project_id="p1", run_id="r1", document_id="d1", claim_id="c1", issue_id="i1",
+                                    position="DENIED", support_status="INSUFFICIENT", updated_by="reviewer",
+                                    evidence_links=[{"document_id": "d1", "page": 1, "relation": "CONTEXT"}]))
+    case.session.add(ReviewRevision(project_id="p1", subject_type="FINDING", subject_id="f1", actor="reviewer",
+                                   after={"workflow_state": "COMPLETED"}))
+    case.session.commit()
+    stale_confirmation = finalize(case, draft, expected_preflight_hash=preflight["preflight_hash"])
+    assert stale_confirmation.status_code == 409
+    final_response = finalize(case, draft)
+    assert final_response.status_code == 201, final_response.text
+    final = final_response.json()
+    assert final["report_id"] != draft["report_id"] and final["state"] == "FINAL"
+    assert final["created_by"] == final["finalized_by"] == "local-owner" and final["finalized_at"]
+    frozen = json.loads(download(case, final, "json"))
+    assert frozen["documents"][0]["findings"][0]["status"] == "UNVERIFIED"
+    assert frozen["review_snapshot"]["workflow"][0]["workflow_state"] == "COMPLETED"
+    assert frozen["review_snapshot"]["matrix"]["claims"][0]["assessment"]["position"] == "DENIED"
+    assert frozen["review_snapshot"]["review_history"][0]["actor"] == "reviewer"
+    assert case.finding.status == "UNVERIFIED"
+    final_bytes = download(case, final, "json")
+    case.session.get(FindingWorkflow, "f1").note = "later edits"
+    case.run.result_json = {"documents": []}
+    case.session.commit()
+    assert download(case, final, "json") == final_bytes
+    assert download(case, draft, "json") == original_bytes
+    assert case.session.get(ReportReview, draft["report_id"]).review_snapshot == original_review
+    assert finalize(case, final).status_code == 409
+
+
+def test_final_uses_frozen_engine_even_if_run_changes(report_case):
+    case = report_case
+    draft = create(case, ["json"])
+    changed = copy.deepcopy(case.run.result_json)
+    changed["documents"][0]["findings"][0]["status"] = "VERIFIED"
+    changed["documents"][0]["filename"] = "changed-live-name.pdf"
+    case.run.result_json = changed
+    case.session.commit()
+    final = finalize(case, draft).json()
+    payload = json.loads(download(case, final, "json"))
+    assert payload["documents"][0]["findings"][0]["status"] == "UNVERIFIED"
+    assert payload["documents"][0]["filename"] == "case.pdf"
+
+
+def test_cross_project_and_unauthorized_report_access(report_case):
+    case = report_case
+    assert case.client.post("/api/projects/p2/reports", json={"run_id": "r1", "formats": ["json"]}).status_code == 404
+    draft = create(case, ["json"])
+    for url in (f"/api/reports/{draft['report_id']}", f"/api/reports/{draft['report_id']}/preflight",
+                f"/api/reports/{draft['report_id']}/download/json", "/api/projects/p1/reports"):
+        assert case.client.get(url, headers={"x-test-outsider": "yes"}).status_code == 404
+    assert case.client.post(f"/api/reports/{draft['report_id']}/finalize", headers={"x-test-outsider": "yes"},
+                            json={"note": "outsider", "acknowledge_privacy": True}).status_code == 404
+
+
+def test_shareable_removes_notes_pages_sealed_and_pii(report_case):
+    case = report_case
+    case.session.add(FindingWorkflow(finding_id="f1", note="PRIVATE_INTERNAL_NOTE", updated_by="reviewer"))
+    case.session.commit()
+    draft = create(case, ["json", "docx"], "shareable")
+    output = download(case, draft, "json").decode()
+    xml = zipfile.ZipFile(io.BytesIO(download(case, draft, "docx"))).read("word/document.xml").decode()
+    for value in ("DO_NOT_EXPORT_SEALED", "PRIVATE_INTERNAL_NOTE", "raw-private-page", "user@example.com", "홍길동"):
+        assert value not in output and value not in xml
+    assert "SHAREABLE" in output
+    assert "full source note" in output and "full source note" in xml
+    private = case.session.get(ReportReview, draft["report_id"]).review_snapshot
+    assert private["workflow"][0]["note"] == "PRIVATE_INTERNAL_NOTE"
+    assert case.client.post("/api/projects/p1/reports", json={"audience": "SHAREABLE", "formats": ["highlight"]}).status_code == 422
+
+
+def test_cross_format_labels_appendix_and_docx_zip(report_case):
+    case = report_case
+    draft = create(case, ["pdf", "xlsx", "csv", "json", "manifest", "docx"])
+    response = finalize(case, draft)
+    assert response.status_code == 201, response.text
+    final = response.json()
+    exports = {fmt: download(case, final, fmt) for fmt in final["formats"]}
+    payload = json.loads(exports["json"])
+    label = payload["report"]["label"]
+    assert label == final["label"] and payload["report"]["state"] == "FINAL"
+    pdf_text = "\n".join(page.extract_text() for page in PdfReader(io.BytesIO(exports["pdf"])).pages)
+    workbook = openpyxl.load_workbook(io.BytesIO(exports["xlsx"]))
+    xlsx_text = "\n".join(str(c.value) for ws in workbook for row in ws for c in row if c.value is not None)
+    archive = zipfile.ZipFile(io.BytesIO(exports["docx"]))
+    word = archive.read("word/document.xml").decode()
+    for text in (pdf_text, xlsx_text, word):
+        assert "FINAL" in text and final["snapshot_hash"] in text and "UNVERIFIED" in text
+        assert "signature verification unavailable" in text and "full source note" in text
+        assert "official.example/full/source" in text
+        assert "DO_NOT_EXPORT_SEALED" not in text
+    assert label in xlsx_text and label in word
+    assert not any("vbaProject" in name or "embeddings/" in name for name in archive.namelist())
+    assert "<w:instrText" not in word and "<w:altChunk" not in word
+    assert "&lt;script&gt;literal&lt;/script&gt;" in word
+    assert not any('TargetMode="External"' in archive.read(name).decode() for name in archive.namelist() if name.endswith(".rels"))
+    assert payload["report"]["editable_copy_notice"] in word
+    assert json.loads(exports["manifest"])["report"]["label"] == label
+    csv_rows = list(csv.DictReader(io.StringIO(exports["csv"].decode("utf-8-sig"))))
+    assert csv_rows[0]["report_label"] == label
+    qa_dir = os.getenv("ACAS_REPORT_QA_DIR") or str(case.tmp_path)
+    if qa_dir:
+        output = Path(qa_dir)
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "report.docx").write_bytes(exports["docx"])
+        (output / "report.pdf").write_bytes(exports["pdf"])
+
+
+def test_insufficient_claim_support_still_requires_unresolved_acknowledgment(report_case):
+    case = report_case
+    changed = copy.deepcopy(case.run.result_json)
+    changed["documents"][0]["findings"][0]["status"] = "VERIFIED"
+    case.run.result_json = changed
+    case.run.unverified_items = []
+    case.run.unavailable_sources = []
+    case.run.state = "COMPLETED"
+    case.session.add(FindingWorkflow(finding_id="f1", workflow_state="COMPLETED", decision="AGREED", updated_by="reviewer"))
+    case.session.add(ClaimAssessment(project_id="p1", run_id="r1", document_id="d1", claim_id="c1", issue_id="i1",
+                                    position="DENIED", support_status="INSUFFICIENT", updated_by="reviewer"))
+    case.session.commit()
+    draft = create(case, ["json"])
+    checks = case.client.get(f"/api/reports/{draft['report_id']}/preflight").json()
+    assert checks["unresolved_claims"] and not checks["unresolved_findings"]
+    assert finalize(case, draft, acknowledge_unresolved=False).status_code == 409
+
+
+def test_formula_injection_and_long_results_are_preserved(report_case):
+    case = report_case
+    changed = copy.deepcopy(case.run.result_json)
+    finding = changed["documents"][0]["findings"][0]
+    finding["title"] = " \t=HYPERLINK(\"https://invalid.example\")"
+    finding["detail"] = "@SUM(1+1)" + "x" * 40000 + "FULL_TEXT_END"
+    case.run.result_json = changed
+    case.run.unverified_items = [{"kind": "citation", "raw_text": f"+unverified-{n}", "reason": f"reason-{n}"} for n in range(65)]
+    case.session.commit()
+    draft = create(case, ["xlsx", "csv", "pdf"])
+    workbook = openpyxl.load_workbook(io.BytesIO(download(case, draft, "xlsx")))
+    assert "Long values" in workbook.sheetnames
+    assert all(cell.data_type != "f" for sheet in workbook for row in sheet for cell in row)
+    all_text = "".join(str(c.value or "") for ws in workbook for row in ws for c in row)
+    assert "FULL_TEXT_END" in all_text and "reason-64" in all_text
+    csv_rows = list(csv.DictReader(io.StringIO(download(case, draft, "csv").decode("utf-8-sig"))))
+    assert csv_rows[0]["title"].startswith("'") and csv_rows[0]["detail"].startswith("'")
+    assert csv_rows[0]["detail"].endswith("FULL_TEXT_END")
+    pdf_text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, draft, "pdf"))).pages)
+    assert "reason-64" in pdf_text and "FULL_TEXT_END" in pdf_text
+
+
+def test_unavailable_stages_require_ack_even_without_unverified_findings(report_case):
+    case = report_case
+    changed = copy.deepcopy(case.run.result_json)
+    changed["documents"][0]["findings"][0]["status"] = "VERIFIED"
+    changed["documents"][0]["claims"] = []
+    case.run.result_json = changed
+    case.run.state = "COMPLETED"
+    case.run.unverified_items = []
+    case.run.unavailable_sources = []
+    case.session.add(FindingWorkflow(finding_id="f1", workflow_state="COMPLETED", decision="AGREED", updated_by="reviewer"))
+    case.session.commit()
+    draft = create(case, ["json"])
+    checks = case.client.get(f"/api/reports/{draft['report_id']}/preflight").json()
+    assert checks["unavailable_stages"] and not checks["unresolved_findings"] and not checks["unresolved_claims"]
+    assert finalize(case, draft, acknowledge_unresolved=False).status_code == 409
+
+
+def test_failed_final_render_does_not_commit_final(report_case, monkeypatch):
+    case = report_case
+    draft = create(case, ["json"])
+    before = download(case, draft, "json")
+    def failure(*args, **kwargs):
+        raise RuntimeError("renderer unavailable")
+    monkeypatch.setattr(reports, "_render", failure)
+    assert finalize(case, draft).status_code == 409
+    assert len(list(case.session.scalars(select(ReportRow)))) == 1
+    assert download(case, draft, "json") == before
+
+
+def test_snapshot_and_artifact_tampering_are_rejected(report_case):
+    case = report_case
+    draft = create(case, ["json"])
+    review = case.session.get(ReportReview, draft["report_id"])
+    assert canonical_hash(review.review_snapshot) == review.snapshot_hash
+    review.review_snapshot = {**review.review_snapshot, "unexpected": True}
+    case.session.commit()
+    assert finalize(case, draft).status_code == 409
+    artifact = draft["artifacts"]["json"]
+    case.storage.path(artifact["storage_key"]).write_bytes(b"tampered")
+    assert case.client.get(artifact["download"]).status_code == 409
+
+
+def test_reports_use_scoped_manifest_and_do_not_label_unchecked_chain(report_case, monkeypatch):
+    calls = []
+
+    def scoped_manifest(project_id, session):
+        calls.append(project_id)
+        return {"project_id": project_id, "event_count": 0, "events": [],
+                "chain_valid": None, "event_hashes_valid": True,
+                "verification_scope": "project_events", "head_hash": "scoped-head"}
+
+    monkeypatch.setattr(reports, "project_manifest", scoped_manifest)
+    draft = create(report_case, ["pdf", "manifest"])
+    response = finalize(report_case, draft)
+    assert response.status_code == 201, response.text
+    final = response.json()
+    assert calls == ["p1", "p1"]
+    manifest = json.loads(download(report_case, final, "manifest"))
+    assert manifest["chain_valid"] is None
+    assert manifest["verification_scope"] == "project_events"
+    pdf_text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(report_case, final, "pdf"))).pages)
+    assert "미검증 (사건별 기록만 조회)" in pdf_text
+
+
+def test_report_rendering_does_not_hold_a_database_writer_lock(report_case, monkeypatch):
+    from sqlalchemy import event
+
+    writes, observed = [], []
+    engine = report_case.session.get_bind()
+    original = reports._render
+
+    def track(connection, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().split(" ", 1)[0].upper() in {"INSERT", "UPDATE", "DELETE"}:
+            writes.append(statement)
+
+    def render(*args, **kwargs):
+        assert not writes, "Report rendering must precede database writes"
+        observed.append(args[0])
+        return original(*args, **kwargs)
+
+    event.listen(engine, "before_cursor_execute", track)
+    monkeypatch.setattr(reports, "_render", render)
+    try:
+        draft = create(report_case, ["json", "manifest"])
+        assert writes
+        writes.clear()
+        response = finalize(report_case, draft)
+        assert response.status_code == 201, response.text
+        assert writes and observed == ["json", "manifest", "json", "manifest"]
+    finally:
+        event.remove(engine, "before_cursor_execute", track)

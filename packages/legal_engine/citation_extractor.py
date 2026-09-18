@@ -36,16 +36,26 @@ CONST_RE = re.compile(
 # 「형법」 제250조 제1항 제2호 / 형법 제250조
 LAW_RE = re.compile(
     r"(?P<law>[「『]?[가-힣A-Za-z·\s]{2,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정)[」』]?)\s*"
+    r"(?:부칙\s*)?"
     r"제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?"
-    r"(?:\s*제\s*(?P<item>\d+)\s*호)?"
+    r"(?:\s*제\s*(?P<item>\d+)\s*호(?:\s*의\s*(?P<item_sub>\d+))?)?"
+    r"(?:\s*(?P<subitem>[가-힣])\s*목)?"
 )
 # 법령해석례 / 행정심판재결례
 INTERPRETATION_RE = re.compile(
-    r"(법제처|법무부|국방부|행정안전부)?\s*(법령해석|유권해석)\s*(?:례)?\s*"
-    r"(?P<no>[\d가-힣\-]{2,20})?"
+    r"(?P<authority>법제처|법무부|국방부|행정안전부)?\s*(?:법령해석|유권해석)\s*(?:례)?\s*"
+    r"(?P<no>\d{2}\s*-\s*\d{4}(?!\d))?"
 )
-ADMIN_APPEAL_RE = re.compile(r"(중앙행정심판위원회|행정심판위원회)\s*(?P<no>\d{4}[-가-힣\d]{2,15})?\s*(재결)?")
+INTERPRETATION_FULL_RE = re.compile(
+    rf"(?P<authority>법제처)\s*(?:(?P<date>{DATE_RE})\s*)?(?:회신\s*)?"
+    r"(?P<no>\d{2}\s*-\s*\d{4})(?!\d)\s*(?:해석례|법령해석례)?"
+)
+ADMIN_APPEAL_RE = re.compile(
+    rf"(?P<authority>중앙행정심판위원회|행정심판위원회)\s*"
+    rf"(?:(?P<date>{DATE_RE})\s*)?(?:재결\s*)?"
+    r"(?P<no>\d{4}\s*-\s*\d{1,8}(?!\d))?\s*(?:재결)?"
+)
 # 학술: 저자, 「제목」, 학술지 권(호), 연도 / DOI
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
 # 학술: 저자, 「논문 제목」 또는 『단행본 제목』, 게재지·출판사, 연도
@@ -67,8 +77,10 @@ QUOTE_RE = re.compile(r"[“\"]([^”\"]{10,600})[”\"]")
 def _quote_near(text: str, index: int, window: int = 400) -> Optional[str]:
     """인용 앞뒤에서 직접 인용문을 찾는다."""
     segment = text[max(0, index - window) : index + window]
-    quotes = QUOTE_RE.findall(segment)
-    return max(quotes, key=len) if quotes else None
+    offset = max(0, index - window)
+    quotes = list(QUOTE_RE.finditer(segment))
+    nearest = min(quotes, key=lambda m: min(abs(offset + m.start() - index), abs(offset + m.end() - index)), default=None)
+    return nearest.group(1) if nearest else None
 
 
 def extract_from_text(
@@ -79,6 +91,25 @@ def extract_from_text(
 
     def overlaps(start: int, end: int) -> bool:
         return any(s <= start < e or s < end <= e for s, e in consumed)
+
+    for pattern, kind in (
+        (INTERPRETATION_FULL_RE, CitationType.INTERPRETATION),
+        (INTERPRETATION_RE, CitationType.INTERPRETATION),
+        (ADMIN_APPEAL_RE, CitationType.ADMIN_APPEAL),
+    ):
+        for m in pattern.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            number = re.sub(r"\s+", "", m.group("no")) if m.group("no") else None
+            citations.append(Citation.create(
+                kind, m.group(0).strip(), document_id=document_id, block_id=block_id,
+                page=page, span=(m.start(), m.end()), case_number=number,
+                canonical_case_number=number, court=m.group("authority"),
+                decision_date=canonical_date(m.groupdict().get("date") or ""),
+                quoted_text=_quote_near(text, m.end()),
+                context=text[max(0, m.start() - 120):m.end() + 200],
+            ))
+            consumed.append((m.start(), m.end()))
 
     # 1) 헌재
     for m in CONST_RE.finditer(text):
@@ -171,7 +202,8 @@ def extract_from_text(
                 law_name=law_name,
                 article=article,
                 paragraph=m.group("paragraph"),
-                item=m.group("item"),
+                item=(f"{m.group('item')}의{m.group('item_sub')}" if m.group("item_sub") else m.group("item")),
+                quoted_text=_quote_near(text, m.end()),
                 context=text[max(0, m.start() - 100) : m.end() + 150],
             )
         )
@@ -226,6 +258,9 @@ def _identity(citation: Citation) -> Tuple[Any, ...]:
         citation.canonical_case_number,
         citation.law_name,
         citation.article,
+        citation.paragraph,
+        citation.item,
+        citation.doi,
         (citation.title or "").strip(),
     )
 
@@ -271,7 +306,7 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
         for citation in extract_from_text(
             block.text, document_id=doc.document_id, block_id=block.block_id, page=block.page
         ):
-            key = _identity(citation)
+            key = (_identity(citation), block.block_id, citation.span)
             if key in seen:
                 continue
             seen.add(key)
@@ -282,13 +317,16 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
     # 인용이 두 줄에 걸치면 블록 단위 검사로는 영원히 잡히지 않는다.
     for joined, offsets in _joined_pages(doc):
         for citation in extract_from_text(joined, document_id=doc.document_id, block_id=None, page=None):
-            key = _identity(citation)
+            owner = _owner_block(offsets, citation.span[0] if citation.span else 0)
+            if owner is not None:
+                start = next(start for start, block in offsets if block.block_id == owner.block_id)
+                citation.block_id = owner.block_id
+                citation.page = owner.page
+                if citation.span:
+                    citation.span = (citation.span[0] - start, citation.span[1] - start)
+            key = (_identity(citation), citation.block_id, citation.span)
             if key in seen:
                 continue
             seen.add(key)
-            owner = _owner_block(offsets, citation.span[0] if citation.span else 0)
-            if owner is not None:
-                citation.block_id = owner.block_id
-                citation.page = owner.page
             out.append(citation)
     return out

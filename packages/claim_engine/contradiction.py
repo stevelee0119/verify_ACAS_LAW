@@ -1,191 +1,187 @@
-"""제11.4장 Timeline 및 Cross-document contradiction.
-
-Rule-based contradiction과 LLM semantic contradiction을 분리해 근거 수준을 다르게 표시한다.
-Rule-based는 Evidence Grade A/C, LLM 기반은 D로 둔다.
-"""
+"""Compare like assertions, retaining uncertainty and source locations."""
 from __future__ import annotations
 
-import re
 from collections import defaultdict
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import fields
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from decimal import Decimal, InvalidOperation
+from itertools import combinations
+from typing import Any
 
-from packages.common.confidence import score as confidence_score
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
-from packages.common.schemas import Evidence, Event, Finding
+from packages.common.schemas import Claim, Evidence, Event, Finding
+from .structure import structure_claim_text
 
 ENGINE_NAME = "claim_engine.contradiction"
-
-# 선행해야 하는 사건 유형 (앞의 것이 뒤의 것보다 먼저여야 한다)
-ORDER_RULES: List[Tuple[str, str, str]] = [
-    ("INCORPORATION", "CONTRACT", "법인 설립일 이후에만 그 법인의 계약체결이 가능하다"),
-    ("CONTRACT", "TERMINATION", "계약 체결일 이후에만 해지가 가능하다"),
-    ("CONTRACT", "PAYMENT", "계약 체결일 이전의 계약상 지급은 통상 성립하지 않는다"),
-    ("INCIDENT", "FILING", "사건 발생일 이후에만 고소·제출이 가능하다"),
-    ("FILING", "DECISION", "접수일 이후에만 결정·선고가 가능하다"),
+EVENT_LABELS = {"INCORPORATION": "설립", "CONTRACT": "계약", "TERMINATION": "종료",
+                "PAYMENT": "지급", "INCIDENT": "사건 발생", "FILING": "제출", "DECISION": "결정"}
+ORDER_RULES = [
+    ("INCORPORATION", "CONTRACT", "설립일과 계약 당시 당사자의 지위를 확인하세요."),
+    ("CONTRACT", "TERMINATION", "종료가 같은 계약에 관한 것인지 확인하세요."),
+    ("CONTRACT", "PAYMENT", "선지급 또는 앞선 구두 합의가 있는지 확인하세요."),
+    ("INCIDENT", "FILING", "제출 서류가 어느 사건에 관한 것인지 확인하세요."),
+    ("FILING", "DECISION", "제출과 결정이 같은 절차에 관한 것인지 확인하세요."),
 ]
 
 
-@dataclass
-class TimelineIssue:
-    kind: str
-    earlier: Event
-    later: Event
-    rule: str
+def _structured(event: Event) -> Event:
+    """Apply conservative surface flags even to legacy callers constructing Events."""
+    result = copy(event)
+    lexical = structure_claim_text(event.description)
+    for name in ("negated", "hearsay", "quoted", "conditional", "alternative"):
+        setattr(result, name, getattr(result, name) or lexical[name])
+    for name in ("transaction_id", "event_identity", "object_id", "speaker_id", "target_id",
+                 "amount", "currency", "amount_scope", "action"):
+        if getattr(result, name) is None:
+            setattr(result, name, lexical[name])
+    if lexical["stance"] not in {"ASSERTED", "UNSPECIFIED"}:
+        result.stance = lexical["stance"]
+    elif result.stance == "UNSPECIFIED":
+        result.stance = "ASSERTED"
+    return result
 
 
-def analyze_timeline(events: List[Event]) -> List[Finding]:
-    """시간적으로 불가능하거나 상충되는 관계를 탐지한다."""
-    findings: List[Finding] = []
-    dated = [e for e in events if e.date]
-    by_kind: Dict[str, List[Event]] = defaultdict(list)
-    for event in dated:
-        by_kind[event.event_kind].append(event)
+def _assertion(event: Event) -> bool:
+    return (event.stance == "ASSERTED" and not any((event.negated, event.hearsay,
+            event.quoted, event.conditional, event.alternative)))
 
+
+def _identity(event: Event) -> tuple:
+    """An exhibit label never proves transaction identity."""
+    return (event.project_id, event.transaction_id) if event.transaction_id else ()
+
+
+def _compatible(first: Event, second: Event) -> bool:
+    if not _identity(first) or _identity(first) != _identity(second):
+        return False
+    for name in ("speaker_id", "target_id", "object_id"):
+        left, right = getattr(first, name), getattr(second, name)
+        if left and right and left != right:
+            return False
+    return True
+
+
+def _evidence(event: Event) -> Evidence:
+    return Evidence.create("문서의 주장 내용 (독립적인 사실 입증은 아님)", EvidenceGrade.C,
+                           document_id=event.document_id, block_id=event.block_id,
+                           page=event.page, span=event.span, excerpt=event.description)
+
+
+def _location(event: Event) -> dict[str, Any]:
+    return {name: getattr(event, name) for name in (
+        "event_id", "document_id", "block_id", "page", "span", "project_id",
+        "source_run_id", "source_document_sha256", "event_identity", "transaction_id",
+    )}
+
+
+def analyze_timeline(events: list[Event]) -> list[Finding]:
+    """Return contextual ordering candidates, never an automatic legal impossibility."""
+    by_kind: dict[str, list[Event]] = defaultdict(list)
+    for source in events:
+        event = _structured(source)
+        if event.date and _assertion(event) and event.project_id and event.transaction_id:
+            by_kind[event.event_kind].append(event)
+    findings = []
     for first_kind, second_kind, rule in ORDER_RULES:
-        firsts = by_kind.get(first_kind) or []
-        seconds = by_kind.get(second_kind) or []
-        if not firsts or not seconds:
-            continue
-        earliest_first = min(firsts, key=lambda e: e.date)  # type: ignore[arg-type]
-        for later in seconds:
-            if later.date and earliest_first.date and later.date < earliest_first.date:
-                features = {
-                    "deterministic_rule": True,
-                    "forensic_signal": 1,
-                    "rule": rule,
-                    "earlier_date": earliest_first.date.isoformat(),
-                    "later_date": later.date.isoformat(),
-                }
-                findings.append(
-                    Finding.create(
-                        type=FindingType.TIMELINE_CONTRADICTION,
-                        status=VerificationStatus.CONTRADICTED,
-                        severity=Severity.HIGH,
-                        evidence_grade=EvidenceGrade.C,
-                        title=f"시간 순서가 성립하지 않는다: {second_kind}({later.date}) < {first_kind}({earliest_first.date})",
-                        detail=f"{rule}. 두 서술의 날짜 관계가 역전되어 있다.",
-                        confidence=confidence_score(features),
-                        confidence_features=features,
-                        document_id=later.document_id,
-                        block_id=later.block_id,
-                        page=later.page,
-                        engine=ENGINE_NAME,
-                        tags=["TIMELINE"],
-                        evidence=[
-                            Evidence.create(
-                                description=f"{first_kind} 서술",
-                                grade=EvidenceGrade.C,
-                                document_id=earliest_first.document_id,
-                                block_id=earliest_first.block_id,
-                                page=earliest_first.page,
-                                excerpt=earliest_first.description,
-                            ),
-                            Evidence.create(
-                                description=f"{second_kind} 서술",
-                                grade=EvidenceGrade.C,
-                                document_id=later.document_id,
-                                block_id=later.block_id,
-                                page=later.page,
-                                excerpt=later.description,
-                                supports=False,
-                            ),
-                        ],
-                    )
-                )
+        for first in by_kind[first_kind]:
+            for second in by_kind[second_kind]:
+                if not _compatible(first, second) or second.date >= first.date:
+                    continue
+                findings.append(Finding.create(
+                    type=FindingType.TIMELINE_CONTRADICTION, status=VerificationStatus.UNVERIFIED,
+                    severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.C,
+                    title=f"날짜 순서 검토: {EVENT_LABELS[second_kind]}이(가) {EVENT_LABELS[first_kind]}보다 앞섬", detail=rule,
+                    document_id=second.document_id, block_id=second.block_id, page=second.page,
+                    engine=ENGINE_NAME, advisory_only=True, tags=["TIMELINE", "CONTEXT_REQUIRED"],
+                    confidence_features={"identity": list(_identity(first)), "rule": rule,
+                                         "sources": [_location(first), _location(second)],
+                                         "extraction_confidence_is_probability": False},
+                    evidence=[_evidence(first), _evidence(second)],
+                ))
     return findings
 
 
-# ---------------------------------------------------------------------------
-# 문서간 모순 (제11.4장)
-# ---------------------------------------------------------------------------
-AMOUNT_RE = re.compile(r"(?:금\s*)?(\d[\d,]*)\s*원")
-KEY_FACT_PATTERNS = [
-    ("CONTRACT_DATE", re.compile(r"계약(?:을)?\s*체결", re.UNICODE)),
-    ("TERMINATION_DATE", re.compile(r"(해지|해제)", re.UNICODE)),
-    ("PAYMENT_AMOUNT", re.compile(r"(지급|송금|변제)", re.UNICODE)),
-]
+def _comparable_amount(event: Event) -> Decimal | None:
+    if not event.amount or not event.currency:
+        return None
+    try:
+        value = Decimal(event.amount)
+        return value if value.is_finite() else None
+    except InvalidOperation:
+        return None
 
 
-def cross_document_contradictions(events_by_document: Dict[str, List[Event]]) -> List[Finding]:
-    """동일 사실에 관한 서로 다른 문서의 날짜 진술이 충돌하는지 확인한다."""
-    findings: List[Finding] = []
-    if len(events_by_document) < 2:
-        return findings
+def cross_document_contradictions(events_by_document: dict[str, list[Event]]) -> list[Finding]:
+    """Compare individual events; transaction-only contract matches stay candidates.
 
-    by_kind: Dict[str, List[Tuple[str, Event]]] = defaultdict(list)
+    Payments without an event_identity are never compared: one transaction can
+    contain many installments. Results describe conflicting assertions, not proof.
+    """
+    groups: dict[tuple, list[Event]] = defaultdict(list)
     for document_id, events in events_by_document.items():
-        for event in events:
-            if event.date and event.event_kind != "GENERIC":
-                by_kind[event.event_kind].append((document_id, event))
-
-    for kind, items in by_kind.items():
-        documents = {document_id for document_id, _ in items}
-        if len(documents) < 2:
-            continue
-        earliest_by_document: Dict[str, Event] = {}
-        for document_id, event in items:
-            current = earliest_by_document.get(document_id)
-            if current is None or (event.date and current.date and event.date < current.date):
-                earliest_by_document[document_id] = event
-        dates = {document_id: event.date for document_id, event in earliest_by_document.items()}
-        distinct = set(dates.values())
-        if len(distinct) < 2:
-            continue
-        items_sorted = sorted(earliest_by_document.items(), key=lambda kv: kv[1].date or date.min)
-        first_doc, first_event = items_sorted[0]
-        last_doc, last_event = items_sorted[-1]
-        features = {
-            "deterministic_rule": True,
-            "cross_layer_mismatch": False,
-            "forensic_signal": len(distinct),
-            "kind": kind,
-            "dates": {d: (v.isoformat() if v else None) for d, v in dates.items()},
-        }
-        findings.append(
-            Finding.create(
-                type=FindingType.CROSS_DOCUMENT_CONTRADICTION,
-                status=VerificationStatus.CONTRADICTED,
-                severity=Severity.MEDIUM,
-                evidence_grade=EvidenceGrade.C,
-                title=f"문서간 {kind} 일자 진술이 다르다",
-                detail=(
-                    "; ".join(f"{document_id}: {value}" for document_id, value in dates.items())
-                    + ". 동일 사건에 관한 서술로 보이나 날짜가 일치하지 않는다. 서로 다른 사실을 가리킬 수 있으므로 확인이 필요하다."
-                ),
-                confidence=confidence_score(features),
-                confidence_features=features,
-                document_id=last_doc,
-                block_id=last_event.block_id,
-                page=last_event.page,
-                engine=ENGINE_NAME,
-                tags=["CROSS_DOCUMENT"],
-                evidence=[
-                    Evidence.create(
-                        description=f"{first_doc} 서술",
-                        grade=EvidenceGrade.C,
-                        document_id=first_doc,
-                        block_id=first_event.block_id,
-                        page=first_event.page,
-                        excerpt=first_event.description,
-                    ),
-                    Evidence.create(
-                        description=f"{last_doc} 서술",
-                        grade=EvidenceGrade.C,
-                        document_id=last_doc,
-                        block_id=last_event.block_id,
-                        page=last_event.page,
-                        excerpt=last_event.description,
-                        supports=False,
-                    ),
-                ],
-            )
-        )
+        for source in events:
+            event = _structured(source)
+            if source.document_id and source.document_id != document_id:
+                raise ValueError("Event document_id conflicts with the document group")
+            event.document_id = document_id
+            if not _assertion(event) or not _identity(event) or event.event_kind == "GENERIC":
+                continue
+            if not event.event_identity and event.event_kind != "CONTRACT":
+                continue
+            groups[(_identity(event), event.event_kind, event.event_identity)].append(event)
+    findings = []
+    for (_, kind, event_identity), events in groups.items():
+        for first, second in combinations(events, 2):
+            if first.document_id == second.document_id or not _compatible(first, second):
+                continue
+            differences = {}
+            if first.date and second.date and first.date != second.date:
+                differences["date"] = [first.date.isoformat(), second.date.isoformat()]
+            left, right = _comparable_amount(first), _comparable_amount(second)
+            if (event_identity and first.currency == second.currency
+                    and first.amount_scope == second.amount_scope and left is not None and right is not None
+                    and left != right):
+                differences["amount"] = [str(left), str(right)]
+            if not differences:
+                continue
+            identified = bool(event_identity and first.project_id and first.speaker_id and first.target_id
+                              and first.speaker_id == second.speaker_id and first.target_id == second.target_id)
+            findings.append(Finding.create(
+                type=FindingType.CROSS_DOCUMENT_CONTRADICTION, status=VerificationStatus.UNVERIFIED,
+                severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.C,
+                title=f"{EVENT_LABELS.get(kind, kind)}에 관한 문서의 기재가 다릅니다", detail=(
+                    "식별자가 일치하는 같은 행위에 서로 다른 값이 기재되어 있습니다. 각 원문의 주장을 확인하세요."
+                    if identified else "불일치 후보입니다. 같은 사건·당사자·개별 행위인지 먼저 확인하세요."),
+                engine=ENGINE_NAME, document_id=second.document_id, block_id=second.block_id, page=second.page,
+                advisory_only=True, tags=["CROSS_DOCUMENT", "ASSERTION_CONFLICT" if identified else "IDENTITY_UNCERTAIN"],
+                confidence_features={"comparison_scope": "EXPLICIT_EVENT" if identified else "CANDIDATE",
+                                     "differences": differences, "sources": [_location(first), _location(second)],
+                                     "evidence_relationship": "UNASSESSED"},
+                evidence=[_evidence(first), _evidence(second)],
+            ))
     return findings
 
 
-def build_timeline(events: List[Event]) -> List[Dict[str, Any]]:
-    """UI Timeline 표시용 정렬 결과."""
-    dated = sorted([e for e in events if e.date], key=lambda e: e.date)  # type: ignore[arg-type]
-    return [e.to_dict() for e in dated]
+def claim_contradictions(claims: list[Claim], *, project_id: str) -> list[Finding]:
+    """Adapt structured claims to comparison, within one explicit project."""
+    if not project_id:
+        raise ValueError("project_id is required")
+    by_document: dict[str, list[Event]] = defaultdict(list)
+    event_fields = {field.name for field in fields(Event)} - {"event_id", "date", "description", "event_kind"}
+    for claim in claims:
+        if claim.project_id != project_id or not claim.document_id or not claim.action:
+            continue
+        try:
+            claimed_date = date.fromisoformat(claim.asserted_date) if claim.asserted_date else None
+        except ValueError:
+            continue
+        kwargs = {name: getattr(claim, name) for name in event_fields if hasattr(claim, name)}
+        by_document[claim.document_id].append(Event(
+            event_id=claim.claim_id, date=claimed_date, description=claim.text,
+            event_kind=claim.action, **kwargs))
+    return cross_document_contradictions(by_document)
+
+
+def build_timeline(events: list[Event]) -> list[dict[str, Any]]:
+    return [event.to_dict() for event in sorted((e for e in events if e.date), key=lambda e: e.date)]

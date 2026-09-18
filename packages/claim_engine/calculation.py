@@ -17,7 +17,8 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 
 ENGINE_NAME = "claim_engine.calculation"
 
-AMOUNT_RE = re.compile(r"(?:금\s*)?(?P<num>\d[\d,]*)\s*(?P<unit>억|천만|백만|만|천)?\s*원")
+AMOUNT_RE = re.compile(r"(?<![\d.,])(?:금\s*)?(?P<sign>[-−+]?)\s*(?P<amount>(?:\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)\s*)*\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)?)\s*원")
+AMOUNT_PART_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(억|천만|백만|만|천)?")
 TOTAL_LABEL_RE = re.compile(r"(합계|총액|총\s*금액|계|소계|합\s*계|총\s*계)")
 ITEM_LABEL_RE = re.compile(r"(항목|내역|세부|명세)")
 PERCENT_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*%")
@@ -57,10 +58,22 @@ def parse_amounts(text: str, *, block_id: Optional[str] = None, page: Optional[i
     out: List[Amount] = []
     for m in AMOUNT_RE.finditer(text):
         try:
-            base = Decimal(m.group("num").replace(",", ""))
+            parts = AMOUNT_PART_RE.findall(m.group("amount"))
+            if any(not re.fullmatch(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", number) for number, _ in parts):
+                continue
+            # Do not silently parse the tail of an unsupported compound/currency.
+            prefix = text[:m.start()]
+            if re.search(r"(?:\d[\d,.]*\s*(?:조|경|백|십)|USD|EUR|JPY|[$€¥])\s*$", prefix, re.I):
+                continue
+            units = [UNIT_MULTIPLIER.get(unit or None, 1) for _, unit in parts]
+            if any(a <= b for a, b in zip(units, units[1:])):
+                continue
+            value = sum((Decimal(number.replace(",", "")) * multiplier
+                         for (number, _), multiplier in zip(parts, units)), Decimal(0))
+            if m.group("sign") in ("-", "−"):
+                value = -value
         except InvalidOperation:  # pragma: no cover
             continue
-        value = base * UNIT_MULTIPLIER.get(m.group("unit"), 1)
         out.append(Amount(value, m.group(0), m.start(), m.end(), block_id, page))
     return out
 

@@ -1,8 +1,20 @@
-# 법률 분야 AI 문서 검증 및 위조 식별 시스템
+# ACAS_LAW Verifier
 
-기술설계서 종합본 v0.2 구현체이다. 사건별 프로젝트 안에서 법률문서의 진정성, 위·변조 의심징후,
-판례·법령·학술자료의 실재성, 인용 정확성, 사실관계 일관성, 논리적 모순, AI 작성 가능성,
-메타 지시어·프롬프트 인젝션 등 적대적 조작을 종합적으로 검증한다.
+변호사의 법률문서 검토를 보조하는 작업 공간입니다. v0.4 개선 내용과
+현재 제한 사항은 [구현 현황](docs/IMPLEMENTATION_STATUS.md), 상세 계획은
+[개선 계획](docs/ASSESSMENT_AND_IMPROVEMENT_PLAN.md)을 참조하세요.
+
+Windows 실행: `.\scripts\start-local.ps1` (http://127.0.0.1:8765).
+포트가 사용 중이면 `.\scripts\start-local.ps1 -Port 8766`으로 실행하세요.
+기존 데이터가 있으면 실행 전에 백업하고 `python -m alembic upgrade head`를 적용하세요.
+기본은 로컬 단일 소유자 모드입니다. 다중 사용자 운영은 `LV_AUTH_MODE=multi-user`와
+HTTPS, 계정 초기 설정, 사건별 권한 및 키 보관 설정이 필요합니다.
+[인증·권한·키 관리](docs/IDENTITY_SECURITY_INTEGRATION.md)와
+[작업 복구·비용 원장](docs/OPERATIONS_DURABILITY.md)을 먼저 확인하세요.
+
+기술설계서 v0.2 기반에 변호사 작업 공간과 오판 방지 개선을 반영한 v0.4 구현체이다.
+문서 위·변조 의심징후, 인용·사실관계·계산의 검토를 지원한다. 확인한 범위와
+미확인·미지원 범위를 구별하며, 법률적 판단이나 진정성립을 자동 확정하지 않는다.
 
 ## 핵심 원칙
 
@@ -23,7 +35,7 @@
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn apps.api.main:app --reload      # http://localhost:8000
-pytest                                   # 177개 테스트 (SQLite·인프로세스 Worker)
+pytest                                   # 외부 환경별 테스트는 설정에 따라 일부 건너뜀
 ```
 
 한국어 OCR을 쓰려면 시스템 패키지가 필요하다.
@@ -43,7 +55,7 @@ PostgreSQL·Celery까지 포함해 테스트하려면:
 
 ```bash
 LV_TEST_DATABASE_URL=postgresql+psycopg://legal:비밀번호@localhost:5432/legal_verifier \
-LV_TEST_CELERY_BROKER=redis://localhost:6379/0 pytest    # 181개
+LV_TEST_CELERY_BROKER=redis://localhost:6379/0 pytest
 ```
 
 API Key가 하나도 없어도 동작한다. 이 경우 외부 Source 검증 항목은 `UNVERIFIED`로 표시되고,
@@ -62,7 +74,7 @@ API Key가 하나도 없어도 동작한다. 이 경우 외부 Source 검증 항
 | `LV_OCR_LANG` / `LV_INDEPENDENT_OCR` | OCR 언어(기본 `kor+eng`), 독립 OCR 교차검증 모드 |
 | `LV_ALLOW_NETWORK=0` | 폐쇄망 모드. 외부 Adapter를 모두 비활성화한다. |
 
-전체 목록과 설명은 `.env.example`에 있다.
+기본 설정은 `.env.example`, 추가 인증·작업·예산 설정은 위 운영 문서에 있다.
 
 API Key는 Frontend LocalStorage나 평문 DB에 저장하지 않는다. 응답에도 키 값은 포함되지 않으며 보유 여부만 노출한다.
 
@@ -82,8 +94,10 @@ packages/
   llm_router/          Provider 추상화, Cascade, Judge Source Priority, 예산 라우팅
   verification_engine/ 파이프라인 오케스트레이션, AI 작성 분석, 축별 점수
   audit_engine/        SHA-256 해시 체인, Chain of Custody Manifest
-  report_engine/       PDF·Highlight PDF·XLSX·CSV·JSON·Manifest
-workers/           Celery Task. 브로커 미설정·장애 시 인프로세스로 강등된다
+  report_engine/       초안·확정본 snapshot, PDF·DOCX·Highlight PDF·XLSX·CSV·JSON·Manifest
+  evaluation/          사건 단위 분할, 라벨·예측 비교, 오류 유형별 오프라인 품질 평가
+apps/worker/       DB 임대·펜싱·재시도·취소·복구, Celery 수명주기 연동
+workers/           기존 Celery Task 호환 진입점
 migrations/        Alembic. pgvector 인덱스와 audit_events append-only 트리거 포함
 ```
 
@@ -92,7 +106,7 @@ migrations/        Alembic. pgvector 인덱스와 audit_events append-only 트�
 | 구성요소 | 기본값 | 확장 |
 |---|---|---|
 | DB | SQLite | `LV_DATABASE_URL`로 PostgreSQL 전환. JSON 컬럼은 JSONB, `embedding`은 pgvector `vector(1536)`로 자동 매핑되고 HNSW 인덱스가 생성된다. |
-| Worker | 인프로세스 스레드 | `LV_CELERY_BROKER` 설정 시 Celery로 디스패치. API는 태스크 구현을 임포트하지 않고 이름으로 메시지만 보내므로 프로듀서·컨슈머가 분리된다. 브로커 장애 시 인프로세스로 강등된다. |
+| Worker | 인프로세스 스레드 + 영속 DB 작업 | Celery도 동일한 DB 임대·펜싱을 적용한다. auto 모드만 브로커 장애 시 로컬로 전환하며, 명시적 celery 모드는 큐를 보존한다. |
 | OCR | 없으면 해당 항목 UNVERIFIED | tesseract 설치 시 자동 사용. 스캔 PDF는 페이지를 래스터화해 본문을 OCR하고 bbox를 보존하므로 인용 추출·Highlight가 그대로 이어진다. |
 
 마이그레이션은 `audit_events`에 UPDATE·DELETE를 거부하는 트리거를 만든다.
@@ -199,7 +213,7 @@ sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $
 alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
 
 # Background Worker (선택)
-celery -A workers.celery_app worker -l info -Q verification,report --concurrency 2
+celery -A apps.worker.celery_app worker -l info -Q verification,report --concurrency 2
 ```
 
 `render.yaml` 블루프린트로 웹 서비스·PostgreSQL·디스크·환경변수를 한 번에 만들 수 있다.
@@ -226,13 +240,18 @@ Internal Database URL을 그대로 붙여넣어도 된다.
 
 ## 구현 범위와 한계
 
-**구현됨**: 제1~26장 및 부록 A~C의 파이프라인 전 구간, 제25.2장 Vertical Slice 전 단계.
+**구현 범위**: 기본 생성·자료 제외/복구, 공식 출처 대조, 쟁점별 기준일, 주장·증거 검토표,
+사람 검토·이력·임시 저장, 문서 버전 비교, 기간별 이자·변제 계산, 초안/확정 보고서,
+사건별 권한, 영속 작업 복구와 중앙 비용 원장. 상세 완료 범위와 검증 근거는
+[구현 현황](docs/IMPLEMENTATION_STATUS.md)에 기록한다. 모든 법률 판단을 자동화한 것은 아니다.
 
 **설계서와 다른 점**
 - Frontend는 Next.js 대신 FastAPI가 서빙하는 무의존 SPA로 구현했다. 화면 구성(대시보드·뷰어·
   Finding 패널·필터·리뷰 상태)은 제19장을 그대로 따르며, API 계약이 동일하므로 Next.js로 교체 가능하다.
-- 인증·RBAC은 구현되어 있지 않다. DB 모델(`User`/`Organization`/`ProjectMember`)만 준비되어 있으므로
-  인터넷에 노출하기 전에 SSO·OIDC 연동과 접근통제를 붙여야 한다.
+- 인증·조직/사건별 RBAC, 명시적 OIDC 신원 연결, 서버 세션과 CSRF 검사가 구현되어 있다.
+  실제 기관 IdP·KMS·프록시의 설정과 연동 검증은 별도 수행해야 한다.
+- 화면은 쉬운 용어를 쓰고 보고서는 검사 코드·단계·범위·근거·버전을 보존한다.
+  변호사의 검토 완료와 자동 검사의 확인 완료는 별도 상태다.
 
 **의도적으로 남긴 한계**
 - OCR 정확도는 원본 품질에 좌우된다. OCR 결과로 추출한 인용문의 문자열 대조(Level 3)는
@@ -243,6 +262,9 @@ Internal Database URL을 그대로 붙여넣어도 된다.
 - Level 4(판례 취지)·Level 5(문맥 왜곡) 검증은 LLM 담당 구간이다. Provider가 없으면 `PENDING_LLM`
   상태로 남고 결코 VERIFIED로 승격되지 않는다.
 - 서명 값의 암호학적 검증은 존재·구조 확인까지만 수행한다.
+- 경과조치·부분 시행·판례 적용 가능성은 근거를 제시하는 검토 보조이며 법적 결론을 확정하지 않는다.
+- 합성 평가 예제는 평가 도구의 동작을 검증할 뿐 실제 법률문서 정확도나 시간 절감률을 입증하지 않는다.
+- 비용 한도는 같은 DB와 설정 가격을 사용하는 호출에 대한 사전 승인 원장이다. 공급자 청구액 보증은 아니다.
 
 ## 참고 Source
 

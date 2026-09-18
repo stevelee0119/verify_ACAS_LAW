@@ -16,6 +16,8 @@ from sqlalchemy import engine_from_config, pool
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from apps.api.db import Base  # noqa: E402
+from apps.api import identity, job_control, workspace  # noqa: E402,F401
+from packages.llm_router import budget  # noqa: E402,F401
 from packages.common.config import get_settings  # noqa: E402
 
 config = context.config

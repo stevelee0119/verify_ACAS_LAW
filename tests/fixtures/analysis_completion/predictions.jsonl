@@ -1,0 +1,5 @@
+{"item_id":"test-1","run_id":"synthetic-current","system_version":"synthetic-stub-v2","status":"CONTRADICTED","error_types":["AMOUNT_CONFLICT"],"latency_ms":100,"cost":0.01,"cost_currency":"USD","review_seconds":60}
+{"item_id":"test-2","run_id":"synthetic-current","system_version":"synthetic-stub-v2","status":"VERIFIED","error_types":[],"latency_ms":120,"cost":0.02,"cost_currency":"USD","review_seconds":40}
+{"item_id":"test-3","run_id":"synthetic-current","system_version":"synthetic-stub-v2","status":"VERIFIED","error_types":[],"latency_ms":80,"cost":0.01,"cost_currency":"USD","review_seconds":30}
+{"item_id":"test-4","run_id":"synthetic-current","system_version":"synthetic-stub-v2","status":"ABSTAIN","error_types":[],"latency_ms":90,"cost":0,"cost_currency":"USD","review_seconds":90}
+{"item_id":"test-5","run_id":"synthetic-current","system_version":"synthetic-stub-v2","status":"CONTRADICTED","error_types":["DATE_CONFLICT"],"latency_ms":110,"cost":0.01,"cost_currency":"USD","review_seconds":50}

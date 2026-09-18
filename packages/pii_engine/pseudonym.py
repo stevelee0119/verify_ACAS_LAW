@@ -11,12 +11,16 @@ import hashlib
 import hmac
 import json
 import os
-from abc import ABC, abstractmethod
+import re
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from filelock import FileLock
 
-from packages.common.config import DATA_DIR, get_settings
+from packages.common.config import data_dir
+from .key_provider import KeyProvider, EnvKeyProvider, default_key_provider
 
 KIND_PREFIX = {
     "PERSON": "PERSON",
@@ -32,36 +36,25 @@ KIND_PREFIX = {
 }
 
 
-class KeyProvider(ABC):
-    """운영환경에서는 Secrets Manager·Vault·KMS 구현으로 교체한다(제21.2장)."""
-
-    @abstractmethod
-    def get_key(self) -> bytes: ...
-
-
-class EnvKeyProvider(KeyProvider):
-    def get_key(self) -> bytes:
-        return get_settings().pseudonym_secret.encode("utf-8")
-
-
 @dataclass
 class PseudonymStore:
     """실명-가명 매핑. 본문 DB와 분리된 파일/저장소에 암호화 보관한다."""
 
     project_id: str
-    key_provider: KeyProvider = field(default_factory=EnvKeyProvider)
-    root: Path = field(default_factory=lambda: DATA_DIR / "pii_vault")
+    key_provider: KeyProvider = field(default_factory=default_key_provider)
+    root: Path = field(default_factory=lambda: data_dir() / "pii_vault")
     _mapping: Dict[str, str] = field(default_factory=dict, init=False)
     _originals: Dict[str, str] = field(default_factory=dict, init=False)
     _counters: Dict[str, int] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", self.project_id):
+            raise ValueError("Invalid project identifier")
         self.root.mkdir(parents=True, exist_ok=True)
         self._load()
 
-    # -- 암호화 (XOR-with-HMAC-keystream; 운영에서는 KMS/AES-GCM으로 교체) ----
-    def _keystream(self, length: int, nonce: bytes) -> bytes:
-        key = self.key_provider.get_key()
+    # The old stream cipher is retained only to read authenticated legacy vaults.
+    def _keystream(self, length: int, nonce: bytes, key: bytes) -> bytes:
         out = bytearray()
         counter = 0
         while len(out) < length:
@@ -70,20 +63,47 @@ class PseudonymStore:
         return bytes(out[:length])
 
     def _encrypt(self, plaintext: bytes) -> bytes:
-        nonce = os.urandom(16)
-        stream = self._keystream(len(plaintext), nonce)
-        body = bytes(a ^ b for a, b in zip(plaintext, stream))
-        tag = hmac.new(self.key_provider.get_key(), nonce + body, hashlib.sha256).digest()
-        return base64.b64encode(nonce + tag + body)
+        nonce = os.urandom(12)
+        material = self.key_provider.encryption_key(self.project_id)
+        body = AESGCM(material.key).encrypt(nonce, plaintext, self._aad(material.metadata))
+        envelope = {"version": 3, "key": material.metadata,
+                    "nonce": base64.b64encode(nonce).decode("ascii"),
+                    "ciphertext": base64.b64encode(body).decode("ascii")}
+        # Retain the AES vault family prefix, with an unambiguous envelope marker.
+        return b"ACAS2:K3:" + base64.b64encode(json.dumps(envelope, sort_keys=True).encode("utf-8"))
+
+    def _aad(self, metadata: dict) -> bytes:
+        return json.dumps({"version": 3, "project_id": self.project_id, "key": metadata},
+                          sort_keys=True, separators=(",", ":")).encode("utf-8")
 
     def _decrypt(self, blob: bytes) -> bytes:
-        raw = base64.b64decode(blob)
+        if blob.startswith(b"ACAS2:K3:"):
+            envelope = json.loads(base64.b64decode(blob[9:], validate=True))
+            if set(envelope) != {"version", "key", "nonce", "ciphertext"} or envelope["version"] != 3:
+                raise ValueError("Invalid vault envelope")
+            nonce = base64.b64decode(envelope["nonce"], validate=True)
+            if len(nonce) != 12:
+                raise ValueError("Invalid vault nonce")
+            key = self.key_provider.decryption_key(envelope["key"], self.project_id)
+            return AESGCM(key).decrypt(nonce, base64.b64decode(envelope["ciphertext"], validate=True), self._aad(envelope["key"]))
+        if blob.startswith(b"ACAS2:"):
+            raw = base64.b64decode(blob[6:], validate=True)
+            for legacy in self.key_provider.legacy_keys():
+                try:
+                    return AESGCM(hashlib.sha256(legacy).digest()).decrypt(raw[:12], raw[12:], self.project_id.encode())
+                except Exception:
+                    continue
+            raise ValueError("No matching legacy vault key")
+        raw = base64.b64decode(blob, validate=True)
+        if len(raw) < 48:
+            raise ValueError("Invalid legacy vault")
         nonce, tag, body = raw[:16], raw[16:48], raw[48:]
-        expected = hmac.new(self.key_provider.get_key(), nonce + body, hashlib.sha256).digest()
-        if not hmac.compare_digest(tag, expected):
-            raise ValueError("PII vault 무결성 검증 실패")
-        stream = self._keystream(len(body), nonce)
-        return bytes(a ^ b for a, b in zip(body, stream))
+        for legacy in self.key_provider.legacy_keys():
+            expected = hmac.new(legacy, nonce + body, hashlib.sha256).digest()
+            if hmac.compare_digest(tag, expected):
+                stream = self._keystream(len(body), nonce, legacy)
+                return bytes(a ^ b for a, b in zip(body, stream))
+        raise ValueError("PII vault 무결성 검증 실패")
 
     @property
     def _path(self) -> Path:
@@ -98,15 +118,27 @@ class PseudonymStore:
             self._counters = data.get("counters", {})
             self._originals = data.get("originals", {})
         except Exception:
-            # 손상된 vault는 덮어쓰지 않고 빈 상태로 시작한다
-            self._mapping, self._counters, self._originals = {}, {}, {}
+            raise ValueError("PII vault 무결성 검증 실패: 원본을 보존하고 처리를 중단합니다") from None
 
     def save(self) -> None:
+        with FileLock(str(self._path) + ".lock"):
+            self._load()
+            self._save_unlocked()
+
+    def _save_unlocked(self) -> None:
         payload = json.dumps(
             {"mapping": self._mapping, "counters": self._counters, "originals": self._originals},
             ensure_ascii=False,
         ).encode("utf-8")
-        self._path.write_bytes(self._encrypt(payload))
+        fd, temporary = tempfile.mkstemp(dir=self.root, suffix=".vault.tmp")
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(self._encrypt(payload))
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self._path)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
 
     # -- 매핑 -------------------------------------------------------------
     @staticmethod
@@ -114,6 +146,11 @@ class PseudonymStore:
         return f"{kind}:{' '.join(value.split()).lower()}"
 
     def pseudonym_for(self, kind: str, value: str) -> str:
+        with FileLock(str(self._path) + ".lock"):
+            self._load()
+            return self._pseudonym_for_unlocked(kind, value)
+
+    def _pseudonym_for_unlocked(self, kind: str, value: str) -> str:
         key = self._norm(kind, value)
         if key in self._mapping:
             return self._mapping[key]
@@ -122,6 +159,7 @@ class PseudonymStore:
         token = f"{prefix}_{self._counters[prefix]:03d}"
         self._mapping[key] = token
         self._originals[token] = value
+        self._save_unlocked()
         return token
 
     def original_for(self, token: str) -> Optional[str]:

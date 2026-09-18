@@ -7,10 +7,12 @@ from __future__ import annotations
 
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.common.config import CONFIG_DIR
+from .legal_history import legal_date
 
 
 def _canon(value: str) -> str:
@@ -57,23 +59,25 @@ class LocalLegalMirror:
     ) -> Optional[Dict[str, Any]]:
         target = _canon(law_name)
         candidates = [law for law in self._laws if _canon(law.get("law_name", "")) == target]
-        if not candidates:
-            # 접두 잡음이 남은 경우를 위한 suffix 대조 (예: "적용법조는테스트법")
-            candidates = [
-                law
-                for law in self._laws
-                if _canon(law.get("law_name", "")) and target.endswith(_canon(law.get("law_name", "")))
-            ]
         if article:
             candidates = [law for law in candidates if str(law.get("article")) == str(article)]
         if not candidates:
             return None
-        if as_of:
-            for law in candidates:
-                start = law.get("effective_from") or "0000-00-00"
-                end = law.get("effective_to") or "9999-12-31"
-                if start <= as_of <= end:
-                    return law
+        candidates = deepcopy(candidates)
+        if as_of is not None:
+            when = legal_date(as_of)
+            dated = all(legal_date(law.get("effective_from")) and
+                        (law.get("effective_to") is None or legal_date(law.get("effective_to")))
+                        for law in candidates)
+            matches = [law for law in candidates if when and dated and
+                       law["effective_from"] <= when and
+                       (law.get("effective_to") is None or when <= law["effective_to"])]
+            if not when or not dated or len(matches) > 1:
+                return {**candidates[-1], "temporal_scope": "UNRESOLVED_MIRROR",
+                        "as_of_match": None, "requested_as_of": as_of}
+            if len(matches) == 1:
+                return {**matches[0], "as_of_match": True if matches[0].get("effective_to") else None,
+                        "requested_as_of": as_of}
             # 시점에 맞는 version이 없으면 현행본을 돌려주되 표시를 남긴다
             current = sorted(candidates, key=lambda x: x.get("effective_from") or "")[-1]
             return {**current, "as_of_match": False, "requested_as_of": as_of}

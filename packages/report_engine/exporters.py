@@ -8,6 +8,8 @@ from datetime import datetime
 from typing import Any, Dict, List
 
 from packages.common.enums import MM4_ADVISORY_TYPES
+from packages.common.terminology import TERMINOLOGY_VERSION, terminology_catalog, EDITABLE_COPY_NOTICE
+from .snapshot import json_lines, xml_text
 
 FINDING_COLUMNS = [
     "finding_id", "type", "status", "severity", "evidence_grade", "confidence",
@@ -29,6 +31,9 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
 def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     """제20.2장 JSON 전체 검증결과."""
     payload = {
+        "product": "ACAS_LAW Verifier",
+        "terminology_version": TERMINOLOGY_VERSION,
+        "terminology": terminology_catalog(),
         "run_id": run_result.run_id,
         "project_id": run_result.project_id,
         "state": str(run_result.state),
@@ -40,6 +45,7 @@ def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
         "unavailable_sources": run_result.unavailable_sources,
         "unverified_items": run_result.unverified_items,
         "errors": run_result.errors,
+        "input_snapshot": getattr(run_result, "input_snapshot", {}),
         "documents": [
             {
                 "document_id": d.document_id,
@@ -56,26 +62,54 @@ def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
                 "entities": d.entities,
                 "events": d.events,
                 "engine_data": d.engine_data,
+                "source_records": [r.to_dict() if hasattr(r, "to_dict") else r for r in d.source_records],
+                "pages": ([{"page_number": p.page_number, "width": p.width, "height": p.height,
+                            "blocks": [b.to_dict() for b in p.blocks if b.visible and b.source_layer in ("visible_text", "ocr_layer")]}
+                           for p in d.normalized.pages] if d.normalized and hasattr(d.normalized, "pages")
+                          else getattr(d, "pages", [])),
+                "page_coverage": d.engine_data.get("page_coverage", []),
                 "findings": [f.to_dict(reveal_sealed=reveal_sealed) for f in d.findings],
             }
             for d in run_result.documents
         ],
         "project_findings": [f.to_dict(reveal_sealed=reveal_sealed) for f in run_result.project_findings],
+        "model_executions": getattr(run_result, "model_executions", []),
         "notice": (
             "봉인된 원문(sealed)은 사용자 명시적 열람 요청이 있는 경우에만 포함된다. "
             "본 결과는 검증 보조자료이며 최종 법적 평가는 사용자에게 있다."
         ),
     }
+    if hasattr(run_result, "report_metadata"):
+        payload["report"] = run_result.report_metadata
+        payload["review_snapshot"] = {key: value for key, value in run_result.review_snapshot.items()
+                                      if key != "engine_result"}
     return json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
 
 
-def to_csv(findings: List[Any], *, reveal_sealed: bool = False) -> bytes:
+def safe_cell(value):
+    if isinstance(value, (dict, list, tuple)):
+        value = json.dumps(value, ensure_ascii=False, default=str)
+    if isinstance(value, str):
+        value = xml_text(value)
+        if value.lstrip(" \t\r\n\ufeff").startswith(("=", "+", "-", "@")) or value.startswith(("\t", "\r", "\n")):
+            return "'" + value
+    return value
+
+
+def to_csv(findings: List[Any], *, reveal_sealed: bool = False, report_metadata=None) -> bytes:
     """제20.2장 CSV Findings."""
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=FINDING_COLUMNS, extrasaction="ignore")
+    metadata = report_metadata or {}
+    extra = {"report_state": metadata.get("state"), "report_label": metadata.get("label"),
+             "report_audience": metadata.get("audience"), "source_run_id": metadata.get("source_run_id"),
+             "snapshot_hash": metadata.get("snapshot_hash"), "created_by": metadata.get("created_by"),
+             "finalized_by": metadata.get("finalized_by"), "finalized_at": metadata.get("finalized_at"),
+             "editable_copy_notice": EDITABLE_COPY_NOTICE} if report_metadata else {}
+    writer = csv.DictWriter(buffer, fieldnames=FINDING_COLUMNS + list(extra), extrasaction="ignore")
     writer.writeheader()
-    for row in findings_to_rows(findings, reveal_sealed=reveal_sealed):
-        writer.writerow(row)
+    rows = findings_to_rows(findings, reveal_sealed=reveal_sealed)
+    for row in rows or ([{}] if extra else []):
+        writer.writerow({key: safe_cell(value) for key, value in (row | extra).items()})
     return buffer.getvalue().encode("utf-8-sig")  # Excel 한글 호환
 
 
@@ -85,6 +119,22 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     from openpyxl.styles import Alignment, Font, PatternFill
 
     workbook = openpyxl.Workbook()
+    overflow = None
+
+    def append(worksheet, values):
+        nonlocal overflow
+        row = []
+        for index, raw in enumerate(values, start=1):
+            value = safe_cell(raw)
+            if isinstance(value, str) and len(value) > 30000:
+                if overflow is None:
+                    overflow = workbook.create_sheet("Long values")
+                    overflow.append(["sheet", "row", "column", "part", "text"])
+                for part, offset in enumerate(range(0, len(value), 30000), start=1):
+                    overflow.append([worksheet.title, worksheet.max_row + 1, index, part, safe_cell(value[offset:offset + 30000])])
+                value = f"[Full value in Long values: {worksheet.title}, row {worksheet.max_row + 1}, column {index}]"
+            row.append(value)
+        worksheet.append(row)
 
     # 1) 요약
     summary = workbook.active
@@ -97,6 +147,9 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     summary.append(["생성시각", datetime.utcnow().isoformat()])
     summary.append(["문서 수", len(run_result.documents)])
     summary.append(["Finding 수", len(run_result.all_findings)])
+    for key, value in getattr(run_result, "report_metadata", {}).items():
+        append(summary, [key, value])
+    append(summary, ["editable_copy_notice", EDITABLE_COPY_NOTICE])
     for axis, value in (run_result.scores.get("axes") or {}).items():
         summary.append([axis, json.dumps(value, ensure_ascii=False)])
     summary.append(["사용 불가 Source", ", ".join(s["name"] for s in run_result.unavailable_sources)])
@@ -109,10 +162,10 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
         "HIGH": PatternFill("solid", fgColor="FFD9B3"),
         "MEDIUM": PatternFill("solid", fgColor="FFF2CC"),
     }
-    main = [f for f in run_result.all_findings if not f.advisory_only]
+    main = [f for f in run_result.all_findings if not f.advisory_only and f.type not in MM4_ADVISORY_TYPES]
     for finding in sorted(main, key=lambda f: -f.severity.rank):
         row = findings_to_rows([finding], reveal_sealed=reveal_sealed)[0]
-        sheet.append([row.get(c) for c in FINDING_COLUMNS])
+        append(sheet, [row.get(c) for c in FINDING_COLUMNS])
         fill = severity_fill.get(str(finding.severity))
         if fill:
             for cell in sheet[sheet.max_row]:
@@ -124,15 +177,46 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     for finding in run_result.all_findings:
         if finding.advisory_only or finding.type in MM4_ADVISORY_TYPES:
             row = findings_to_rows([finding], reveal_sealed=reveal_sealed)[0]
-            advisory_sheet.append([row.get(c) for c in FINDING_COLUMNS])
+            append(advisory_sheet, [row.get(c) for c in FINDING_COLUMNS])
 
     # 4) 미검증 항목
     unverified = workbook.create_sheet("미검증항목")
     unverified.append(["kind", "document_id", "citation_id", "type", "raw_text", "reason"])
     for item in run_result.unverified_items:
-        unverified.append([item.get(k) for k in ("kind", "document_id", "citation_id", "type", "raw_text", "reason")])
+        append(unverified, [item.get(k) for k in ("kind", "document_id", "citation_id", "type", "raw_text", "reason")])
+
+    snapshot = getattr(run_result, "review_snapshot", {})
+    review_sheet = workbook.create_sheet("검토기록")
+    columns = ["finding_id", "system_status", "workflow_state", "decision", "assignee", "note", "updated_by", "updated_at", "revision"]
+    append(review_sheet, columns)
+    for row in snapshot.get("workflow", []):
+        append(review_sheet, [row.get(c) for c in columns])
+    matrix = workbook.create_sheet("쟁점증거표")
+    append(matrix, ["claim_id", "document_id", "claim", "issue_id", "position", "support_status", "evidence_links", "missing_material", "note"])
+    for row in snapshot.get("matrix", {}).get("claims", []):
+        assessment = row.get("assessment", {})
+        append(matrix, [row["claim"].get("claim_id"), row.get("document_id"), row["claim"].get("text"),
+                        assessment.get("issue_id"), assessment.get("position"), row.get("review_status"),
+                        assessment.get("evidence_links", []), assessment.get("missing_material"), assessment.get("note")])
+    issues = workbook.create_sheet("쟁점")
+    columns = ["id", "title", "elements", "reference_date", "legal_basis", "priority", "note"]
+    append(issues, columns)
+    for row in snapshot.get("matrix", {}).get("issues", []):
+        append(issues, [row.get(c) for c in columns])
+    technical = workbook.create_sheet("기술부록")
+    append(technical, ["JSON path", "part", "value"])
+    for path, value in json_lines(json.loads(to_json(run_result, reveal_sealed=reveal_sealed))):
+        for part, offset in enumerate(range(0, max(1, len(value)), 29000), start=1):
+            append(technical, [path, part, value[offset:offset + 29000]])
 
     for worksheet in workbook.worksheets:
+        worksheet.freeze_panes = "A2"
+        for row in worksheet:
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.value = safe_cell(cell.value)
+                    cell.data_type = "s"
+                cell.alignment = Alignment(wrap_text=True, vertical="top")
         for cell in worksheet[1]:
             cell.font = Font(bold=True)
             cell.alignment = Alignment(vertical="center")

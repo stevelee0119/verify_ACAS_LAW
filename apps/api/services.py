@@ -1,9 +1,7 @@
 """검증 실행 서비스: 파이프라인 실행 결과를 DB에 적재한다."""
 from __future__ import annotations
 
-import threading
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import select
@@ -80,6 +78,7 @@ def build_context(project: Project) -> ProjectContext:
         court=project.court,
         parties=list(project.parties or []),
         case_date=project.incident_date,
+        issue_dates=project.key_dates or {},
         external_ai_policy=ExternalAIPolicy(project.external_ai_policy or "MASKED"),
         profile=VerificationProfile(project.verification_profile or "STANDARD"),
         enabled_advisory_signals=set(project.enabled_advisory_signals)
@@ -96,78 +95,58 @@ def find_reusable_run(session: Session, project_id: str, key: str) -> Optional[V
         .where(
             VerificationRun.project_id == project_id,
             VerificationRun.verification_key == key,
-            VerificationRun.state.in_([str(JobState.COMPLETED), str(JobState.PARTIAL_COMPLETED)]),
+            VerificationRun.state == str(JobState.COMPLETED),
         )
         .order_by(VerificationRun.started_at.desc())
         .limit(1)
     ).scalar_one_or_none()
 
 
-def execute_run(run_id: str) -> None:
-    """Worker에서 호출되는 실행 함수. 자체 세션을 연다."""
-    session = get_session_factory()()
-    try:
-        run = session.get(VerificationRun, run_id)
-        if run is None:
-            return
-        project = session.get(Project, run.project_id)
-        if project is None:
-            run.state = str(JobState.FAILED)
-            session.commit()
-            return
+def execute_run(run_id: str, *, store=None) -> None:
+    """Both Celery and local workers use the durable, fenced execution path."""
+    from apps.worker.runtime import execute
 
-        documents = (
-            session.execute(select(Document).where(Document.id.in_(run.document_ids or []))).scalars().all()
-        )
-        storage = get_storage()
-        inputs: List[DocumentInput] = []
-        for document in documents:
-            inputs.append(
-                DocumentInput(
-                    document_id=document.id,
-                    path=str(storage.path(document.storage_key)),
-                    filename=document.filename,
-                    mime_type=document.mime_type or "",
-                    sha256=document.sha256,
-                )
-            )
-
-        audit = make_audit(session)
-        pipeline = VerificationPipeline(registry=get_registry(), router=LLMRouter(), audit=audit)
-
-        def progress(state: JobState, message: str, ratio: float) -> None:
-            # 최종 상태는 여기서 쓰지 않는다. 결과(scores·findings) 적재보다 먼저
-            # 완료로 바뀌면, SSE를 보고 결과를 가져가는 화면이 빈 값을 받는다.
-            # 종료 상태는 persist_result가 결과와 함께 한 번에 기록한다.
-            if state in TERMINAL_JOB_STATES:
-                session.add(VerificationCheck(run_id=run.id, name=str(state), state="PERSISTING",
-                                              detail={"message": message, "progress": ratio}))
-                session.commit()
-                return
-            run.state = str(state)
-            run.stage_message = message
-            run.progress = round(ratio, 3)
-            session.add(VerificationCheck(run_id=run.id, name=str(state), state="RUNNING",
-                                          detail={"message": message, "progress": ratio}))
-            session.commit()
-
-        context = build_context(project)
-        result = pipeline.run(run.id, context, inputs, progress=progress)
-        persist_result(session, run, result)
-    except Exception as exc:  # pragma: no cover - 방어적
-        session.rollback()
-        run = session.get(VerificationRun, run_id)
-        if run is not None:
-            run.state = str(JobState.FAILED)
-            run.errors = (run.errors or []) + [str(exc)]
-            run.finished_at = datetime.utcnow()
-            session.commit()
-    finally:
-        session.close()
+    execute(run_id, store=store)
 
 
-def persist_result(session: Session, run: VerificationRun, result: VerificationRunResult) -> None:
+def link_snapshot_evidence(result, snapshot) -> None:
+    from dataclasses import fields
+    from packages.claim_engine.structure import EvidenceItem, extract_evidence_references, match_evidence_references
+    from packages.common.schemas import Claim
+
+    documents = {document.document_id: document for document in result.documents}
+    catalog = []
+    for item in snapshot.get("documents", []):
+        document = documents.get(item["document_id"])
+        if document is None or document.quarantined or not document.normalized or not item.get("sha256"):
+            continue
+        references = extract_evidence_references(item.get("evidence_number") or "")
+        for reference in references:
+            if reference["parse_status"] == "PARSED":
+                catalog.append(EvidenceItem(result.project_id, reference["key"], item["document_id"],
+                    result.run_id, item["sha256"],
+                    tuple(page.page_number for page in document.normalized.pages)))
+    claim_fields = {item.name for item in fields(Claim)}
+    for document_result in result.documents:
+        for claim in document_result.claims:
+            structured = Claim(**{key: value for key, value in claim.items() if key in claim_fields})
+            matches = match_evidence_references([structured], catalog, project_id=result.project_id)
+            claim["evidence_matches"] = [match.to_dict() for match in matches]
+            claim["evidence_links"] = [{"reference": match.reference["raw_text"],
+                "document_ids": [item.document_id for item in match.candidates],
+                "reference_status": match.status, "support_status": "NOT_ASSESSED"} for match in matches]
+
+
+def persist_result(session: Session, run: VerificationRun, result: VerificationRunResult,
+                   *, lease=None, store=None, commit=True) -> None:
     from packages.report_engine import to_json
+    from .job_control import DurableJob, JobOwnershipLost, JobStore
+
+    store = store or JobStore()
+    if lease is not None:
+        store.fence(session, lease)
+    elif session.get(DurableJob, run.id) is not None:
+        raise JobOwnershipLost(run.id)
 
     run.state = str(result.state)
     run.progress = 1.0
@@ -177,11 +156,12 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
     run.timeline = result.timeline
     run.unavailable_sources = result.unavailable_sources
     run.unverified_items = result.unverified_items
-    run.errors = result.errors
+    run.errors = list(dict.fromkeys([*(run.errors or []), *result.errors]))
     run.finished_at = result.finished_at or datetime.utcnow()
     import json as _json
 
     run.result_json = _json.loads(to_json(result).decode("utf-8"))
+    run.result_json["input_snapshot"] = run.input_snapshot or {}
 
     for document_result in result.documents:
         document = session.get(Document, document_result.document_id)
@@ -295,84 +275,14 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
                     )
                 )
 
-    session.commit()
+    for execution in result.model_executions:
+        allowed = {c.name for c in ModelExecutionRow.__table__.columns} - {"id", "run_id", "created_at"}
+        session.add(ModelExecutionRow(run_id=run.id, **{k: v for k, v in execution.items() if k in allowed}))
+    if commit:
+        session.commit()
 
 
-class JobRunner:
-    """검증 Job 실행기 (제3.1장).
-
-    브로커가 설정되어 있으면 Celery로 디스패치하고, 없으면 인프로세스 스레드로 실행한다.
-    두 경로 모두 동일한 execute_run()을 호출하므로 Verification Core는 하나이다.
-    """
-
-    def __init__(self) -> None:
-        self._threads: Dict[str, threading.Thread] = {}
-        self._task_ids: Dict[str, str] = {}
-
-    # -- 모드 판정 --------------------------------------------------------
-    @property
-    def mode(self) -> str:
-        settings = get_settings()
-        configured = (settings.worker_mode or "auto").lower()
-        if configured == "celery":
-            return "celery"
-        if configured == "inprocess":
-            return "inprocess"
-        from workers.celery_app import broker_url, celery_available
-
-        return "celery" if (broker_url() and celery_available()) else "inprocess"
-
-    # -- 제출 -------------------------------------------------------------
-    def submit(self, run_id: str) -> str:
-        if self.mode == "celery":
-            try:
-                from workers.celery_app import VERIFICATION_TASK, get_celery_app
-
-                app = get_celery_app()
-                if app is None:
-                    raise RuntimeError("celery를 사용할 수 없다")
-                result = app.send_task(VERIFICATION_TASK, args=[run_id], queue="verification")
-                self._task_ids[run_id] = result.id
-                return "celery"
-            except Exception:
-                # 브로커 장애 시 전체 기능을 잃지 않도록 인프로세스로 강등한다
-                # (제2장 Graceful Degradation)
-                pass
-        thread = threading.Thread(target=execute_run, args=(run_id,), daemon=True, name=f"run-{run_id}")
-        self._threads[run_id] = thread
-        thread.start()
-        return "inprocess"
-
-    def task_id(self, run_id: str) -> Optional[str]:
-        return self._task_ids.get(run_id)
-
-    def wait(self, run_id: str, timeout: float = 120.0) -> None:
-        """인프로세스 실행을 기다린다. Celery 경로에서는 Run 상태를 폴링한다."""
-        thread = self._threads.get(run_id)
-        if thread is not None:
-            thread.join(timeout)
-            return
-        if run_id not in self._task_ids:
-            return
-        import time
-
-        from packages.common.enums import JobState
-
-        terminal = {str(JobState.COMPLETED), str(JobState.PARTIAL_COMPLETED),
-                    str(JobState.FAILED), str(JobState.CANCELLED)}
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            session = get_session_factory()()
-            try:
-                run = session.get(VerificationRun, run_id)
-                if run is not None and run.state in terminal:
-                    return
-            finally:
-                session.close()
-            time.sleep(0.3)
-
-    def busy(self) -> List[str]:
-        return [rid for rid, t in self._threads.items() if t.is_alive()]
+from apps.worker.runner import JobRunner
 
 
 _runner = JobRunner()

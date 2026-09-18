@@ -1,0 +1,804 @@
+"""Durability, ownership and money invariants using real database transactions."""
+from __future__ import annotations
+
+import asyncio
+import copy
+import multiprocessing
+import os
+import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.orm import sessionmaker
+
+from apps.api import db
+from apps.api.db import Document, Project, VerificationRun
+from apps.api.job_control import (
+    DurableJob, JobAttempt, JobConflict, JobOwnershipLost, JobStore, Lease,
+    enqueue_run, execution_settings_snapshot,
+)
+from apps.api.services import build_context, execute_run, persist_result
+from apps.worker.runner import JobRunner
+from packages.common.config import ProviderConfig, get_settings
+from packages.common.enums import JobState, LLMRole
+from packages.common.storage import get_storage, sha256_bytes
+from packages.llm_router.budget import (
+    BudgetAccount, BudgetExceeded, BudgetLedger, BudgetReservation, write_session,
+)
+from packages.llm_router.providers import LLMProvider, LLMRequest, LLMResponse
+from packages.llm_router.router import LLMRouter
+from packages.verification_engine import VerificationPipeline, VerificationRunResult
+
+
+def _process_reserve(args):
+    url, index = args
+    engine = create_engine(url, connect_args={"timeout": 30})
+    try:
+        ledger = BudgetLedger(sessionmaker(engine))
+        ledger.reserve("process-" + str(index), "0.2", monthly_limit="1")
+        return True
+    except BudgetExceeded:
+        return False
+    finally:
+        engine.dispose()
+
+
+def _crash_after_reserve(url):
+    ledger = BudgetLedger(sessionmaker(create_engine(url)))
+    reservation = ledger.reserve("crashed", "0.75", monthly_limit="1", reservation_id="crash")
+    ledger.dispatch(reservation.id)
+    os._exit(0)
+
+
+def _crash_after_claim(url, run_id):
+    store = JobStore(sessionmaker(create_engine(url), expire_on_commit=False))
+    lease = store.claim(run_id)
+    with store.session() as session:
+        document_id = session.get(VerificationRun, run_id).document_ids[0]
+    store.checkpoint(lease, document={"document_id": document_id, "findings": []})
+    os._exit(0)
+
+
+@pytest.fixture
+def ops(tmp_path, monkeypatch):
+    # Import the route-owned models before creating this isolated schema.
+    from apps.api.routers import jobs, verification  # noqa: F401
+    engine = create_engine("sqlite:///" + str(tmp_path / "operations.db"),
+                           connect_args={"check_same_thread": False, "timeout": 30})
+
+    @event.listens_for(engine, "connect")
+    def pragmas(connection, _):
+        connection.execute("PRAGMA journal_mode=WAL")
+        connection.execute("PRAGMA foreign_keys=ON")
+
+    db.Base.metadata.create_all(engine)
+    factory = sessionmaker(engine, expire_on_commit=False, autoflush=False)
+    monkeypatch.setattr(db, "_engine", engine)
+    monkeypatch.setattr(db, "_SessionLocal", factory)
+    monkeypatch.setattr(get_settings(), "worker_mode", "inprocess")
+    monkeypatch.setenv("LV_JOB_BACKOFF_SECONDS", "0")
+    yield factory
+    engine.dispose()
+
+
+def seeded_run(factory, *, enqueue=True, organization_id=None, policy="LOCAL_ONLY"):
+    with factory() as session:
+        project = Project(name="Snapshot", key_dates={"issue-a": "2020-01-02"}, external_ai_policy=policy,
+                          organization_id=organization_id)
+        session.add(project)
+        session.flush()
+        body = b"original snapshot bytes"
+        key = get_storage().put_original(project.id + "/original.txt", body)
+        document = Document(project_id=project.id, filename="original.txt", mime_type="text/plain",
+                            storage_key=key, sha256=sha256_bytes(body), is_own_document=True)
+        session.add(document)
+        session.flush()
+        snapshot = {"context": build_context(project).__dict__, "documents": [{
+            "document_id": document.id, "filename": document.filename, "sha256": document.sha256,
+            "is_own_document": True, "evidence_number": "EX-1"}], "issues": [{"id": "issue-a"}]}
+        run = VerificationRun(project_id=project.id, document_ids=[document.id], profile="STANDARD",
+                              verification_key="same-inputs", state="QUEUED", input_snapshot=snapshot)
+        if enqueue:
+            run, reused = enqueue_run(session, run)
+            assert not reused
+        session.commit()
+        return run
+
+
+def completed(run):
+    return VerificationRunResult(run.id, run.project_id, JobState.COMPLETED, run.verification_key,
+                                 scores={"ready": True})
+
+
+def test_concurrent_monthly_reservations_and_decimal_precision(ops):
+    def reserve(index):
+        try:
+            BudgetLedger(ops).reserve(str(index), "0.1", monthly_limit="1")
+            return True
+        except BudgetExceeded:
+            return False
+    with ThreadPoolExecutor(max_workers=12) as pool:
+        admitted = list(pool.map(reserve, range(24)))
+    assert sum(admitted) == 10
+    account = BudgetLedger(ops).account("month:" + datetime.utcnow().strftime("%Y-%m"))
+    assert account["reserved"] == Decimal("1") and account["spent"] == 0
+
+
+def test_separate_processes_share_the_same_monthly_limit(ops):
+    url = str(ops.kw["bind"].url)
+    with multiprocessing.get_context("spawn").Pool(3) as pool:
+        admitted = pool.map(_process_reserve, [(url, i) for i in range(12)])
+    assert sum(admitted) == 5
+
+
+def test_reservation_survives_process_crash_and_cannot_be_released(ops):
+    process = multiprocessing.get_context("spawn").Process(target=_crash_after_reserve, args=(str(ops.kw["bind"].url),))
+    process.start()
+    process.join(30)
+    assert process.exitcode == 0
+    ledger = BudgetLedger(ops)
+    with pytest.raises(BudgetExceeded):
+        ledger.reserve("next", "0.3", monthly_limit="1")
+    with pytest.raises(ValueError, match="confirmed usage"):
+        ledger.release("crash")
+    ledger.settle("crash", Decimal("0.2"))
+    assert not ledger.settle("crash", Decimal("0.2"))
+    ledger.reserve("next", "0.8", monthly_limit="1")
+
+
+def test_run_ceiling_is_atomic_and_failed_reservation_rolls_back_month(ops):
+    ledger = BudgetLedger(ops)
+    ledger.reserve("r1", "0.3", monthly_limit="5", run_limit="0.5", budget_run_id="root")
+    with pytest.raises(BudgetExceeded):
+        ledger.reserve("r2", "0.3", monthly_limit="5", run_limit="0.5", budget_run_id="root")
+    assert ledger.account("run:root")["reserved"] == Decimal("0.3")
+    assert ledger.account("month:" + datetime.utcnow().strftime("%Y-%m"))["reserved"] == Decimal("0.3")
+
+
+def test_unused_release_and_tiny_usage_are_not_rounded_to_zero(ops):
+    ledger = BudgetLedger(ops)
+    reservation = ledger.reserve("tiny", "0.0000000011")
+    assert reservation.amount == Decimal("0.000000002")
+    assert ledger.release(reservation.id)
+    assert not ledger.release(reservation.id)
+    assert ledger.account("run:tiny")["reserved"] == 0
+
+
+def test_month_rollover_keeps_original_reservations_and_attribution(ops):
+    ledger = BudgetLedger(ops, clock=lambda: datetime(2026, 1, 31, 23, 59))
+    reservation = ledger.reserve("old", "1", monthly_limit="1")
+    ledger.clock = lambda: datetime(2026, 2, 1)
+    ledger.reserve("new", "1", monthly_limit="1")
+    ledger.settle(reservation.id, "0.5")
+    assert ledger.account("month:2026-01")["spent"] == Decimal("0.5")
+    assert ledger.account("month:2026-02")["reserved"] == Decimal("1")
+
+
+def test_enqueue_and_outer_rollback_are_atomic(ops):
+    template = seeded_run(ops, enqueue=False)
+    with ops() as session:
+        run, _ = enqueue_run(session, template)
+        run_id = run.id
+        session.rollback()
+    with ops() as session:
+        assert session.get(VerificationRun, run_id) is None
+        assert session.get(DurableJob, run_id) is None
+
+
+def test_concurrent_duplicate_submission_creates_one_run(ops):
+    template = seeded_run(ops, enqueue=False)
+    def submit(_):
+        with ops() as session:
+            run = VerificationRun(project_id=template.project_id, document_ids=template.document_ids,
+                profile=template.profile, verification_key=template.verification_key, state="QUEUED",
+                input_snapshot=copy.deepcopy(template.input_snapshot))
+            run, _ = enqueue_run(session, run)
+            session.commit()
+            return run.id
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        ids = list(pool.map(submit, range(16)))
+    assert len(set(ids)) == 1
+    with ops() as session:
+        assert session.scalar(select(func.count()).select_from(VerificationRun)) == 1
+        assert session.scalar(select(func.count()).select_from(DurableJob)) == 1
+
+
+def test_completion_between_cache_lookup_and_enqueue_keeps_deduplication(ops, monkeypatch):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    with write_session(ops) as session:
+        persist_result(session, session.get(VerificationRun, run.id), completed(run),
+                       lease=lease, store=store, commit=False)
+        store.complete(session, lease, completed(run))
+    with ops() as session:
+        original = session.execute
+        missed_cache_lookup = False
+
+        def execute(statement, *args, **kwargs):
+            nonlocal missed_cache_lookup
+            if not missed_cache_lookup:
+                missed_cache_lookup = True
+                # PostgreSQL can finish a worker after this SELECT but before INSERT.
+                return type("CacheMiss", (), {"scalar_one_or_none": lambda self: None})()
+            return original(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", execute)
+        candidate = VerificationRun(project_id=run.project_id, document_ids=run.document_ids,
+            profile=run.profile, verification_key=run.verification_key, state="QUEUED",
+            input_snapshot=copy.deepcopy(run.input_snapshot))
+        canonical, reused = enqueue_run(session, candidate)
+        session.commit()
+        assert reused and canonical.id == run.id
+        assert session.scalar(select(func.count()).select_from(VerificationRun)) == 1
+
+
+def test_concurrent_claim_only_one_owner(ops):
+    run = seeded_run(ops)
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        leases = list(pool.map(lambda _: JobStore(ops).claim(run.id), range(16)))
+    assert sum(lease is not None for lease in leases) == 1
+
+
+def test_dead_process_recovery_fences_old_completion_and_preserves_partial(ops):
+    run = seeded_run(ops)
+    process = multiprocessing.get_context("spawn").Process(
+        target=_crash_after_claim, args=(str(ops.kw["bind"].url), run.id))
+    process.start()
+    process.join(30)
+    assert process.exitcode == 0
+    with ops() as session:
+        job = session.get(DurableJob, run.id)
+        old = Lease(run.id, job.owner, job.fence)
+        now = job.lease_expires_at + timedelta(seconds=1)
+    store = JobStore(ops, clock=lambda: now, backoff_seconds=0)
+    assert store.recover() == [run.id]
+    fresh = store.claim(run.id)
+    assert fresh and fresh.fence > old.fence
+    with ops() as session, pytest.raises(JobOwnershipLost):
+        persist_result(session, session.get(VerificationRun, run.id), completed(run), lease=old, store=store)
+    with write_session(ops) as session:
+        persist_result(session, session.get(VerificationRun, run.id), completed(run),
+                       lease=fresh, store=store, commit=False)
+        store.complete(session, fresh, completed(run))
+    history = store.status(run.id)["history"]
+    assert history[0]["state"] == "FAILED"
+    assert history[0]["partial_result"]["documents"][0]["document_id"] == run.document_ids[0]
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        assert saved.state == "COMPLETED" and saved.result_json["scores"]["ready"]
+        assert "WORKER_LEASE_EXPIRED" in saved.errors
+
+
+def test_backoff_and_attempt_limit(ops):
+    run = seeded_run(ops)
+    now = datetime.utcnow() + timedelta(seconds=1)
+    store = JobStore(ops, clock=lambda: now, backoff_seconds=2)
+    with ops() as session:
+        session.get(DurableJob, run.id).max_attempts = 2
+        session.commit()
+    first = store.claim(run.id)
+    store.fail(first, "temporary")
+    assert store.claim(run.id) is None
+    now += timedelta(seconds=2)
+    second = store.claim(run.id)
+    store.fail(second, "again")
+    assert store.status(run.id)["state"] == "FAILED"
+    assert store.claim(run.id) is None
+
+
+@pytest.mark.parametrize("claimed", [False, True])
+def test_cancel_is_idempotent_and_invalidates_running_owner(ops, claimed):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id) if claimed else None
+    if lease:
+        store.checkpoint(lease, document={"document_id": run.document_ids[0]})
+    assert store.cancel(run.id, actor="reviewer") == "CANCELLED"
+    assert store.cancel(run.id, actor="reviewer") == "CANCELLED"
+    assert store.claim(run.id) is None
+    if lease:
+        with pytest.raises(JobOwnershipLost):
+            store.progress(lease, JobState.VERIFYING, "late", 0.9)
+        assert store.status(run.id)["history"][0]["partial_result"]["documents"]
+
+
+def test_retry_is_idempotent_and_copies_snapshot_and_budget_root(ops):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    store.cancel(run.id)
+    with ops() as session:
+        session.get(Project, run.project_id).key_dates = {"changed": "2099-01-01"}
+        session.get(Document, run.document_ids[0]).included_in_verification = False
+        session.commit()
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        children = list(pool.map(lambda _: JobStore(ops).retry(run.id), range(8)))
+    assert len(set(children)) == 1
+    with ops() as session:
+        source, child = session.get(VerificationRun, run.id), session.get(VerificationRun, children[0])
+        assert child.input_snapshot == source.input_snapshot
+        assert child.verification_key == source.verification_key and child.document_ids == source.document_ids
+        assert session.get(DurableJob, child.id).snapshot == session.get(DurableJob, source.id).snapshot
+        assert session.get(DurableJob, child.id).budget_run_id == source.id
+        assert source.state == "CANCELLED"
+
+
+def test_runtime_uses_frozen_inputs_and_ignores_live_document_changes(ops, monkeypatch):
+    run = seeded_run(ops)
+    with ops() as session:
+        session.get(Project, run.project_id).key_dates = {"new": "2099-01-01"}
+        document = session.get(Document, run.document_ids[0])
+        document.storage_key, document.filename, document.is_own_document = "missing", "changed", False
+        session.commit()
+    def pipeline(self, run_id, context, documents, **kwargs):
+        assert context.issue_dates == {"issue-a": "2020-01-02"}
+        assert documents[0].is_own_document is True and documents[0].filename == "original.txt"
+        return completed(run)
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=JobStore(ops))
+    assert JobStore(ops).status(run.id)["state"] == "COMPLETED"
+
+
+def test_late_result_after_cancellation_cannot_complete(ops, monkeypatch):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    def pipeline(*args, **kwargs):
+        store.cancel(run.id)
+        return completed(run)
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=store)
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        assert saved.state == "CANCELLED" and saved.result_json is None
+
+
+def test_heartbeat_prevents_recovery_during_slow_work(ops):
+    from apps.worker.runtime import heartbeat
+    run = seeded_run(ops)
+    store = JobStore(ops, lease_seconds=0.3)
+    lease = store.claim(run.id)
+    with heartbeat(store, lease) as check:
+        time.sleep(0.5)
+        assert store.recover() == []
+        check()
+
+
+def test_startup_recovers_expired_run_and_shuts_down(ops, monkeypatch):
+    run = seeded_run(ops)
+    store = JobStore(ops, backoff_seconds=0)
+    store.claim(run.id)
+    with ops() as session:
+        session.get(DurableJob, run.id).lease_expires_at = datetime.utcnow() - timedelta(seconds=1)
+        session.commit()
+    monkeypatch.setattr(VerificationPipeline, "run", lambda *a, **kw: completed(run))
+    runner = JobRunner(store)
+    try:
+        runner.start()
+        runner.start()
+        runner.wait(run.id, 10)
+        assert store.status(run.id)["state"] == "COMPLETED"
+    finally:
+        runner.stop()
+    assert not runner._poller.is_alive()
+
+
+def test_celery_delivery_uses_same_claim_and_duplicate_is_noop(ops, monkeypatch):
+    import workers.celery_app as celery_module
+    run = seeded_run(ops)
+    calls = []
+    class App:
+        def send_task(self, name, **kwargs):
+            calls.append((name, kwargs))
+            return type("Task", (), {"id": "task-1"})()
+    monkeypatch.setattr(celery_module, "get_celery_app", lambda: App())
+    monkeypatch.setattr(get_settings(), "worker_mode", "celery")
+    runner = JobRunner(JobStore(ops))
+    assert runner.submit(run.id) == "celery"
+    runner.submit(run.id)
+    assert len(calls) == 1 and runner.task_id(run.id) == "task-1"
+    executions = []
+    def pipeline(*args, **kwargs):
+        executions.append(run.id)
+        return completed(run)
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=runner.store)
+    execute_run(run.id, store=runner.store)
+    assert executions == [run.id]
+
+
+class StubProvider(LLMProvider):
+    name = "openai"
+    @property
+    def available(self):
+        return True
+    async def generate(self, request):
+        self.calls += 1
+        if self.callback:
+            self.callback()
+        if isinstance(self.response, Exception):
+            raise self.response
+        return self.response
+
+
+def model_router(ops, monkeypatch, response, **kwargs):
+    from dataclasses import replace
+    settings = replace(get_settings(), pricing={"openai": {"input": 2, "output": 8}})
+    provider = StubProvider(ProviderConfig("openai", enabled=True, model="fixture"))
+    provider.response, provider.calls, provider.callback = response, 0, None
+    monkeypatch.delenv("LV_MONTHLY_BUDGET_USD", raising=False)
+    router = LLMRouter({"openai": provider}, settings=settings, ledger=BudgetLedger(ops), run_id="model-run",
+        limits={"monthly_limit": "1", "run_limit": "1", "max_input_tokens": 4096,
+                "max_output_tokens": 1200, "unknown_call_usd": ""}, **kwargs)
+    return router, provider
+
+
+def test_model_reserves_before_external_call_then_settles_reported_usage(ops, monkeypatch):
+    router, provider = model_router(ops, monkeypatch, LLMResponse(True, text="ok", input_tokens=100, output_tokens=10))
+    def reserved():
+        with ops() as session:
+            row = session.scalar(select(BudgetReservation))
+            assert row.state == "DISPATCHED" and row.reserved_units > 0
+    provider.callback = reserved
+    result = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert result.used and provider.calls == 1
+    assert BudgetLedger(ops).account("run:model-run")["spent"] == Decimal("0.00028")
+    assert BudgetLedger(ops).account("run:model-run")["reserved"] == 0
+
+
+@pytest.mark.parametrize("response,state", [(TimeoutError(), "DISPATCHED"), (LLMResponse(True, text="ok"), "SETTLED")])
+def test_uncertain_or_missing_usage_never_releases_budget(ops, monkeypatch, response, state):
+    router, provider = model_router(ops, monkeypatch, response)
+    asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    with ops() as session:
+        reservation = session.scalar(select(BudgetReservation))
+        assert reservation.state == state
+    account = BudgetLedger(ops).account("run:model-run")
+    assert account["reserved"] + account["spent"] == Decimal("0.017792")
+
+
+def test_missing_pricing_and_exhausted_budget_prevent_provider_call(ops, monkeypatch):
+    router, provider = model_router(ops, monkeypatch, LLMResponse(True, text="ok"))
+    router.settings.pricing = {}
+    result = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert not result.used and provider.calls == 0
+    router.settings.pricing = {"openai": {"input": 2, "output": 8}}
+    router.limits["run_limit"] = "0.00001"
+    result = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert not result.used and provider.calls == 0
+
+
+def test_cancel_between_reservation_and_dispatch_releases_unsent_hold(ops, monkeypatch):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    checks = []
+    def guard():
+        checks.append(1)
+        if len(checks) == 2:
+            store.cancel(run.id)
+        store.check(lease)
+    router, provider = model_router(ops, monkeypatch, LLMResponse(True, text="ok"), call_guard=guard)
+    with pytest.raises(JobOwnershipLost):
+        asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert provider.calls == 0
+    assert BudgetLedger(ops).account("run:model-run")["reserved"] == 0
+
+
+def test_snapshot_contains_key_names_only_and_rejects_credentials_in_urls(ops, monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "must-not-enter-snapshot")
+    snapshot = execution_settings_snapshot()
+    assert "must-not-enter-snapshot" not in str(snapshot)
+    assert snapshot["providers"]["openai"]["api_key_env"] == "OPENAI_API_KEY"
+    monkeypatch.setattr(get_settings().providers["openai"], "base_url", "https://secret@example.com/v1")
+    with pytest.raises(JobConflict):
+        execution_settings_snapshot()
+
+
+def test_rejected_tighter_cap_remains_central_across_process_configurations(ops):
+    ledger = BudgetLedger(ops)
+    ledger.reserve("first", "1", monthly_limit="10")
+    with pytest.raises(BudgetExceeded):
+        ledger.reserve("tight", "0.1", monthly_limit="0.5")
+    with pytest.raises(BudgetExceeded):
+        BudgetLedger(ops).reserve("old-config", "0.1", monthly_limit="10")
+    assert ledger.account("month:" + datetime.utcnow().strftime("%Y-%m"))["limit"] == Decimal("0.5")
+
+
+@pytest.fixture
+def ops_client(ops, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from apps.api.identity import Principal, _principal
+    from apps.api.routers import jobs, verification
+
+    state = {"principal": Principal("local-owner", None, "ADMIN", "local")}
+    app = FastAPI()
+    @app.middleware("http")
+    async def identity(request, call_next):
+        request.state.principal = state["principal"]
+        token = _principal.set(state["principal"])
+        try:
+            return await call_next(request)
+        finally:
+            _principal.reset(token)
+    app.include_router(jobs.router, prefix="/api")
+    app.include_router(verification.router, prefix="/api")
+    monkeypatch.setattr(jobs, "get_runner", lambda: type("Runner", (), {"submit": lambda *a: None})())
+    with TestClient(app) as client:
+        yield client, state
+
+
+def test_status_api_never_exposes_untrusted_partial_text_or_secrets(ops, ops_client):
+    client, _ = ops_client
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    forbidden = ["SEALED_SENTINEL", "HIDDEN_SENTINEL", "PROVIDER_SECRET_SENTINEL"]
+    store.checkpoint(lease, document={"document_id": run.document_ids[0],
+        "filename": forbidden[0], "sealed_excerpt": forbidden[0],
+        "pages": [{"blocks": [{"text": forbidden[1], "visible": False}]}],
+        "engine_data": {"api_key": forbidden[2]},
+        "findings": [{"sealed_excerpt": forbidden[0], "detail": forbidden[1]}]})
+    store.checkpoint(lease, execution={"provider": forbidden[2], "model": forbidden[2],
+        "error": forbidden[2], "quarantine_reasons": forbidden, "text": forbidden[0], "ok": False})
+    store.fail(lease, forbidden[2])
+    response = client.get(f"/api/verification-runs/{run.id}/job")
+    assert response.status_code == 200
+    assert all(secret not in response.text for secret in forbidden)
+    summary = response.json()["history"][0]["partial_result"]["documents"][0]
+    assert summary["finding_count"] == 1 and summary["page_count"] == 1
+    with ops() as session:
+        attempt = session.scalar(select(JobAttempt).where(JobAttempt.run_id == run.id))
+        assert attempt.partial_result["documents"][0]["sealed_excerpt"] == forbidden[0]
+
+
+def test_jobs_api_resolves_project_and_requires_member_for_mutations(ops, ops_client):
+    from apps.api.identity import Principal
+    client, state = ops_client
+    run = seeded_run(ops)
+    with ops() as session:
+        session.add(db.Organization(id="org", name="Org"))
+        session.flush()
+        session.add(db.User(id="viewer", email="viewer@example.invalid", organization_id="org", role="VIEWER"))
+        session.flush()
+        session.get(Project, run.project_id).organization_id = "org"
+        session.add(db.ProjectMember(project_id=run.project_id, user_id="viewer", role="VIEWER"))
+        session.commit()
+    state["principal"] = Principal("viewer", "org", "VIEWER", "token")
+    assert client.get(f"/api/verification-runs/{run.id}/job").status_code == 200
+    assert client.post(f"/api/verification-runs/{run.id}/cancel").status_code == 403
+    assert client.post(f"/api/verification-runs/{run.id}/retry").status_code == 403
+    state["principal"] = Principal("outsider", "elsewhere", "ADMIN", "token")
+    assert client.get(f"/api/verification-runs/{run.id}/job").status_code == 404
+    state["principal"] = None
+    assert client.get(f"/api/verification-runs/{run.id}/job").status_code == 401
+
+
+def test_cancel_retry_api_contract_and_actor(ops, ops_client):
+    client, _ = ops_client
+    run = seeded_run(ops)
+    assert client.post(f"/api/verification-runs/{run.id}/retry").status_code == 409
+    cancelled = client.post(f"/api/verification-runs/{run.id}/cancel")
+    assert cancelled.status_code == 200 and cancelled.json()["state"] == "CANCELLED"
+    retried = client.post(f"/api/verification-runs/{run.id}/retry")
+    assert retried.status_code == 202 and retried.json()["id"] != run.id
+    assert retried.json()["input_snapshot"] == cancelled.json()["input_snapshot"]
+    again = client.post(f"/api/verification-runs/{run.id}/retry")
+    assert again.json()["id"] == retried.json()["id"]
+    with ops() as session:
+        check = session.scalar(select(db.VerificationCheck).where(db.VerificationCheck.name == "CANCEL"))
+        assert check.detail["actor"] == "local-owner"
+
+
+def test_legacy_review_updates_structured_workflow_then_rejects_stale_legacy_edit(ops, ops_client):
+    from apps.api.workspace import FindingWorkflow
+    client, _ = ops_client
+    run = seeded_run(ops)
+    with ops() as session:
+        session.add(db.FindingRow(id="finding", run_id=run.id, project_id=run.project_id,
+            type="ARITHMETIC_MISMATCH", status="UNVERIFIED", severity="LOW", evidence_grade="U", confidence=0.1))
+        session.commit()
+    response = client.patch("/api/findings/finding/review", json={
+        "review_status": "ACCEPTED", "note": "Keep this note", "reviewer": "forged"})
+    assert response.status_code == 200
+    with ops() as session:
+        workflow = session.get(FindingWorkflow, "finding")
+        assert workflow.revision == 1 and workflow.decision == "AGREED"
+        assert workflow.updated_by == "local-owner" and workflow.note == "Keep this note"
+    assert client.patch("/api/findings/finding/review", json={"review_status": "FALSE_POSITIVE"}).status_code == 409
+
+
+def test_reported_usage_on_failed_response_is_settled(ops, monkeypatch):
+    router, _ = model_router(ops, monkeypatch, LLMResponse(False, input_tokens=100, output_tokens=10, error="rejected"))
+    result = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert not result.used and result.executions[0].cost_status == "REPORTED"
+    assert BudgetLedger(ops).account("run:model-run")["spent"] == Decimal("0.00028")
+    assert BudgetLedger(ops).account("run:model-run")["reserved"] == 0
+
+
+def test_sub_microdollar_cost_is_visible_in_total():
+    from packages.llm_router.router import ModelExecution, RouterResult
+    result = RouterResult(executions=[ModelExecution("role", "provider", "model", True, cost_usd=0.0000002)])
+    assert result.total_cost == 0.0000002
+
+
+def test_stale_worker_cannot_append_audit_events(ops):
+    from apps.worker.runtime import FencedAuditSink
+    from packages.audit_engine import AuditChain
+    from packages.common.enums import AuditEventType
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    store.cancel(run.id)
+    with pytest.raises(JobOwnershipLost):
+        AuditChain(sink=FencedAuditSink(store, lease)).record(AuditEventType.VERIFICATION, {"late": True})
+    with ops() as session:
+        assert session.scalar(select(func.count()).select_from(db.AuditEventRow)) == 0
+
+
+def test_concurrent_local_dispatch_respects_capacity(ops, monkeypatch):
+    import threading
+    import apps.api.services as services
+    first, second = seeded_run(ops), seeded_run(ops)
+    runner = JobRunner(JobStore(ops))
+    monkeypatch.setenv("LV_JOB_CONCURRENCY", "1")
+    barrier = threading.Barrier(2)
+    release = threading.Event()
+    original = runner.store.acquire_dispatch
+    def acquire(run_id, **kwargs):
+        barrier.wait(timeout=10)
+        return original(run_id, **kwargs)
+    monkeypatch.setattr(runner.store, "acquire_dispatch", acquire)
+    monkeypatch.setattr(services, "execute_run", lambda *args, **kwargs: release.wait(10))
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            modes = list(pool.map(runner.submit, [first.id, second.id]))
+        assert sorted(modes) == ["inprocess", "queued"]
+        assert sum(t.is_alive() for t in runner._threads.values()) == 1
+    finally:
+        release.set()
+        runner.stop()
+
+
+@pytest.mark.parametrize("saved_policy,forced,blocked,expected", [
+    ("ORIGINAL", "LOCAL_ONLY", [], "LOCAL_ONLY"),
+    ("ORIGINAL", None, ["openai"], "ORIGINAL"),
+    ("LOCAL_ONLY", "ORIGINAL", [], "LOCAL_ONLY"),
+])
+def test_queued_run_obeys_current_organization_restrictions(ops, monkeypatch, saved_policy, forced, blocked, expected):
+    with ops() as session:
+        session.add(db.Organization(id="org", name="Org"))
+        session.commit()
+    run = seeded_run(ops, organization_id="org", policy=saved_policy)
+    with ops() as session:
+        organization = session.get(db.Organization, "org")
+        organization.forced_ai_policy, organization.blocked_providers = forced, blocked
+        session.commit()
+    _, provider = model_router(ops, monkeypatch, LLMResponse(True, text="not permitted"))
+
+    def pipeline(self, run_id, context, documents, **kwargs):
+        assert str(context.external_ai_policy) == expected
+        self.router.providers = {"openai": provider}
+        result = asyncio.run(self.router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "raw data"),
+                                             policy=context.external_ai_policy))
+        assert not result.used
+        return completed(run)
+
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=JobStore(ops))
+    assert provider.calls == 0
+    assert JobStore(ops).status(run.id)["state"] == "COMPLETED"
+    with ops() as session:
+        assert session.get(DurableJob, run.id).snapshot["context"]["external_ai_policy"] == saved_policy
+
+
+@pytest.mark.parametrize("forced,blocked", [("MASKED", []), ("LOCAL_ONLY", []), (None, ["openai"])])
+def test_org_restriction_changed_after_request_preparation_blocks_dispatch(ops, monkeypatch, forced, blocked):
+    with ops() as session:
+        session.add(db.Organization(id="org", name="Org"))
+        session.commit()
+    run = seeded_run(ops, organization_id="org", policy="ORIGINAL")
+    _, provider = model_router(ops, monkeypatch, LLMResponse(True, text="not permitted"))
+
+    def pipeline(self, run_id, context, documents, **kwargs):
+        self.router.providers = {"openai": provider}
+        with ops() as session:
+            organization = session.get(db.Organization, "org")
+            organization.forced_ai_policy, organization.blocked_providers = forced, blocked
+            session.commit()
+        response = asyncio.run(self.router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "raw data"),
+                                               policy=context.external_ai_policy))
+        assert response.executions[0].cost_status == "NOT_SENT"
+        assert response.executions[0].error.startswith("PROVIDER_POLICY_BLOCKED")
+        with ops() as session:
+            organization = session.get(db.Organization, "org")
+            organization.forced_ai_policy, organization.blocked_providers = None, []
+            session.commit()
+        response = asyncio.run(self.router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "raw data"),
+                                               policy=context.external_ai_policy))
+        assert response.executions[0].cost_status == "NOT_SENT"
+        return completed(run)
+
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=JobStore(ops))
+    assert provider.calls == 0
+    assert JobStore(ops).status(run.id)["state"] == "COMPLETED"
+    assert BudgetLedger(ops).account("run:" + run.id)["reserved"] == 0
+
+
+def test_removed_organization_fails_closed_before_pipeline(ops, monkeypatch):
+    with ops() as session:
+        session.add(db.Organization(id="org", name="Org"))
+        session.commit()
+    run = seeded_run(ops, organization_id="org", policy="ORIGINAL")
+    with ops() as session:
+        session.get(Project, run.project_id).organization_id = None
+        session.get(DurableJob, run.id).max_attempts = 1
+        session.flush()
+        session.delete(session.get(db.Organization, "org"))
+        session.commit()
+    called = []
+    monkeypatch.setattr(VerificationPipeline, "run", lambda *a, **kw: called.append(True))
+    execute_run(run.id, store=JobStore(ops))
+    assert called == [] and JobStore(ops).status(run.id)["state"] == "FAILED"
+
+
+def test_server_captures_submitter_and_worker_audit_does_not_impersonate_client(ops, ops_client, monkeypatch):
+    from apps.api.routers import verification
+    from apps.worker.runtime import FencedAuditSink
+    from packages.audit_engine import AuditChain
+    from packages.common.enums import AuditEventType
+    client, _ = ops_client
+    template = seeded_run(ops, enqueue=False)
+    monkeypatch.setattr(verification, "get_runner", lambda: type("Runner", (), {"submit": lambda *a: None})())
+    response = client.post(f"/api/projects/{template.project_id}/verify", json={
+        "submission": {"actor_id": "forged", "api_key": "REQUEST_SECRET_SENTINEL"}})
+    assert response.status_code == 202
+    run_id = response.json()["id"]
+    with ops() as session:
+        run = session.get(VerificationRun, run_id)
+        assert run.input_snapshot["submission"]["actor_id"] == "local-owner"
+        assert "forged" not in str(run.input_snapshot) and "REQUEST_SECRET_SENTINEL" not in str(run.input_snapshot)
+
+    def pipeline(self, *args, **kwargs):
+        self.audit.record(AuditEventType.VERIFICATION, {"stage": "TEST"}, actor="forged")
+        return completed(run)
+
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    store = JobStore(ops)
+    execute_run(run_id, store=store)
+    with ops() as session:
+        events = list(session.scalars(select(db.AuditEventRow)))
+        assert len(events) >= 2
+        assert all(event.actor == "system:worker" for event in events)
+        assert all(event.payload["submission"]["actor_id"] == "local-owner" for event in events)
+    assert AuditChain(sink=FencedAuditSink(store, None)).verify()["valid"]
+
+
+def test_restricted_completion_is_not_reused_under_the_original_policy(ops, monkeypatch):
+    with ops() as session:
+        session.add(db.Organization(id="org", name="Org"))
+        session.commit()
+    run = seeded_run(ops, organization_id="org", policy="ORIGINAL")
+    with ops() as session:
+        session.get(db.Organization, "org").forced_ai_policy = "LOCAL_ONLY"
+        session.commit()
+    monkeypatch.setattr(VerificationPipeline, "run", lambda *a, **kw: completed(run))
+    execute_run(run.id, store=JobStore(ops))
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        assert saved.state == "COMPLETED" and saved.result_json["security_restricted"]
+        assert saved.result_json["effective_security"]["external_ai_policy"] == "LOCAL_ONLY"
+        assert saved.input_snapshot["context"]["external_ai_policy"] == "ORIGINAL"
+        assert session.get(DurableJob, run.id).dedup_key is None
+        session.get(db.Organization, "org").forced_ai_policy = None
+        session.commit()
+        candidate = VerificationRun(project_id=run.project_id, document_ids=run.document_ids,
+            profile=run.profile, verification_key=run.verification_key, state="QUEUED",
+            input_snapshot=copy.deepcopy(run.input_snapshot))
+        child, reused = enqueue_run(session, candidate)
+        session.commit()
+        assert not reused and child.id != run.id

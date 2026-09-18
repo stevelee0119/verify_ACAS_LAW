@@ -7,6 +7,9 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
+from dataclasses import replace
+from decimal import Decimal
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -21,7 +24,8 @@ from packages.common.enums import (
     VerificationStatus,
 )
 
-from .providers import LLMProvider, LLMRequest, LLMResponse, NullProvider, build_providers
+from .budget import BudgetLedger, budget_settings, estimate_call, money, usage_cost
+from .providers import PROVIDER_CLASSES, LLMProvider, LLMRequest, LLMResponse, NullProvider, build_providers
 
 # 제12.4장 Judge Source Priority
 SOURCE_PRIORITY = [
@@ -58,6 +62,8 @@ class ModelExecution:
     quarantine_reasons: List[str] = field(default_factory=list)
     error: str = ""
     cost_usd: float = 0.0
+    cost_status: str = "REPORTED"
+    reservation_id: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -74,7 +80,7 @@ class RouterResult:
 
     @property
     def total_cost(self) -> float:
-        return round(sum(e.cost_usd for e in self.executions), 6)
+        return float(sum((Decimal(str(e.cost_usd)) for e in self.executions), Decimal(0)))
 
 
 @dataclass
@@ -119,16 +125,33 @@ SYSTEM_BASE = (
 
 
 class LLMRouter:
-    def __init__(self, providers: Optional[Dict[str, LLMProvider]] = None) -> None:
-        self.settings = get_settings()
+    def __init__(self, providers: Optional[Dict[str, LLMProvider]] = None, *,
+                 settings=None, ledger=None, run_id=None, budget_run_id=None, limits=None,
+                 call_guard=None, dispatch_guard=None, on_execution=None,
+                 blocked_providers=None, provider_guard=None) -> None:
+        self.settings = settings or get_settings()
+        if providers is None and settings is not None:
+            providers = {name: PROVIDER_CLASSES[name](config)
+                         for name, config in settings.providers.items() if name in PROVIDER_CLASSES}
+            for provider in providers.values():
+                provider.settings = settings
         self.providers = providers if providers is not None else build_providers()
         self.null = NullProvider(self.settings.providers.get("openai") or next(iter(self.settings.providers.values())))
-        self.spent_usd = 0.0
+        self.spent_usd = Decimal(0)
+        self.ledger = ledger or BudgetLedger()
+        self.run_id = run_id or "router_" + uuid.uuid4().hex
+        self.budget_run_id = budget_run_id or self.run_id
+        self.limits = limits or budget_settings(self.settings)
+        self.call_guard, self.dispatch_guard, self.on_execution = call_guard, dispatch_guard, on_execution
+        self.blocked_providers = set(blocked_providers or [])
+        self.provider_guard = provider_guard
 
     # -- Provider 선택 ------------------------------------------------------
     def available_providers(self, *, policy: ExternalAIPolicy = ExternalAIPolicy.MASKED) -> List[str]:
         names = []
         for name, provider in self.providers.items():
+            if self.blocked_providers.intersection({name, provider.name, provider.config.name}):
+                continue
             if policy == ExternalAIPolicy.LOCAL_ONLY and provider.config.kind != "local":
                 continue
             if provider.available:
@@ -143,6 +166,8 @@ class LLMRouter:
                 continue
             provider = self.providers.get(name)
             if provider is None:
+                continue
+            if self.blocked_providers.intersection({name, provider.name, provider.config.name}):
                 continue
             if policy == ExternalAIPolicy.LOCAL_ONLY and provider.config.kind != "local":
                 continue
@@ -160,59 +185,120 @@ class LLMRouter:
         exclude: Optional[List[str]] = None,
         expected_task: str = "",
     ) -> RouterResult:
+        if self.call_guard:
+            self.call_guard()
         provider = self.pick(role, policy=policy, exclude=exclude)
         if provider is None:
             return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 
-        request.system = f"{SYSTEM_BASE}\n[역할] {role}\n{request.system}"
-        response = await provider.generate(request)
+        request = replace(request, system=f"{SYSTEM_BASE}\n[역할] {role}\n{request.system}")
+        reservation = None
+        rates = None
+        if provider.config.kind != "local":
+            try:
+                estimate, rates = estimate_call(self.settings, provider, request, self.limits)
+                configured = budget_settings(get_settings())
+                limits = [money(value) for value in (self.limits["monthly_limit"], configured["monthly_limit"])
+                          if money(value) > 0]
+                run_limits = [money(value) for value in (self.limits["run_limit"], configured["run_limit"])
+                              if money(value) > 0]
+                reservation = self.ledger.reserve(
+                    self.run_id, estimate, monthly_limit=min(limits) if limits else 0,
+                    run_limit=min(run_limits) if run_limits else 0, budget_run_id=self.budget_run_id,
+                    detail={"provider": provider.name, "model": provider.config.model,
+                            "input_cap": self.limits["max_input_tokens"], "output_cap": request.max_tokens},
+                )
+                try:
+                    if self.call_guard:
+                        self.call_guard()
+                    def dispatch_guard(session):
+                        if self.dispatch_guard:
+                            self.dispatch_guard(session)
+                        if self.provider_guard:
+                            self.provider_guard(provider, policy, session=session)
+                    self.ledger.dispatch(reservation.id, guard=dispatch_guard)
+                except BaseException:
+                    self.ledger.release(reservation.id)
+                    raise
+            except Exception as exc:
+                code = "PROVIDER_POLICY_BLOCKED" if isinstance(exc, PermissionError) else "BUDGET_ADMISSION_FAILED"
+                execution = ModelExecution(str(role), provider.name, provider.config.model, False,
+                    error=code + ": " + str(exc), cost_status="NOT_SENT")
+                if self.on_execution:
+                    self.on_execution(execution)
+                return RouterResult(executions=[execution], note=execution.error)
+
+        try:
+            if provider.config.kind == "local" and self.provider_guard:
+                self.provider_guard(provider, policy)
+            response = await provider.generate(request)
+        except Exception as exc:
+            response = LLMResponse(False, provider=provider.name, model=provider.config.model,
+                                   error="PROVIDER_EXCEPTION: " + type(exc).__name__)
+        cost, cost_status = Decimal(0), "LOCAL"
+        if reservation is not None:
+            if response.ok or (response.input_tokens > 0 and response.output_tokens > 0):
+                cost, cost_status = usage_cost(response, rates, reservation.amount)
+                # The Gemini adapter omits thinking tokens. Do not label that partial usage exact.
+                if provider.name == "gemini":
+                    cost, cost_status = max(cost, reservation.amount), "ESTIMATED"
+                self.ledger.settle(reservation.id, cost, detail={"cost_status": cost_status,
+                    "input_tokens": response.input_tokens, "output_tokens": response.output_tokens})
+            else:
+                cost, cost_status = reservation.amount, "RESERVED_UNCERTAIN"
         execution = ModelExecution(
-            role=str(role),
-            provider=response.provider or provider.name,
-            model=response.model or provider.config.model,
-            ok=response.ok,
-            input_tokens=response.input_tokens,
-            output_tokens=response.output_tokens,
-            latency_ms=response.latency_ms,
-            prompt_version=self.settings.prompt_version,
-            error=response.error,
-            cost_usd=self._cost(provider.name, response),
+            role=str(role), provider=response.provider or provider.name,
+            model=response.model or provider.config.model, ok=response.ok,
+            input_tokens=response.input_tokens, output_tokens=response.output_tokens,
+            latency_ms=response.latency_ms, prompt_version=self.settings.prompt_version,
+            error=response.error, cost_usd=float(cost), cost_status=cost_status,
+            reservation_id=reservation.id if reservation else "",
         )
-        self.spent_usd += execution.cost_usd
+        self.spent_usd += cost
+
+        def finish(result):
+            if self.on_execution:
+                self.on_execution(execution)
+            return result
 
         if not response.ok:
-            return RouterResult(executions=[execution], note=response.error)
+            return finish(RouterResult(executions=[execution], note=response.error))
 
         # 제7.8장 Output 검사
         scan = scan_output(response.text, expected_task=expected_task)
         if scan.quarantined:
             execution.quarantined = True
             execution.quarantine_reasons = scan.reasons
-            return RouterResult(
+            return finish(RouterResult(
                 text="",
                 executions=[execution],
                 quarantined=True,
                 note=f"모델 출력이 격리되었다: {', '.join(scan.reasons)}",
-            )
+            ))
 
         from .providers import _extract_json
-
-        return RouterResult(
+        parsed = _extract_json(response.text) if request.schema else None
+        if request.schema:
+            from jsonschema import validate, ValidationError
+            try:
+                validate(parsed, request.schema)
+            except ValidationError:
+                execution.ok = False
+                execution.error = "INVALID_RESPONSE_SCHEMA"
+                return finish(RouterResult(executions=[execution], note="모델 응답 형식 검증 실패"))
+        return finish(RouterResult(
             text=response.text,
-            parsed=_extract_json(response.text) if request.schema else None,
+            parsed=parsed,
             executions=[execution],
             used=True,
-        )
+        ))
 
     def _cost(self, provider_name: str, response: LLMResponse) -> float:
-        pricing = self.settings.pricing.get(provider_name) or {}
-        if not pricing:
-            return 0.0
-        return round(
-            response.input_tokens / 1_000_000 * float(pricing.get("input", 0))
-            + response.output_tokens / 1_000_000 * float(pricing.get("output", 0)),
-            6,
-        )
+        pricing = self.settings.pricing.get(response.model) or self.settings.pricing.get(provider_name) or {}
+        if not all(key in pricing for key in ("input", "output")):
+            raise ValueError("Cannot compute a cost without configured input/output prices")
+        return float((money(response.input_tokens) * money(pricing["input"])
+                      + money(response.output_tokens) * money(pricing["output"])) / Decimal(1000000))
 
     # -- 제12.3장 Cascade Verification --------------------------------------
     async def cascade(
@@ -396,8 +482,20 @@ class LLMRouter:
 
     # -- 제22.3장 Budget Routing --------------------------------------------
     def budget_exhausted(self) -> bool:
-        budget = self.settings.monthly_budget_usd
-        return budget > 0 and self.spent_usd >= budget
+        from datetime import datetime
+
+        try:
+            for account_id, configured in (
+                ("month:" + datetime.utcnow().strftime("%Y-%m"), self.limits["monthly_limit"]),
+                ("run:" + self.budget_run_id, self.limits["run_limit"]),
+            ):
+                account = self.ledger.account(account_id)
+                caps = [cap for cap in (account["limit"], money(configured)) if cap > 0]
+                if caps and account["spent"] + account["reserved"] >= min(caps):
+                    return True
+            return False
+        except Exception:
+            return True
 
     def role_for_budget(self, severity: Severity) -> LLMRole:
         if self.budget_exhausted() and severity.rank < Severity.HIGH.rank:

@@ -116,9 +116,13 @@ def test_entity_extraction_and_merge():
 
 
 def test_timeline_contradiction_detected():
+    # An exhibit number alone is not identity. Supply the same explicit project,
+    # transaction and corporation before asking for an ordering review candidate.
     events = [
-        Event.create(date(2020, 5, 1), "회사 설립", event_kind="INCORPORATION", document_id="D", block_id="B1"),
-        Event.create(date(2019, 3, 1), "계약 체결", event_kind="CONTRACT", document_id="D", block_id="B2"),
+        Event.create(date(2020, 5, 1), "갑 제1호증 회사 설립", event_kind="INCORPORATION", document_id="D", block_id="B1",
+                     project_id="P", transaction_id="T", speaker_id="CORPORATION-1", object_id="CORPORATION-1"),
+        Event.create(date(2019, 3, 1), "갑 제1호증 계약 체결", event_kind="CONTRACT", document_id="D", block_id="B2",
+                     project_id="P", transaction_id="T", speaker_id="CORPORATION-1", object_id="CORPORATION-1"),
     ]
     findings = analyze_timeline(events)
     assert findings and findings[0].type == FindingType.TIMELINE_CONTRADICTION
@@ -133,8 +137,8 @@ def test_no_timeline_finding_when_order_is_valid():
 
 
 def test_cross_document_contradiction():
-    a = [Event.create(date(2020, 3, 15), "계약 체결", event_kind="CONTRACT", document_id="D1", block_id="B1")]
-    b = [Event.create(date(2020, 4, 20), "계약 체결", event_kind="CONTRACT", document_id="D2", block_id="B2")]
+    a = [Event.create(date(2020, 3, 15), "계약번호 A-123 계약 체결", event_kind="CONTRACT", document_id="D1", block_id="B1")]
+    b = [Event.create(date(2020, 4, 20), "계약번호 A-123 계약 체결", event_kind="CONTRACT", document_id="D2", block_id="B2")]
     findings = cross_document_contradictions({"D1": a, "D2": b})
     assert findings and findings[0].type == FindingType.CROSS_DOCUMENT_CONTRADICTION
 

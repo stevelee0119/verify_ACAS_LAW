@@ -267,8 +267,16 @@ class PdfParser(DocumentParser):
         adapter = get_ocr_adapter()
         has_visible_text = bool("".join(rendered_parts).strip())
         doc.structure["ocr_engine"] = adapter.name
+        missing_pages = {p.page_number for p in doc.pages if not any(
+            b.visible and b.text.strip() and b.source_layer == "visible_text" for b in p.blocks)}
+        coverage = {p.page_number: {"page": p.page_number,
+            "status": "UNVERIFIED" if p.page_number in missing_pages else "EXTRACTED",
+            "reason": "OCR_REQUIRED" if p.page_number in missing_pages else ""} for p in doc.pages}
+        doc.structure["page_coverage"] = list(coverage.values())
 
         if not adapter.available:
+            for number in missing_pages:
+                coverage[number]["reason"] = "OCR_UNAVAILABLE"
             if not has_visible_text:
                 doc.structure["body_extraction_failed"] = True
                 doc.parse_warnings.append(
@@ -285,30 +293,36 @@ class PdfParser(DocumentParser):
         )
         mode = settings.independent_ocr_mode.lower()
         run_independent = mode == "always" or (mode == "auto" and (risky or scanned))
-        if mode == "off" and not scanned:
+        if mode == "off" and not missing_pages:
             return
 
-        target_pages = [p.page_number for p in doc.pages]
-        if scanned:
-            target_pages = target_pages[: settings.ocr_max_pages]
-        elif run_independent:
-            target_pages = target_pages[: settings.independent_ocr_pages]
-        else:
+        body_targets = sorted(missing_pages)[: settings.ocr_max_pages]
+        for number in missing_pages - set(body_targets):
+            coverage[number]["reason"] = "OCR_PAGE_LIMIT"
+        independent_targets = [p.page_number for p in doc.pages if p.page_number not in missing_pages][: settings.independent_ocr_pages] if run_independent else []
+        target_pages = sorted(set(body_targets + independent_targets))
+        if not target_pages:
             return
 
         independent_parts: List[str] = []
         recognized_pages = 0
+        body_parts = []
         for raster in render_pages(path, target_pages, dpi=settings.ocr_dpi):
             lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale)
             # 신뢰도 미달 라인은 버린다. 남은 것이 없으면 그 면은 인식 실패로 취급한다.
             kept = [line for line in lines if line.confidence >= settings.ocr_min_confidence]
             if not kept:
+                if raster.page_number in missing_pages:
+                    coverage[raster.page_number]["reason"] = "OCR_LOW_CONFIDENCE"
                 continue
             recognized_pages += 1
             page = next((p for p in doc.pages if p.page_number == raster.page_number), None)
             for line in kept:
-                independent_parts.append(line.text)
-                if scanned and page is not None:
+                if raster.page_number not in missing_pages:
+                    independent_parts.append(line.text)
+                if raster.page_number in missing_pages and page is not None:
+                    body_parts.append(line.text)
+                    coverage[raster.page_number] .update(status="OCR_EXTRACTED", reason="")
                     page.blocks.append(
                         Block(
                             block_id=new_id("B"),
@@ -320,16 +334,20 @@ class PdfParser(DocumentParser):
                         )
                     )
 
+        doc.structure["body_extraction_failed"] = not has_visible_text and not body_parts
+        for item in coverage.values():
+            if item["status"] == "UNVERIFIED":
+                doc.parse_warnings.append(f"{item['page']}면 본문 미검증: {item['reason']}")
         if not recognized_pages:
             return
 
         joined = "\n".join(independent_parts)
         doc.structure["ocr_pages"] = recognized_pages
-        if scanned:
-            doc.raw_layers["ocr_layer"] = joined
-            rendered_parts.extend(independent_parts)
+        if body_parts:
+            doc.raw_layers["ocr_layer"] = "\n".join(body_parts)
+            rendered_parts.extend(body_parts)
             doc.structure["scanned_pdf_ocr_applied"] = True
-        else:
+        if independent_parts:
             # 화면 렌더링 결과와 내장 텍스트 레이어를 비교하기 위한 독립 OCR 산출물
             doc.raw_layers["independent_ocr"] = joined
             doc.structure["independent_ocr_pages"] = recognized_pages

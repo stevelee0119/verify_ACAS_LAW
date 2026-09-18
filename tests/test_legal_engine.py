@@ -93,7 +93,9 @@ def _verify(registry, text, **kwargs):
 
 def test_level1_2_verified_when_matching(registry):
     _, result = _verify(registry, "대법원 2099. 1. 15. 선고 2099도99999 판결")
-    assert result.data["verified_count"] == 1
+    assert result.data["verified_count"] == 0
+    assert result.data["verdicts"][0]["levels"]["level1"] == "VERIFIED"
+    assert result.data["verdicts"][0]["status"] == "PARTIALLY_VERIFIED"
     assert not [f for f in result.findings if f.severity.rank >= Severity.MEDIUM.rank]
 
 
@@ -104,10 +106,11 @@ def test_level2_metadata_mismatch_is_grade_a(registry):
     assert mismatch.evidence_grade == EvidenceGrade.A
 
 
-def test_level3_quote_mismatch_detected(registry):
+def test_summary_absence_is_not_full_text_quote_mismatch(registry):
     text = '대법원 2099. 1. 15. 선고 2099도99999 판결은 "피고인은 무죄이며 어떠한 책임도 지지 아니한다"고 판시하였다.'
     _, result = _verify(registry, text)
-    assert any(f.type == FindingType.CASE_QUOTE_MISMATCH for f in result.findings)
+    assert not any(f.type == FindingType.CASE_QUOTE_MISMATCH for f in result.findings)
+    assert result.data["verdicts"][0]["levels"]["level3"] == "UNVERIFIED"
 
 
 def test_level3_quote_match_passes(registry):
@@ -259,7 +262,7 @@ def test_nonexistent_article_is_not_verified():
     )
     assert verdict.status == VerificationStatus.NOT_FOUND
     assert verdict.levels.get("article") == "NOT_FOUND"
-    assert any("실재하지 않는 조문" in f.title for f in verdict.findings)
+    assert any("조회한 법령 버전에서 조문 미확인" in f.title for f in verdict.findings)
 
 
 def test_article_lookup_failure_does_not_claim_verified():
@@ -277,8 +280,8 @@ def test_article_lookup_failure_does_not_claim_verified():
     assert verdict.status == VerificationStatus.UNVERIFIED
 
 
-def test_existing_article_still_verifies():
-    """정상 인용은 그대로 VERIFIED여야 한다(과잉 차단 방지)."""
+def test_existing_article_is_not_complete_legal_verification():
+    """Article existence cannot establish temporal or textual correctness."""
     from packages.common.enums import VerificationStatus
     from packages.legal_engine.verifier import LegalVerifier
 
@@ -289,7 +292,8 @@ def test_existing_article_still_verifies():
     verdict = LegalVerifier(registry=_registry_with(adapter)).verify_statute(
         _citation(law_name="민법", article="390", raw_text="민법 제390조")
     )
-    assert verdict.status == VerificationStatus.VERIFIED
+    assert verdict.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert verdict.levels["temporal"] == "UNVERIFIED"
     assert verdict.levels.get("article") == "VERIFIED"
 
 

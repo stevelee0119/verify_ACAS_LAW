@@ -155,6 +155,8 @@ class Project(Base):
     verification_profile = Column(String(20), default="STANDARD")
     enabled_advisory_signals = Column(JSONType)
     requested_issues = Column(JSONType, default=list)
+    scope_revision = Column(Integer, nullable=False, default=0, server_default="0")
+    creation_key = Column(String(80), unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
@@ -183,6 +185,13 @@ class Document(Base):
     """자기 측 문서 여부. Outbound Guard(제7-A.7장)와 특권 게이트 판단에 사용한다."""
     quarantined = Column(Boolean, default=False)
     rag_indexable = Column(Boolean, default=False)
+    included_in_verification = Column(Boolean, nullable=False, default=True, server_default="1")
+    scope_changed_at = Column(DateTime)
+    scope_changed_by = Column(String(80))
+    exclusion_reason = Column(Text, default="")
+    evidence_number = Column(String(120), default="")
+    submitted_by = Column(String(30), default="UNSPECIFIED")
+    submitted_on = Column(String(10))
     uploaded_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", back_populates="documents")
@@ -276,6 +285,7 @@ class VerificationRun(Base):
     unverified_items = Column(JSONType, default=list)
     errors = Column(JSONType, default=list)
     result_json = Column(JSONType)
+    input_snapshot = Column(JSONType, default=dict)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime)
 
