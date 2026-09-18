@@ -145,13 +145,42 @@ def test_import_path_bootstrap_is_idempotent():
     assert sys.path == before
 
 
+def test_rejects_empty_document_run_before_dispatch(restore_worker_settings):
+    from apps.api.db import Project, VerificationRun, get_session_factory, init_db
+    from apps.api.job_control import DurableJob, JobConflict
+    from apps.api.services import get_runner
+
+    restore_worker_settings.worker_mode = "inprocess"
+    init_db()
+    with get_session_factory()() as session:
+        project = Project(name="Empty input regression")
+        session.add(project)
+        session.flush()
+        run = VerificationRun(
+            project_id=project.id, document_ids=[], profile="STANDARD",
+            state="QUEUED", verification_key="empty-input-regression",
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    with pytest.raises(JobConflict, match="exactly the selected project documents"):
+        get_runner().submit(run_id)
+    with get_session_factory()() as session:
+        assert session.get(DurableJob, run_id) is None
+
+
 # --- 실제 브로커 통합 ----------------------------------------------------------
 @celery_integration
-def test_dispatches_to_real_broker(restore_worker_settings):
+def test_dispatches_to_real_broker(tmp_path, restore_worker_settings):
     """브로커가 있으면 Celery로 넘기고 task id를 남긴다."""
-    from apps.api.db import Project, VerificationRun, get_session_factory, init_db
+    from helpers import make_pdf
+
+    from apps.api.db import Document, Project, VerificationRun, get_session_factory, init_db
+    from apps.api.job_control import DurableJob
     from apps.api.services import get_runner
     from packages.common.enums import JobState
+    from packages.common.storage import get_storage, sha256_bytes
 
     settings = restore_worker_settings
     settings.worker_mode = "celery"
@@ -163,8 +192,18 @@ def test_dispatches_to_real_broker(restore_worker_settings):
         project = Project(name="브로커 통합 테스트")
         session.add(project)
         session.flush()
+        data = make_pdf(tmp_path / "broker.pdf", ["Synthetic broker test document."]).read_bytes()
+        digest = sha256_bytes(data)
+        key = get_storage().put_original(f"{project.id}/{digest}.pdf", data)
+        document = Document(
+            project_id=project.id, filename="broker.pdf", mime_type="application/pdf",
+            size_bytes=len(data), sha256=digest, storage_key=key,
+        )
+        session.add(document)
+        session.flush()
+        document_id = document.id
         run = VerificationRun(
-            project_id=project.id, document_ids=[], profile="STANDARD",
+            project_id=project.id, document_ids=[document_id], profile="STANDARD",
             state=str(JobState.QUEUED), verification_key="broker-integration-key",
         )
         session.add(run)
@@ -175,4 +214,10 @@ def test_dispatches_to_real_broker(restore_worker_settings):
 
     runner = get_runner()
     assert runner.submit(run_id) == "celery"
-    assert runner.task_id(run_id)
+    task_id = runner.task_id(run_id)
+    assert task_id
+    with get_session_factory()() as session:
+        job = session.get(DurableJob, run_id)
+        assert job.task_id == task_id
+        assert [item["document_id"] for item in job.snapshot["documents"]] == [document_id]
+        assert job.snapshot["documents"][0]["sha256"] == digest
