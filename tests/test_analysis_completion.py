@@ -408,7 +408,7 @@ def test_calculation_workbench_browser_desktop_mobile_and_exact_payload(tmp_path
 
     static = ROOT / "apps" / "web" / "static"
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(channel="msedge", headless=True)
+        browser = playwright.chromium.launch(headless=True)
         page = browser.new_page(viewport={"width": 1440, "height": 960})
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))

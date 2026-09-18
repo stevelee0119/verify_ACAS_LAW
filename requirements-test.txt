@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Browser regression tests only; not needed by the production image.
+playwright==1.63.0

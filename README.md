@@ -35,6 +35,14 @@ HTTPS, 계정 초기 설정, 사건별 권한 및 키 보관 설정이 필요합
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn apps.api.main:app --reload      # http://localhost:8000
+```
+
+테스트는 별도 의존성과 Chromium을 설치한 뒤 실행한다. Linux에서는
+`--with-deps`가 브라우저 실행에 필요한 시스템 패키지도 설치한다.
+
+```bash
+pip install -r requirements-test.txt
+python -m playwright install --with-deps chromium
 pytest                                   # 외부 환경별 테스트는 설정에 따라 일부 건너뜀
 ```
 
