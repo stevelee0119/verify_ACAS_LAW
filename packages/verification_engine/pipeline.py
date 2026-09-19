@@ -48,13 +48,14 @@ from packages.common.schemas import Claim, Finding, NormalizedDocument, SourceRe
 from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine
 from packages.forensic_engine.advisory import AdvisoryContext
-from packages.legal_engine import LegalVerifier, extract_citations
+from packages.legal_engine import LegalVerifier, extract_citations, verify_argument_validity
 from packages.legal_engine.source_review import case_applicability_review
 from packages.source_adapters.legal_history import today_korea
 from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
 from packages.source_adapters import SourceRegistry
 
+from .ai_document_detector import create_ai_detector_findings, detect_ai_document
 from .authorship import analyze_authorship, authorship_findings
 from .scoring import aggregate_scores
 
@@ -103,6 +104,9 @@ class DocumentResult:
     entities: List[Dict[str, Any]] = field(default_factory=list)
     events: List[Dict[str, Any]] = field(default_factory=list)
     authorship: Dict[str, Any] = field(default_factory=dict)
+    ai_detector_result: Dict[str, Any] = field(default_factory=dict)
+    ai_hallucination_table: List[Dict[str, Any]] = field(default_factory=list)
+    argument_validity_summary: str = ""
     masked_preview: Dict[str, Any] = field(default_factory=dict)
     quarantined: bool = False
     rag_indexable: bool = False
@@ -426,10 +430,44 @@ class VerificationPipeline:
         result.findings.extend(self.calculation.verify_document(doc))
         result.findings.extend(analyze_timeline(events))
 
-        # 8) 작성자 분석
+        # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
+        arg_validity = asyncio.run(
+            verify_argument_validity(
+                doc,
+                citations,
+                result.engine_data.get("legal_verdicts", []),
+                claims,
+                router=self.router,
+                external_ai_policy=context.external_ai_policy,
+            )
+        )
+        result.findings.extend(arg_validity.findings)
+        result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
+        result.argument_validity_summary = arg_validity.overall_validity_summary
+        result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
+        result.engine_data["argument_validity_summary"] = result.argument_validity_summary
+
+        # 9) 작성자 분석 및 AI 문서 전체 생성 여부 심층 판별
         assessment = analyze_authorship(doc)
         result.authorship = assessment.to_dict()
         result.findings.extend(authorship_findings(doc, assessment))
+
+        # 메타데이터 AI 힌트 여부
+        metadata_hint = bool(assessment.signals.get("provenance_metadata")) or any(
+            f.type == FindingType.METADATA_ANOMALY for f in result.findings
+        )
+        ai_detector_res = asyncio.run(
+            detect_ai_document(
+                doc,
+                result.findings,
+                router=self.router,
+                external_ai_policy=context.external_ai_policy,
+                metadata_indications=metadata_hint,
+            )
+        )
+        result.ai_detector_result = ai_detector_res.to_dict()
+        result.engine_data["ai_detector_result"] = result.ai_detector_result
+        result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
 
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id

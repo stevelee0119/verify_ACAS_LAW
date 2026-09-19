@@ -8,6 +8,7 @@ from .normalize import (
     split_case_number,
 )
 from .verifier import CitationVerdict, LegalVerifier
+from .argument_validity_verifier import verify_argument_validity
 
 __all__ = [
     "extract_citations",
@@ -20,4 +21,5 @@ __all__ = [
     "split_case_number",
     "LegalVerifier",
     "CitationVerdict",
+    "verify_argument_validity",
 ]

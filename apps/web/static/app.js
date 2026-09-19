@@ -220,10 +220,30 @@ function renderProject() {
 
 function renderSummary() {
   $("summary").replaceChildren();
+  let aiStatus = "미분석";
+  let fakeCaseCount = 0;
+  const docs = state.result?.documents || [];
+  for (const d of docs) {
+    if (d.ai_detector_result?.verdict === "AI_FULL_GENERATION_LIKELY") {
+      aiStatus = "AI 전체 작성 의심";
+    } else if (d.ai_detector_result?.verdict === "AI_PARTIAL_GENERATION" && aiStatus !== "AI 전체 작성 의심") {
+      aiStatus = "일부 AI 작성";
+    } else if (d.ai_detector_result?.verdict === "HUMAN_AUTHORED_LIKELY" && aiStatus === "미분석") {
+      aiStatus = "인간 작성 유력";
+    }
+    if (d.ai_hallucination_table) {
+      fakeCaseCount += d.ai_hallucination_table.length;
+    }
+  }
+  if (aiStatus === "미분석" && state.findings.some(f => f.type === "AI_FULL_GENERATION_SUSPECTED")) {
+    aiStatus = "AI 전체 작성 의심";
+  }
+
   const metrics = [
     ["검토에 포함", `${state.documents.filter(d=>d.included_in_verification).length} / ${state.documents.length}`],
+    ["AI 작성 진단", state.run ? aiStatus : "—"],
+    ["가짜 판례 의심", state.run ? `${fakeCaseCount}건` : "—"],
     ["확인 전 항목", state.findings.filter(f => f.review_status === "NEEDS_REVIEW").length],
-    ["확인하지 못한 항목", state.run?.unverified_items.length ?? "—"],
     ["진행 상태", state.run ? label(state.run.state) : "시작 전"]
   ];
   for (const [title, value] of metrics) {
@@ -464,6 +484,7 @@ async function loadResults(generation) {
   if (generation !== state.generation) return;
   renderProject();
   renderFindings();
+  renderAIVerification();
 }
 
 function renderFindings() {
@@ -484,6 +505,121 @@ function renderFindings() {
     details.append(node("summary", `미확인 범위 ${state.run.unverified_items.length}건`));
     for (const item of state.run.unverified_items) details.append(node("p", friendlyText(`${item.raw_text || item.document_id || ""} ${item.page ? `· ${item.page}쪽` : ""}: ${item.reason || "확인하지 못함"}`)));
     $("findings").append(details);
+  }
+}
+
+function renderAIVerification() {
+  const container = $("aiVerificationRows");
+  const emptyMsg = $("aiVerificationEmpty");
+  const cardsContainer = $("aiSummaryCards");
+  if (!container || !cardsContainer) return;
+
+  container.replaceChildren();
+  cardsContainer.replaceChildren();
+
+  const docs = state.result?.documents || [];
+  let allRows = [];
+  let detectorResults = [];
+  let hasQuarantine = false;
+
+  for (const d of docs) {
+    if (d.quarantined) hasQuarantine = true;
+    if (d.ai_detector_result && d.ai_detector_result.verdict) {
+      detectorResults.push({ filename: d.filename, ...d.ai_detector_result });
+    }
+    if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
+      for (const row of d.ai_hallucination_table) {
+        allRows.push({ filename: d.filename, ...row });
+      }
+    }
+  }
+
+  // AI 종합 요약 카드 렌더링
+  const card1 = node("div", null, "summary-card");
+  card1.append(node("h3", "문서 AI 생성 여부 진단"));
+  if (detectorResults.length > 0) {
+    for (const res of detectorResults) {
+      let verdictLabel = "판단 보류";
+      let badgeClass = "badge INFO";
+      if (res.verdict === "AI_FULL_GENERATION_LIKELY") {
+        verdictLabel = "AI 임의 전체 작성 유력";
+        badgeClass = "badge CRITICAL";
+      } else if (res.verdict === "AI_PARTIAL_GENERATION") {
+        verdictLabel = "일부 AI 작성·인용 내용 확인";
+        badgeClass = "badge HIGH";
+      } else if (res.verdict === "HUMAN_AUTHORED_LIKELY") {
+        verdictLabel = "인간(변호사/당사자) 작성 유력";
+        badgeClass = "badge VERIFIED";
+      }
+      const item = node("div", null, "card-item");
+      item.append(
+        node("div", `${res.filename}: `),
+        node("span", verdictLabel, badgeClass),
+        node("small", ` (신뢰도: ${Math.round((res.score || 0) * 100)}%)`, "muted")
+      );
+      if (res.reasons && res.reasons.length > 0) {
+        const reasonList = node("ul", null, "reason-list");
+        for (const r of res.reasons.slice(0, 3)) {
+          reasonList.append(node("li", r));
+        }
+        item.append(reasonList);
+      }
+      card1.append(item);
+    }
+  } else {
+    card1.append(node("p", state.run ? "검증 완료 후 분석 결과를 표시합니다." : "검증을 시작하면 AI 작성 여부를 진단합니다.", "muted"));
+  }
+
+  const card2 = node("div", null, "summary-card");
+  card2.append(node("h3", "허위 판례(할루시네이션) 발견"));
+  if (allRows.length > 0) {
+    card2.append(
+      node("p", `공식 법원 DB에서 확인되지 않는 판례 및 이를 전제로 한 주장이 총 ${allRows.length}건 발견되었습니다.`, "warning-text")
+    );
+  } else {
+    card2.append(node("p", state.run ? "공식 소스에서 확인되지 않는 허위 판례가 발견되지 않았습니다." : "미실행", "safe-text"));
+  }
+
+  const card3 = node("div", null, "summary-card");
+  card3.append(node("h3", "프롬프트 인젝션 속임수 검증"));
+  if (hasQuarantine) {
+    card3.append(node("p", "경고: 프롬프트 인젝션 등 AI 판단 왜곡 시도가 탐지되어 격리(QUARANTINED)되었습니다.", "danger-text"));
+  } else {
+    card3.append(node("p", state.run ? "정상: 문서를 왜곡하려는 악의적 프롬프트 인젝션이 발견되지 않았습니다." : "미실행", "safe-text"));
+  }
+
+  cardsContainer.append(card1, card2, card3);
+
+  // 테이블 렌더링
+  if (allRows.length === 0) {
+    if (emptyMsg) emptyMsg.hidden = false;
+    return;
+  }
+  if (emptyMsg) emptyMsg.hidden = true;
+
+  for (const r of allRows) {
+    const tr = node("tr");
+    const tdLoc = node("td", `${r.filename}\n${r.location || ""}`);
+    const tdClaim = node("td");
+    tdClaim.append(
+      node("strong", r.cited_authority || "인용 판례"),
+      node("p", r.claim_text || "", "claim-text")
+    );
+    const tdBasis = node("td", r.ai_generation_basis || "공식 소스 미존재");
+    const tdReason = node("td");
+    tdReason.append(
+      node("p", r.legal_reasoning || "", "legal-reasoning"),
+      node("div", `대응 방안: ${r.recommended_counteraction || ""}`, "counteraction-box")
+    );
+    const tdVerdict = node("td");
+    let verdictCls = "badge HIGH";
+    if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
+      verdictCls = "badge CRITICAL";
+    }
+    tdVerdict.append(node("span", r.validity_verdict || "확인 필요", verdictCls));
+
+    tr.append(tdLoc, tdClaim, tdBasis, tdReason, tdVerdict);
+    container.append(tr);
   }
 }
 

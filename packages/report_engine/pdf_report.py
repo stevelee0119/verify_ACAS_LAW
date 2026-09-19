@@ -212,16 +212,34 @@ def build_report_pdf(
     story.append(_section_table(table, main_findings, {"FACT_CONTRADICTION", "CROSS_DOCUMENT_CONTRADICTION",
                                                        "TIMELINE_CONTRADICTION", "ARITHMETIC_MISMATCH"}, styles))
 
-    # --- 5. AI 작성 분석 ---------------------------------------------------
-    story.append(Paragraph("5. AI 작성 분석", styles["h1"]))
-    ai_rows = [["문서", "판정", "score", "Attribution", "비고"]]
+    # --- 5. AI 작성 분석 및 법률 주장 타당성 검토 -----------------------
+    story.append(Paragraph(_escape("5. AI 작성 분석 및 법률 주장 타당성 검토"), styles["h1"]))
+    ai_rows = [["문서", "AI 진단", "확신도", "판정 근거"]]
     for d in run_result.documents:
+        det = getattr(d, "ai_detector_result", {}) or {}
         a = d.authorship or {}
-        ai_rows.append(
-            [d.filename, a.get("verdict", "-"), str(a.get("score", "-")), a.get("attribution", "-"),
-             " ".join(a.get("notes", []))]
-        )
-    story.append(table(ai_rows, [90, 70, 40, 90, 200]))
+        verdict_str = det.get("verdict") or a.get("verdict", "-")
+        score_str = f"{det.get('score'):.2f}" if "score" in det else str(a.get("score", "-"))
+        reasons_str = "; ".join(det.get("reasons", [])) if det.get("reasons") else " ".join(a.get("notes", []))
+        ai_rows.append([d.filename, verdict_str, score_str, reasons_str])
+    story.append(table(ai_rows, [90, 80, 40, 280]))
+
+    # AI 환각 및 법률 주장 타당성 대조표
+    all_hallucination_rows = []
+    for d in run_result.documents:
+        for row in getattr(d, "ai_hallucination_table", []) or []:
+            all_hallucination_rows.append([
+                d.filename + " " + str(row.get("location", "")),
+                str(row.get("claim_text", ""))[:120] + "\n(" + str(row.get("cited_authority", "")) + ")",
+                str(row.get("ai_generation_basis", ""))[:120],
+                str(row.get("legal_reasoning", ""))[:140] + "\n[대응] " + str(row.get("recommended_counteraction", ""))[:100],
+                str(row.get("validity_verdict", "")),
+            ])
+    if all_hallucination_rows:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(_escape("AI 임의 생성(환각) 및 법률적 주장 타당성 대조표"), styles["h2"]))
+        h_table_rows = [["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"]] + all_hallucination_rows
+        story.append(table(h_table_rows, [65, 110, 105, 150, 60]))
 
     # --- 6. 문서 포렌식·전자서명 --------------------------------------------
     story.append(PageBreak())

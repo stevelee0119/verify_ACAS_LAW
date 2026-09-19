@@ -104,6 +104,32 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
           [[item.get("raw_text") or item.get("document_id") or item.get("kind"), item.get("reason")]
            for item in run_result.unverified_items] +
           [[s.get("name"), f"{s.get('status')} / {s.get('note', '')}"] for s in run_result.unavailable_sources], [2.5, 4.5])
+    doc.add_heading("AI 작성 분석 및 법률 주장 타당성 검토", 1)
+    ai_rows = []
+    for d in run_result.documents:
+        det = getattr(d, "ai_detector_result", {}) or {}
+        a = d.authorship or {}
+        v = det.get("verdict") or a.get("verdict", "-")
+        score = f"{det.get('score'):.2f}" if "score" in det else str(a.get("score", "-"))
+        reasons = "; ".join(det.get("reasons", [])) if det.get("reasons") else " ".join(a.get("notes", []))
+        ai_rows.append([d.filename, v, score, reasons])
+    if ai_rows:
+        table(["문서", "AI 진단", "확신도", "판정 근거"], ai_rows, [1.5, 1.3, 0.8, 3.4])
+
+    all_hallucination_rows = []
+    for d in run_result.documents:
+        for row in getattr(d, "ai_hallucination_table", []) or []:
+            all_hallucination_rows.append([
+                d.filename + " " + str(row.get("location", "")),
+                str(row.get("claim_text", "")) + f"\n({row.get('cited_authority', '')})",
+                str(row.get("ai_generation_basis", "")),
+                str(row.get("legal_reasoning", "")) + f"\n[대응] {row.get('recommended_counteraction', '')}",
+                str(row.get("validity_verdict", "")),
+            ])
+    if all_hallucination_rows:
+        doc.add_heading("AI 임의 생성(환각) 및 법률 주장 타당성 대조표", 2)
+        table(["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"], all_hallucination_rows, [1.0, 1.8, 1.5, 2.0, 0.7])
+
     doc.add_heading("사람의 검토 기록", 1)
     table(["항목", "진행과 의견", "검토자와 메모"],
           [[r.get("title") or r.get("finding_id"), f"{r.get('workflow_state')} / {r.get('decision')}",
