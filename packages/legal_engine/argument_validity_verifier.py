@@ -15,6 +15,7 @@ from packages.common.enums import (
     EvidenceGrade,
     ExternalAIPolicy,
     FindingType,
+    LLMRole,
     Severity,
     VerificationStatus,
 )
@@ -104,7 +105,12 @@ async def verify_argument_validity(
         return result
 
     # 3. LLM(OpenAI/Gemini)을 활용한 심층 법률 타당성 검토
-    can_use_llm = router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY and router.has_available_provider()
+    can_use_llm = False
+    if router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY:
+        if hasattr(router, "has_available_provider"):
+            can_use_llm = router.has_available_provider(policy=external_ai_policy)
+        elif hasattr(router, "available_providers"):
+            can_use_llm = len(router.available_providers(policy=external_ai_policy)) > 0
 
     if can_use_llm and unverified_cases:
         # LLM 프롬프트 준비
@@ -155,7 +161,13 @@ async def verify_argument_validity(
         )
 
         try:
-            provider = router.primary()
+            provider = (
+                router.primary(policy=external_ai_policy)
+                if hasattr(router, "primary")
+                else (router.pick(LLMRole.PRIMARY_REASONER, policy=external_ai_policy) if hasattr(router, "pick") else None)
+            )
+            if not provider:
+                raise RuntimeError("No LLM provider available")
             resp = await provider.structured_output(schema={}, request=req)
             if resp.ok and resp.parsed:
                 parsed = resp.parsed

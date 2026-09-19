@@ -431,21 +431,24 @@ class VerificationPipeline:
         result.findings.extend(analyze_timeline(events))
 
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
-        arg_validity = asyncio.run(
-            verify_argument_validity(
-                doc,
-                citations,
-                result.engine_data.get("legal_verdicts", []),
-                claims,
-                router=self.router,
-                external_ai_policy=context.external_ai_policy,
+        try:
+            arg_validity = asyncio.run(
+                verify_argument_validity(
+                    doc,
+                    citations,
+                    result.engine_data.get("legal_verdicts", []),
+                    claims,
+                    router=self.router,
+                    external_ai_policy=context.external_ai_policy,
+                )
             )
-        )
-        result.findings.extend(arg_validity.findings)
-        result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
-        result.argument_validity_summary = arg_validity.overall_validity_summary
-        result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
-        result.engine_data["argument_validity_summary"] = result.argument_validity_summary
+            result.findings.extend(arg_validity.findings)
+            result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
+            result.argument_validity_summary = arg_validity.overall_validity_summary
+            result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
+            result.engine_data["argument_validity_summary"] = result.argument_validity_summary
+        except Exception as e:
+            result.warnings.append(f"법률 주장 타당성 검토 경고: {e}")
 
         # 9) 작성자 분석 및 AI 문서 전체 생성 여부 심층 판별
         assessment = analyze_authorship(doc)
@@ -456,18 +459,21 @@ class VerificationPipeline:
         metadata_hint = bool(assessment.signals.get("provenance_metadata")) or any(
             f.type == FindingType.METADATA_ANOMALY for f in result.findings
         )
-        ai_detector_res = asyncio.run(
-            detect_ai_document(
-                doc,
-                result.findings,
-                router=self.router,
-                external_ai_policy=context.external_ai_policy,
-                metadata_indications=metadata_hint,
+        try:
+            ai_detector_res = asyncio.run(
+                detect_ai_document(
+                    doc,
+                    result.findings,
+                    router=self.router,
+                    external_ai_policy=context.external_ai_policy,
+                    metadata_indications=metadata_hint,
+                )
             )
-        )
-        result.ai_detector_result = ai_detector_res.to_dict()
-        result.engine_data["ai_detector_result"] = result.ai_detector_result
-        result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
+            result.ai_detector_result = ai_detector_res.to_dict()
+            result.engine_data["ai_detector_result"] = result.ai_detector_result
+            result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
+        except Exception as e:
+            result.warnings.append(f"AI 문서 생성 판별 경고: {e}")
 
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id

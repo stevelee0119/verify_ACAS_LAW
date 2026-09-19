@@ -16,6 +16,7 @@ from packages.common.enums import (
     EvidenceGrade,
     ExternalAIPolicy,
     FindingType,
+    LLMRole,
     Severity,
     VerificationStatus,
 )
@@ -160,7 +161,14 @@ async def detect_ai_document(
     rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications)
 
     # LLM을 사용할 수 없거나 정책이 LOCAL_ONLY인 경우 규칙 기반 결과 반환
-    if not router or external_ai_policy == ExternalAIPolicy.LOCAL_ONLY or not router.has_available_provider():
+    can_use_llm = False
+    if router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY:
+        if hasattr(router, "has_available_provider"):
+            can_use_llm = router.has_available_provider(policy=external_ai_policy)
+        elif hasattr(router, "available_providers"):
+            can_use_llm = len(router.available_providers(policy=external_ai_policy)) > 0
+
+    if not can_use_llm:
         return rule_res
 
     # 가짜 판례 목록 요약
@@ -205,7 +213,13 @@ async def detect_ai_document(
 
     try:
         # LLMRouter의 primary provider(OpenAI 또는 Gemini)를 통해 분석 요청
-        provider = router.primary()
+        provider = (
+            router.primary(policy=external_ai_policy)
+            if hasattr(router, "primary")
+            else (router.pick(LLMRole.PRIMARY_REASONER, policy=external_ai_policy) if hasattr(router, "pick") else None)
+        )
+        if not provider:
+            return rule_res
         resp = await provider.structured_output(schema={}, request=req)
         if resp.ok and resp.parsed:
             parsed = resp.parsed

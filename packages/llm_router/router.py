@@ -158,6 +158,14 @@ class LLMRouter:
                 names.append(name)
         return names
 
+    def has_available_provider(self, *, policy: ExternalAIPolicy = ExternalAIPolicy.MASKED) -> bool:
+        """현재 정책(policy) 기준으로 사용 가능한 Provider가 존재하는지 여부."""
+        return len(self.available_providers(policy=policy)) > 0
+
+    def primary(self, *, policy: ExternalAIPolicy = ExternalAIPolicy.MASKED) -> Optional[LLMProvider]:
+        """주요 추론기(PRIMARY_REASONER) 역할을 수행할 Provider 반환."""
+        return self.pick(LLMRole.PRIMARY_REASONER, policy=policy)
+
     def pick(self, role: LLMRole, *, policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
              exclude: Optional[List[str]] = None) -> Optional[LLMProvider]:
         exclude = exclude or []
