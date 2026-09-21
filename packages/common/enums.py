@@ -403,6 +403,21 @@ class FindingType(StrEnum):
     LIABILITY_HEDGING_SIGNAL = "LIABILITY_HEDGING_SIGNAL"
     COERCIVE_LANGUAGE_SIGNAL = "COERCIVE_LANGUAGE_SIGNAL"
     SELECTIVE_QUOTATION_SIGNAL = "SELECTIVE_QUOTATION_SIGNAL"
+    # 명세 v1.0 제1.2장. 위에 대응 항목이 없는 오류 유형만 새로 둔다.
+    CASE_RELEVANCE_WEAK = "CASE_RELEVANCE_WEAK"
+    STATUTE_NONEXISTENT = "STATUTE_NONEXISTENT"
+    STATUTE_TEXT_MISMATCH = "STATUTE_TEXT_MISMATCH"
+    INTERNAL_CITATION_ERROR = "INTERNAL_CITATION_ERROR"
+    QUOTE_MISMATCH = "QUOTE_MISMATCH"
+    FACT_UNSUPPORTED = "FACT_UNSUPPORTED"
+    SOURCE_CONFLICT_IGNORED = "SOURCE_CONFLICT_IGNORED"
+    CALCULATION_INVARIANT_VIOLATION = "CALCULATION_INVARIANT_VIOLATION"
+    LEGAL_REQUIREMENT_OMITTED = "LEGAL_REQUIREMENT_OMITTED"
+    OVERCLAIM = "OVERCLAIM"
+    REASONING_GAP = "REASONING_GAP"
+    AUTHORITY_RANK_ERROR = "AUTHORITY_RANK_ERROR"
+    DRAFT_ARTIFACT = "DRAFT_ARTIFACT"
+    UNCERTAINTY_NOT_DISCLOSED = "UNCERTAINTY_NOT_DISCLOSED"
     # 처리 상태
     UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
     PARSE_ERROR = "PARSE_ERROR"
@@ -446,3 +461,91 @@ LEGAL_FINDING_TYPES = {
     FindingType.ACADEMIC_CITATION_ERROR,
     FindingType.LEGAL_ARGUMENT_INVALID,
 }
+
+
+# 명세 v1.0 제1.2장의 코드 이름과 이 시스템의 FindingType 이름이 다른 경우의 대응표.
+# 같은 결함에 이름을 둘 두면 한쪽만 처리하는 코드가 생기므로, 새 멤버를 만들지 않고
+# 보고서 출력 단계에서만 명세 코드명을 함께 싣는다.
+SPEC_FINDING_CODE = {
+    FindingType.CASE_NOT_FOUND: "CASE_NONEXISTENT",
+    FindingType.CASE_HOLDING_DISTORTION: "CASE_HOLDING_MISMATCH",
+    FindingType.TEMPORAL_LAW_MISMATCH: "STATUTE_VERSION_ERROR",
+    FindingType.ARITHMETIC_MISMATCH: "CALCULATION_ERROR",
+    FindingType.ACADEMIC_CITATION_ERROR: "SECONDARY_SOURCE_ERROR",
+    FindingType.CASE_QUOTE_MISMATCH: "QUOTE_MISMATCH",
+}
+
+
+def spec_code(value: "FindingType") -> str:
+    """명세 제1.2장의 코드명을 돌려준다. 대응표에 없으면 본래 이름이 곧 명세 코드다."""
+    return SPEC_FINDING_CODE.get(value, str(value))
+
+
+# 제1.2장의 심각도 기본값. 개별 검출기가 근거의 강도에 따라 내릴 수는 있으나
+# 올리려면 그 이유가 Finding에 남아야 한다.
+SPEC_DEFAULT_SEVERITY = {
+    FindingType.CASE_NOT_FOUND: Severity.CRITICAL,
+    FindingType.CASE_METADATA_MISMATCH: Severity.CRITICAL,
+    FindingType.CASE_HOLDING_DISTORTION: Severity.CRITICAL,
+    FindingType.CASE_RELEVANCE_WEAK: Severity.HIGH,
+    FindingType.STATUTE_NONEXISTENT: Severity.CRITICAL,
+    FindingType.TEMPORAL_LAW_MISMATCH: Severity.CRITICAL,
+    FindingType.STATUTE_TEXT_MISMATCH: Severity.HIGH,
+    FindingType.INTERNAL_CITATION_ERROR: Severity.HIGH,
+    FindingType.QUOTE_MISMATCH: Severity.CRITICAL,
+    FindingType.CASE_QUOTE_MISMATCH: Severity.CRITICAL,
+    FindingType.FACT_UNSUPPORTED: Severity.HIGH,
+    FindingType.FACT_CONTRADICTION: Severity.CRITICAL,
+    FindingType.SOURCE_CONFLICT_IGNORED: Severity.HIGH,
+    FindingType.ARITHMETIC_MISMATCH: Severity.HIGH,
+    FindingType.CALCULATION_INVARIANT_VIOLATION: Severity.HIGH,
+    FindingType.LEGAL_REQUIREMENT_OMITTED: Severity.HIGH,
+    FindingType.OVERCLAIM: Severity.HIGH,
+    FindingType.REASONING_GAP: Severity.HIGH,
+    FindingType.AUTHORITY_RANK_ERROR: Severity.MEDIUM,
+    FindingType.ACADEMIC_CITATION_ERROR: Severity.HIGH,
+    FindingType.DRAFT_ARTIFACT: Severity.MEDIUM,
+    FindingType.UNCERTAINTY_NOT_DISCLOSED: Severity.HIGH,
+}
+
+
+class ReleaseGate(StrEnum):
+    """제9.2장 배포가능 상태."""
+
+    PASS = "PASS"
+    PASS_WITH_WARNINGS = "PASS_WITH_WARNINGS"
+    HUMAN_REVIEW_REQUIRED = "HUMAN_REVIEW_REQUIRED"
+    BLOCK = "BLOCK"
+
+    @property
+    def rank(self) -> int:
+        return {"PASS": 0, "PASS_WITH_WARNINGS": 1,
+                "HUMAN_REVIEW_REQUIRED": 2, "BLOCK": 3}[self.value]
+
+
+class SourceVerdict(StrEnum):
+    """제4.1장 출처 대조 판정값. 조회 실패는 NOT_FOUND가 아니라 UNVERIFIABLE이다."""
+
+    VERIFIED_EXACT = "VERIFIED_EXACT"
+    VERIFIED_PARAPHRASE = "VERIFIED_PARAPHRASE"
+    PARTIAL = "PARTIAL"
+    WRONG_VERSION = "WRONG_VERSION"
+    MISMATCH = "MISMATCH"
+    NOT_FOUND = "NOT_FOUND"
+    UNVERIFIABLE = "UNVERIFIABLE"
+
+
+class SupportType(StrEnum):
+    """제5.1장. 기록에 적힌 사실과 해석으로 도출한 사실을 섞지 않는다."""
+
+    EXPLICIT = "EXPLICIT"
+    INFERRED = "INFERRED"
+
+
+class ConflictResolution(StrEnum):
+    """제5.2장. 충돌을 무엇으로 풀었는지 남긴다."""
+
+    UNRESOLVED = "UNRESOLVED"
+    PRIORITY_RULE = "PRIORITY_RULE"
+    INTERPRETATION = "INTERPRETATION"
+    HUMAN_DECISION = "HUMAN_DECISION"
