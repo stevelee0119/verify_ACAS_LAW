@@ -164,18 +164,29 @@ h3 {
   min-width: 0
 }
 
-.brand>.lucide {
-  width: 29px;
-  height: 29px;
-  color: var(--green)
+.brand-emblem {
+  position: relative;
+  display: block;
+  width: 216px;
+  max-width: 100%;
+  aspect-ratio: 1280 / 296;
+  flex: none;
+  overflow: hidden;
+  background: #fff;
 }
 
-/* 엠블럼. 오각형 윤곽이 상단바 높이 안에서 뭉개지지 않도록 크기를 고정한다. */
-.brand>.emblem {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 auto;
-  object-fit: contain
+/* The supplied original contains two variants; show its lower, light version. */
+.brand-emblem img {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.brand-title {
+  white-space: nowrap;
 }
 
 .brand strong>span {
@@ -472,11 +483,9 @@ td {
   margin-bottom: 22px
 }
 
-.empty>.emblem-lg {
-  width: 112px;
-  height: 112px;
-  margin-bottom: 18px;
-  object-fit: contain
+.empty>.brand-emblem {
+  width: 360px;
+  margin: 0 auto 18px;
 }
 
 .empty-sub {
@@ -766,6 +775,10 @@ table {
 }
 
 @media(max-width:1050px) {
+  .brand-title {
+    display: none;
+  }
+
   main {
     padding: 24px 20px
   }
@@ -808,13 +821,8 @@ table {
     gap: 7px
   }
 
-  .brand>.lucide {
-    width: 22px
-  }
-
-  .brand>.emblem {
-    width: 26px;
-    height: 26px
+  .brand .brand-emblem {
+    width: 152px;
   }
 
   /* 좁은 화면에서는 제품명만 남긴다. 부제까지 넣으면 연결 상태가 밀린다. */
@@ -978,6 +986,7 @@ table {
 .workflow-table td>div>small {display:block;}
 .login-dialog {width:min(420px, calc(100% - 24px));}
 .login-dialog form {display:flex; flex-direction:column; gap:18px;}
+.login-dialog .brand-emblem {width:100%;}
 .login-dialog h2 {font-size:20px; line-height:1.4; overflow-wrap:anywhere; margin:0;}
 .login-modes {display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:4px; border-bottom:1px solid var(--line);}
 .login-modes button {border:0; border-bottom:3px solid transparent; border-radius:0; min-height:44px; background:transparent;}
@@ -1008,12 +1017,6 @@ table {
 
 .login-heading>h2 {
   margin: 10px 0 2px
-}
-
-.login-emblem {
-  width: 72px;
-  height: 72px;
-  object-fit: contain
 }
 
 .login-sub {

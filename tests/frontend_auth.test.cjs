@@ -92,6 +92,11 @@ function loginSuccess(h, me = principal) { h.responses.push({status:200, body:{a
 test("password login is default, deduplicated, cookie based, and resolves universal identity", async () => {
   const h = harness(), pending = h.ui.authenticate(), dialog = h.loginDialog();
   assert.equal(h.ui.authenticate(), pending);
+  const emblem = dialog.querySelector("img");
+  assert.equal(emblem.src, "/static/acas-law-emblem.jpg");
+  assert.equal(emblem.alt, "ACASia LAW");
+  assert.equal(emblem.parent.className, "brand-emblem");
+  assert.equal(emblem.width, 1280); assert.equal(emblem.height, 640);
   const email = fieldInput(dialog, "email"), password = fieldInput(dialog, "password"), token = fieldInput(dialog, "token");
   assert.equal(token.disabled, true); assert.equal(email.autocomplete, "username"); assert.equal(password.autocomplete, "current-password");
   email.value = " lawyer@example.test "; password.value = "secret-password"; loginSuccess(h);
@@ -201,7 +206,7 @@ test("merged page retains every workbench and no script persists authentication 
   assert.ok(html.includes("법률문서 검증시스템"));
   // 엠블럼은 상단바와 빈 상태 화면 양쪽에 있어야 한다.
   assert.ok(html.includes("/static/img/emblem-192.png"));
-  assert.ok(html.includes("/static/img/emblem.png"));
+  assert.equal((html.match(/src="\/static\/acas-law-emblem\.jpg"/g) || []).length, 2);
   assert.ok(html.includes("/static/img/favicon.ico"));
   assert.doesNotMatch(html, /ACAS_LAW Verifier/);
   const ids = Array.from(html.matchAll(/\bid="([^"]+)"/g), match => match[1]); assert.equal(new Set(ids).size, ids.length);

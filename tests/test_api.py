@@ -55,6 +55,26 @@ def client(registry, tmp_path_factory):
     return test_client
 
 
+def test_frontend_emblem_is_available_without_login(client):
+    from fastapi.testclient import TestClient
+    from lxml import html
+    from PIL import Image
+
+    anonymous = TestClient(client.app)
+    page = anonymous.get("/")
+    assert page.status_code == 200
+    brand = html.fromstring(page.text).xpath("//a[@class='brand']")[0]
+    assert brand.get("aria-label") == "ACASia_LAW 홈"
+    emblem = brand.xpath(".//img")[0]
+    assert emblem.get("alt") == "ACASia LAW"
+    response = anonymous.get(emblem.get("src"))
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(response.content)) as image:
+        assert image.size == (1280, 640)
+        assert image.format == "JPEG"
+
+
 @pytest.fixture()
 def project(client):
     response = client.post(
