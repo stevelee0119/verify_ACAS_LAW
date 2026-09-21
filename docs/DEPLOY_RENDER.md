@@ -32,8 +32,20 @@ Dockerfile에 tesseract 한국어팩이 들어 있어 스캔 문서까지 처리
 |---|---|
 | Runtime | Docker |
 | Dockerfile Path | `./docker/Dockerfile` |
-| Docker Command | `sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"` |
+| Docker Command | `python -m scripts.start_server` (또는 비워 두어 Dockerfile의 동일한 기본 명령 사용) |
 | Health Check Path | `/api/health` |
+
+시작 모듈은 DB 마이그레이션 성공 후에만 API를 실행한다. `PORT` 환경변수를 직접 읽고,
+쉘이나 따옴표 재해석 없이 각 인자를 전달한다. Render에서는 프록시를 신뢰하며,
+다른 환경의 기본 신뢰 범위는 루프백이다. `FORWARDED_ALLOW_IPS`로 명시할 수 있다.
+
+### `sh: 1: alembic upgrade head && uvicorn ...: not found` / 종료 코드 127
+
+명령 전체가 하나의 실행 파일 이름으로 처리된 오류다. `alembic: not found`와는 다르며,
+이 로그만으로 패키지 누락이라고 진단하지 않는다. Docker Command의 기존 `sh -c ...`를
+모두 지우고 **따옴표 없이** `python -m scripts.start_server`로 교체한 뒤 최신 커밋을 배포한다.
+대시보드에 저장된 명령은 GitHub의 `render.yaml`만 수정해도 바뀌는 것이 아니다.
+Docker 빌드 로그의 `CACHED`는 실패가 아니라 이전에 성공한 레이어의 재사용이다.
 
 ### Native Python 런타임
 
@@ -44,7 +56,7 @@ OCR 구성 요소가 없으면 스캔 PDF·이미지 본문은 `UNVERIFIED`로 �
 | 항목 | 값 |
 |---|---|
 | Build Command | `pip install -r requirements.txt` |
-| Start Command | `alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*` |
+| Start Command | `python -m scripts.start_server` |
 
 ### Background Worker (선택)
 
@@ -60,8 +72,10 @@ Redis 없이 DB 작업 큐와 임대 기반 복구를 사용한다. 다중 프�
 
 ## `$PORT`
 
-Render는 `PORT` 환경변수로 포트를 지정한다. `--port $PORT`와 `--host 0.0.0.0`이
-모두 있어야 헬스체크가 통과한다. 둘 중 하나라도 빠지면 "포트를 열지 못했다"로 배포가 실패한다.
+Render는 `PORT` 환경변수로 포트를 지정한다. 시작 모듈이 이를 검증해 `--port`에 전달하고
+`--host 0.0.0.0`으로 바인딩한다. `PORT` 미지정 시 로컬 기본값은 8000이다.
+CI는 실제 Docker 이미지의 기본 명령과 명시적 시작 명령을 각각 실행하여,
+10000번 포트 헬스체크, DB 마이그레이션 완료, 정상 종료까지 검사한다.
 
 ## 접속정보
 

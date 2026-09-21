@@ -92,3 +92,38 @@ jobs:
         run: docker build --tag acas-law-ocr-check --file docker/Dockerfile .
       - name: Verify OCR as production user without network
         run: docker run --rm --network none acas-law-ocr-check python -m scripts.check_ocr_runtime
+      - name: Verify production startup and migrations on Render port
+        run: |
+          trap 'docker logs acas-law-startup; docker rm -f acas-law-startup' EXIT
+          for mode in default override; do
+            command=()
+            if [ "$mode" = override ]; then
+              command=(python -m scripts.start_server)
+            fi
+            docker run --detach --name acas-law-startup --network none \
+              --env PORT=10000 --env RENDER_SERVICE_ID=srv-ci \
+              --env LV_AUTH_MODE=multi-user --env LV_WORKER_MODE=inprocess \
+              --env LV_ALLOW_NETWORK=0 --env LV_PSEUDONYM_SECRET=ci-only-not-a-real-secret \
+              acas-law-ocr-check "${command[@]}"
+            ready=0
+            for attempt in $(seq 1 45); do
+              if docker exec acas-law-startup python -c 'import json, urllib.request; response = urllib.request.urlopen("http://127.0.0.1:10000/api/health", timeout=2); assert json.load(response)["status"] == "ok"'; then
+                ready=1
+                break
+              fi
+              if [ "$(docker inspect --format '{{.State.Running}}' acas-law-startup)" != true ]; then
+                exit 1
+              fi
+              sleep 2
+            done
+            test "$ready" = 1
+            docker exec acas-law-startup python -c 'import sqlite3; from alembic.config import Config; from alembic.script import ScriptDirectory; db = sqlite3.connect("file:/data/legal_verifier.db?mode=ro", uri=True); assert {row[0] for row in db.execute("SELECT version_num FROM alembic_version")} == set(ScriptDirectory.from_config(Config("alembic.ini")).get_heads())'
+            docker stop --time 15 acas-law-startup
+            docker logs acas-law-startup
+            docker logs acas-law-startup 2>&1 | grep -q 'Application shutdown complete'
+            exit_code=$(docker inspect --format '{{.State.ExitCode}}' acas-law-startup)
+            # Uvicorn may re-raise SIGTERM after a graceful shutdown.
+            test "$exit_code" = 0 || test "$exit_code" = 143
+            docker rm acas-law-startup
+          done
+          trap - EXIT

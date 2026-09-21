@@ -32,12 +32,17 @@ DB, 업로드 원본, 감사 기록이 임시 파일시스템에 있으면 재�
 | Repository / Branch | 기존 저장소 / 검증을 통과한 main 커밋 |
 | Runtime | Docker |
 | Dockerfile Path / Context | `./docker/Dockerfile` / `.` |
-| Docker Command | `sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"` |
+| Docker Command | `python -m scripts.start_server` (따옴표 없이 입력) |
 | OCR 언어 | `LV_OCR_LANG=kor+eng` |
 | 기동 시 OCR 필수 검사 | `LV_REQUIRE_OCR=1` |
 | OCR 요청 한도 | `LV_OCR_TIMEOUT_SECONDS=30` (한 번의 이미지 인식) |
 | Worker | 별도 작업 서버가 없으면 `LV_WORKER_MODE=inprocess` |
 | 저장 위치 | 실제 영구 디스크 경로와 `LV_DATA_DIR` / `LV_STORAGE_ROOT` 일치 |
+
+대시보드에 저장된 이전 `sh -c ...` 명령은 직접 교체한다. GitHub 코드 갱신만으로
+수동 설정이 자동 변경되지는 않는다. 시작 모듈은 `PORT`를 읽고 DB 마이그레이션 성공 후
+API를 기동한다. 전체 명령 뒤에 `not found`가 붙고 종료 코드가 127이면
+[명령 해석 오류 복구](DEPLOY_RENDER.md)를 따른다.
 
 기존 DB를 유지한다. OCR 복구에 PostgreSQL 전환은 필수가 아니다.
 DB 접속 주소를 PostgreSQL로 바꾸기만 하면 기존 SQLite 데이터는 자동 이전되지 않는다.

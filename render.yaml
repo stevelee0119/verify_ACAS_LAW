@@ -20,7 +20,7 @@ services:
     plan: starter
     healthCheckPath: /api/health
     # 마이그레이션을 먼저 적용한 뒤 기동한다.
-    dockerCommand: sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips=*"
+    dockerCommand: python -m scripts.start_server
     disk:
       name: lv-data
       mountPath: /data

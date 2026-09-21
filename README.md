@@ -215,10 +215,10 @@ python scripts/verify_cli.py --input samples --out out \
 
 ```
 # Docker 런타임 (OCR 포함, 권장)
-sh -c "alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT"
+python -m scripts.start_server
 
 # Native Python 런타임 (OCR 없음)
-alembic upgrade head && uvicorn apps.api.main:app --host 0.0.0.0 --port $PORT
+python -m scripts.start_server
 
 # Background Worker (선택)
 celery -A apps.worker.celery_app worker -l info -Q verification,report --concurrency 2
