@@ -26,6 +26,7 @@ def test_many_citations_and_three_documents_finish_during_source_outage(monkeypa
         requests.append(url)
         raise httpx.ReadTimeout("synthetic outage")
     monkeypatch.setattr(transport, "_fetch", fail)
+    monkeypatch.setattr(transport, "_wait", lambda session, seconds: session.check_active())
     text = "\n".join(f"대법원 2024. 1. 1. 선고 2023다{10000 + index} 판결" for index in range(46))
     documents = {"one": synthetic_document("one", text),
                  "two": synthetic_document("two", "민법 제390조"),
@@ -37,7 +38,7 @@ def test_many_citations_and_three_documents_finish_during_source_outage(monkeypa
         [module.DocumentInput(identifier, "synthetic.txt", doc.filename) for identifier, doc in documents.items()],
         progress=lambda *event: events.append(event))
     assert result.state == JobState.PARTIAL_COMPLETED and not result.errors
-    assert len(requests) == 2
+    assert len(requests) == 9  # Two bounded batches, then one deferred recovery probe.
     assert len(result.documents) == 3
     assert len(result.documents[0].citations) == 46
     assert all(verdict["status"] == "UNVERIFIED" for verdict in result.documents[0].engine_data["legal_verdicts"])
@@ -47,6 +48,9 @@ def test_many_citations_and_three_documents_finish_during_source_outage(monkeypa
     assert all(b >= a - 1e-12 for a, b in zip(progress, progress[1:])) and progress[-1] == 1
     for expected in ("인용 항목 추출", "법률 인용 확인 46/46건", "주장·사건·금액 분석", "작성 이력 분석", "AI 작성 정황 분석", "문서 분석 완료"):
         assert any(expected in message for _, message, _ in events)
+    assert any("외부 출처 재조회" in message for _, message, _ in events)
+    assert any("지연된 인용 다시 확인" in message for _, message, _ in events)
+    assert result.documents[0].engine_data["source_lookup"]["recovery_used"]
 
 
 def test_cancel_between_citations_escapes_document_failure_handler(monkeypatch):

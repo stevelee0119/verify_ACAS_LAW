@@ -32,6 +32,7 @@ from .normalize import canonical_article, same_case_number
 from .source_review import date_context, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
 from packages.source_adapters.legal_history import legal_date
+from packages.source_adapters.transport import source_lookup_trace, source_recovery
 
 ENGINE_NAME = "legal_engine"
 
@@ -49,6 +50,7 @@ class CitationVerdict:
     levels: Dict[str, str] = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
     review: Dict[str, Any] = field(default_factory=dict)
+    lookup: Dict[str, Any] = field(default_factory=dict)
 
 
 class LegalVerifier:
@@ -63,9 +65,8 @@ class LegalVerifier:
     ) -> EngineResult:
         result = EngineResult(engine=ENGINE_NAME)
         verdicts: List[CitationVerdict] = []
-        for index, citation in enumerate(citations):
-            if progress:
-                progress(index, len(citations))
+
+        def verify(citation):
             if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                 verdict = self.verify_case(citation)
             elif citation.type == CitationType.STATUTE:
@@ -78,7 +79,56 @@ class LegalVerifier:
             else:
                 verdict = CitationVerdict(citation, VerificationStatus.SKIPPED)
                 verdict.notes.append("이 인용 유형의 공식 원문 검증 어댑터는 아직 지원하지 않습니다")
+            return verdict
+
+        pending = []
+        for index, citation in enumerate(citations):
+            if progress:
+                progress(index, len(citations))
+            with source_lookup_trace() as trace:
+                verdict = verify(citation)
+            verdict.lookup = {**trace.summary(), "deferred_retry": False}
             verdicts.append(verdict)
+            if trace.retryable:
+                pending.append(index)
+            if progress:
+                progress(index + 1, len(citations))
+
+        if pending:
+            with source_recovery() as recovery:
+                if recovery:
+                    for number, index in enumerate(pending, 1):
+                        recovery.message(f"지연된 인용 다시 확인 {number}/{len(pending)}건")
+                        prior = verdicts[index]
+                        with source_lookup_trace() as trace:
+                            verdict = verify(citations[index])
+                        summary = trace.summary()
+                        history = [*prior.lookup.get("requests", []), *summary["requests"]]
+                        recovered = bool(summary["requests"]) and all(
+                            r["status"] == str(AdapterStatus.READY) for r in summary["requests"])
+                        verdict.lookup = {**summary, "deferred_retry": True,
+                            "http_attempts": prior.lookup["http_attempts"] + summary["http_attempts"],
+                            "cache_hits": prior.lookup["cache_hits"] + summary["cache_hits"],
+                            "requests": history,
+                            "recovery_status": ("RETRY_EXHAUSTED" if trace.retryable else
+                                                "RECOVERED" if recovered else "UNAVAILABLE")}
+                        # Keep failed lookup evidence for audit, not obsolete findings.
+                        ids = {r.source_record_id for r in verdict.source_records}
+                        verdict.source_records.extend(r for r in prior.source_records if r.source_record_id not in ids)
+                        verdicts[index] = verdict
+
+        for verdict in verdicts:
+            if verdict.lookup.get("retryable"):
+                verdict.notes.append(
+                    f"외부 출처 자동 재조회 후에도 확인하지 못한 요청이 남아 있다 "
+                    f"(HTTP 시도 {verdict.lookup['http_attempts']}회). 출처 연결 회복 후 재검증이 필요하다.")
+                if verdict.status == VerificationStatus.NOT_FOUND:
+                    # A timed-out fallback search is not evidence of absence.
+                    verdict.status = VerificationStatus.UNVERIFIED
+                    verdict.levels["level1"] = "UNVERIFIED"
+                    verdict.findings = [f for f in verdict.findings if f.type != FindingType.CASE_NOT_FOUND]
+                    verdict.findings.append(self._unverified_finding(
+                        verdict.citation, verdict.notes[-1], None))
             result.findings.extend(verdict.findings)
             result.source_records.extend(verdict.source_records)
             if verdict.status in (VerificationStatus.UNVERIFIED, VerificationStatus.PARTIALLY_VERIFIED, VerificationStatus.SKIPPED):
@@ -89,10 +139,9 @@ class LegalVerifier:
                         "type": str(verdict.citation.type),
                         "raw_text": verdict.citation.raw_text,
                         "reason": "; ".join(verdict.notes) or "공식 Source 확인 불가",
+                        "source_lookup": verdict.lookup,
                     }
                 )
-            if progress:
-                progress(index + 1, len(citations))
         result.data["verdicts"] = [
             {
                 "citation_id": v.citation.citation_id,
@@ -107,6 +156,7 @@ class LegalVerifier:
                 "official_record": v.official_record,
                 "review": v.review,
                 "source_record_ids": [r.source_record_id for r in v.source_records],
+                "source_lookup": v.lookup,
             }
             for v in verdicts
         ]

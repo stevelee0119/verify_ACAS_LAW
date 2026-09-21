@@ -89,5 +89,12 @@ def runtime_capabilities() -> Dict[str, Any]:
         "worker_mode": settings.worker_mode,
         "network_allowed": bool(settings.allow_network),
         "source_keys_present": _source_keys(),
+        "source_lookup": {
+            "max_attempts": max(1, min(5, settings.source_lookup_attempts)),
+            "initial_timeout_seconds": min(45.0, max(0.01, settings.http_timeout)),
+            "document_base_seconds": settings.source_lookup_budget_seconds,
+            "document_max_seconds": settings.source_lookup_max_document_seconds,
+            "document_recovery_seconds": settings.source_lookup_recovery_seconds,
+        },
         "runtime": _container_state(),
     }

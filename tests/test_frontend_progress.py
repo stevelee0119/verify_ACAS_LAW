@@ -66,6 +66,13 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 expect(notice).to_be_hidden()
                 expect(page.locator("#progressPercent")).to_have_text("60%")
                 expect(page.get_by_role("button", name="검증 취소", exact=True)).to_be_enabled()
+                page.evaluate("""() => {
+                    state.run.stage_message = '검토의견서.docx 법률 인용 확인 46/46건 · 지연된 인용 다시 확인 12/18건';
+                    renderProject();
+                }""")
+                expect(page.locator("#progressText")).to_contain_text("지연된 인용 다시 확인")
+                assert page.locator("#progress").evaluate("el => el.scrollWidth <= el.clientWidth")
+                page.screenshot(path=str(tmp_path / f"progress-source-recovery-{width}.png"), full_page=True)
                 assert not errors
                 page.close()
         finally:

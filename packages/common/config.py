@@ -98,6 +98,12 @@ class Settings:
     http_timeout: float = field(default_factory=lambda: float(os.getenv("LV_HTTP_TIMEOUT", "12")))
     source_lookup_budget_seconds: float = field(
         default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_BUDGET_SECONDS", "120")))
+    source_lookup_max_document_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_MAX_DOCUMENT_SECONDS", "900")))
+    source_lookup_recovery_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_RECOVERY_SECONDS", "120")))
+    source_lookup_attempts: int = field(
+        default_factory=lambda: int(os.getenv("LV_SOURCE_LOOKUP_ATTEMPTS", "3")))
     law_go_kr_oc: Optional[str] = field(default_factory=lambda: os.getenv("LV_LAW_GO_KR_OC"))
     kci_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_KCI_KEY"))
     semantic_scholar_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_SEMANTIC_SCHOLAR_KEY"))
@@ -120,7 +126,7 @@ class Settings:
     )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
-    rule_version: str = "2026.09.21.3"
+    rule_version: str = "2026.09.21.4"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

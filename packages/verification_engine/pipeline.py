@@ -55,7 +55,7 @@ from packages.source_adapters.legal_history import today_korea
 from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
 from packages.source_adapters import SourceRegistry
-from packages.source_adapters.transport import source_lookup_session
+from packages.source_adapters.transport import prepare_source_document, source_lookup_session
 
 from packages.claim_engine.assertion import analyze_assertions
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
@@ -184,13 +184,23 @@ class VerificationPipeline:
         self, run_id: str, context: ProjectContext, documents: List[DocumentInput], *,
         progress: Optional[ProgressCallback] = None, check: Optional[Callable[[], None]] = None,
     ) -> VerificationRunResult:
+        current_progress = [JobState.QUEUED, "검증 준비", 0.0]
+
         def emit(state, message, ratio):
             if check:
                 check()
             if progress:
                 progress(state, message, ratio)
+            current_progress[:] = [state, message, ratio]
 
-        with source_lookup_session(self.settings.source_lookup_budget_seconds, check=check):
+        def source_progress(message):
+            if progress:
+                state, stage, ratio = current_progress
+                progress(state, f"{stage} · {message}", ratio)
+
+        with source_lookup_session(self.settings.source_lookup_budget_seconds, check=check,
+                                   notify=source_progress, max_attempts=self.settings.source_lookup_attempts,
+                                   request_timeout=self.settings.http_timeout):
             return self._run(run_id, context, documents, progress=emit)
 
     def _run(
@@ -541,6 +551,10 @@ class VerificationPipeline:
         by_id = {c.citation_id: c for c in citations}
         completed = 0
         total = sum(len(scope[3]) for scope in scopes)
+        lookup = prepare_source_document(total,
+            base_seconds=self.settings.source_lookup_budget_seconds,
+            max_seconds=self.settings.source_lookup_max_document_seconds,
+            recovery_seconds=self.settings.source_lookup_recovery_seconds)
         for scope, issue_id, when, review_citations in scopes:
             review_id = f"issue:{issue_id}" if issue_id is not None else "incident"
             legal = self.legal.verify_citations(
@@ -589,6 +603,14 @@ class VerificationPipeline:
         result.engine_data["legal_reviews"] = grouped
         result.engine_data["legal_verdicts"] = verdicts
         result.engine_data["case_applicability_reviews"] = applicability
+        if lookup:
+            result.engine_data["source_lookup"] = {
+                "spent_seconds": round(lookup.spent_seconds, 3),
+                "budget_seconds": lookup.budget_seconds,
+                "max_attempts": lookup.max_attempts,
+                "recovery_used": lookup.recovery_used,
+                "retry_exhausted_count": sum(bool(v.get("source_lookup", {}).get("retryable")) for v in verdicts),
+            }
 
     def _semantic_review(self, result, citations, context, pii, *, progress=None):
         """Source-grounded model advice never replaces deterministic findings."""
