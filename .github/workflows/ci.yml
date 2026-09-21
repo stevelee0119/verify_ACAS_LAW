@@ -104,6 +104,9 @@ jobs:
               --env PORT=10000 --env RENDER_SERVICE_ID=srv-ci \
               --env LV_AUTH_MODE=multi-user --env LV_WORKER_MODE=inprocess \
               --env LV_ALLOW_NETWORK=0 --env LV_PSEUDONYM_SECRET=ci-only-not-a-real-secret \
+              --env LV_UPLOAD_SMOKE_TEST=1 \
+              --env LV_BOOTSTRAP_ADMIN_EMAIL=container-check@example.test \
+              --env LV_BOOTSTRAP_ADMIN_PASSWORD=ci-only-upload-test-password \
               acas-law-ocr-check "${command[@]}"
             ready=0
             for attempt in $(seq 1 45); do
@@ -117,6 +120,7 @@ jobs:
               sleep 2
             done
             test "$ready" = 1
+            docker exec acas-law-startup python -m scripts.check_upload_runtime
             docker exec acas-law-startup python -c 'import sqlite3; from alembic.config import Config; from alembic.script import ScriptDirectory; db = sqlite3.connect("file:/data/legal_verifier.db?mode=ro", uri=True); assert {row[0] for row in db.execute("SELECT version_num FROM alembic_version")} == set(ScriptDirectory.from_config(Config("alembic.ini")).get_heads())'
             docker stop --time 15 acas-law-startup
             docker logs acas-law-startup

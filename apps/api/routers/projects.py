@@ -1,14 +1,15 @@
 """프로젝트 및 문서 업로드 엔드포인트 (제18.1장)."""
 from __future__ import annotations
 
+import logging
 import re
 from datetime import datetime
 from uuid import uuid4
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
@@ -25,6 +26,7 @@ from ..identity import (actor_id, apply_organization_policy, filter_project_quer
                         project_creation_defaults, require_project)
 
 router = APIRouter(tags=["projects"])
+logger = logging.getLogger(__name__)
 
 
 def _project_out(session: Session, project: Project) -> ProjectOut:
@@ -192,20 +194,44 @@ def get_project(project_id: str, session: Session = Depends(get_db)) -> ProjectO
 
 
 @router.post("/projects/{project_id}/documents", response_model=DocumentOut, status_code=201)
-async def upload_document(
+def upload_document(
     project_id: str,
+    response: Response,
     file: UploadFile = File(...),
     document_kind: str = Form(""),
     is_own_document: bool = Form(False),
     session: Session = Depends(get_db),
 ) -> DocumentOut:
+    # FastAPI runs this blocking file/DB work in its thread pool, not the event loop.
+    request_id = uuid4().hex
+    response.headers["X-Request-ID"] = request_id
+    try:
+        return _store_document(project_id, file, document_kind, is_own_document, session)
+    except HTTPException as exc:
+        exc.headers = {**(exc.headers or {}), "X-Request-ID": request_id}
+        raise
+    except (OSError, SQLAlchemyError) as exc:
+        session.rollback()
+        database_error = isinstance(exc, SQLAlchemyError)
+        code = "UPLOAD_DATABASE_UNAVAILABLE" if database_error else "UPLOAD_STORAGE_UNAVAILABLE"
+        message = ("자료 등록 정보를 저장하지 못했습니다. 등록 내역을 확인한 뒤 다시 시도하세요."
+                   if database_error else "서버에서 파일을 읽거나 저장하지 못했습니다. 관리자가 저장소 권한과 남은 공간을 확인해야 합니다.")
+        # Never log exception values: SQL parameters and file paths may contain case data.
+        logger.error("upload_failed request_id=%s code=%s error_type=%s errno=%s",
+                     request_id, code, type(exc).__name__, getattr(exc, "errno", None))
+        raise HTTPException(503, {"code": code, "message": message, "request_id": request_id},
+                            headers={"X-Request-ID": request_id}) from None
+
+
+def _store_document(project_id: str, file: UploadFile, document_kind: str,
+                    is_own_document: bool, session: Session) -> DocumentOut:
     """업로드 → 검증 → SHA-256 → Immutable Original 저장 (제6장, 제15.1장)."""
     project = require_project(session, project_id, "MEMBER")
 
     settings = get_settings()
     filename = _safe_filename(file.filename or "unnamed")
     chunks, size = [], 0
-    while chunk := await file.read(1024 * 1024):
+    while chunk := file.file.read(1024 * 1024):
         size += len(chunk)
         if size > settings.max_upload_mb * 1024 * 1024:
             raise HTTPException(413, f"파일 크기가 {settings.max_upload_mb}MB를 초과합니다")

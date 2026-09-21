@@ -16,7 +16,8 @@ const state = {
   creationKey: null,
   viewing: null,
   page: 1,
-  pages: []
+  pages: [],
+  uploadBatch: null
 };
 const labels = {
   LOCAL_ONLY: "외부 AI 전송 안 함",
@@ -96,8 +97,18 @@ async function api(path, options = {}) {
     await operationsUI.authenticate();
     ({response, data} = await send(path, requestOptions));
   }
-  if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `요청 실패 (${response.status})`);
+  if (!response.ok) throw requestError(
+    typeof data?.detail === "string" ? data.detail : data?.detail?.message || `서버가 요청을 처리하지 못했습니다 (HTTP ${response.status}).`,
+    data?.detail?.code || "HTTP_ERROR", {
+      status: response.status,
+      requestId: response.headers.get("X-Request-ID") || data?.detail?.request_id,
+      uncertain: response.status >= 500 || response.status === 408
+    });
   return data;
+}
+
+function requestError(message, code, details = {}) {
+  return Object.assign(new Error(message), {code, ...details});
 }
 
 // 서버가 응답하지 못한 경우와 서버가 오류를 돌려준 경우를 구분한다.
@@ -112,18 +123,21 @@ async function send(path, requestOptions) {
   try {
     const response = await fetch(`/api${path}`, {...fetchOptions, signal: controller.signal});
     const data = response.status === 204 ? null : await response.json().catch(error => {
-      if (controller.signal.aborted || response.ok || error?.name !== "SyntaxError") throw error;
+      if (controller.signal.aborted) throw error;
+      if (response.ok) throw requestError("서버의 응답 내용을 확인하지 못했습니다. 등록 내역을 다시 확인하세요.", "INVALID_RESPONSE", {
+        status: response.status, requestId: response.headers.get("X-Request-ID"), uncertain: true
+      });
       return null;
     });
     return {response, data};
   } catch (error) {
+    if (typeof error.code === "string") throw error;
     if (error?.name === "AbortError") {
-      throw new Error(`서버가 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않아 요청을 중단했습니다. ` +
-        "자료가 많은 경우 처리에 시간이 걸릴 수 있습니다. 잠시 후 다시 시도하고, 반복되면 서버 로그를 확인하세요.");
+      throw requestError(`서버가 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않았습니다. 처리 여부를 다시 확인하세요.`, "TIMEOUT", {uncertain: true});
     }
-    throw new Error("서버에 연결하지 못했거나 응답이 도중에 끊겼습니다. " +
-      "네트워크 상태와 서버 상태(/api/health)를 확인하세요. " +
-      `(요청: ${requestOptions.method || "GET"} /api${path})`);
+    throw requestError(navigator.onLine === false
+      ? "기기가 인터넷에 연결되어 있지 않습니다. 연결 후 등록 내역을 확인하세요."
+      : "서버와 연결되지 않았거나 응답이 끊겼습니다. 잠시 후 처리 여부를 확인하세요.", "NETWORK_ERROR", {uncertain: true});
   } finally {
     clearTimeout(timer);
   }
@@ -229,7 +243,7 @@ function renderProject() {
   $("policyLabel").textContent = label(p.external_ai_policy);
   $("staleNotice").hidden = !state.run || state.run.input_snapshot?.scope_revision === p.scope_revision;
   const busy = state.run && !terminal(state.run);
-  $("verifyBtn").disabled = !!busy || !state.documents.some(d => d.included_in_verification);
+  $("verifyBtn").disabled = !!busy || !!state.uploadBatch?.busy || !state.documents.some(d => d.included_in_verification);
   $("reverify").disabled = $("verifyBtn").disabled;
   $("progress").hidden = !busy;
   if (busy) {
@@ -241,6 +255,7 @@ function renderProject() {
   }
   renderProjects();
   renderDocuments();
+  renderUploadStatus();
   renderSummary();
   renderIssues();
   renderTimeline();
@@ -421,27 +436,119 @@ function ask(title, message, reasonInput = false) {
   });
 }
 
+function renderUploadStatus() {
+  let area = $("uploadStatus");
+  if (!area) {
+    area = node("section", null, "upload-status");
+    area.id = "uploadStatus";
+    area.setAttribute("aria-label", "파일 등록 상태");
+    area.setAttribute("aria-live", "polite");
+    $("dropArea").before(area);
+  }
+  const batch = state.uploadBatch;
+  $("fileInput").disabled = !!batch?.busy;
+  document.querySelector('label[for="fileInput"]').setAttribute("aria-disabled", String(!!batch?.busy));
+  area.hidden = !batch || batch.projectId !== state.project?.id;
+  if (area.hidden) return;
+  area.replaceChildren();
+  const registered = batch.entries.filter(entry => entry.status === "REGISTERED").length;
+  const heading = node("div", null, "upload-heading");
+  heading.append(node("strong", `${batch.busy ? "파일 등록 중" : "파일 등록 결과"} · ${registered}/${batch.entries.length}개 확인`));
+  if (!batch.busy && batch.entries.some(entry => entry.status === "UNCONFIRMED")) {
+    heading.append(iconButton("refresh-cw", "등록 내역 다시 확인", async () => {
+      await reconcileUploads(batch);
+      if (state.project?.id === batch.projectId) await refreshScope();
+      renderUploadStatus();
+    }));
+  }
+  area.append(heading);
+  const names = {WAITING: "대기", READING: "파일 읽는 중", SENDING: "전송 중", REGISTERED: "등록 완료", FAILED: "미등록", UNCONFIRMED: "등록 확인 필요"};
+  for (const entry of batch.entries) {
+    const row = node("div", null, "upload-result");
+    row.append(node("span", entry.name, "upload-filename"), node("strong", names[entry.status], `upload-state ${entry.status.toLowerCase()}`));
+    if (entry.error) {
+      row.append(node("p", entry.error.message, "upload-message"));
+      const technical = node("details", null, "upload-technical");
+      const details = [entry.error.code, entry.error.status ? `HTTP ${entry.error.status}` : "", entry.error.requestId ? `문의 번호: ${entry.error.requestId}` : ""].filter(Boolean);
+      technical.append(node("summary", "기술 정보"), node("p", details.join(" · ")));
+      row.append(technical);
+    }
+    area.append(row);
+  }
+  if (batch.refreshError) area.append(node("p", `등록 내역 조회 실패: ${batch.refreshError}`, "error"));
+  icons();
+}
+
+async function prepareUpload(file) {
+  let bytes;
+  try {
+    bytes = await file.arrayBuffer();
+    if (bytes.byteLength !== file.size) throw new Error("File changed");
+  } catch (error) {
+    throw requestError("기기에서 파일을 읽지 못했습니다. 파일을 기기에 내려받아 저장한 뒤 다시 선택하세요.", "FILE_READ_FAILED");
+  }
+  // A byte snapshot avoids re-reading a changed or unavailable cloud-backed file during fetch.
+  const body = new Blob([bytes], {type: file.type || "application/octet-stream"});
+  const sha256 = globalThis.crypto?.subtle
+    ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)), byte => byte.toString(16).padStart(2, "0")).join("")
+    : null;
+  return {body, sha256};
+}
+
+async function reconcileUploads(batch) {
+  try {
+    const documents = await api(`/projects/${batch.projectId}/documents`, {timeoutMs: 15000});
+    for (const entry of batch.entries) {
+      if (entry.status === "UNCONFIRMED" && entry.sha256 && documents.some(document => document.sha256 === entry.sha256)) {
+        entry.status = "REGISTERED";
+        entry.error = null;
+      }
+    }
+    batch.refreshError = null;
+  } catch (error) {
+    batch.refreshError = error.message;
+  }
+  renderUploadStatus();
+}
+
 async function upload(files) {
   const id = state.project?.id;
-  if (!id) return;
-  let success = 0;
-  const failures = [];
-  for (const file of files) {
-    const form = new FormData();
-    form.append("file", file);
-    try {
-      await api(`/projects/${id}/documents`, {
-        method: "POST",
-        body: form
-      });
-      success++;
-    } catch (error) {
-      failures.push(`${file.name}: ${error.message}`);
+  if (!id || !files.length) return;
+  if (state.uploadBatch?.busy) return toast("다른 파일의 등록이 진행 중입니다.");
+  const batch = {projectId: id, busy: true, entries: files.map(file => ({name: file.name, status: "WAITING"}))};
+  state.uploadBatch = batch;
+  renderProject();
+  try {
+    for (const [index, file] of files.entries()) {
+      const entry = batch.entries[index];
+      try {
+        entry.status = "READING";
+        renderUploadStatus();
+        const prepared = await prepareUpload(file);
+        entry.sha256 = prepared.sha256;
+        const form = new FormData();
+        form.append("file", prepared.body, file.name);
+        entry.status = "SENDING";
+        renderUploadStatus();
+        await api(`/projects/${id}/documents`, {method: "POST", body: form});
+        entry.status = "REGISTERED";
+      } catch (error) {
+        entry.status = error.uncertain ? "UNCONFIRMED" : "FAILED";
+        entry.error = error;
+      }
+      renderUploadStatus();
     }
+    if (batch.entries.some(entry => entry.status === "UNCONFIRMED")) await reconcileUploads(batch);
+    if (state.project?.id === id) {
+      try { await refreshScope(); } catch (error) { batch.refreshError = error.message; }
+    }
+  } finally {
+    batch.busy = false;
+    $("fileInput").value = "";
+    renderProject();
+    const count = batch.entries.filter(entry => entry.status === "REGISTERED").length;
+    toast(`${count}개 등록 확인${count < files.length ? " · 파일별 등록 상태를 확인하세요." : ""}`);
   }
-  $("fileInput").value = "";
-  if (state.project?.id === id) await refreshScope();
-  toast(`${success}개 등록${failures.length?` · ${failures.join(" / ")}`:""}`);
 }
 async function editProject(isNew = false) {
   state.editing = isNew ? null : state.project.id;

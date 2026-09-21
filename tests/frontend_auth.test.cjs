@@ -220,7 +220,8 @@ test("merged page retains every workbench and no script persists authentication 
 function networkHarness(fetch, authenticate = async () => {}) {
   const app = readFileSync(path.join(root, "apps/web/static/app.js"), "utf8");
   const network = app.slice(app.indexOf("async function api("), app.indexOf("function action("));
-  const context = vm.createContext({fetch, AbortController, setTimeout, clearTimeout, FormData:class {},
+  const context = vm.createContext({fetch:async (...args) => ({headers:new Headers(), ...await fetch(...args)}),
+    navigator:{onLine:true}, AbortController, setTimeout, clearTimeout, FormData:class {},
     operationsUI:{authenticate}});
   vm.runInContext(network, context);
   return vm.runInContext("({api, send})", context);
@@ -232,13 +233,13 @@ test("progress request timeout includes response body receipt and aborts it", as
     json:() => new Promise((resolve, reject) => options.signal.addEventListener("abort", () => {
       aborted = true; reject(Object.assign(new Error("aborted"), {name:"AbortError"}));
     }))}));
-  await assert.rejects(h.api("/verification-runs/run", {timeoutMs:20}), /응답하지 않아/);
+  await assert.rejects(h.api("/verification-runs/run", {timeoutMs:20}), error => error.code === "TIMEOUT" && error.uncertain);
   assert.equal(aborted, true);
 });
 
 test("broken success JSON is an error, not a null run that silently stops polling", async () => {
   const h = networkHarness(async () => ({ok:true, status:200, json:async () => {throw new SyntaxError("truncated");}}));
-  await assert.rejects(h.api("/verification-runs/run"), /연결하지 못했거나 응답이 도중에 끊겼습니다/);
+  await assert.rejects(h.api("/verification-runs/run"), error => error.code === "INVALID_RESPONSE" && error.status === 200 && error.uncertain);
 });
 
 test("non JSON server errors remain HTTP errors and empty DELETE responses are supported", async () => {
@@ -260,4 +261,12 @@ test("JSON mutation is replayed once after login with the same body and without 
   assert.equal(calls[0].options.body, calls[1].options.body);
   assert.equal(calls[0].options.body, JSON.stringify({name:"test"}));
   assert.equal(calls[0].options.timeoutMs, undefined);
+});
+
+test("network failures and validation errors preserve distinct outcomes", async () => {
+  const network = networkHarness(async () => {throw new TypeError("Failed to fetch");});
+  await assert.rejects(network.api("/projects"), error => error.code === "NETWORK_ERROR" && error.uncertain);
+  const validation = networkHarness(async () => ({ok:false, status:400,
+    headers:new Headers({"X-Request-ID":"test-request"}), json:async () => ({detail:"Invalid file"})}));
+  await assert.rejects(validation.api("/projects"), error => error.code === "HTTP_ERROR" && !error.uncertain && error.requestId === "test-request");
 });

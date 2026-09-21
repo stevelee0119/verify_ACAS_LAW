@@ -1041,6 +1041,18 @@ table {
 #progressText { min-width: 0; overflow-wrap: anywhere; }
 #progressPercent { flex-shrink: 0; }
 
+.upload-status { margin: 0 0 20px; padding: 14px 0; border-block: 1px solid var(--line); }
+.upload-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 40px; }
+.upload-result { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 16px; padding: 12px 0; font-size: 13px; }
+.upload-filename { overflow-wrap: anywhere; }
+.upload-message, .upload-technical { grid-column: 1 / -1; margin: 0; overflow-wrap: anywhere; }
+.upload-message { line-height: 1.6; }
+.upload-technical { color: var(--muted); }
+.upload-technical summary { cursor: pointer; }
+.upload-state.registered { color: #1f6b52; }
+.upload-state.failed, .upload-state.unconfirmed { color: #a13d29; }
+label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
+
 .login-heading>h2 {
   margin: 16px 0 0;
   font-size: 16px;
