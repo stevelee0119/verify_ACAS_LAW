@@ -170,8 +170,27 @@ h3 {
   color: var(--green)
 }
 
-.brand span {
+/* 엠블럼. 오각형 윤곽이 상단바 높이 안에서 뭉개지지 않도록 크기를 고정한다. */
+.brand>.emblem {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  object-fit: contain
+}
+
+.brand strong>span {
   font-weight: 400
+}
+
+/* 부제는 제품명과 같은 줄에 두되 구분선으로 분리한다. */
+.brand-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+  padding-left: 11px;
+  margin-left: 2px;
+  border-left: 1px solid var(--line);
+  white-space: nowrap
 }
 
 .connection {
@@ -451,6 +470,20 @@ td {
   height: 48px;
   color: var(--green);
   margin-bottom: 22px
+}
+
+.empty>.emblem-lg {
+  width: 112px;
+  height: 112px;
+  margin-bottom: 18px;
+  object-fit: contain
+}
+
+.empty-sub {
+  margin-top: -6px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 14px
 }
 
 .empty-small {
@@ -779,6 +812,16 @@ table {
     width: 22px
   }
 
+  .brand>.emblem {
+    width: 26px;
+    height: 26px
+  }
+
+  /* 좁은 화면에서는 제품명만 남긴다. 부제까지 넣으면 연결 상태가 밀린다. */
+  .brand-sub {
+    display: none
+  }
+
   .connection {
     display: none
   }
@@ -957,3 +1000,24 @@ table {
 .ai-table .legal-reasoning { margin: 0 0 8px; color: #1e2825; }
 .ai-table .counteraction-box { background: #f0f4f3; border-left: 3px solid #1f6b52; padding: 6px 10px; font-size: 12px; color: #1f4237; }
 
+/* ---------- 로그인 ---------- */
+.login-heading {
+  text-align: center;
+  margin-bottom: 18px
+}
+
+.login-heading>h2 {
+  margin: 10px 0 2px
+}
+
+.login-emblem {
+  width: 72px;
+  height: 72px;
+  object-fit: contain
+}
+
+.login-sub {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px
+}

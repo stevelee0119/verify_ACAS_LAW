@@ -197,7 +197,13 @@ test("merged page retains every workbench and no script persists authentication 
   const html = readFileSync(path.join(root, "apps/web/index.html"), "utf8");
   const app = readFileSync(path.join(root, "apps/web/static/app.js"), "utf8");
   for (const file of ["workflow.js", "operations.js", "report-workbench.js", "calculation-workbench.js"]) assert.ok(html.includes(file));
-  assert.ok(html.includes("ACAS_LAW Verifier"));
+  assert.ok(html.includes("ACASia_LAW"));
+  assert.ok(html.includes("법률문서 검증시스템"));
+  // 엠블럼은 상단바와 빈 상태 화면 양쪽에 있어야 한다.
+  assert.ok(html.includes("/static/img/emblem-192.png"));
+  assert.ok(html.includes("/static/img/emblem.png"));
+  assert.ok(html.includes("/static/img/favicon.ico"));
+  assert.doesNotMatch(html, /ACAS_LAW Verifier/);
   const ids = Array.from(html.matchAll(/\bid="([^"]+)"/g), match => match[1]); assert.equal(new Set(ids).size, ids.length);
   assert.doesNotMatch(source + app, /(?:sessionStorage|localStorage)\.setItem\([^)]*(?:token|password|credential)/i);
   assert.doesNotMatch(source + app + html, /<<<<<<<|=======|>>>>>>>/);

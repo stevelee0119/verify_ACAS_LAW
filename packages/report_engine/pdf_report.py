@@ -103,7 +103,7 @@ def build_report_pdf(
     buffer = io.BytesIO()
     document = SimpleDocTemplate(
         buffer, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
-        title="ACAS_LAW Verifier 법률문서 검증보고서",
+        title="ACASia_LAW 법률문서 검증보고서",
     )
     story: List[Any] = []
     findings = run_result.all_findings
@@ -128,7 +128,7 @@ def build_report_pdf(
         return t
 
     # --- 표지 / 1. 검증개요 ------------------------------------------------
-    story.append(Paragraph("ACAS_LAW Verifier", styles["title"]))
+    story.append(Paragraph("ACASia_LAW 법률문서 검증시스템", styles["title"]))
     story.append(Paragraph("법률문서 검증보고서", styles["h1"]))
     metadata = getattr(run_result, "report_metadata", {})
     if metadata:

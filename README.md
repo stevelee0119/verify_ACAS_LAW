@@ -1,4 +1,4 @@
-# ACAS_LAW Verifier
+# ACASia_LAW
 
 변호사의 법률문서 검토를 보조하는 작업 공간입니다. v0.4 개선 내용과
 현재 제한 사항은 [구현 현황](docs/IMPLEMENTATION_STATUS.md), 상세 계획은

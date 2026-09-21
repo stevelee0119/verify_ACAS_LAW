@@ -51,7 +51,17 @@ const operationsUI = (() => {
         modeButtons.push(tab); modes.append(tab);
       }
       const submit = node("button", "로그인", "primary"); submit.type = "submit";
-      form.append(node("h2", "ACAS_LAW Verifier"), modes, passwordPanel, tokenPanel, error, submit);
+      // 엠블럼은 앱 공통 node() 헬퍼로 만든다. document.createElement를 직접 부르면
+      // 프런트엔드 인증 회귀 테스트의 DOM 대역(document는 {body}뿐)에서 깨진다.
+      const emblem = node("img", null, "login-emblem");
+      emblem.setAttribute("src", "/static/img/emblem-192.png");
+      emblem.setAttribute("alt", "");
+      emblem.setAttribute("width", "72");
+      emblem.setAttribute("height", "72");
+      emblem.setAttribute("decoding", "async");
+      const heading = node("div", null, "login-heading");
+      heading.append(emblem, node("h2", "ACASia_LAW"), node("p", "법률문서 검증시스템", "login-sub"));
+      form.append(heading, modes, passwordPanel, tokenPanel, error, submit);
       dialog.append(form); document.body.append(dialog);
       let authenticated = false;
       dialog.addEventListener("cancel", event => {if (submit.disabled) event.preventDefault();});

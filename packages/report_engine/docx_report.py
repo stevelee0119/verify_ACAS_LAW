@@ -32,7 +32,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     metadata = getattr(run_result, "report_metadata", {})
     snapshot = getattr(run_result, "review_snapshot", {})
     doc.core_properties.title = "법률문서 검증보고서"
-    doc.core_properties.author = str(metadata.get("created_by") or "ACAS_LAW Verifier")
+    doc.core_properties.author = str(metadata.get("created_by") or "ACASia_LAW")
     doc.core_properties.comments = "Editable copy; retained artifacts and snapshot hashes identify the generated version."
 
     def paragraph(value, style=None):

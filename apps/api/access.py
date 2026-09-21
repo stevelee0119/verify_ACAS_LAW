@@ -153,7 +153,7 @@ def _authenticate_local(request) -> Principal:
             supplied = ""
         if not hmac.compare_digest(supplied.encode(), token.encode()):
             raise HTTPException(401, "Workspace authentication required", headers={
-                "WWW-Authenticate": 'Basic realm="ACAS_LAW Verifier", charset="UTF-8"'})
+                "WWW-Authenticate": 'Basic realm="ACASia_LAW", charset="UTF-8"'})
     elif peer not in {"127.0.0.1", "::1", "testclient"} or request.url.hostname not in {"127.0.0.1", "localhost", "::1", "testserver"}:
         raise HTTPException(403, "Remote access requires LV_ACCESS_TOKEN and HTTPS")
     return Principal(LOCAL_OWNER, None, "ADMIN", "local")

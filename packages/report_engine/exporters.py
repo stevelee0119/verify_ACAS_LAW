@@ -31,7 +31,7 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
 def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     """제20.2장 JSON 전체 검증결과."""
     payload = {
-        "product": "ACAS_LAW Verifier",
+        "product": "ACASia_LAW",
         "terminology_version": TERMINOLOGY_VERSION,
         "terminology": terminology_catalog(),
         "run_id": run_result.run_id,

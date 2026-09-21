@@ -85,7 +85,7 @@ def create_app() -> FastAPI:
         version=settings.version,
         lifespan=lifespan,
         description=(
-            "법률 분야 AI 문서 검증 및 위조 식별 시스템. "
+            "ACASia_LAW 법률문서 검증시스템. "
             "Source First / Evidence First / Human Final Decision 원칙에 따라 동작한다."
         ),
     )

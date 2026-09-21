@@ -74,7 +74,7 @@ def test_report_snapshot_and_viewer(client, project, tmp_path):
         assert "error" not in item, item
     exported = client.get(report.json()["artifacts"]["json"]["download"]).json()
     assert exported["input_snapshot"] == run["input_snapshot"]
-    assert exported["product"] == "ACAS_LAW Verifier"
+    assert exported["product"] == "ACASia_LAW"
     other = client.post("/api/projects", json={}).json()
     assert client.post(f"/api/projects/{other['id']}/reports", json={"run_id": run["id"]}).status_code == 404
     assert client.post(f"/api/projects/{project['id']}/reports", json={"run_id": run["id"], "include_sealed": True}).status_code == 403
