@@ -99,3 +99,72 @@ def calculate_segmented_interest_endpoint(payload: SegmentedInterestRequest):
         ).to_dict()
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+# --- 제6장 베스팅·지분 검산 ---------------------------------------------------
+class SourcedValue(BaseModel):
+    """계산 입력 하나. 출처를 함께 받는다(제6장 '입력값마다 source span')."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    source_span: str = Field(default="", max_length=500)
+    support: Literal["EXPLICIT", "INFERRED"] = "EXPLICIT"
+
+
+class DatedValue(SourcedValue):
+    value: date
+
+
+class VestingRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    total_shares: Decimal = Field(gt=0, le=10**15, max_digits=18, decimal_places=0)
+    total_shares_source: str = Field(default="", max_length=500)
+    start: DatedValue
+    vesting_months: int = Field(gt=0, le=1200)
+    vesting_months_source: str = Field(default="", max_length=500)
+    cliff_months: int | None = Field(default=None, ge=0, le=1200)
+    rounding_rule: Literal["FLOOR", "CEILING", "TRUNCATE", "HALF_UP", "HALF_EVEN"] = "FLOOR"
+    as_of_candidates: list[DatedValue] = Field(min_length=1, max_length=12)
+    stated_vested_shares: Decimal | None = Field(
+        default=None, ge=0, le=10**15, max_digits=18, decimal_places=0)
+
+
+@router.post("/calculations/vesting")
+def calculate_vesting(payload: VestingRequest):
+    """베스팅 주식수를 전제별로 계산한다.
+
+    기준일 전제가 갈리면 결과를 나란히 돌려준다. 어느 전제가 옳은지는
+    이 API가 정하지 않는다(제6장).
+    """
+    from packages.claim_engine.deterministic import (
+        CalculationError, Input, verify_stated, vesting, vesting_sensitivity,
+    )
+
+    total = Input(name="총주식수", value=payload.total_shares, unit="주",
+                  source_span=payload.total_shares_source or None)
+    start = Input(name=payload.start.name, value=payload.start.value,
+                  source_span=payload.start.source_span or None, support=payload.start.support)
+    months = Input(name="베스팅기간", value=payload.vesting_months,
+                   source_span=payload.vesting_months_source or None)
+    cliff = (Input(name="cliff", value=payload.cliff_months)
+             if payload.cliff_months is not None else None)
+    candidates = [Input(name=c.name, value=c.value, source_span=c.source_span or None,
+                        support=c.support) for c in payload.as_of_candidates]
+
+    try:
+        primary = vesting(total_shares=total, start=start, as_of=candidates[0],
+                          vesting_months=months, cliff_months=cliff,
+                          rounding_rule=payload.rounding_rule)
+        sensitivity = vesting_sensitivity(
+            total_shares=total, start=start, as_of_candidates=candidates,
+            vesting_months=months, cliff_months=cliff, rounding_rule=payload.rounding_rule)
+    except CalculationError as e:
+        raise HTTPException(422, str(e))
+
+    body = {"calculation": primary.to_dict(), "sensitivity": sensitivity.to_dict()}
+    if payload.stated_vested_shares is not None:
+        body["stated_comparison"] = verify_stated(
+            primary, "vested_shares", payload.stated_vested_shares)
+    return body

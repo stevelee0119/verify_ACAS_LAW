@@ -564,3 +564,69 @@ def test_full_relevance_above_threshold_is_not_flagged():
                                 "procedural_posture_similarity", "holding_support_strength")})
     assert review["status"] == "SUPPORTED"
     assert relevance_finding(review) is None
+
+
+# --- 제12.2장 전제 변경 시 민감도 즉시 표시 (API) ------------------------------
+def _calc_client(tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from apps.api import db
+    from apps.api.main import create_app
+    from packages.common.config import reset_settings
+
+    monkeypatch.setenv("LV_DATABASE_URL", "sqlite:///" + str(tmp_path / "calc.db"))
+    monkeypatch.setenv("LV_AUTH_MODE", "local")
+    monkeypatch.setenv("LV_PSEUDONYM_SECRET", "test-secret")
+    monkeypatch.delenv("LV_ACCESS_TOKEN", raising=False)
+    reset_settings()
+    db.reset_engine()
+    db.init_db()
+    client = TestClient(create_app(), base_url="https://testserver")
+    yield client
+    db.get_engine().dispose()
+    db.reset_engine()
+    reset_settings()
+
+
+@pytest.fixture()
+def calc_client(tmp_path, monkeypatch):
+    yield from _calc_client(tmp_path, monkeypatch)
+
+
+VESTING_PAYLOAD = {
+    "total_shares": "360000",
+    "total_shares_source": "DOC_TERMSHEET:p1",
+    "start": {"name": "기산일", "value": "2022-01-01", "source_span": "DOC_CONTRACT:p2"},
+    "vesting_months": 48,
+    "vesting_months_source": "DOC_CONTRACT:p2",
+    "as_of_candidates": [
+        {"name": "평가기준일", "value": "2025-11-01", "source_span": "DOC_MEMO:p1"},
+        {"name": "퇴사예정일", "value": "2025-12-31", "source_span": "DOC_EMAIL:p2",
+         "support": "INFERRED"},
+    ],
+}
+
+
+def test_vesting_endpoint_returns_every_assumption(calc_client):
+    response = calc_client.post("/api/calculations/vesting", json=VESTING_PAYLOAD)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["sensitivity"]["diverges"] is True
+    assert [c["assumption"] for c in body["sensitivity"]["cases"]] == ["평가기준일", "퇴사예정일"]
+    assert body["calculation"]["invariants_hold"] is True
+    assert body["calculation"]["rounding_rule"] == "FLOOR"
+    assert body["calculation"]["formula"]
+
+
+def test_vesting_endpoint_compares_a_stated_figure(calc_client):
+    payload = dict(VESTING_PAYLOAD, stated_vested_shares="342708")
+    body = calc_client.post("/api/calculations/vesting", json=payload).json()
+    comparison = body["stated_comparison"]
+    assert comparison["computed"] == "345000"
+    assert comparison["matches"] is False
+    assert comparison["rounding_rule"] == "FLOOR", "반올림 규칙 없이 불일치를 말하지 않는다"
+
+
+def test_vesting_endpoint_rejects_a_zero_vesting_period(calc_client):
+    payload = dict(VESTING_PAYLOAD, vesting_months=0)
+    assert calc_client.post("/api/calculations/vesting", json=payload).status_code == 422
