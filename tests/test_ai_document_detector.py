@@ -136,3 +136,15 @@ def test_argument_validity_verifier_generates_hallucination_table():
     assert len(result.findings) == 1
     assert result.findings[0].type == FindingType.LEGAL_ARGUMENT_INVALID
     assert result.findings[0].severity == Severity.HIGH
+
+
+def test_unavailable_source_does_not_count_as_fake_case_or_ai_generation():
+    doc = _make_sample_doc("원고의 청구는 이유 없습니다. 계약은 유효합니다. 채무를 이행했습니다.")
+    unavailable = Finding.create(
+        type=FindingType.CASE_NOT_FOUND, status=VerificationStatus.UNVERIFIED,
+        severity=Severity.INFO, evidence_grade=EvidenceGrade.U,
+        title="외부 출처 시간 초과", detail="조회 미완료", engine="legal_engine")
+    baseline = asyncio.run(detect_ai_document(doc, [], router=None))
+    result = asyncio.run(detect_ai_document(doc, [unavailable] * 46, router=None))
+    assert result.score == baseline.score
+    assert result.reasons == baseline.reasons

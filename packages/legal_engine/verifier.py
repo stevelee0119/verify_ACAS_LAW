@@ -13,7 +13,7 @@ Level 1~3은 결정론적으로 수행한다. Level 4~5는 LLM이 담당하되
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
@@ -58,11 +58,14 @@ class LegalVerifier:
     # -- 진입점 -----------------------------------------------------------
     def verify_citations(
         self, citations: List[Citation], *, case_date: Optional[str] = None,
-        incident_date: Optional[str] = None, current_date: Optional[str] = None
+        incident_date: Optional[str] = None, current_date: Optional[str] = None,
+        progress: Optional[Callable[[int, int], None]] = None,
     ) -> EngineResult:
         result = EngineResult(engine=ENGINE_NAME)
         verdicts: List[CitationVerdict] = []
-        for citation in citations:
+        for index, citation in enumerate(citations):
+            if progress:
+                progress(index, len(citations))
             if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                 verdict = self.verify_case(citation)
             elif citation.type == CitationType.STATUTE:
@@ -88,6 +91,8 @@ class LegalVerifier:
                         "reason": "; ".join(verdict.notes) or "공식 Source 확인 불가",
                     }
                 )
+            if progress:
+                progress(index + 1, len(citations))
         result.data["verdicts"] = [
             {
                 "citation_id": v.citation.citation_id,

@@ -10,6 +10,8 @@ const state = {
   selected: new Set(),
   generation: 0,
   timer: null,
+  pollError: null,
+  progressSeen: null,
   editing: null,
   creationKey: null,
   viewing: null,
@@ -89,12 +91,11 @@ async function api(path, options = {}) {
     headers,
     credentials: "same-origin"
   };
-  let response = await send(path, requestOptions);
+  let {response, data} = await send(path, requestOptions);
   if (response.status === 401) {
     await operationsUI.authenticate();
-    response = await send(path, requestOptions);
+    ({response, data} = await send(path, requestOptions));
   }
-  const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `요청 실패 (${response.status})`);
   return data;
 }
@@ -105,13 +106,19 @@ async function api(path, options = {}) {
 const API_TIMEOUT_MS = 180000;
 
 async function send(path, requestOptions) {
+  const {timeoutMs = API_TIMEOUT_MS, ...fetchOptions} = requestOptions;
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(`/api${path}`, {...requestOptions, signal: controller.signal});
+    const response = await fetch(`/api${path}`, {...fetchOptions, signal: controller.signal});
+    const data = response.status === 204 ? null : await response.json().catch(error => {
+      if (controller.signal.aborted || response.ok || error?.name !== "SyntaxError") throw error;
+      return null;
+    });
+    return {response, data};
   } catch (error) {
     if (error?.name === "AbortError") {
-      throw new Error(`서버가 ${Math.round(API_TIMEOUT_MS / 1000)}초 안에 응답하지 않아 요청을 중단했습니다. ` +
+      throw new Error(`서버가 ${Math.round(timeoutMs / 1000)}초 안에 응답하지 않아 요청을 중단했습니다. ` +
         "자료가 많은 경우 처리에 시간이 걸릴 수 있습니다. 잠시 후 다시 시도하고, 반복되면 서버 로그를 확인하세요.");
     }
     throw new Error("서버에 연결하지 못했거나 응답이 도중에 끊겼습니다. " +
@@ -230,6 +237,7 @@ function renderProject() {
     $("progressText").textContent = state.run.stage_message || label(state.run.state);
     $("progressPercent").textContent = `${percent}%`;
     $("progressBar").value = percent;
+    renderProgressNotice();
   }
   renderProjects();
   renderDocuments();
@@ -499,13 +507,32 @@ async function verify() {
   }
 }
 
+function renderProgressNotice() {
+  const run = state.run;
+  if (!run) return;
+  const signature = JSON.stringify([run.state, run.stage_message, run.progress]);
+  if (state.progressSeen?.runId !== run.id || state.progressSeen.signature !== signature) {
+    state.progressSeen = {runId: run.id, signature, at: Date.now()};
+  }
+  const seconds = Math.floor((Date.now() - state.progressSeen.at) / 1000);
+  const error = state.pollError?.runId === run.id;
+  const message = error ? "서버 연결이 지연되어 진행 상태를 갱신하지 못했습니다. 자동으로 다시 연결 중입니다. 검증 작업이 중단된 것으로 확정된 것은 아닙니다."
+    : seconds >= 60 ? `현재 단계의 진행 정보가 ${seconds}초 동안 변경되지 않았습니다. 서버 응답은 정상이며 작업 결과를 기다리고 있습니다.` : "";
+  $("progressNotice").textContent = message;
+  $("progressNotice").hidden = !message;
+}
+
 function pollRun(generation) {
   clearTimeout(state.timer);
+  const runId = state.run?.id;
+  if (!runId) return;
   state.timer = setTimeout(async () => {
-    if (generation !== state.generation) return;
+    if (generation !== state.generation || state.run?.id !== runId) return;
     try {
-      const run = await api(`/verification-runs/${state.run.id}`);
-      if (generation !== state.generation) return;
+      const run = await api(`/verification-runs/${runId}`, {timeoutMs: 15000});
+      if (generation !== state.generation || state.run?.id !== runId) return;
+      if (!run || run.id !== runId || typeof run.state !== "string") throw new Error("진행 상태 응답을 읽지 못했습니다");
+      state.pollError = null;
       state.run = run;
       renderProject();
       if (terminal(run)) {
@@ -513,7 +540,9 @@ function pollRun(generation) {
         toast(label(run.state));
       } else pollRun(generation);
     } catch (error) {
-      toast(error.message);
+      if (generation !== state.generation || state.run?.id !== runId) return;
+      state.pollError = {runId};
+      renderProgressNotice();
       pollRun(generation);
     }
   }, 1500);

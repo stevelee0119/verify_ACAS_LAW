@@ -43,6 +43,10 @@ services:
         value: STANDARD
       - key: LV_ALLOW_NETWORK
         value: "1"
+      - key: LV_HTTP_TIMEOUT
+        value: "12"
+      - key: LV_SOURCE_LOOKUP_BUDGET_SECONDS
+        value: "120"
       - key: LV_PSEUDONYM_SECRET
         generateValue: true
       # 최초 관리자. 기존 계정도 이 값도 없으면 보호된 API에 접근할 수 없다.

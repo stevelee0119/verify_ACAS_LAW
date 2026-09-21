@@ -73,9 +73,7 @@ class OfficialLegalMixin:
                                      message="" if status == AdapterStatus.READY else "Official request failed")
             return result, payload if status == AdapterStatus.READY else None
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in type(exc).__name__.lower() else AdapterStatus.ERROR
-            # Exception messages may contain the credential-bearing request URL.
-            return self._unavailable(audit_query, status, "Official request failed (transport error)"), None
+            return self._transport_unavailable(audit_query, exc), None
 
     def _legal_list(self, audit_query, target, root, key, **filters):
         records, sources = [], []

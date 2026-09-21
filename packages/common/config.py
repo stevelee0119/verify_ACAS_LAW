@@ -96,6 +96,8 @@ class Settings:
     )
     allow_network: bool = field(default_factory=lambda: _flag("LV_ALLOW_NETWORK", True))
     http_timeout: float = field(default_factory=lambda: float(os.getenv("LV_HTTP_TIMEOUT", "12")))
+    source_lookup_budget_seconds: float = field(
+        default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_BUDGET_SECONDS", "120")))
     law_go_kr_oc: Optional[str] = field(default_factory=lambda: os.getenv("LV_LAW_GO_KR_OC"))
     kci_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_KCI_KEY"))
     semantic_scholar_key: Optional[str] = field(default_factory=lambda: os.getenv("LV_SEMANTIC_SCHOLAR_KEY"))
@@ -117,7 +119,7 @@ class Settings:
     )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
-    rule_version: str = "2026.09.21.1"
+    rule_version: str = "2026.09.21.2"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

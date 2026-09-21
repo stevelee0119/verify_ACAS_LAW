@@ -121,7 +121,7 @@ def execution_settings_snapshot():
         "pricing": copy.deepcopy(settings.pricing),
         "budget": budget_settings(settings),
         "settings": {name: getattr(settings, name) for name in (
-            "rule_version", "prompt_version", "allow_network", "http_timeout", "ocr_lang",
+            "rule_version", "prompt_version", "allow_network", "http_timeout", "source_lookup_budget_seconds", "ocr_lang",
             "ocr_psm", "ocr_dpi", "ocr_min_confidence", "ocr_max_pages", "independent_ocr_pages",
             "independent_ocr_mode", "seal_meta_message_content", "allow_sealed_reveal")},
     }

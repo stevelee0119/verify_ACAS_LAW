@@ -47,8 +47,7 @@ class KCIAdapter(AcademicSourceAdapter):
                 return self._unavailable(query, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             body = response.text
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(query, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(query, exc)
 
         records = _parse_kci_xml(body)
         return AdapterResponse(
@@ -81,8 +80,7 @@ class OpenAlexAdapter(AcademicSourceAdapter):
                 return self._unavailable(query, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             payload = response.json()
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(query, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(query, exc)
 
         records = []
         for item in (payload.get("results") or [])[:5]:
@@ -135,8 +133,7 @@ class SemanticScholarAdapter(AcademicSourceAdapter):
                 return self._unavailable(query, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             payload = response.json()
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(query, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(query, exc)
 
         records = [
             {
@@ -181,8 +178,7 @@ class CrossrefAdapter(AcademicSourceAdapter):
                 return self._unavailable(query, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             payload = response.json()
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(query, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(query, exc)
 
         message = payload.get("message", {})
         items = message.get("items") if isinstance(message.get("items"), list) else [message]

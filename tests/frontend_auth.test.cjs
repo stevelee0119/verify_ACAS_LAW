@@ -216,3 +216,48 @@ test("merged page retains every workbench and no script persists authentication 
   assert.doesNotMatch(source + app, /(?:sessionStorage|localStorage)\.setItem\([^)]*(?:token|password|credential)/i);
   assert.doesNotMatch(source + app + html, /<<<<<<<|=======|>>>>>>>/);
 });
+
+function networkHarness(fetch, authenticate = async () => {}) {
+  const app = readFileSync(path.join(root, "apps/web/static/app.js"), "utf8");
+  const network = app.slice(app.indexOf("async function api("), app.indexOf("function action("));
+  const context = vm.createContext({fetch, AbortController, setTimeout, clearTimeout, FormData:class {},
+    operationsUI:{authenticate}});
+  vm.runInContext(network, context);
+  return vm.runInContext("({api, send})", context);
+}
+
+test("progress request timeout includes response body receipt and aborts it", async () => {
+  let aborted = false;
+  const h = networkHarness(async (url, options) => ({ok:true, status:200,
+    json:() => new Promise((resolve, reject) => options.signal.addEventListener("abort", () => {
+      aborted = true; reject(Object.assign(new Error("aborted"), {name:"AbortError"}));
+    }))}));
+  await assert.rejects(h.api("/verification-runs/run", {timeoutMs:20}), /응답하지 않아/);
+  assert.equal(aborted, true);
+});
+
+test("broken success JSON is an error, not a null run that silently stops polling", async () => {
+  const h = networkHarness(async () => ({ok:true, status:200, json:async () => {throw new SyntaxError("truncated");}}));
+  await assert.rejects(h.api("/verification-runs/run"), /연결하지 못했거나 응답이 도중에 끊겼습니다/);
+});
+
+test("non JSON server errors remain HTTP errors and empty DELETE responses are supported", async () => {
+  const h = networkHarness(async () => ({ok:false, status:503, json:async () => {throw new SyntaxError("HTML");}}));
+  await assert.rejects(h.api("/verification-runs/run"), /503/);
+  const empty = networkHarness(async () => ({ok:true, status:204}));
+  assert.equal(await empty.api("/documents/d", {method:"DELETE"}), null);
+});
+
+test("JSON mutation is replayed once after login with the same body and without timeout options in fetch", async () => {
+  let logins = 0;
+  const calls = [];
+  const h = networkHarness(async (url, options) => {
+    calls.push({url, options});
+    return {ok:calls.length === 2, status:calls.length === 2 ? 200 : 401, json:async () => ({done:true})};
+  }, async () => {logins++;});
+  assert.equal((await h.api("/projects", {method:"POST", body:{name:"test"}, timeoutMs:100})).done, true);
+  assert.equal(logins, 1);
+  assert.equal(calls[0].options.body, calls[1].options.body);
+  assert.equal(calls[0].options.body, JSON.stringify({name:"test"}));
+  assert.equal(calls[0].options.timeoutMs, undefined);
+});

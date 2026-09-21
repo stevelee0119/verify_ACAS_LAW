@@ -239,7 +239,11 @@ class LLMRouter:
         try:
             if provider.config.kind == "local" and self.provider_guard:
                 self.provider_guard(provider, policy)
-            response = await provider.generate(request)
+            response = await asyncio.wait_for(provider.generate(request),
+                                              timeout=max(0.01, self.settings.http_timeout * 3))
+        except asyncio.TimeoutError:
+            response = LLMResponse(False, provider=provider.name, model=provider.config.model,
+                                   error="PROVIDER_TIMEOUT: AI 응답 시간 초과. 해당 검토는 미검증입니다")
         except Exception as exc:
             response = LLMResponse(False, provider=provider.name, model=provider.config.model,
                                    error="PROVIDER_EXCEPTION: " + type(exc).__name__)

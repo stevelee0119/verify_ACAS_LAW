@@ -5,6 +5,7 @@ from dataclasses import replace
 from datetime import date
 from decimal import Decimal, Inexact, localcontext
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
@@ -408,7 +409,10 @@ def test_calculation_workbench_browser_desktop_mobile_and_exact_payload(tmp_path
 
     static = ROOT / "apps" / "web" / "static"
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        options = {"headless": True}
+        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
+            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
+        browser = playwright.chromium.launch(**options)
         page = browser.new_page(viewport={"width": 1440, "height": 960})
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))

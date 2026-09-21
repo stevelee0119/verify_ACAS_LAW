@@ -95,7 +95,8 @@ def _rule_based_ai_detection(
         reasons.append(f"AI 챗봇의 전형적인 관용구/면책/대화형 잔재 문구가 {cliche_hits}건 발견됨")
 
     # 3. 존재하지 않는 판례(할루시네이션) 발생 정황 결합
-    fake_case_count = sum(1 for f in citation_findings if f.type == FindingType.CASE_NOT_FOUND)
+    fake_case_count = sum(1 for f in citation_findings
+                          if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND)
     total_case_count = sum(1 for f in citation_findings if "CASE" in f.tags)
     if fake_case_count > 0:
         ratio = fake_case_count / max(1, total_case_count)
@@ -173,7 +174,8 @@ async def detect_ai_document(
 
     # 가짜 판례 목록 요약
     fake_cases = [
-        f.title for f in citation_findings if f.type == FindingType.CASE_NOT_FOUND
+        f.title for f in citation_findings
+        if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND
     ][:5]
 
     # LLM 심층 판별 프롬프트 구성

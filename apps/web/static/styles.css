@@ -1021,6 +1021,17 @@ table {
   margin-bottom: 0
 }
 
+.progress-notice {
+  margin: 10px 0 0;
+  color: #785315;
+  font-size: 13px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+#progressText { min-width: 0; overflow-wrap: anywhere; }
+#progressPercent { flex-shrink: 0; }
+
 .login-heading>h2 {
   margin: 16px 0 0;
   font-size: 16px;

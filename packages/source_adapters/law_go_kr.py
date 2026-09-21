@@ -68,8 +68,7 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                 return self._unavailable(case_number, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             payload = response.json()
         except Exception as exc:  # 네트워크·파싱 오류는 Job을 실패시키지 않는다
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(case_number, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(case_number, exc)
 
         records = _normalize_case_payload(payload)
         return AdapterResponse(
@@ -114,8 +113,7 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                 return self._unavailable(law_name, AdapterStatus.ERROR, f"HTTP {response.status_code}")
             payload = response.json()
         except Exception as exc:
-            status = AdapterStatus.TIMEOUT if "timeout" in str(exc).lower() else AdapterStatus.ERROR
-            return self._unavailable(law_name, status, f"조회 실패: {exc}")
+            return self._transport_unavailable(law_name, exc)
 
         records = _normalize_law_payload(payload)
         # lawSearch.do는 키워드 검색이다. "민법"으로 조회하면 "난민법"·"주민법" 등
@@ -153,8 +151,8 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
             record = self._record(str(case.get("case_number")), AdapterStatus.READY, payload=mask_oc(payload),
                 result_id=str(identifier), url=f"{SERVICE_URL}?target={target}&ID={identifier}", used_fields=["판례내용", "판시사항", "판결요지"])
             return AdapterResponse(AdapterStatus.READY, [normalized], record)
-        except Exception:
-            return self._unavailable(str(case.get("case_number")), AdapterStatus.ERROR, "판례 전문 조회 실패")
+        except Exception as exc:
+            return self._transport_unavailable(str(case.get("case_number")), exc)
 
     def fetch_articles(self, law: Dict[str, Any]) -> Optional[List[str]]:
         """법령 본문을 조회해 수록된 조문 번호 목록을 만든다.

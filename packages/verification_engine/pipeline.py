@@ -55,6 +55,7 @@ from packages.source_adapters.legal_history import today_korea
 from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
 from packages.source_adapters import SourceRegistry
+from packages.source_adapters.transport import source_lookup_session
 
 from packages.claim_engine.assertion import analyze_assertions
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
@@ -180,6 +181,19 @@ class VerificationPipeline:
 
     # -- 진입점 -----------------------------------------------------------
     def run(
+        self, run_id: str, context: ProjectContext, documents: List[DocumentInput], *,
+        progress: Optional[ProgressCallback] = None, check: Optional[Callable[[], None]] = None,
+    ) -> VerificationRunResult:
+        def emit(state, message, ratio):
+            if check:
+                check()
+            if progress:
+                progress(state, message, ratio)
+
+        with source_lookup_session(self.settings.source_lookup_budget_seconds, check=check):
+            return self._run(run_id, context, documents, progress=emit)
+
+    def _run(
         self,
         run_id: str,
         context: ProjectContext,
@@ -212,9 +226,9 @@ class VerificationPipeline:
 
         total = max(1, len(documents))
         for index, document in enumerate(documents):
-            base = index / total
+            base = 0.85 * index / total
             try:
-                document_result = self._run_document(document, context, pii, emit, base, 1 / total,
+                document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
                                                      source_run_id=run_id)
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
@@ -306,7 +320,7 @@ class VerificationPipeline:
         # 본문을 한 글자도 읽지 못한 경우. 파싱 자체는 성공했으므로 parse_error가 아니지만,
         # 검증 관점에서는 아무것도 확인하지 못한 것이다. 조용히 넘어가면 모든 위험 축이
         # "문제 없음"으로 보고되어, 검증한 결과 깨끗한 문서와 구별되지 않는다.
-        if doc.structure.get("body_extraction_failed") and not doc.body_blocks():
+        if (doc.structure.get("body_extraction_failed") or doc.structure.get("unsupported_body")) and not doc.body_blocks():
             result.findings.append(
                 Finding.create(
                     type=FindingType.PARSE_ERROR,
@@ -326,7 +340,7 @@ class VerificationPipeline:
             )
             result.unverified_items.append(
                 {"kind": "document_body", "document_id": doc.document_id,
-                 "reason": "본문 추출 실패(OCR 미설치 등)로 내용 검증 미수행"}
+                 "reason": "본문 추출 실패로 내용 검증 미수행"}
             )
 
         if doc.structure.get("unsupported_format") or doc.structure.get("parse_error"):
@@ -411,11 +425,16 @@ class VerificationPipeline:
         result.findings.extend(scan_redaction(doc))
 
         # 6) VERIFYING — 인용 검증(결정론 우선)
-        emit(JobState.VERIFYING, f"{document.filename} 법률 인용 검증", base + span * 0.7)
+        emit(JobState.VERIFYING, f"{document.filename} 인용 항목 추출", base + span * 0.55)
         citations = extract_citations(doc)
         result.citations = [c.to_dict() for c in citations]
-        self._legal_reviews(result, citations, context)
-        self._semantic_review(result, citations, context, pii)
+        self._legal_reviews(result, citations, context, progress=lambda done, total: emit(
+            JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
+            base + span * (0.55 + 0.20 * done / max(1, total))))
+        emit(JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토", base + span * 0.75)
+        self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
+            JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
+            base + span * (0.75 + 0.05 * done / max(1, total))))
         for record in result.source_records:
             self.audit.record(
                 AuditEventType.API_QUERY,
@@ -426,6 +445,7 @@ class VerificationPipeline:
             )
 
         # 7) Claim / Entity / Event / 계산 검증
+        emit(JobState.VERIFYING, f"{document.filename} 주장·사건·금액 분석", base + span * 0.81)
         claims = extract_claims(doc, citations, project_id=context.project_id, source_run_id=source_run_id)
         entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
                                     project_id=context.project_id)
@@ -437,6 +457,7 @@ class VerificationPipeline:
         result.findings.extend(analyze_timeline(events))
 
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
+        emit(JobState.VERIFYING, f"{document.filename} 법률 주장 타당성 검토", base + span * 0.85)
         try:
             arg_validity = asyncio.run(
                 verify_argument_validity(
@@ -457,6 +478,7 @@ class VerificationPipeline:
             result.warnings.append(f"법률 주장 타당성 검토 경고: {e}")
 
         # 9) 작성자 분석 및 AI 문서 전체 생성 여부 심층 판별
+        emit(JobState.VERIFYING, f"{document.filename} 작성 이력 분석", base + span * 0.9)
         assessment = analyze_authorship(doc)
         result.authorship = assessment.to_dict()
         result.findings.extend(authorship_findings(doc, assessment))
@@ -465,6 +487,7 @@ class VerificationPipeline:
         metadata_hint = bool(assessment.signals.get("provenance_metadata")) or any(
             f.type == FindingType.METADATA_ANOMALY for f in result.findings
         )
+        emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
         try:
             ai_detector_res = asyncio.run(
                 detect_ai_document(
@@ -484,6 +507,7 @@ class VerificationPipeline:
         # 10) 명세 v1.0 제1.2장: 초안 흔적, 불확실성 미고지, 과잉 일반화, 출처 위계
         #     확신 표현 자체는 결함이 아니다. 원문을 확보하지 못한 채 그렇게 쓴 것이
         #     결함이므로, 미검증 인용 목록을 함께 넘긴다.
+        emit(JobState.VERIFYING, f"{document.filename} 표현·검토 누락 검사", base + span * 0.96)
         try:
             unverified_ids = {item.get("citation_id") for item in result.unverified_items
                               if item.get("kind") == "citation"}
@@ -503,9 +527,10 @@ class VerificationPipeline:
 
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
+        emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
         return result
 
-    def _legal_reviews(self, result, citations, context):
+    def _legal_reviews(self, result, citations, context, *, progress=None):
         """Keep the incident-date review and every issue-date review distinct."""
         current = today_korea()
         scopes = [("incident", None, context.case_date, citations)]
@@ -514,10 +539,14 @@ class VerificationPipeline:
                       for issue_id, when in sorted(context.issue_dates.items()))
         grouped, verdicts, applicability = [], [], []
         by_id = {c.citation_id: c for c in citations}
+        completed = 0
+        total = sum(len(scope[3]) for scope in scopes)
         for scope, issue_id, when, review_citations in scopes:
             review_id = f"issue:{issue_id}" if issue_id is not None else "incident"
             legal = self.legal.verify_citations(
-                review_citations, case_date=when, incident_date=context.case_date, current_date=current)
+                review_citations, case_date=when, incident_date=context.case_date, current_date=current,
+                progress=(lambda done, count: progress(completed + done, total)) if progress else None)
+            completed += len(review_citations)
             label = {"review_id": review_id, "scope": scope, "issue_id": issue_id,
                      "reference_date": when, "incident_date": context.case_date, "current_date": current}
             for verdict in legal.data.get("verdicts", []):
@@ -561,11 +590,14 @@ class VerificationPipeline:
         result.engine_data["legal_verdicts"] = verdicts
         result.engine_data["case_applicability_reviews"] = applicability
 
-    def _semantic_review(self, result, citations, context, pii):
+    def _semantic_review(self, result, citations, context, pii, *, progress=None):
         """Source-grounded model advice never replaces deterministic findings."""
         by_id = {c.citation_id: c for c in citations}
         reviews = []
-        for verdict in result.engine_data.get("legal_verdicts", []):
+        verdicts = result.engine_data.get("legal_verdicts", [])
+        for index, verdict in enumerate(verdicts):
+            if progress:
+                progress(index, len(verdicts))
             citation = by_id.get(verdict.get("citation_id"))
             official = verdict.get("official_record") or {}
             if not citation or not any(k in verdict.get("levels", {}) for k in ("level4", "level5")):
@@ -606,6 +638,8 @@ class VerificationPipeline:
             for level in ("level4", "level5"):
                 verdict["levels"][level] = "ADVISORY_REVIEWED" if grounded else "UNVERIFIED"
         result.engine_data["semantic_reviews"] = reviews
+        if progress:
+            progress(len(verdicts), len(verdicts))
 
     # -- 프로젝트 단위 ----------------------------------------------------
     def _cross_check(self, result: VerificationRunResult) -> List[Finding]:

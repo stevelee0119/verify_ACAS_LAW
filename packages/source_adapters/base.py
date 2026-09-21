@@ -109,12 +109,22 @@ class SourceAdapter(ABC):
 
     def _http_get(self, url: str, *, params: Optional[Dict[str, Any]] = None, headers: Optional[Dict[str, str]] = None):
         """제21.1장 SSRF 방어: 허용된 Adapter만 자신의 고정 도메인을 호출한다."""
-        import httpx
+        from .transport import source_get
 
-        return httpx.get(
-            url,
+        return source_get(
+            self.name, url,
             params=params,
             headers=headers or {},
             timeout=self.settings.http_timeout,
-            follow_redirects=False,
         )
+
+    def _transport_unavailable(self, query, exc):
+        import httpx
+        from .transport import SourceRequestStopped
+
+        if isinstance(exc, SourceRequestStopped):
+            return self._unavailable(query, exc.status, str(exc))
+        if isinstance(exc, httpx.TimeoutException):
+            return self._unavailable(query, AdapterStatus.TIMEOUT, "외부 출처 조회 시간이 초과되었습니다")
+        # Raw transport errors can include credential-bearing URLs.
+        return self._unavailable(query, AdapterStatus.ERROR, "외부 출처 연결 또는 응답 처리에 실패했습니다")

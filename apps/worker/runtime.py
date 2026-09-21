@@ -183,7 +183,7 @@ def execute(run_id, *, store=None):
                                           audit=audit)
             pipeline.settings = settings
             result = pipeline.run(run_id, context, inputs,
-                                  progress=lambda *args: store.progress(lease, *args))
+                                  progress=lambda *args: store.progress(lease, *args), check=check)
             result.verification_key = key
             link_snapshot_evidence(result, snapshot)
             check()

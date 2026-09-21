@@ -448,6 +448,24 @@ def test_model_reserves_before_external_call_then_settles_reported_usage(ops, mo
     assert BudgetLedger(ops).account("run:model-run")["reserved"] == 0
 
 
+def test_unresponsive_model_is_cancelled_without_releasing_uncertain_charge(ops, monkeypatch):
+    router, provider = model_router(ops, monkeypatch, None)
+    router.settings.http_timeout = 0.01
+    closed = []
+    async def never_finishes(request):
+        try:
+            await asyncio.sleep(60)
+        finally:
+            closed.append(True)
+    monkeypatch.setattr(provider, "generate", never_finishes)
+    result = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, LLMRequest("system", "user")))
+    assert closed == [True] and not result.used
+    assert result.executions[0].error.startswith("PROVIDER_TIMEOUT")
+    assert result.executions[0].cost_status == "RESERVED_UNCERTAIN"
+    with ops() as session:
+        assert session.scalar(select(BudgetReservation)).state == "DISPATCHED"
+
+
 @pytest.mark.parametrize("response,state", [(TimeoutError(), "DISPATCHED"), (LLMResponse(True, text="ok"), "SETTLED")])
 def test_uncertain_or_missing_usage_never_releases_budget(ops, monkeypatch, response, state):
     router, provider = model_router(ops, monkeypatch, response)

@@ -6,6 +6,7 @@ Binary HWP는 native parse를 시도하고 실패 시 UNSUPPORTED로 표시하�
 """
 from __future__ import annotations
 
+import io
 import re
 import struct
 import zlib
@@ -141,6 +142,11 @@ class HwpParser(DocumentParser):
                 "현재 문서의 본문 검증 항목은 UNVERIFIED로 처리한다."
             )
             doc.structure["unsupported_body"] = True
+            doc.structure["body_extraction_failed"] = True
+        else:
+            doc.structure["body_extraction_scope"] = "HWP_PARAGRAPH_RECORDS"
+            doc.structure["page_numbers_reliable"] = False
+            doc.parse_warnings.append("HWP 본문 텍스트를 추출했습니다. 원본 쪽 번호와 시각적 배치·서식은 확인되지 않습니다.")
 
         page = Page(page_number=1)
         for t in texts:
@@ -152,24 +158,92 @@ class HwpParser(DocumentParser):
         return doc
 
 
+MAX_HWP_SECTION_BYTES = 16 * 1024 * 1024
+MAX_HWP_BODY_BYTES = 32 * 1024 * 1024
+MAX_HWP_SECTIONS = 512
+MAX_HWP_RECORDS = 200_000
+
+
+def _paragraph_text(data: bytes) -> str:
+    if len(data) % 2:
+        raise ParserError("HWP 문단 텍스트 길이가 잘못되었습니다")
+    output = bytearray()
+    cursor = 0
+    while cursor < len(data):
+        code = struct.unpack_from("<H", data, cursor)[0]
+        if code >= 32:
+            output.extend(data[cursor:cursor + 2])
+            cursor += 2
+            continue
+        # Inline/extended controls occupy eight UTF-16 code units, not one.
+        width = 16 if code in {*range(1, 10), 11, 12, *range(14, 24)} else 2
+        if cursor + width > len(data):
+            raise ParserError("HWP 문단 제어문자가 잘렸습니다")
+        replacement = {9: "\t", 10: "\n", 13: "\n", 24: "-", 30: " ", 31: " "}.get(code, "")
+        output.extend(replacement.encode("utf-16-le"))
+        cursor += width
+    return output.decode("utf-16-le").strip()
+
+
+def _section_text(data: bytes) -> List[str]:
+    texts = []
+    cursor = count = 0
+    while cursor < len(data):
+        count += 1
+        if count > MAX_HWP_RECORDS or len(data) - cursor < 4:
+            raise ParserError("HWP 레코드 수 초과 또는 잘린 헤더")
+        header = struct.unpack_from("<I", data, cursor)[0]
+        tag, size = header & 0x3FF, header >> 20
+        cursor += 4
+        if size == 0xFFF:
+            if len(data) - cursor < 4:
+                raise ParserError("HWP 확장 길이 헤더가 잘렸습니다")
+            size = struct.unpack_from("<I", data, cursor)[0]
+            cursor += 4
+        if size > len(data) - cursor:
+            raise ParserError("HWP 레코드 본문이 잘렸습니다")
+        if tag == 0x43:  # HWPTAG_PARA_TEXT, including table-cell paragraphs.
+            text = _paragraph_text(data[cursor:cursor + size])
+            if text:
+                texts.append(text)
+        cursor += size
+    return texts
+
+
 def _extract_hwp_text(raw: bytes) -> List[str]:
-    """의존성 없이 zlib 스트림에서 UTF-16LE 한글 텍스트를 복원하는 보수적 추출기."""
-    results: List[str] = []
-    for m in re.finditer(rb"\x78\x9c|\x78\x01|\x78\xda", raw):
-        start = m.start()
-        try:
-            data = zlib.decompressobj().decompress(raw[start : start + 2_000_000])
-        except Exception:
-            continue
-        if len(data) < 20:
-            continue
-        try:
-            text = data.decode("utf-16-le", "ignore")
-        except Exception:
-            continue
-        cleaned = re.sub(r"[\x00-\x1f]+", " ", text)
-        for chunk in re.findall(r"[가-힣A-Za-z0-9][가-힣A-Za-z0-9\s·.,()\[\]:;\-~%\"'“”‘’/]{6,}", cleaned):
-            s = chunk.strip()
-            if len(s) >= 8 and s not in results:
-                results.append(s)
-    return results[:5000]
+    """Read CFB streams and raw DEFLATE records per the Hancom HWP 5.0 spec.
+
+    https://tech.hancom.com/python-hwp-parsing-2/
+    Preview text and embedded binary data are not substitutes for the body.
+    """
+    import olefile
+
+    with olefile.OleFileIO(io.BytesIO(raw)) as ole:
+        if not ole.exists("FileHeader") or ole.get_size("FileHeader") != 256:
+            raise ParserError("HWP FileHeader가 없거나 길이가 잘못되었습니다")
+        header = ole.openstream("FileHeader").read()
+        if header[:32].rstrip(b"\0") != b"HWP Document File" or header[35] != 5:
+            raise ParserError("지원하지 않는 HWP 형식입니다")
+        flags = struct.unpack_from("<I", header, 36)[0]
+        if flags & ((1 << 1) | (1 << 2) | (1 << 4) | (1 << 8) | (1 << 10)):
+            raise ParserError("암호화·배포용·DRM HWP는 HWPX 또는 PDF 변환 후 검증해야 합니다")
+        sections = [path for path in ole.listdir(streams=True, storages=False)
+                    if len(path) == 2 and path[0] == "BodyText" and re.fullmatch(r"Section\d+", path[1])]
+        sections.sort(key=lambda path: int(path[1][7:]))
+        if not sections or len(sections) > MAX_HWP_SECTIONS:
+            raise ParserError("HWP 본문 구역이 없거나 구역 수 한도를 초과했습니다")
+        results, body_size = [], 0
+        for section in sections:
+            if ole.get_size(section) > MAX_HWP_SECTION_BYTES:
+                raise ParserError("HWP 본문 스트림 크기 한도 초과")
+            data = ole.openstream(section).read()
+            if flags & 1:
+                decoder = zlib.decompressobj(-15)
+                data = decoder.decompress(data, MAX_HWP_SECTION_BYTES + 1)
+                if len(data) > MAX_HWP_SECTION_BYTES or not decoder.eof or decoder.unused_data:
+                    raise ParserError("HWP 압축 본문 한도 초과 또는 손상")
+            body_size += len(data)
+            if body_size > MAX_HWP_BODY_BYTES:
+                raise ParserError("HWP 전체 본문 크기 한도 초과")
+            results.extend(_section_text(data))
+        return results
