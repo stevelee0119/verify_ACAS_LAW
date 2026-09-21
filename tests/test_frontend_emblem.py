@@ -1,9 +1,11 @@
 """Offline visual regression for the supplied emblem and compact header."""
+import io
 import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
+from PIL import Image, ImageColor
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -60,10 +62,10 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 expect(dialog).not_to_be_visible()
                 square = page.locator("#emptyState .empty-emblem")
                 expect(square).to_be_visible()
-                expect(square).to_have_attribute("src", "/static/img/acas-law-square.jpg")
+                expect(square).to_have_attribute("src", "/static/img/acas-law-square-transparent.png")
                 page.wait_for_function("""() => {
                     const image = document.querySelector('#emptyState .empty-emblem');
-                    return image.complete && image.naturalWidth === 1280 && image.naturalHeight === 1280;
+                    return image.complete && image.naturalWidth === 1254 && image.naturalHeight === 1254;
                 }""")
                 assert square.evaluate("""image => {
                     const rect = image.getBoundingClientRect();
@@ -71,6 +73,12 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                         && rect.left >= 0 && rect.right <= innerWidth
                         && getComputedStyle(image).objectFit === 'contain';
                 }""")
+                background = ImageColor.getrgb(page.evaluate(
+                    "getComputedStyle(document.documentElement).backgroundColor"))
+                with Image.open(io.BytesIO(square.screenshot())) as rendered:
+                    for point in ((1, 1), (rendered.width - 2, 1),
+                                  (1, rendered.height - 2), (rendered.width - 2, rendered.height - 2)):
+                        assert rendered.getpixel(point)[:3] == background
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 assert page.locator(".topbar").evaluate("""bar => {
                     const rects = [...bar.children].filter(element => getComputedStyle(element).display !== 'none')

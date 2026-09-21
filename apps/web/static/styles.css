@@ -490,6 +490,7 @@ td {
   height: auto;
   aspect-ratio: 1;
   object-fit: contain;
+  background: transparent;
   margin: 0 auto 18px;
 }
 

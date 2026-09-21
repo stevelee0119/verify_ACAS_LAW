@@ -69,14 +69,26 @@ def test_frontend_emblem_is_available_without_login(client):
     emblem = brand.xpath(".//img")[0]
     assert emblem.get("alt") == "ACASia LAW"
     square = markup.xpath("//img[@class='empty-emblem']")[0]
-    assert square.get("src") == "/static/img/acas-law-square.jpg"
-    for element, size in ((emblem, (1280, 640)), (square, (1280, 1280))):
+    assert square.get("src") == "/static/img/acas-law-square-transparent.png"
+    for element, size, fmt, mime in (
+        (emblem, (1280, 640), "JPEG", "image/jpeg"),
+        (square, (1254, 1254), "PNG", "image/png"),
+    ):
         response = anonymous.get(element.get("src"))
         assert response.status_code == 200
-        assert response.headers["content-type"] == "image/jpeg"
+        assert response.headers["content-type"] == mime
         with Image.open(io.BytesIO(response.content)) as image:
             assert image.size == size
-            assert image.format == "JPEG"
+            assert image.format == fmt
+            if fmt == "PNG":
+                assert image.mode == "RGBA"
+                alpha = image.getchannel("A")
+                assert alpha.getextrema() == (0, 255)
+                assert alpha.histogram()[0] > image.width * image.height / 4
+                assert all(alpha.getpixel(point) == 0 for point in (
+                    (0, 0), (image.width - 1, 0),
+                    (0, image.height - 1), (image.width - 1, image.height - 1),
+                ))
 
 
 @pytest.fixture()

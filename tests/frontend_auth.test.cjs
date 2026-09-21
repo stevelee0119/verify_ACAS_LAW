@@ -209,7 +209,7 @@ test("merged page retains every workbench and no script persists authentication 
   // 엠블럼은 상단바와 빈 상태 화면 양쪽에 있어야 한다.
   assert.ok(html.includes("/static/img/emblem-192.png"));
   assert.equal((html.match(/src="\/static\/acas-law-emblem\.jpg"/g) || []).length, 1);
-  assert.ok(html.includes('class="empty-emblem" src="/static/img/acas-law-square.jpg"'));
+  assert.ok(html.includes('class="empty-emblem" src="/static/img/acas-law-square-transparent.png"'));
   assert.ok(html.includes("/static/img/favicon.ico"));
   assert.doesNotMatch(html, /ACAS_LAW Verifier/);
   const ids = Array.from(html.matchAll(/\bid="([^"]+)"/g), match => match[1]); assert.equal(new Set(ids).size, ids.length);
