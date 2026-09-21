@@ -50,6 +50,7 @@ from packages.forensic_engine import ForensicContext, ForensicEngine
 from packages.forensic_engine.advisory import AdvisoryContext
 from packages.legal_engine import LegalVerifier, extract_citations, verify_argument_validity
 from packages.legal_engine.source_review import case_applicability_review
+from packages.legal_engine.spec_mapping import relevance_finding
 from packages.source_adapters.legal_history import today_korea
 from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
@@ -528,6 +529,15 @@ class VerificationPipeline:
                         source_record_ids=verdict.get("source_record_ids", []))
                     review.update(label)
                     applicability.append(review)
+                    # 제4.2장. 존재 확인과 관련성은 별개다. 관련성 축이 채워진
+                    # 경우에만 판정하고, 재지 않은 축을 약하다고 말하지 않는다.
+                    weak = relevance_finding(
+                        review.get("relevance") or {},
+                        case_number=citation.case_number or "",
+                        citation_id=citation.citation_id,
+                        document_id=citation.document_id, page=citation.page)
+                    if weak is not None:
+                        result.findings.append(weak)
                 verdicts.append(verdict)
             for finding in legal.findings:
                 finding.confidence_features["legal_review"] = dict(label)

@@ -12,6 +12,8 @@ from packages.common.enums import CitationType, EvidenceGrade, FindingType, Seve
 from packages.common.schemas import Evidence, Finding
 from packages.source_adapters.legal_history import legal_date, select_provision, today_korea
 
+from .spec_mapping import relevance_review
+
 
 def date_context(as_of=None, incident_date=None, current_date=None):
     return {"reference_date": as_of, "incident_date": incident_date,
@@ -198,4 +200,7 @@ def case_applicability_review(citation, official, *, source_record_ids=(), extra
         result["sections"][key] = accepted
     result["missing_sections"] = [key for key in fields if not result["sections"][key]]
     result["full_text_available"] = bool(text)
+    # 제4.2장 관련성. 측정하지 않았으면 0점이 아니라 미측정이며, 관련성 검증을
+    # 마쳤다는 표시로 쓸 수 없다. 값은 검토자나 임베딩 단계가 채운다.
+    result["relevance"] = relevance_review((extracted or {}).get("relevance_axes"))
     return result

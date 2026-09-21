@@ -505,3 +505,62 @@ def test_acceptance_auto_fix_scope_excludes_legal_judgement():
                   FindingType.LEGAL_REQUIREMENT_OMITTED, FindingType.SOURCE_CONFLICT_IGNORED):
         assert type_ not in AUTO_FIXABLE_TYPES
         assert type_ in LAWYER_APPROVAL_TYPES
+
+
+# --- 제4.1~4.2장 판정값 파생 --------------------------------------------------
+def test_lookup_failure_is_unverifiable_not_not_found():
+    """제11.1장. 공식 API 장애가 '그런 판례는 없다'로 둔갑하면 안 된다."""
+    from packages.common.enums import SourceVerdict
+    from packages.legal_engine.spec_mapping import spec_source_verdict
+
+    failure = spec_source_verdict({"existence": "UNVERIFIED"},
+                                  ["LV_LAW_GO_KR_OC 환경변수가 없어 조회하지 못했다"])
+    absent = spec_source_verdict({"existence": "UNVERIFIED"}, ["검색 결과 없음"])
+    assert failure == SourceVerdict.UNVERIFIABLE
+    assert absent == SourceVerdict.NOT_FOUND
+    assert failure != absent
+
+
+@pytest.mark.parametrize("levels,expected", [
+    ({"existence": "VERIFIED", "content": "VERIFIED", "temporal": "VERIFIED"}, "VERIFIED_EXACT"),
+    ({"existence": "VERIFIED", "content": "PARTIALLY_VERIFIED", "temporal": "VERIFIED"},
+     "VERIFIED_PARAPHRASE"),
+    ({"existence": "VERIFIED", "content": "AVAILABLE", "temporal": "UNVERIFIED"}, "PARTIAL"),
+    ({"existence": "VERIFIED", "content": "CONTRADICTED"}, "MISMATCH"),
+    ({"existence": "VERIFIED", "version": "CONTRADICTED", "content": "AVAILABLE"}, "WRONG_VERSION"),
+])
+def test_spec_source_verdict_mapping(levels, expected):
+    from packages.legal_engine.spec_mapping import spec_source_verdict
+    assert str(spec_source_verdict(levels, [], has_official_record=True)) == expected
+
+
+def test_unmeasured_relevance_is_not_a_zero_score():
+    """재지 않은 관련성을 '약함'으로도 '확인됨'으로도 표시하지 않는다."""
+    from packages.legal_engine.spec_mapping import relevance_finding, relevance_review
+
+    review = relevance_review()
+    assert review["status"] == "NOT_MEASURED"
+    assert all(value is None for value in review["axes"].values())
+    assert relevance_finding(review) is None
+
+
+def test_weak_relevance_produces_a_finding_when_measured():
+    from packages.legal_engine.spec_mapping import relevance_finding, relevance_review
+
+    review = relevance_review({"issue_similarity": 0.2, "fact_similarity": 0.9,
+                               "legal_basis_similarity": 0.8,
+                               "procedural_posture_similarity": 0.7,
+                               "holding_support_strength": 0.6})
+    finding = relevance_finding(review, case_number="사건번호")
+    assert finding is not None and finding.type == FindingType.CASE_RELEVANCE_WEAK
+    assert "issue_similarity" in finding.detail
+
+
+def test_full_relevance_above_threshold_is_not_flagged():
+    from packages.legal_engine.spec_mapping import relevance_finding, relevance_review
+
+    review = relevance_review({name: 0.9 for name in
+                               ("issue_similarity", "fact_similarity", "legal_basis_similarity",
+                                "procedural_posture_similarity", "holding_support_strength")})
+    assert review["status"] == "SUPPORTED"
+    assert relevance_finding(review) is None

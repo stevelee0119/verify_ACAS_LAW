@@ -30,6 +30,7 @@ from packages.source_adapters import SourceRegistry
 
 from .normalize import canonical_article, same_case_number
 from .source_review import date_context, verify_decision_source, verify_statute_source
+from .spec_mapping import spec_source_verdict
 from packages.source_adapters.legal_history import legal_date
 
 ENGINE_NAME = "legal_engine"
@@ -91,6 +92,11 @@ class LegalVerifier:
             {
                 "citation_id": v.citation.citation_id,
                 "status": str(v.status),
+                # 명세 제4.1장 어휘로 읽을 수 있는 단일 값. 다단계 판정을
+                # 대체하지 않고 함께 싣는다. 조회 실패(UNVERIFIABLE)와
+                # 원문 미발견(NOT_FOUND)은 끝까지 구분한다.
+                "spec_verdict": str(spec_source_verdict(
+                    v.levels, v.notes, has_official_record=bool(v.official_record))),
                 "levels": v.levels,
                 "notes": v.notes,
                 "official_record": v.official_record,
