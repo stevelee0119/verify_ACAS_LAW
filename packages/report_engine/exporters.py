@@ -7,12 +7,12 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List
 
-from packages.common.enums import MM4_ADVISORY_TYPES
+from packages.common.enums import MM4_ADVISORY_TYPES, spec_code
 from packages.common.terminology import TERMINOLOGY_VERSION, terminology_catalog, EDITABLE_COPY_NOTICE
 from .snapshot import json_lines, xml_text
 
 FINDING_COLUMNS = [
-    "finding_id", "type", "status", "severity", "evidence_grade", "confidence",
+    "finding_id", "type", "spec_code", "status", "severity", "evidence_grade", "confidence",
     "document_id", "page", "block_id", "title", "detail", "engine",
     "meta_message_type", "advisory_only", "review_status", "sources", "has_sealed_content",
 ]
@@ -23,6 +23,8 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
     for finding in findings:
         data = finding.to_dict(reveal_sealed=reveal_sealed)
         row = {key: data.get(key) for key in FINDING_COLUMNS}
+        # 명세 제1.2장의 코드명. 이 시스템의 이름과 다른 경우에만 값이 달라진다.
+        row["spec_code"] = spec_code(finding.type)
         row["sources"] = ";".join(data.get("sources") or [])
         rows.append(row)
     return rows
@@ -150,6 +152,16 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     summary.append(["생성시각", datetime.utcnow().isoformat()])
     summary.append(["문서 수", len(run_result.documents)])
     summary.append(["Finding 수", len(run_result.all_findings)])
+    # 제9.2장 배포가능 상태. 보고서를 여는 사람이 가장 먼저 봐야 하는 값이다.
+    gate = (run_result.scores or {}).get("release_gate") or {}
+    if gate:
+        append(summary, ["배포가능 상태", gate.get("release_gate")])
+        append(summary, ["검증위험 지수", gate.get("hallucination_risk")])
+        append(summary, ["지수 성격", gate.get("risk_index_note")])
+        if gate.get("hard_block_reasons"):
+            append(summary, ["차단 사유", "\n".join(gate["hard_block_reasons"])])
+        if gate.get("review_reasons"):
+            append(summary, ["사람 검토 사유", "\n".join(gate["review_reasons"])])
     for key, value in getattr(run_result, "report_metadata", {}).items():
         append(summary, [key, value])
     append(summary, ["editable_copy_notice", EDITABLE_COPY_NOTICE])

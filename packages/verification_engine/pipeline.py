@@ -55,6 +55,11 @@ from packages.llm_router import LLMRouter
 from packages.pii_engine import PIIEngine, PseudonymStore
 from packages.source_adapters import SourceRegistry
 
+from packages.claim_engine.assertion import analyze_assertions
+from packages.legal_engine.internal_citation import (build_clause_index, check_references,
+                                                    internal_citation_findings)
+from packages.legal_engine.omission import analyze_omissions, omission_findings
+
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document
 from .authorship import analyze_authorship, authorship_findings
 from .scoring import aggregate_scores
@@ -475,6 +480,26 @@ class VerificationPipeline:
         except Exception as e:
             result.warnings.append(f"AI 문서 생성 판별 경고: {e}")
 
+        # 10) 명세 v1.0 제1.2장: 초안 흔적, 불확실성 미고지, 과잉 일반화, 출처 위계
+        #     확신 표현 자체는 결함이 아니다. 원문을 확보하지 못한 채 그렇게 쓴 것이
+        #     결함이므로, 미검증 인용 목록을 함께 넘긴다.
+        try:
+            unverified_ids = {item.get("citation_id") for item in result.unverified_items
+                              if item.get("kind") == "citation"}
+            unverified_citations = [c for c in citations if c.citation_id in unverified_ids]
+            body = "\n".join(block.text for page in doc.pages for block in page.blocks
+                              if block.source_layer == "visible_text" and block.text)
+            result.findings.extend(analyze_assertions(
+                body, citations=citations, unverified_citations=unverified_citations,
+                document_id=doc.document_id,
+            ))
+            # 제7.2장 누락 탐지. 결론을 확정하지 않고 누락 후보만 제시한다.
+            reports = analyze_omissions(body)
+            result.engine_data["omission_reports"] = [r.to_dict() for r in reports]
+            result.findings.extend(omission_findings(reports, document_id=doc.document_id))
+        except Exception as e:
+            result.warnings.append(f"표현·초안흔적 검사 경고: {e}")
+
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         return result
@@ -590,6 +615,7 @@ class VerificationPipeline:
                           for raw in document.claims)
         candidates = claim_contradictions(claims, project_id=result.project_id)
         candidates.extend(cross_document_contradictions(events_by_document))
+        candidates.extend(self._internal_citation_check(result))
         findings, seen = [], set()
         for finding in candidates:
             features = finding.confidence_features
@@ -600,6 +626,39 @@ class VerificationPipeline:
             if key not in seen:
                 seen.add(key)
                 findings.append(finding)
+        return findings
+
+
+    def _internal_citation_check(self, result: VerificationRunResult) -> List[Finding]:
+        """제4.4장. 첨부문서의 조항 색인으로 다른 문서의 조항 참조를 대조한다.
+
+        어느 문서가 참조이고 어느 문서가 원본인지 미리 알 수 없으므로,
+        조항 색인이 잡히는 문서를 모두 원본 후보로 두고 교차 대조한다.
+        참조한 문서 자신의 조항은 대조 대상에서 뺀다.
+        """
+        indices: Dict[str, Dict[str, Any]] = {}
+        bodies: Dict[str, str] = {}
+        for document in result.documents:
+            if document.quarantined or document.normalized is None:
+                continue
+            bodies[document.document_id] = "\n".join(
+                block.text for page in document.normalized.pages for block in page.blocks
+                if block.source_layer == "visible_text" and block.text
+            )
+            index = build_clause_index(document.normalized)
+            if len(index) >= 2:  # 조항이 하나뿐이면 색인으로 보지 않는다
+                indices[document.document_id] = index
+
+        findings: List[Finding] = []
+        for document_id, text in bodies.items():
+            for source_id, index in indices.items():
+                if source_id == document_id or not text:
+                    continue
+                label = next((d.filename for d in result.documents
+                              if d.document_id == source_id), "첨부문서")
+                checks = [c for c in check_references(text, index) if c.matches_concept is False]
+                findings.extend(internal_citation_findings(
+                    checks, source_label=label, document_id=document_id))
         return findings
 
 

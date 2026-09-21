@@ -1021,3 +1021,12 @@ table {
   color: var(--muted);
   font-size: 13px
 }
+
+/* 제9.2장 배포가능 상태. 색은 보조 신호이며 판정은 글자로 읽힌다. */
+.metric.gate-pass strong { color: var(--ok, #1a7f37); }
+.metric.gate-pass_with_warnings strong { color: var(--warn, #9a6700); }
+.metric.gate-human_review_required strong { color: var(--warn, #9a6700); }
+.metric.gate-block strong { color: var(--danger, #b42318); }
+.gate-reasons { grid-column: 1 / -1; margin-top: 0.5rem; }
+.gate-reasons ul { margin: 0.4rem 0 0.2rem 1.1rem; padding: 0; }
+.gate-reasons li { margin-bottom: 0.2rem; line-height: 1.5; }

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List
 
+from packages.common.schemas import Finding
 from packages.common.enums import (
     ADVERSARIAL_FINDING_TYPES,
     LEGAL_FINDING_TYPES,
@@ -15,6 +16,8 @@ from packages.common.enums import (
     Severity,
     VerificationStatus,
 )
+
+from .gate import evaluate_gate
 
 RISK_ORDER = ["NONE", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 
@@ -95,7 +98,19 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
             return "UNVERIFIED"
         return risk
 
+    # 제8~9장. 축별 위험도와 별도로 배포 가능 여부를 하나의 판정으로 낸다.
+    # 읽지 못한 문서가 있으면 PASS를 주지 않는다.
+    gate = evaluate_gate(
+        findings,
+        unverified_items=result.unverified_items,
+        nothing_analyzed=nothing_analyzed,
+        intended_external_submission=bool(
+            getattr(result, "intended_external_submission", False)
+        ),
+    )
+
     return {
+        "release_gate": gate.to_dict(),
         "severity_counts": severity_counts,
         "status_counts": status_counts,
         "finding_total": len(findings),

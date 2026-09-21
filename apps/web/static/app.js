@@ -239,8 +239,11 @@ function renderSummary() {
     aiStatus = "AI 전체 작성 의심";
   }
 
+  const gate = state.run?.scores?.release_gate || null;
   const metrics = [
     ["검토에 포함", `${state.documents.filter(d=>d.included_in_verification).length} / ${state.documents.length}`],
+    ["배포가능 상태", gate ? GATE_LABELS[gate.release_gate] || gate.release_gate : "—"],
+    ["검증위험 지수", gate ? `${gate.hallucination_risk}점` : "—"],
     ["AI 작성 진단", state.run ? aiStatus : "—"],
     ["가짜 판례 의심", state.run ? `${fakeCaseCount}건` : "—"],
     ["확인 전 항목", state.findings.filter(f => f.review_status === "NEEDS_REVIEW").length],
@@ -249,8 +252,31 @@ function renderSummary() {
   for (const [title, value] of metrics) {
     const el = node("div", null, "metric");
     el.append(node("span", title), node("strong", value));
+    if (title === "배포가능 상태" && gate) el.classList.add(`gate-${gate.release_gate.toLowerCase()}`);
     $("summary").append(el);
   }
+  if (gate) renderGateReasons(gate);
+}
+
+// 제9.2장. 차단 사유와 사람 검토 사유를 상태값과 함께 보여준다.
+// 상태값만 있으면 무엇을 고쳐야 하는지 알 수 없다.
+const GATE_LABELS = {
+  PASS: "배포 가능",
+  PASS_WITH_WARNINGS: "경고 포함 배포 가능",
+  HUMAN_REVIEW_REQUIRED: "사람 검토 필요",
+  BLOCK: "배포 차단"
+};
+
+function renderGateReasons(gate) {
+  const reasons = [...(gate.hard_block_reasons || []), ...(gate.review_reasons || [])];
+  if (!reasons.length) return;
+  const details = node("details", null, "gate-reasons");
+  details.append(node("summary", `${GATE_LABELS[gate.release_gate] || gate.release_gate} 사유 ${reasons.length}건`));
+  const list = node("ul");
+  for (const reason of reasons) list.append(node("li", friendlyText(reason)));
+  details.append(list);
+  details.append(node("p", gate.risk_index_note || "", "muted"));
+  $("summary").append(details);
 }
 
 function filteredDocuments() {
