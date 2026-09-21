@@ -949,14 +949,52 @@ $("nextPage").onclick = action(async () => {
   state.page++;
   await renderPage();
 });
+function renderDiagnostics(data) {
+  const capabilities = data.capabilities || {};
+  const ocr = capabilities.ocr || {};
+  const ready = ocr.ready === true;
+  const reasons = {
+    NOT_INSTALLED: "글자 인식 프로그램을 찾지 못했습니다. 서버에 Tesseract와 한국어·영어 언어팩을 설치하고 재시작해야 합니다.",
+    PYTHON_DEPENDENCY_MISSING: "글자 인식에 필요한 Python 구성 요소가 없습니다. 배포 이미지의 의존성을 확인하세요.",
+    ENGINE_FAILED: "글자 인식 프로그램을 실행하지 못했습니다. 실행 권한과 서버 설치 상태를 확인하세요.",
+    LANGUAGES_UNAVAILABLE: "언어팩 목록을 확인하지 못했습니다. 언어팩이 정상이라는 뜻은 아닙니다.",
+    LANGUAGES_MISSING: `필요한 인식 언어가 준비되지 않았습니다: ${(ocr.missing_languages || ocr.required_languages || []).join(", ")}`,
+    KOREAN_TEST_FONT_MISSING: "자체 점검에 필요한 한국어 글꼴이 없습니다. 배포 이미지에 fonts-nanum을 설치하세요.",
+    SCANNED_PDF_RECOGNITION_FAILED: "한국어 시험 PDF의 글자 또는 위치를 확인하지 못했습니다. OCR과 PDF 변환 구성을 점검하세요.",
+    SCANNED_PDF_CHECK_FAILED: "한국어 시험 PDF 점검을 완료하지 못했습니다. 서버의 OCR·PDF 구성 요소를 확인하세요."
+  };
+  const content = $("settingsContent");
+  content.replaceChildren(node("p", data.note, "diagnostic-summary"));
+  function row(title, status, detail, tone = "LOW") {
+    const section = node("section", null, "diagnostic-row");
+    const heading = node("div", null, "diagnostic-heading");
+    heading.append(node("h3", title), node("span", status, `badge ${tone}`));
+    section.append(heading, node("p", detail));
+    content.append(section);
+  }
+  row("스캔 문서 읽기", ready ? "준비 완료" : "점검 필요", ready
+    ? "한국어 시험 PDF의 본문과 페이지 위치를 인식했습니다. 실제 문서의 인식 정확도는 별도 확인이 필요합니다."
+    : reasons[ocr.self_test?.reason] || reasons[ocr.status] || "OCR 준비 상태를 확인하지 못했습니다.", ready ? "LOW" : "HIGH");
+  row("PDF 이미지 변환", capabilities.rasterizer?.available ? "사용 가능" : "사용 불가",
+    capabilities.rasterizer?.available ? "PDF 페이지를 이미지로 변환할 수 있습니다. 글자 인식 준비 상태와는 별개입니다."
+      : "스캔 PDF를 처리하려면 서버의 pypdfium2 설치를 확인해야 합니다.", capabilities.rasterizer?.available ? "LOW" : "HIGH");
+  const dialect = capabilities.database?.dialect;
+  row("자료 저장소", dialect === "postgresql" ? "PostgreSQL" : dialect === "sqlite" ? "SQLite" : "확인 필요",
+    dialect === "sqlite" ? "파일 기반 데이터베이스를 사용 중입니다. 재배포 전에 DB·업로드 원본의 영구 저장소와 백업을 확인하세요."
+      : "데이터베이스 연결과 별도로 업로드 원본의 영구 저장 위치 및 백업을 확인해야 합니다.");
+  row("검증 작업 실행", {auto: "자동 선택", inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[capabilities.worker_mode] || "확인 필요",
+    capabilities.worker_mode === "auto" ? "작업 서버 연결 설정에 따라 실행 방식을 선택합니다. 자동 선택 자체는 오류가 아닙니다." : "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
+  row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",
+    capabilities.source_keys_present?.law_go_kr ? "국가법령정보센터 조회 정보가 설정되어 있습니다. 실제 조회 성공 여부는 검증 결과의 출처 기록에서 확인합니다."
+      : "국가법령정보센터 조회 정보가 설정되지 않았습니다. 공식 출처를 확인하지 못한 항목은 미검증으로 남습니다.");
+  const technical = node("details", null, "diagnostic-technical");
+  technical.append(node("summary", "기술 진단 정보"), node("pre", JSON.stringify(capabilities, null, 2), "technical"));
+  content.append(technical);
+}
+
 $("settingsButton").onclick = action(async () => {
   const data = await api("/diagnostics");
-  $("settingsContent").replaceChildren(node("p", data.note));
-  for (const [name, capability] of Object.entries(data.capabilities)) {
-    const row = node("div", null, "row-item");
-    row.append(node("strong", name), node("pre", JSON.stringify(capability, null, 2), "technical"));
-    $("settingsContent").append(row);
-  }
+  renderDiagnostics(data);
   $("settingsDialog").showModal();
 });
 $("calculationForm").onsubmit = action(async e => {

@@ -109,6 +109,7 @@ class Settings:
     ocr_dpi: int = field(default_factory=lambda: int(os.getenv("LV_OCR_DPI", "200")))
     ocr_min_confidence: float = field(default_factory=lambda: float(os.getenv("LV_OCR_MIN_CONFIDENCE", "0.55")))
     ocr_max_pages: int = field(default_factory=lambda: int(os.getenv("LV_OCR_MAX_PAGES", "20")))
+    ocr_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("LV_OCR_TIMEOUT_SECONDS", "30")))
     independent_ocr_pages: int = field(default_factory=lambda: int(os.getenv("LV_INDEPENDENT_OCR_PAGES", "3")))
     independent_ocr_mode: str = field(default_factory=lambda: os.getenv("LV_INDEPENDENT_OCR", "auto"))
     """auto: 위험 신호가 있는 문서에만 수행 / always / off (제7.3장 독립 OCR)."""
@@ -119,7 +120,7 @@ class Settings:
     )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
-    rule_version: str = "2026.09.21.2"
+    rule_version: str = "2026.09.21.3"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

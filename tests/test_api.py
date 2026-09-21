@@ -441,3 +441,26 @@ def test_ocr_unavailable_is_reported_as_degraded(client):
         set_ocr_adapter(original)
     assert payload["verdict"] == "DEGRADED"
     assert "ocr" in payload["blocking"]
+
+
+@pytest.mark.parametrize("ocr_ready,raster_ready", [(False, True), (True, False), (True, True)])
+def test_diagnostics_requires_recognition_and_rasterizer(client, monkeypatch, ocr_ready, raster_ready):
+    from apps.api import main
+    monkeypatch.setattr(main, "runtime_capabilities", lambda: {
+        "ocr": {"available": True, "ready": ocr_ready}, "rasterizer": {"available": raster_ready}})
+    payload = client.get("/api/diagnostics").json()
+    assert (payload["verdict"] == "READY") == (ocr_ready and raster_ready)
+    assert ("ocr" in payload["blocking"]) == (not ocr_ready)
+    assert ("rasterizer" in payload["blocking"]) == (not raster_ready)
+    if ocr_ready and not raster_ready:
+        assert "변환할 수 없어" in payload["note"]
+
+
+def test_required_ocr_prevents_worker_start_when_runtime_is_not_ready(client, monkeypatch):
+    from fastapi.testclient import TestClient
+    from packages.document_engine import ocr_readiness
+    monkeypatch.setenv("LV_REQUIRE_OCR", "1")
+    monkeypatch.setattr(ocr_readiness, "ocr_readiness", lambda **kwargs: {"ready": False})
+    with pytest.raises(RuntimeError, match="OCR_READINESS_FAILED"):
+        with TestClient(client.app):
+            pass

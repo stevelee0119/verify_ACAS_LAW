@@ -54,7 +54,7 @@ jobs:
       - name: 한국어 OCR 엔진 설치
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng fonts-nanum
           tesseract --list-langs
 
       - name: 의존성 설치
@@ -64,6 +64,9 @@ jobs:
 
       - name: Install test browser
         run: python -m playwright install --with-deps chromium
+
+      - name: Korean scanned PDF readiness check
+        run: python -m scripts.check_ocr_runtime
 
       - name: 테스트 (SQLite + 인프로세스 Worker)
         run: pytest -q
@@ -78,3 +81,14 @@ jobs:
           LV_TEST_DATABASE_URL: postgresql+psycopg://legal:legal@localhost:5432/legal_verifier
           LV_TEST_CELERY_BROKER: redis://localhost:6379/0
         run: pytest -q
+
+  docker-ocr:
+    name: Docker OCR readiness
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image and verify OCR
+        run: docker build --tag acas-law-ocr-check --file docker/Dockerfile .
+      - name: Verify OCR as production user without network
+        run: docker run --rm --network none acas-law-ocr-check python -m scripts.check_ocr_runtime

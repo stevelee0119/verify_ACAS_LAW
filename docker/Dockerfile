@@ -8,7 +8,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # 폐쇄망에서는 내부 미러를 사용한다.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libjpeg62-turbo zlib1g libxml2 libxslt1.1 \
-        tesseract-ocr tesseract-ocr-kor \
+        tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng fonts-nanum \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,7 +20,11 @@ COPY . .
 RUN useradd -m -u 10001 appuser && mkdir -p /data && chown -R appuser:appuser /app /data
 USER appuser
 
-ENV LV_DATA_DIR=/data
+ENV LV_DATA_DIR=/data \
+    LV_OCR_LANG=kor+eng \
+    LV_REQUIRE_OCR=1
+
+RUN python -m scripts.check_ocr_runtime
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \

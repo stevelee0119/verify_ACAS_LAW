@@ -574,6 +574,15 @@ dialog::backdrop {
   background: #1f303566
 }
 
+.diagnostic-summary {margin: 0 0 16px; line-height: 1.6; overflow-wrap: anywhere;}
+.diagnostic-row {padding: 14px 0; border-top: 1px solid var(--line);}
+.diagnostic-heading {display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap;}
+.diagnostic-heading h3 {font-size: 15px; margin: 0;}
+.diagnostic-row p {font-size: 13px; line-height: 1.6; margin: 8px 0 0; overflow-wrap: anywhere;}
+.diagnostic-technical {border-top: 1px solid var(--line); padding-top: 14px; margin-top: 2px;}
+.diagnostic-technical summary {cursor: pointer; font-size: 14px;}
+.diagnostic-technical pre {white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; font-size: 12px;}
+
 .dialog-heading {
   display: flex;
   justify-content: space-between;

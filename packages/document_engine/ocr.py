@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from dataclasses import dataclass
@@ -60,6 +59,9 @@ class NullOCRAdapter(OCRAdapter):
     name = "null"
     available = False
 
+    def __init__(self, diagnostics=None):
+        self.diagnostics = diagnostics
+
     def recognize(self, path: str, page_numbers: Optional[List[int]] = None) -> List[OCRLine]:
         return []
 
@@ -76,18 +78,10 @@ class TesseractOCRAdapter(OCRAdapter):
         settings = get_settings()
         self.lang = lang or settings.ocr_lang
         self.psm = psm if psm is not None else settings.ocr_psm
-        self.available = False
-        self.version = ""
-        try:
-            import pytesseract  # noqa: F401
-            from PIL import Image  # noqa: F401
-
-            if shutil.which("tesseract") is None:
-                return
-            self.version = str(pytesseract.get_tesseract_version())
-            self.available = True
-        except Exception:
-            self.available = False
+        from .ocr_readiness import probe_tesseract
+        self.diagnostics = probe_tesseract(self.lang)
+        self.available = self.diagnostics["available"]
+        self.version = self.diagnostics["version"]
 
     @property
     def config(self) -> str:
@@ -112,7 +106,8 @@ class TesseractOCRAdapter(OCRAdapter):
 
         try:
             data = pytesseract.image_to_data(
-                image, lang=self.lang, config=self.config, output_type=pytesseract.Output.DICT
+                image, lang=self.lang, config=self.config, output_type=pytesseract.Output.DICT,
+                timeout=max(1, get_settings().ocr_timeout_seconds),
             )
         except Exception:
             return []
@@ -154,7 +149,7 @@ def get_ocr_adapter() -> OCRAdapter:
     global _adapter
     if _adapter is None:
         candidate = TesseractOCRAdapter()
-        _adapter = candidate if candidate.available else NullOCRAdapter()
+        _adapter = candidate if candidate.available else NullOCRAdapter(candidate.diagnostics)
     return _adapter
 
 

@@ -37,6 +37,10 @@ services:
       # Worker를 함께 띄우지 않는다면 inprocess로 두면 Redis 없이 동작한다.
       - key: LV_WORKER_MODE
         value: inprocess
+      - key: LV_OCR_LANG
+        value: kor+eng
+      - key: LV_REQUIRE_OCR
+        value: "1"
       - key: LV_DEFAULT_AI_POLICY
         value: MASKED
       - key: LV_DEFAULT_PROFILE

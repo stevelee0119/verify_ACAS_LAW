@@ -73,6 +73,9 @@ def create_app() -> FastAPI:
     async def lifespan(app):
         import asyncio
         from .services import get_runner
+        if os.getenv("LV_REQUIRE_OCR", "").lower() in {"1", "true", "yes", "on"}:
+            from packages.document_engine.ocr_readiness import require_ocr_ready
+            await asyncio.to_thread(require_ocr_ready)
         runner = get_runner()
         await asyncio.to_thread(runner.start)
         try:
@@ -144,7 +147,7 @@ def create_app() -> FastAPI:
         """
         capabilities = runtime_capabilities()
         blocking = [name for name, ready in (
-            ("ocr", capabilities["ocr"]["available"]),
+            ("ocr", capabilities["ocr"]["ready"]),
             ("rasterizer", capabilities["rasterizer"]["available"]),
         ) if not ready]
         return {
@@ -152,10 +155,12 @@ def create_app() -> FastAPI:
             "blocking": blocking,
             "verdict": "READY" if not blocking else "DEGRADED",
             "note": (
-                "OCR을 사용할 수 없다. 이미지·스캔 PDF는 본문을 읽지 못해 "
-                "내용 검증이 UNVERIFIED로 남는다. Render라면 runtime이 docker인지 확인한다."
+                "스캔 문서 읽기 준비가 완료되지 않았습니다. 이미지·스캔 PDF의 본문 검증은 "
+                "미검증(UNVERIFIED)으로 남을 수 있습니다. 아래 점검 결과와 관리자 조치를 확인하세요."
                 if "ocr" in blocking
-                else "이미지·스캔 문서를 포함해 본문 추출이 가능하다."
+                else "PDF를 이미지로 변환할 수 없어 스캔 PDF 검증이 제한됩니다."
+                if "rasterizer" in blocking
+                else "한국어 스캔 시험 문서의 본문·페이지 위치 인식을 확인했습니다. 개별 문서의 인식 결과는 별도 검토가 필요합니다."
             ),
         }
 

@@ -37,8 +37,9 @@ Dockerfile에 tesseract 한국어팩이 들어 있어 스캔 문서까지 처리
 
 ### Native Python 런타임
 
-시스템 패키지를 설치할 수 없어 OCR이 비활성화된다. 스캔 PDF·이미지 본문은
-`UNVERIFIED`로 남고 나머지 검증은 정상 동작한다.
+기본 Python 패키지 설치만으로 Tesseract 실행 파일과 언어팩이 설치되지는 않는다.
+OCR 구성 요소가 없으면 스캔 PDF·이미지 본문은 `UNVERIFIED`로 남는다.
+운영 OCR은 아래 Docker 구성으로 설치·실제 인식 검사를 함께 수행한다.
 
 | 항목 | 값 |
 |---|---|
@@ -115,17 +116,22 @@ curl -s https://<서비스>.onrender.com/api/health | jq
 자격 증명이나 내부 설정을 노출하지 않는다. 아래 진단은 관리자 로그인 후
 `/api/diagnostics`에서 확인한다.
 
-- `verdict: "READY"` → 이미지·스캔 문서까지 본문 추출이 가능하다.
-- `verdict: "DEGRADED"`, `blocking: ["ocr"]` → **런타임이 docker가 아니다.**
-  Native Python 런타임에는 시스템 패키지(tesseract)를 설치할 수 없다.
+- `verdict: "READY"` → 한국어 시험 스캔 PDF의 본문과 위치 인식을 확인했다.
+  실제 사건 문서의 인식 정확도나 전체 페이지 처리까지 보증하지는 않는다.
+- `verdict: "DEGRADED"`, `blocking: ["ocr"]` → OCR 실행 파일·언어팩 또는 실제 인식
+  점검 실패다. Docker 여부는 배포 설정과 빌드 로그에서 별도로 확인한다.
+- `/api/health`는 서버 생존 확인이다. OCR 준비 판정으로 사용하지 않는다.
 
 확인할 필드:
 
 | 필드 | 정상값 | 뜻 |
 |---|---|---|
-| `capabilities.ocr.available` | `true` | tesseract 실행 가능 |
+| `capabilities.ocr.available` | `true` | tesseract 실행 및 필수 언어팩 확인 |
 | `capabilities.ocr.binary_path` | `/usr/bin/tesseract` | 바이너리 위치 |
-| `capabilities.ocr.missing_languages` | `[]` | 한국어 데이터 설치됨 |
+| `capabilities.ocr.languages_checked` | `true` | 언어 목록 조회 성공 |
+| `capabilities.ocr.missing_languages` | `[]` | 필수 언어 누락 없음. `null`은 확인 불가 |
+| `capabilities.ocr.self_test.status` | `PASSED` | 한국어 시험 스캔 PDF 인식 성공 |
+| `capabilities.ocr.ready` | `true` | OCR 준비 확인 |
 | `capabilities.rasterizer.available` | `true` | 스캔 PDF 래스터화 가능 |
 | `capabilities.database.dialect` | `postgresql` | 운영 DB 연결됨 |
 | `capabilities.source_keys_present` | 필요한 키가 `true` | Render Environment에 입력됨 |
@@ -142,9 +148,16 @@ curl -s https://<서비스>.onrender.com/api/health | jq
 
 ### docker가 아니었다면
 
-`render.yaml`을 사용하는 Blueprint로 다시 만드는 편이 확실하다. 대시보드에서 수동
-생성한 서비스는 `render.yaml`을 읽지 않으므로, `runtime: docker`뿐 아니라
-`LV_ALLOW_NETWORK`·`LV_DATA_DIR` 같은 환경변수도 적용되지 않는다.
+기존 서비스의 Settings → Build → Source → Edit에서 런타임을 Docker로 바꿀 수 있다.
+대시보드에서 수동 생성한 서비스는 저장소의 `render.yaml`이 자동 적용된다고 가정하지 않는다.
+서비스 삭제나 중복 Blueprint 생성 대신, 백업 후 기존 서비스의 구성을 대조한다.
+전환 시 저장 경로도 바뀔 수 있으므로 [OCR 전환 절차](OCR_RUNTIME_RECOVERY.md)를 먼저 따른다.
+
+Dockerfile은 한국어·영어 언어팩과 시험용 한국어 글꼴을 설치하고 빌드 중
+`python -m scripts.check_ocr_runtime`을 실행한다. 인식 실패는 빌드 실패다.
+CI는 실제 운영 이미지에서도 네트워크 없이 같은 검사를 실행한다.
+Docker의 `LV_REQUIRE_OCR=1`은 시작 시에도 검사를 강제해 OCR 미준비 상태로 기동하지 않게 한다.
+텍스트 전용 환경에서는 명시적으로 `LV_REQUIRE_OCR=0`을 사용할 수 있지만 OCR 복구로 보지 않는다.
 
 ## 인증 설정 (배포 전 필수)
 

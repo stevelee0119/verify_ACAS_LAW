@@ -10,35 +10,14 @@ from __future__ import annotations
 
 import os
 import platform
-import shutil
 from typing import Any, Dict
 
 from packages.common.config import get_settings
 
 
 def _ocr_state() -> Dict[str, Any]:
-    from packages.document_engine.ocr import get_ocr_adapter
-
-    adapter = get_ocr_adapter()
-    languages: list = []
-    if adapter.available:
-        try:
-            import pytesseract
-
-            languages = sorted(pytesseract.get_languages(config=""))
-        except Exception:
-            languages = []
-    settings = get_settings()
-    wanted = [part for part in (settings.ocr_lang or "").split("+") if part]
-    return {
-        "engine": adapter.name,
-        "available": bool(adapter.available),
-        "version": str(getattr(adapter, "version", "") or ""),
-        "binary_path": shutil.which("tesseract") or "",
-        "languages": languages,
-        "required_languages": wanted,
-        "missing_languages": [lang for lang in wanted if languages and lang not in languages],
-    }
+    from packages.document_engine.ocr_readiness import ocr_readiness
+    return ocr_readiness()
 
 
 def _rasterizer_state() -> Dict[str, Any]:
@@ -74,7 +53,7 @@ def _container_state() -> Dict[str, Any]:
     """컨테이너(도커) 안에서 도는지 추정한다.
 
     Render의 docker 런타임은 컨테이너로 돌고, native 런타임도 격리 환경이므로
-    이것만으로 런타임 종류를 단정하지 않는다. 판단의 근거는 ocr.available이다.
+    OCR 가용성이나 컨테이너 표지만으로 런타임 종류를 단정하지 않는다.
     """
     markers = {
         "dockerenv": os.path.exists("/.dockerenv"),
@@ -84,7 +63,7 @@ def _container_state() -> Dict[str, Any]:
         "platform": platform.platform(),
         "python": platform.python_version(),
         "markers": markers,
-        "note": "컨테이너 표지는 참고용이다. 런타임 종류는 ocr.available로 판단한다.",
+        "note": "컨테이너 표지와 OCR 상태만으로 런타임 종류를 확정할 수 없습니다. 배포 설정과 빌드 로그를 확인하세요.",
     }
 
 
