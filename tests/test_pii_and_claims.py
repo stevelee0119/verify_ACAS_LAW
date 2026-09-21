@@ -218,3 +218,63 @@ def test_interest_and_day_count_are_deterministic():
     assert simple_interest(Decimal("10000000"), Decimal("5"), 365) == Decimal("500000")
     assert day_count(date(2020, 1, 1), date(2020, 1, 31)) == 30
     assert day_count(date(2020, 1, 1), date(2020, 1, 31), inclusive=True) == 31
+
+
+# --- 탐지 비용과 위치 정확성 (보고서 생성 지연의 원인이었다) -------------------
+def test_detection_cost_stays_linear_in_input_size():
+    """탐지 비용이 입력 길이에 비례해야 한다.
+
+    종전에는 탐지 결과 하나마다 본문 전체를 다시 훑어 비용이 제곱으로 늘었다.
+    검증 결과 JSON처럼 숫자가 많고 긴 입력에서 한 번의 호출이 수십 초 걸렸고,
+    보고서 생성 요청이 응답 없이 끊겼다. 회귀하면 이 시험이 먼저 깨진다.
+    """
+    import json
+    import time
+
+    from packages.pii_engine import detect
+
+    unit = json.dumps(
+        [{"claim_id": f"C-{i}", "text": f"원고는 피고에게 금 {i * 1000}원의 지급을 구한다.",
+          "page": 1, "span": [i, i + 30], "raw": "대법원 2021. 3. 25. 선고 2018다275017 판결"}
+         for i in range(200)],
+        ensure_ascii=False,
+    )
+    small, large = unit, unit * 8
+
+    def elapsed(text):
+        started = time.monotonic()
+        detect(text)
+        return time.monotonic() - started
+
+    elapsed(small)  # 정규식 캐시 예열
+    small_time, large_time = elapsed(small), elapsed(large)
+
+    # 8배 입력이 제곱 비용이면 64배, 선형이면 8배다. 실행 환경 편차를 감안해
+    # 24배를 상한으로 둔다. 제곱 복잡도는 이 값을 넘지 못할 수 없다.
+    assert large_time < max(small_time * 24, 0.05), (
+        f"입력 8배에 소요시간 {large_time / max(small_time, 1e-9):.1f}배. 제곱 비용이 되살아났다"
+    )
+
+
+def test_company_name_after_circled_mark_keeps_its_position():
+    """㈜ 뒤의 상호도 본문에서의 위치를 가져야 한다.
+
+    선택지가 둘인 정규식에서 무조건 첫 그룹의 위치를 쓰면 뒤쪽 선택지가
+    매치될 때 위치가 (-1, -1)로 남는다. 그 상태로는 마스킹이 상호를 가리지
+    못하고 엉뚱한 곳을 건드린다.
+    """
+    from packages.pii_engine import detect
+
+    text = "계약 상대방 ㈜라마바 대리인 주식회사 가나다"
+    companies = {m.text: (m.start, m.end) for m in detect(text) if m.kind == "COMPANY"}
+    assert "라마바" in companies, companies
+    for name, (start, end) in companies.items():
+        assert start >= 0 and text[start:end] == name, f"{name}의 위치가 본문과 어긋난다"
+
+
+def test_case_numbers_are_still_excluded_from_masking():
+    """성능 수정이 법률 식별자 Guard를 무너뜨리지 않았는지 확인한다."""
+    from packages.pii_engine import detect
+
+    text = "2023가합12345 사건과 2018다275017 판결, 상법 제341조 제1항을 인용한다."
+    assert [m for m in detect(text) if m.kind in ("ACCOUNT", "RRN", "PHONE")] == []

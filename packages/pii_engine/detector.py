@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -95,12 +96,45 @@ def validate_rrn(digits: str) -> bool:
     return (11 - (total % 11)) % 10 == int(digits[12])
 
 
-def _in_legal_identifier(text: str, start: int, end: int) -> bool:
+def legal_identifier_spans(text: str) -> List[Tuple[int, int]]:
+    """법률 식별자 구간을 한 번만 찾아 병합해 둔다.
+
+    종전에는 탐지 결과 하나마다 본문 전체를 다시 훑었다. 본문이 길고 숫자가
+    많을수록 비용이 제곱으로 늘어, 수백 KB짜리 검증 결과에서는 한 번의 호출이
+    수십 초에서 수 분까지 걸렸다. 구간을 미리 구해 두면 같은 판정을 선형
+    시간에 내릴 수 있다.
+    """
+    spans: List[Tuple[int, int]] = []
     for pattern in LEGAL_IDENTIFIER_PATTERNS:
-        for m in pattern.finditer(text):
-            if m.start() <= start and end <= m.end():
-                return True
-    return False
+        spans.extend(m.span() for m in pattern.finditer(text))
+    if not spans:
+        return []
+    spans.sort()
+    merged: List[Tuple[int, int]] = [spans[0]]
+    for start, end in spans[1:]:
+        last_start, last_end = merged[-1]
+        if start <= last_end:  # 겹치거나 맞닿으면 합친다
+            if end > last_end:
+                merged[-1] = (last_start, end)
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool:
+    """[start, end)가 어느 식별자 구간 안에 온전히 들어가는지 본다."""
+    if not spans:
+        return False
+    index = bisect_right(spans, (start, float("inf"))) - 1
+    if index < 0:
+        return False
+    span_start, span_end = spans[index]
+    return span_start <= start and end <= span_end
+
+
+def _in_legal_identifier(text: str, start: int, end: int) -> bool:
+    """단건 조회용 호환 함수. 반복 호출에는 legal_identifier_spans를 쓴다."""
+    return _covered_by_span(legal_identifier_spans(text), start, end)
 
 
 def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> List[PIIMatch]:
@@ -109,10 +143,11 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
     if not text:
         return matches
 
+    guard_spans = legal_identifier_spans(text)
     for kind, pattern, base_confidence in DETECTORS:
         for m in pattern.finditer(text):
             start, end = m.start(), m.end()
-            if _in_legal_identifier(text, start, end):
+            if _covered_by_span(guard_spans, start, end):
                 continue
             raw = m.group(0)
             confidence = base_confidence
@@ -136,22 +171,34 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         for m in pattern.finditer(text):
             name = m.group(1)
             start, end = m.start(1), m.end(1)
-            if _in_legal_identifier(text, start, end):
+            if _covered_by_span(guard_spans, start, end):
                 continue
             matches.append(PIIMatch(kind, name, start, end, block_id, page, 0.75, "직함·당사자 표기 문맥"))
 
     for pattern in (COMPANY_SUFFIX_RE, COMPANY_PREFIX_RE):
         for m in pattern.finditer(text):
-            name = (m.group(1) or (m.lastindex and m.group(m.lastindex)) or "").strip()
+            # 선택지가 여럿인 패턴에서는 실제로 매치된 그룹의 위치를 써야 한다.
+            # 무조건 group(1)의 위치를 쓰면 "㈜라마바"처럼 뒤쪽 선택지가 매치된
+            # 경우 위치가 (-1, -1)로 남아 마스킹이 엉뚱한 곳을 가린다.
+            index = next((i for i in range(1, (m.re.groups or 0) + 1) if m.group(i) is not None), None)
+            if index is None:
+                continue
+            name = (m.group(index) or "").strip()
             if not name or name in COMPANY_STOPWORDS:
                 continue
-            matches.append(PIIMatch("COMPANY", name, m.start(1), m.end(1), block_id, page, 0.8, "법인 표기"))
+            matches.append(PIIMatch("COMPANY", name, m.start(index), m.end(index),
+                                    block_id, page, 0.8, "법인 표기"))
 
-    # 중복 span 정리 (긴 매치 우선)
+    # 중복 span 정리 (긴 매치 우선).
+    # start 오름차순이므로 앞선 항목의 start는 모두 현재 start 이하다. 따라서
+    # "감싸는 항목이 있는가"는 지금까지 본 end의 최댓값 하나로 판정된다.
+    # 매번 전체를 다시 훑으면 탐지 결과가 많을 때 비용이 제곱으로 늘어난다.
     matches.sort(key=lambda x: (x.start, -(x.end - x.start)))
     deduped: List[PIIMatch] = []
+    covered_until = float("-inf")
     for match in matches:
-        if any(d.start <= match.start and match.end <= d.end for d in deduped):
+        if match.end <= covered_until:
             continue
         deduped.append(match)
+        covered_until = max(covered_until, match.end)
     return deduped

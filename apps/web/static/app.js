@@ -89,14 +89,37 @@ async function api(path, options = {}) {
     headers,
     credentials: "same-origin"
   };
-  let response = await fetch(`/api${path}`, requestOptions);
+  let response = await send(path, requestOptions);
   if (response.status === 401) {
     await operationsUI.authenticate();
-    response = await fetch(`/api${path}`, requestOptions);
+    response = await send(path, requestOptions);
   }
   const data = await response.json().catch(() => null);
   if (!response.ok) throw new Error(typeof data?.detail === "string" ? data.detail : data?.detail?.message || `요청 실패 (${response.status})`);
   return data;
+}
+
+// 서버가 응답하지 못한 경우와 서버가 오류를 돌려준 경우를 구분한다.
+// 브라우저는 전자를 "Failed to fetch" 한 줄로만 알려 주므로, 그대로 보여 주면
+// 무엇을 확인해야 하는지 알 수 없다.
+const API_TIMEOUT_MS = 180000;
+
+async function send(path, requestOptions) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+  try {
+    return await fetch(`/api${path}`, {...requestOptions, signal: controller.signal});
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw new Error(`서버가 ${Math.round(API_TIMEOUT_MS / 1000)}초 안에 응답하지 않아 요청을 중단했습니다. ` +
+        "자료가 많은 경우 처리에 시간이 걸릴 수 있습니다. 잠시 후 다시 시도하고, 반복되면 서버 로그를 확인하세요.");
+    }
+    throw new Error("서버에 연결하지 못했거나 응답이 도중에 끊겼습니다. " +
+      "네트워크 상태와 서버 상태(/api/health)를 확인하세요. " +
+      `(요청: ${requestOptions.method || "GET"} /api${path})`);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function action(fn) {
