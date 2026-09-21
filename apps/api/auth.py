@@ -36,6 +36,7 @@ from .db import (
     get_db,
 )
 from . import identity
+from .session_policy import session_deadline
 
 # --- 역할 ------------------------------------------------------------------
 ROLE_ADMIN = "ADMIN"
@@ -44,7 +45,6 @@ ROLE_VIEWER = "VIEWER"
 ROLES = (ROLE_ADMIN, ROLE_MEMBER, ROLE_VIEWER)
 _ROLE_RANK = {ROLE_VIEWER: 0, ROLE_MEMBER: 1, ROLE_ADMIN: 2}
 
-SESSION_TTL_HOURS = int(os.getenv("LV_SESSION_TTL_HOURS", "12"))
 MAX_FAILED_LOGINS = 5
 LOCKOUT_MINUTES = 15
 
@@ -97,14 +97,15 @@ def _token_hash(token: str) -> str:
 def issue_session(session: Session, user: User, *, user_agent: str = "") -> str:
     """새 세션을 만들고 토큰 원문을 돌려준다. 원문은 여기서만 존재한다."""
     identity.principal_for_user(session, user.id, "password")
-    if not 1 <= SESSION_TTL_HOURS <= 720:
-        raise HTTPException(503, "Invalid session lifetime")
+    now = datetime.utcnow()
+    expires_at = session_deadline(now, now)
     token = secrets.token_urlsafe(32)
     session.add(
         SessionToken(
             user_id=user.id,
             token_hash=_token_hash(token),
-            expires_at=datetime.utcnow() + timedelta(hours=SESSION_TTL_HOURS),
+            issued_at=now,
+            expires_at=expires_at,
             user_agent=(user_agent or "")[:300],
         )
     )

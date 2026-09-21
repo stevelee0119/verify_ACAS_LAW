@@ -1,7 +1,7 @@
 "use strict";
 
 const operationsUI = (() => {
-  let loginPromise = null, identity = null;
+  let loginPromise = null, identity = null, authVersion = 0;
   const roles = {ADMIN:"관리자", MEMBER:"검토자", VIEWER:"열람자"};
   async function authRequest(path, options = {}) {
     const response = await fetch(`/api${path}`, {...options, credentials:"same-origin"});
@@ -74,7 +74,11 @@ const operationsUI = (() => {
           const changedUser = identity && identity.user_id !== nextIdentity.user_id;
           identity = nextIdentity; authenticated = true; dialog.close();
           if (changedUser) { location.reload(); reject(new Error("다른 계정으로 로그인하여 작업 공간을 새로 불러옵니다.")); }
-          else resolve();
+          else {
+            authVersion += 1;
+            resolve();
+            if (typeof resumeAuthenticatedRun === "function") resumeAuthenticatedRun();
+          }
         } catch (e) { error.textContent = e.message; }
         finally { password.value = token.value = ""; submit.disabled = false; modeButtons.forEach(tab => tab.disabled = false); }
       };
@@ -221,5 +225,5 @@ const operationsUI = (() => {
     $("settingsButton").before(accountButton);
     const jobs=node("div",null,"toolbar job-controls");jobs.id="jobControls";$("progress").after(jobs);
   }
-  return {init,authenticate,refreshIdentity,renderJobControls};
+  return {init,authenticate,refreshIdentity,renderJobControls,authVersion:()=>authVersion};
 })();

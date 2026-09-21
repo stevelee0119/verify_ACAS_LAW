@@ -193,7 +193,8 @@ Environment 탭에 아래를 넣고 배포하면 기동 시 관리자 계정이 
 | `LV_BOOTSTRAP_ADMIN_EMAIL` | 관리자 이메일 |
 | `LV_BOOTSTRAP_ADMIN_PASSWORD` | 10자 이상 비밀번호 |
 | `LV_BOOTSTRAP_ADMIN_NAME` | 표시 이름(선택) |
-| `LV_SESSION_TTL_HOURS` | 세션 유효시간(기본 12) |
+| `LV_SESSION_TTL_HOURS` | 브라우저 미사용 제한(기본 24시간). 인증된 요청과 검증 진행 조회 시 자동 연장 |
+| `LV_SESSION_ABSOLUTE_HOURS` | 최초 로그인부터 자동 연장 상한(기본 168시간, 7일) |
 
 계정이 만들어진 뒤에는 이 변수들이 무시된다. **첫 로그인 후 비밀번호를 바꾸고
 두 환경변수를 삭제한다.** 환경변수는 대시보드에서 다시 볼 수 있다.

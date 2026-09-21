@@ -106,9 +106,14 @@ Process-global provider settings are read-only in multi-user mode.
 | GET /api/projects/{project_id}/members | Project admin |
 | PUT/DELETE /api/projects/{project_id}/members/{user_id} | Project admin; PUT role; target must be a provisioned user of the same organization |
 
-The browser cookie is HttpOnly, SameSite=Lax, Path=/api, Secure when using HTTPS,
-and expires within eight hours or at the source credential's expiry, whichever
-is sooner. API-token revocation, SSO unbinding, session revocation and account
+The exchanged browser cookie is HttpOnly, SameSite=Lax, Path=/api, Secure when
+using HTTPS. Password login uses HttpOnly, SameSite=Strict, Path=/ instead.
+Successful browser activity renews the default 24-hour idle lifetime, bounded by
+168 hours from initial issuance. API-token sessions cannot outlive their source;
+OIDC sessions retain the earlier of eight hours and the verified JWT expiry and
+are not silently renewed. See [session policy](SESSION_ACTIVITY.md) for legacy
+environment overrides and reauthentication behavior.
+API-token revocation, SSO unbinding, session revocation and account
 disable are rechecked on every request. Cookie mutations require an exact
 matching Origin; cross-site Fetch Metadata is rejected. Use same-origin fetch
 with `credentials: "same-origin"`; private `<img>` PNGs and downloads then work

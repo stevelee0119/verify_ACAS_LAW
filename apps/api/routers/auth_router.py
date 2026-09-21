@@ -16,7 +16,6 @@ from packages.common.enums import AuditEventType
 
 from ..auth import (
     ROLES,
-    SESSION_TTL_HOURS,
     authenticate,
     current_user,
     hash_password,
@@ -30,6 +29,7 @@ from ..identity import (PASSWORD_SESSION_COOKIE, SESSION_COOKIE, auth_mode, curr
                         provision_user, require_org_admin, revoke_principal_credential,
                         set_account_enabled)
 from ..services import make_audit
+from ..session_policy import session_lifetimes
 
 router = APIRouter(tags=["auth"])
 
@@ -120,13 +120,14 @@ def login(
         actor=user.id,
     )
     # 브라우저 편의를 위한 쿠키. 토큰은 스크립트가 읽지 못하게 HttpOnly로 둔다.
+    lifetime_seconds = int(session_lifetimes()[0].total_seconds())
     response.set_cookie(
         PASSWORD_SESSION_COOKIE, token, httponly=True, samesite="strict", path="/",
-        secure=is_https, max_age=SESSION_TTL_HOURS * 3600,
+        secure=is_https, max_age=lifetime_seconds,
     )
     response.delete_cookie(SESSION_COOKIE, path="/api", httponly=True, secure=is_https, samesite="lax")
     return {"access_token": token, "token_type": "bearer",
-            "expires_in": SESSION_TTL_HOURS * 3600, "user": _out(user).model_dump()}
+            "expires_in": lifetime_seconds, "user": _out(user).model_dump()}
 
 
 @router.post("/api/auth/logout")

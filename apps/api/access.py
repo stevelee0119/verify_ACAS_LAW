@@ -4,19 +4,23 @@ from __future__ import annotations
 import base64
 import hmac
 import json
+import logging
 import os
+from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
+from sqlalchemy.exc import SQLAlchemyError
 
 from .db import (Document, ExportArtifactRow, FindingRow, ReportRow, VerificationRun,
                  get_session_factory)
 from .identity import (LOCAL_OWNER, Principal, _principal, auth_mode, authenticate_bearer,
                        authenticate_session, authenticate_password_session, require_project,
-                       SESSION_COOKIE, PASSWORD_SESSION_COOKIE)
+                       SESSION_COOKIE, PASSWORD_SESSION_COOKIE, renew_browser_activity)
+from .session_policy import RENEW_INTERVAL, session_lifetimes
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 RESOURCE_MODELS = {"document_id": Document, "run_id": VerificationRun,
@@ -174,6 +178,7 @@ def _authenticate(request):
                 authenticate = authenticate_session if name == SESSION_COOKIE else authenticate_password_session
                 principal = authenticate(session, request.cookies.get(name, ""))
                 request.state.cookie_authenticated = True
+                request.state.session_cookie_name = name
                 return principal
     if len(authorization) != 1:
         raise HTTPException(401, "Bearer authentication required", headers={"WWW-Authenticate": "Bearer"})
@@ -219,6 +224,40 @@ def check_origin(request, *, secure: bool, required: bool = False):
         raise HTTPException(403, "Cross-origin changes are not allowed")
     if request.headers.get("sec-fetch-site") == "cross-site":
         raise HTTPException(403, "Cross-site changes are not allowed")
+
+
+def _renew_cookie(request, response, principal, secure):
+    if not request.state.cookie_authenticated or not 200 <= response.status_code < 400:
+        return
+    if request.url.path.rstrip("/") in {"/api/auth/logout", "/api/auth/password", "/api/identity/session"}:
+        return
+    # Read-only cross-site requests must not keep an otherwise idle session alive.
+    if request.headers.get("sec-fetch-site") == "cross-site":
+        return
+    try:
+        check_origin(request, secure=secure)
+    except HTTPException:
+        return
+    idle, _ = session_lifetimes()
+    if principal.expires_at and principal.expires_at > datetime.utcnow() + idle - RENEW_INTERVAL:
+        return
+    name = request.state.session_cookie_name
+    secret = request.cookies.get(name, "")
+    try:
+        with get_session_factory()() as session:
+            deadline = renew_browser_activity(session, name, secret)
+    except HTTPException:
+        # Logout, expiry or an account change may have happened during the request.
+        return
+    except SQLAlchemyError:
+        logging.getLogger(__name__).warning("Browser session renewal unavailable")
+        return
+    if deadline is not None:
+        response.set_cookie(name, secret, httponly=True, secure=secure,
+                            path="/" if name == PASSWORD_SESSION_COOKIE else "/api",
+                            samesite="strict" if name == PASSWORD_SESSION_COOKIE else "lax",
+                            expires=deadline.replace(tzinfo=timezone.utc),
+                            max_age=max(0, int((deadline - datetime.utcnow()).total_seconds())))
 
 
 async def workspace_access(request, call_next):
@@ -272,6 +311,7 @@ async def workspace_access(request, call_next):
             response = await call_next(request)
         finally:
             _principal.reset(context_token)
+        await run_in_threadpool(_renew_cookie, request, response, principal, secure)
     except HTTPException as exc:
         response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
     except ValueError:

@@ -77,3 +77,90 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 page.close()
         finally:
             browser.close()
+
+
+def test_expired_poll_pauses_and_explicit_login_resumes_same_results(tmp_path):
+    static = ROOT / "apps/web/static"
+    files = {f"/static/{path.relative_to(static).as_posix()}": path for path in static.rglob("*") if path.is_file()}
+    files["/"] = ROOT / "apps/web/index.html"
+    run = {"id": "run", "state": "COMPLETED", "stage_message": "검증 완료", "progress": 1,
+           "document_ids": [], "unverified_items": [], "started_at": "2026-09-21T00:00:00"}
+
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
+            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
+        browser = playwright.chromium.launch(**options)
+        try:
+            for width, height in ((1440, 960), (390, 844)):
+                for expiry_stage in ("status", "result"):
+                    expired, requests, errors = [True], [], []
+
+                    def respond(route):
+                        path = urlsplit(route.request.url).path
+                        requests.append((route.request.method, path))
+                        if path in files:
+                            route.fulfill(path=str(files[path]))
+                        elif path == "/api/health":
+                            route.fulfill(json={"status": "ok", "version": "0.5.0"})
+                        elif path == "/api/auth/login":
+                            expired[0] = False
+                            route.fulfill(json={"user": {"id": "member"}})
+                        elif path == "/api/verification-runs/run" and expiry_stage == "result":
+                            route.fulfill(json=run)
+                        elif expired[0]:
+                            route.fulfill(status=401, json={"detail": "Session expired"})
+                        elif path == "/api/identity/me":
+                            route.fulfill(json={"user_id": "member", "role": "MEMBER", "authentication": "password"})
+                        elif path == "/api/verification-runs/run":
+                            route.fulfill(json=run)
+                        elif path == "/api/verification-runs/run/result":
+                            route.fulfill(json={"test_marker": "same-run", "documents": []})
+                        elif "/case-matrix" in path:
+                            route.fulfill(body="null", content_type="application/json")
+                        else:
+                            route.fulfill(json=[])
+
+                    page = browser.new_page(viewport={"width": width, "height": height})
+                    page.on("pageerror", lambda error: errors.append(str(error)))
+                    page.route("**/*", respond)
+                    page.goto("http://progress.test/")
+                    login = page.get_by_role("dialog", name="작업 공간 로그인")
+                    expect(login).to_be_visible()
+                    page.keyboard.press("Escape")
+                    page.evaluate("""run => {
+                        state.project = {id:'project', name:'장시간 분석', external_ai_policy:'LOCAL_ONLY'};
+                        state.run = {...run, state:'VERIFYING', progress:.57};
+                        document.getElementById('emptyState').hidden = true;
+                        document.getElementById('projectView').hidden = false;
+                        renderProject(); pollRun(state.generation);
+                    }""", run)
+                    notice = page.locator("#progressNotice")
+                    expect(notice).to_contain_text("결과 조회를 잠시 멈췄습니다", timeout=7000)
+                    expect(login).to_have_count(0)
+                    count = len(requests)
+                    page.wait_for_timeout(3200)
+                    assert len(requests) == count
+                    assert notice.evaluate("el => el.scrollWidth <= el.clientWidth")
+                    page.screenshot(path=str(tmp_path / f"session-paused-{expiry_stage}-{width}.png"), full_page=True)
+                    await_login = page.get_by_role("button", name="다시 로그인", exact=True)
+                    await_login.click()
+                    expect(login).to_be_visible()
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(1800)
+                    expect(login).to_have_count(0)
+                    expect(await_login).to_be_visible()
+                    await_login.click()
+                    login.locator('input[name="email"]').fill("member@example.invalid")
+                    login.locator('input[name="password"]').fill("synthetic-password")
+                    login.get_by_role("button", name="로그인", exact=True).click()
+                    expect(login).to_have_count(0)
+                    page.wait_for_function("state.result.test_marker === 'same-run' && !state.pollError")
+                    expect(page.locator("#progress")).to_be_hidden()
+                    assert page.evaluate("state.run.id") == "run"
+                    assert page.evaluate("state.project.id") == "project"
+                    assert [path for method, path in requests if method == "POST"] == ["/api/auth/login"]
+                    assert not errors
+                    page.close()
+        finally:
+            browser.close()

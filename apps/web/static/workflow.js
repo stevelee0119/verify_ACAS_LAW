@@ -66,16 +66,16 @@ const workflowUI = (() => {
     if (!doc) return;
     await openDocument(doc, null, runId); state.page = page || 1; await renderPage();
   }
-  async function refresh() {
+  async function refresh(options = {}) {
     const id = state.project?.id, run = state.run;
     if (!id) return;
     const version = ++generation;
     if (projectId !== id) { selected.clear(); workflows = new Map(); matrix = null; projectId = id; }
-    const issueData = await api(`/projects/${id}/issues`);
+    const issueData = await api(`/projects/${id}/issues`, options);
     let nextMatrix = null, nextWorkflows = [];
     if (run && ["COMPLETED", "PARTIAL_COMPLETED"].includes(run.state)) {
       [nextMatrix, nextWorkflows] = await Promise.all([
-        api(`/projects/${id}/case-matrix?run_id=${run.id}`), api(`/projects/${id}/review-workflows?run_id=${run.id}`)]);
+        api(`/projects/${id}/case-matrix?run_id=${run.id}`, options), api(`/projects/${id}/review-workflows?run_id=${run.id}`, options)]);
     }
     if (generation !== version || state.project?.id !== id) return;
     issues = issueData; matrix = nextMatrix; workflows = new Map(nextWorkflows.map(w => [w.finding_id, w]));

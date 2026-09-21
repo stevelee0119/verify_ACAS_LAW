@@ -80,6 +80,8 @@ function toast(message) {
   toast.timer = setTimeout(() => $("toast").hidden = true, 6500);
 }
 async function api(path, options = {}) {
+  const authVersion = operationsUI.authVersion?.() || 0;
+  const {interactiveAuth = true, ...request} = options;
   const headers = {
     ...options.headers
   };
@@ -88,18 +90,23 @@ async function api(path, options = {}) {
     options.body = JSON.stringify(options.body);
   }
   const requestOptions = {
-    ...options,
+    ...request,
+    body: options.body,
     headers,
     credentials: "same-origin"
   };
   let {response, data} = await send(path, requestOptions);
   if (response.status === 401) {
-    await operationsUI.authenticate();
-    ({response, data} = await send(path, requestOptions));
+    if ((operationsUI.authVersion?.() || 0) !== authVersion) {
+      ({response, data} = await send(path, requestOptions));
+    } else if (interactiveAuth) {
+      await operationsUI.authenticate();
+      ({response, data} = await send(path, requestOptions));
+    }
   }
   if (!response.ok) throw requestError(
     typeof data?.detail === "string" ? data.detail : data?.detail?.message || `서버가 요청을 처리하지 못했습니다 (HTTP ${response.status}).`,
-    data?.detail?.code || "HTTP_ERROR", {
+    response.status === 401 ? "AUTH_REQUIRED" : data?.detail?.code || "HTTP_ERROR", {
       status: response.status,
       requestId: response.headers.get("X-Request-ID") || data?.detail?.request_id,
       uncertain: response.status >= 500 || response.status === 408
@@ -243,10 +250,11 @@ function renderProject() {
   $("policyLabel").textContent = label(p.external_ai_policy);
   $("staleNotice").hidden = !state.run || state.run.input_snapshot?.scope_revision === p.scope_revision;
   const busy = state.run && !terminal(state.run);
+  const loginRequired = state.pollError?.runId === state.run?.id && state.pollError?.authRequired;
   $("verifyBtn").disabled = !!busy || !!state.uploadBatch?.busy || !state.documents.some(d => d.included_in_verification);
   $("reverify").disabled = $("verifyBtn").disabled;
-  $("progress").hidden = !busy;
-  if (busy) {
+  $("progress").hidden = !busy && !loginRequired;
+  if (busy || loginRequired) {
     const percent = Math.round(state.run.progress * (state.run.progress <= 1 ? 100 : 1));
     $("progressText").textContent = state.run.stage_message || label(state.run.state);
     $("progressPercent").textContent = `${percent}%`;
@@ -623,10 +631,27 @@ function renderProgressNotice() {
   }
   const seconds = Math.floor((Date.now() - state.progressSeen.at) / 1000);
   const error = state.pollError?.runId === run.id;
-  const message = error ? "서버 연결이 지연되어 진행 상태를 갱신하지 못했습니다. 자동으로 다시 연결 중입니다. 검증 작업이 중단된 것으로 확정된 것은 아닙니다."
+  const authRequired = error && state.pollError.authRequired;
+  const message = authRequired ? "로그인이 만료되어 결과 조회를 잠시 멈췄습니다. 다시 로그인하면 같은 검증의 진행 상태와 결과를 확인합니다."
+    : error ? "서버 연결이 지연되어 진행 상태를 갱신하지 못했습니다. 자동으로 다시 연결 중입니다. 검증 작업이 중단된 것으로 확정된 것은 아닙니다."
     : seconds >= 60 ? `현재 단계의 진행 정보가 ${seconds}초 동안 변경되지 않았습니다. 서버 응답은 정상이며 작업 결과를 기다리고 있습니다.` : "";
   $("progressNotice").textContent = message;
   $("progressNotice").hidden = !message;
+  if (authRequired) {
+    $("progress").hidden = false;
+    const login = button("다시 로그인", () => operationsUI.authenticate(), "resume-login");
+    const icon = node("i"); icon.dataset.lucide = "log-in"; login.prepend(icon);
+    $("progressNotice").append(login);
+    icons();
+  }
+}
+
+function resumeAuthenticatedRun() {
+  if (state.pollError?.authRequired && state.pollError.runId === state.run?.id) {
+    state.pollError = null;
+    renderProgressNotice();
+    pollRun(state.generation);
+  }
 }
 
 function pollRun(generation) {
@@ -636,36 +661,37 @@ function pollRun(generation) {
   state.timer = setTimeout(async () => {
     if (generation !== state.generation || state.run?.id !== runId) return;
     try {
-      const run = await api(`/verification-runs/${runId}`, {timeoutMs: 15000});
+      const run = await api(`/verification-runs/${runId}`, {timeoutMs: 15000, interactiveAuth: false});
       if (generation !== state.generation || state.run?.id !== runId) return;
       if (!run || run.id !== runId || typeof run.state !== "string") throw new Error("진행 상태 응답을 읽지 못했습니다");
       state.pollError = null;
       state.run = run;
       renderProject();
       if (terminal(run)) {
-        await loadResults(generation);
+        await loadResults(generation, {interactiveAuth: false});
         toast(label(run.state));
       } else pollRun(generation);
     } catch (error) {
       if (generation !== state.generation || state.run?.id !== runId) return;
-      state.pollError = {runId};
-      renderProgressNotice();
-      pollRun(generation);
+      const authRequired = error.status === 401 || error.code === "AUTH_REQUIRED";
+      state.pollError = {runId, authRequired};
+      renderProject();
+      if (!authRequired) pollRun(generation);
     }
   }, 1500);
 }
-async function loadResults(generation) {
+async function loadResults(generation, options = {}) {
   if (!state.run) {
     renderFindings();
-    await workflowUI.refresh();
+    await workflowUI.refresh(options);
     return;
   }
-  const result = await api(`/verification-runs/${state.run.id}/result`);
-  const findings = await api(`/projects/${state.project.id}/findings?run_id=${state.run.id}`);
+  const result = await api(`/verification-runs/${state.run.id}/result`, options);
+  const findings = await api(`/projects/${state.project.id}/findings?run_id=${state.run.id}`, options);
   if (generation !== state.generation) return;
   state.result = result;
   state.findings = findings;
-  await workflowUI.refresh();
+  await workflowUI.refresh(options);
   if (generation !== state.generation) return;
   renderProject();
   renderFindings();
@@ -1086,6 +1112,9 @@ function renderDiagnostics(data) {
     capabilities.rasterizer?.available ? "PDF 페이지를 이미지로 변환할 수 있습니다. 글자 인식 준비 상태와는 별개입니다."
       : "스캔 PDF를 처리하려면 서버의 pypdfium2 설치를 확인해야 합니다.", capabilities.rasterizer?.available ? "LOW" : "HIGH");
   const dialect = capabilities.database?.dialect;
+  const sessionPolicy = capabilities.browser_session;
+  if (sessionPolicy) row("로그인 유지", "사용 중 자동 연장",
+    `미사용 ${sessionPolicy.idle_hours}시간 · 최초 로그인부터 최대 ${sessionPolicy.absolute_hours}시간. 로그아웃·비밀번호 변경·계정 중지 시 종료되며, 토큰·SSO의 원본 유효기간을 넘지 않습니다.`);
   row("자료 저장소", dialect === "postgresql" ? "PostgreSQL" : dialect === "sqlite" ? "SQLite" : "확인 필요",
     dialect === "sqlite" ? "파일 기반 데이터베이스를 사용 중입니다. 재배포 전에 DB·업로드 원본의 영구 저장소와 백업을 확인하세요."
       : "데이터베이스 연결과 별도로 업로드 원본의 영구 저장 위치 및 백업을 확인해야 합니다.");

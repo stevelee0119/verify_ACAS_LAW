@@ -16,10 +16,11 @@ from functools import lru_cache
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueConstraint, or_, select
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueConstraint, or_, select, update
 from sqlalchemy.orm import Session
 
 from .db import Base, Organization, Project, ProjectMember, SessionToken, User, new_uuid
+from .session_policy import RENEW_INTERVAL, absolute_deadline, session_deadline
 
 ROLES = {"VIEWER": 1, "MEMBER": 2, "ADMIN": 3}
 LOCAL_OWNER = "local-owner"
@@ -176,7 +177,9 @@ def authenticate_password_session(session: Session, secret: str) -> Principal:
         raise _unauthorized()
     row = session.scalar(select(SessionToken).where(
         SessionToken.token_hash == hashlib.sha256(secret.encode("ascii")).hexdigest()))
-    if row is None or row.revoked_at is not None or row.expires_at <= datetime.utcnow():
+    now = datetime.utcnow()
+    if (row is None or row.revoked_at is not None or row.expires_at <= now
+            or absolute_deadline(row.issued_at) <= now):
         raise _unauthorized()
     return principal_for_user(session, row.user_id, "password", row.id, row.expires_at)
 
@@ -301,9 +304,12 @@ def issue_browser_session(session: Session, principal: Principal) -> tuple[Brows
     if principal.authentication not in {"token", "oidc", "password"} or not principal.credential_id or not principal.expires_at:
         raise HTTPException(401, "Exchange requires a valid bearer credential")
     secret = secrets.token_urlsafe(32)
+    now = datetime.utcnow()
     row = BrowserSession(user_id=principal.user_id, secret_hash=hashlib.sha256(secret.encode("ascii")).hexdigest(),
         source_kind=principal.authentication, source_id=principal.credential_id,
-        expires_at=min(datetime.utcnow() + timedelta(hours=8), principal.expires_at))
+        created_at=now,
+        expires_at=min(session_deadline(now, now), principal.expires_at,
+                       now + timedelta(hours=8) if principal.authentication == "oidc" else principal.expires_at))
     session.add(row)
     session.flush()
     return row, secret
@@ -315,11 +321,14 @@ def authenticate_session(session: Session, secret: str) -> Principal:
     digest = hashlib.sha256(secret.encode("ascii")).hexdigest()
     row = session.scalar(select(BrowserSession).where(BrowserSession.secret_hash == digest))
     now = datetime.utcnow()
-    if row is None or row.revoked_at is not None or row.expires_at <= now:
+    if (row is None or row.revoked_at is not None or row.expires_at <= now
+            or absolute_deadline(row.created_at) <= now):
         raise _unauthorized()
     if row.source_kind in {"token", "password"}:
         source = session.get(ApiToken if row.source_kind == "token" else SessionToken, row.source_id)
         if source is None or source.user_id != row.user_id or source.revoked_at is not None or source.expires_at <= now:
+            raise _unauthorized()
+        if row.source_kind == "password" and absolute_deadline(source.issued_at) <= now:
             raise _unauthorized()
     elif row.source_kind == "oidc":
         source = session.get(ExternalIdentity, row.source_id)
@@ -329,6 +338,46 @@ def authenticate_session(session: Session, secret: str) -> Principal:
     else:
         raise _unauthorized()
     return principal_for_user(session, row.user_id, "session", row.id, row.expires_at)
+
+
+def renew_browser_activity(session: Session, cookie_name: str, secret: str) -> datetime | None:
+    """Renew only live credentials; conditional writes cannot undo revocation."""
+    authenticate = authenticate_password_session if cookie_name == PASSWORD_SESSION_COOKIE else authenticate_session
+    principal = authenticate(session, secret)
+    model = SessionToken if cookie_name == PASSWORD_SESSION_COOKIE else BrowserSession
+    row = session.get(model, principal.credential_id)
+    now = datetime.utcnow()
+    issued_at = row.issued_at if model is SessionToken else row.created_at
+    deadline = session_deadline(issued_at, now)
+    source = None
+    if model is BrowserSession:
+        # The original OIDC expiry is not renewable without a new verified JWT.
+        if row.source_kind == "oidc":
+            return None
+        source_model = SessionToken if row.source_kind == "password" else ApiToken
+        source = session.get(source_model, row.source_id)
+        source_deadline = (session_deadline(source.issued_at, now)
+                           if source_model is SessionToken else source.expires_at)
+        deadline = min(deadline, source_deadline)
+    if deadline - row.expires_at < RENEW_INTERVAL:
+        return None
+
+    def extend(record, target):
+        old_expiry = record.expires_at
+        return session.execute(update(type(record)).where(
+            type(record).id == record.id, type(record).revoked_at.is_(None),
+            type(record).expires_at == old_expiry, type(record).expires_at > now,
+        ).values(expires_at=target)).rowcount == 1
+
+    if source is not None and isinstance(source, SessionToken) and source.expires_at < deadline:
+        if not extend(source, deadline):
+            session.rollback()
+            return None
+    if not extend(row, deadline):
+        session.rollback()
+        return None
+    session.commit()
+    return deadline
 
 
 def project_role(session: Session, project: Project, principal: Principal | None = None) -> str | None:

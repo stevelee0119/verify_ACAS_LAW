@@ -1038,6 +1038,14 @@ table {
   overflow-wrap: anywhere;
 }
 
+.resume-login {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  max-width: 100%;
+}
+
 #progressText { min-width: 0; overflow-wrap: anywhere; }
 #progressPercent { flex-shrink: 0; }
 

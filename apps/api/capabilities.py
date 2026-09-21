@@ -81,12 +81,20 @@ def _source_keys() -> Dict[str, bool]:
 
 
 def runtime_capabilities() -> Dict[str, Any]:
+    from .session_policy import session_lifetimes
+
     settings = get_settings()
+    idle, absolute = session_lifetimes()
     return {
         "ocr": _ocr_state(),
         "rasterizer": _rasterizer_state(),
         "database": _database_state(),
         "worker_mode": settings.worker_mode,
+        "browser_session": {
+            "idle_hours": idle.total_seconds() / 3600,
+            "absolute_hours": absolute.total_seconds() / 3600,
+            "renew_on_activity": True,
+        },
         "network_allowed": bool(settings.allow_network),
         "source_keys_present": _source_keys(),
         "source_lookup": {

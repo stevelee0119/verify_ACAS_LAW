@@ -217,12 +217,12 @@ test("merged page retains every workbench and no script persists authentication 
   assert.doesNotMatch(source + app + html, /<<<<<<<|=======|>>>>>>>/);
 });
 
-function networkHarness(fetch, authenticate = async () => {}) {
+function networkHarness(fetch, authenticate = async () => {}, authVersion = () => 0) {
   const app = readFileSync(path.join(root, "apps/web/static/app.js"), "utf8");
   const network = app.slice(app.indexOf("async function api("), app.indexOf("function action("));
   const context = vm.createContext({fetch:async (...args) => ({headers:new Headers(), ...await fetch(...args)}),
     navigator:{onLine:true}, AbortController, setTimeout, clearTimeout, FormData:class {},
-    operationsUI:{authenticate}});
+    operationsUI:{authenticate, authVersion}});
   vm.runInContext(network, context);
   return vm.runInContext("({api, send})", context);
 }
@@ -269,4 +269,29 @@ test("network failures and validation errors preserve distinct outcomes", async 
   const validation = networkHarness(async () => ({ok:false, status:400,
     headers:new Headers({"X-Request-ID":"test-request"}), json:async () => ({detail:"Invalid file"})}));
   await assert.rejects(validation.api("/projects"), error => error.code === "HTTP_ERROR" && !error.uncertain && error.requestId === "test-request");
+});
+
+test("background expiry is actionable without opening a login dialog or retrying", async () => {
+  let requests = 0, logins = 0;
+  const h = networkHarness(async (url, options) => {
+    requests++;
+    assert.equal(options.interactiveAuth, undefined);
+    return {ok:false, status:401, json:async () => ({detail:"Expired"})};
+  }, async () => {logins++;});
+  await assert.rejects(h.api("/verification-runs/run", {interactiveAuth:false}),
+    error => error.code === "AUTH_REQUIRED" && error.status === 401 && !error.uncertain);
+  assert.equal(requests, 1);
+  assert.equal(logins, 0);
+});
+
+test("a late unauthorized response after successful login reuses the new session", async () => {
+  let version = 0, logins = 0, calls = 0;
+  const h = networkHarness(async () => {
+    calls++;
+    if (calls === 1) version++;
+    return {ok:calls === 2, status:calls === 2 ? 200 : 401, json:async () => ({done:true})};
+  }, async () => {logins++;}, () => version);
+  assert.equal((await h.api("/verification-runs/run")).done, true);
+  assert.equal(calls, 2);
+  assert.equal(logins, 0);
 });

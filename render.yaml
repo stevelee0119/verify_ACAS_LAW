@@ -62,7 +62,9 @@ services:
       - key: LV_BOOTSTRAP_ADMIN_NAME
         value: 관리자
       - key: LV_SESSION_TTL_HOURS
-        value: "12"
+        value: "24"
+      - key: LV_SESSION_ABSOLUTE_HOURS
+        value: "168"
       - key: LV_LAW_GO_KR_OC
         sync: false
       - key: LV_KCI_KEY
