@@ -38,10 +38,15 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 page.goto("http://emblem.test/")
                 dialog = page.get_by_role("dialog", name="작업 공간 로그인")
                 expect(dialog).to_be_visible()
-                expect(dialog.get_by_role("heading", name="ACASia_LAW")).to_be_visible()
+                expect(dialog.get_by_role("heading", name="법률문서 검증시스템", exact=True)).to_be_visible()
+                expect(dialog.get_by_role("heading")).to_have_count(1)
+                expect(dialog.get_by_text("ACASia_LAW", exact=True)).to_have_count(0)
+                assert dialog.locator(".login-heading").evaluate("""element =>
+                    element.querySelector('h2').getBoundingClientRect().top >=
+                    element.querySelector('.brand-emblem').getBoundingClientRect().bottom + 12""")
                 page.wait_for_function("""() => [...document.querySelectorAll('.brand-emblem img')]
                     .every(image => image.complete && image.naturalWidth === 1280)""")
-                assert page.locator(".brand-emblem img").count() == 3
+                assert page.locator(".brand-emblem img").count() == 2
                 assert dialog.evaluate("element => element.scrollWidth <= element.clientWidth")
                 assert page.locator(".brand-emblem").evaluate_all("""elements => elements.every(element => {
                     const rect = element.getBoundingClientRect();
@@ -53,6 +58,19 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 page.screenshot(path=str(tmp_path / f"emblem-login-{width}.png"), full_page=True)
                 page.keyboard.press("Escape")
                 expect(dialog).not_to_be_visible()
+                square = page.locator("#emptyState .empty-emblem")
+                expect(square).to_be_visible()
+                expect(square).to_have_attribute("src", "/static/img/acas-law-square.jpg")
+                page.wait_for_function("""() => {
+                    const image = document.querySelector('#emptyState .empty-emblem');
+                    return image.complete && image.naturalWidth === 1280 && image.naturalHeight === 1280;
+                }""")
+                assert square.evaluate("""image => {
+                    const rect = image.getBoundingClientRect();
+                    return Math.abs(rect.width - rect.height) < 1 && rect.width > 0
+                        && rect.left >= 0 && rect.right <= innerWidth
+                        && getComputedStyle(image).objectFit === 'contain';
+                }""")
                 assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
                 assert page.locator(".topbar").evaluate("""bar => {
                     const rects = [...bar.children].filter(element => getComputedStyle(element).display !== 'none')
@@ -61,10 +79,10 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                         && (!index || rect.left >= rects[index - 1].right));
                 }""")
                 expect(page.get_by_role("link", name="ACASia_LAW 홈")).to_be_visible()
+                page.screenshot(path=str(tmp_path / f"emblem-workspace-{width}.png"), full_page=True)
                 if width <= 700:
                     page.get_by_role("button", name="프로젝트 목록", exact=True).click()
                     expect(page.locator("#sidebar")).to_be_visible()
-                page.screenshot(path=str(tmp_path / f"emblem-workspace-{width}.png"), full_page=True)
                 assert errors == []
                 page.close()
         finally:

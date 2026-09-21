@@ -55,7 +55,7 @@ const operationsUI = (() => {
       emblemImage.src = "/static/acas-law-emblem.jpg"; emblemImage.alt = "ACASia LAW";
       emblemImage.width = 1280; emblemImage.height = 640; emblem.append(emblemImage);
       const heading = node("div", null, "login-heading");
-      heading.append(emblem, node("h2", "ACASia_LAW"), node("p", "법률문서 검증시스템", "login-sub"));
+      heading.append(emblem, node("h2", "법률문서 검증시스템"));
       form.append(heading, modes, passwordPanel, tokenPanel, error, submit);
       dialog.append(form); document.body.append(dialog);
       let authenticated = false;

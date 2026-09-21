@@ -483,8 +483,13 @@ td {
   margin-bottom: 22px
 }
 
-.empty>.brand-emblem {
-  width: 360px;
+.empty>.empty-emblem {
+  display: block;
+  width: 280px;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
   margin: 0 auto 18px;
 }
 
@@ -1012,17 +1017,14 @@ table {
 /* ---------- 로그인 ---------- */
 .login-heading {
   text-align: center;
-  margin-bottom: 18px
+  margin-bottom: 0
 }
 
 .login-heading>h2 {
-  margin: 10px 0 2px
-}
-
-.login-sub {
-  margin: 0;
-  color: var(--muted);
-  font-size: 13px
+  margin: 16px 0 0;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 600;
 }
 
 /* 제9.2장 배포가능 상태. 색은 보조 신호이며 판정은 글자로 읽힌다. */
