@@ -229,7 +229,7 @@ def test_detection_cost_stays_linear_in_input_size():
     보고서 생성 요청이 응답 없이 끊겼다. 회귀하면 이 시험이 먼저 깨진다.
     """
     import json
-    import time
+    from timeit import repeat
 
     from packages.pii_engine import detect
 
@@ -242,11 +242,10 @@ def test_detection_cost_stays_linear_in_input_size():
     small, large = unit, unit * 8
 
     def elapsed(text):
-        started = time.monotonic()
-        detect(text)
-        return time.monotonic() - started
+        # timeit은 GC를 잠시 멈춘다. 반복 최소값으로 CI 스케줄링 지연도 줄인다.
+        return min(repeat(lambda: detect(text), number=1, repeat=5))
 
-    elapsed(small)  # 정규식 캐시 예열
+    detect(small)  # 정규식 캐시 예열
     small_time, large_time = elapsed(small), elapsed(large)
 
     # 8배 입력이 제곱 비용이면 64배, 선형이면 8배다. 실행 환경 편차를 감안해
