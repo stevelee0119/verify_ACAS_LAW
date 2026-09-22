@@ -188,3 +188,66 @@ def test_a_third_model_disagreeing_is_not_treated_as_agreement(monkeypatch):
     assert used == ["anthropic", "openai", "gemini"]
     assert outcome.disagreement is True
     assert str(outcome.status) == "UNVERIFIED", "엇갈리면 다수결로 정하지 않는다"
+
+
+def test_a_failing_provider_falls_through_to_the_next(monkeypatch):
+    """공급자 하나의 장애로 AI 검토를 통째로 포기하지 않는다.
+
+    실제 배포에서 Anthropic 키가 없고 OpenAI 잔액이 없자, Gemini가 멀쩡한데도
+    캐스케이드가 2단계에서 끝나 검토가 수행되지 않았다.
+    """
+    import asyncio
+    from dataclasses import dataclass
+
+    from packages.llm_router import router as module
+
+    called = []
+
+    @dataclass
+    class _Exec:
+        provider: str
+
+    class _Res:
+        def __init__(self, name, ok):
+            self.used = ok
+            self.note = "" if ok else f"{name} 호출 실패"
+            self.text, self.parsed = "", {"status": "VERIFIED", "confidence": 0.95} if ok else {}
+            self.executions = [_Exec(provider=name)]
+
+    order = ["anthropic", "openai", "gemini"]
+    healthy = {"gemini"}
+
+    async def fake_run(self, role, request, *, policy=None, exclude=None, expected_task=""):
+        remaining = [n for n in order if n not in (exclude or [])]
+        if not remaining:
+            class _Empty:
+                used, note, text, parsed, executions = False, "남은 공급자 없음", "", {}, []
+            return _Empty()
+        name = remaining[0]
+        called.append(name)
+        return _Res(name, name in healthy)
+
+    monkeypatch.setattr(module.LLMRouter, "run", fake_run)
+    router = module.LLMRouter()
+    router.settings.llm_cross_check = "off"      # 1단계만 보면 충분하다
+    outcome = asyncio.run(router.cascade(question="q", evidence={"a": 1}))
+
+    assert called == ["anthropic", "openai", "gemini"], called
+    assert str(outcome.status) != "UNVERIFIED", "멀쩡한 공급자가 있으면 검토가 수행되어야 한다"
+    assert outcome.winning_source == "SINGLE_MODEL_OPINION"
+
+
+def test_all_providers_failing_still_reports_why(monkeypatch):
+    import asyncio
+
+    from packages.llm_router import router as module
+
+    async def fake_run(self, role, request, *, policy=None, exclude=None, expected_task=""):
+        class _Empty:
+            used, note, text, parsed, executions = False, "사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.", "", {}, []
+        return _Empty()
+
+    monkeypatch.setattr(module.LLMRouter, "run", fake_run)
+    outcome = asyncio.run(module.LLMRouter().cascade(question="q", evidence={"a": 1}))
+    assert str(outcome.status) == "UNVERIFIED"
+    assert outcome.rationale, "왜 수행하지 못했는지 남아야 한다"

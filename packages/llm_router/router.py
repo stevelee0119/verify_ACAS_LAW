@@ -183,6 +183,46 @@ class LLMRouter:
                 return provider
         return None
 
+    async def run_any(
+        self,
+        role: LLMRole,
+        request: LLMRequest,
+        *,
+        policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
+        exclude: Optional[List[str]] = None,
+        expected_task: str = "",
+    ) -> RouterResult:
+        """공급자 하나가 실패해도 다음 공급자로 넘어간다.
+
+        run()은 역할에 배정된 1순위 공급자 하나만 부른다. 그 호출이 실패하면
+        (키 누락, 잔액 소진, 모델 ID 불일치) 캐스케이드가 그 자리에서 끝났다.
+        다른 공급자가 멀쩡해도 AI 검토가 통째로 수행되지 않는다. 실제 배포에서
+        Anthropic 키가 없고 OpenAI 잔액이 없자 Gemini를 한 번도 부르지 않았다.
+
+        공급자 장애는 개별 사정이지 검토를 포기할 이유가 아니다. 순서대로
+        시도하고 성공한 첫 결과를 쓴다. 실패한 시도의 실행 기록도 함께 남겨
+        무엇이 왜 실패했는지 추적할 수 있게 한다.
+        """
+        tried = list(exclude or [])
+        attempted: List[ModelExecution] = []
+        last: Optional[RouterResult] = None
+        for _ in range(max(1, len(self.providers))):
+            result = await self.run(role, request, policy=policy, exclude=tried,
+                                    expected_task=expected_task)
+            if result.used:
+                result.executions = [*attempted, *result.executions]
+                return result
+            attempted.extend(result.executions)
+            last = result
+            names = [e.provider for e in result.executions if getattr(e, "provider", "")]
+            if not names:
+                break  # 고를 공급자가 더 없다
+            tried.extend(names)
+        if last is not None:
+            last.executions = attempted
+            return last
+        return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
+
     # -- 단일 호출 ----------------------------------------------------------
     async def run(
         self,
@@ -349,7 +389,7 @@ class LLMRouter:
             )
 
         # Stage 2: Primary Reasoner
-        primary = await self.run(
+        primary = await self.run_any(
             LLMRole.PRIMARY_REASONER,
             LLMRequest(
                 system="공식 Source와 문서를 대조해 판단하고 근거를 제시하라. JSON으로만 답하라.",
@@ -393,7 +433,7 @@ class LLMRouter:
             )
 
         # Stage 3: Independent Critic (다른 Provider 우선)
-        critic = await self.run(
+        critic = await self.run_any(
             LLMRole.INDEPENDENT_CRITIC,
             LLMRequest(
                 system=(
@@ -420,7 +460,7 @@ class LLMRouter:
         # 두 모델이 같은 답을 냈다는 사실만으로는 교차검증이라 하기 어렵다.
         third_verdict: Dict[str, Any] = {}
         if cross_all or (disagreement and profile == VerificationProfile.DEEP_VERIFY):
-            third = await self.run(
+            third = await self.run_any(
                 LLMRole.WEB_GROUNDER,
                 LLMRequest(
                     system="공개 자료를 근거로 사실관계만 확인하라. 확인되지 않으면 UNVERIFIED로 답하라. JSON으로만 답하라.",
