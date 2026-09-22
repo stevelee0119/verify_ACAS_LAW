@@ -107,3 +107,25 @@ def test_diagnostics_reports_durability_without_blocking_analysis(client):
 
 
 from test_api import client, project  # noqa: E402,F401
+
+
+def test_mounted_volume_inside_the_application_directory_is_not_flagged(monkeypatch, tmp_path):
+    """디스크를 소스 디렉터리 안에 마운트하는 배포도 있다.
+
+    경로만 보고 위험하다고 하면 정상 구성을 잘못 경고한다. 실제 마운트를
+    확인해서, 별도 볼륨이면 AT_RISK로 단정하지 않는다.
+    """
+    from apps.api import durability
+
+    monkeypatch.setattr(durability, "mounted_volume", lambda path: True)
+    report = _report(monkeypatch, RENDER_SERVICE_ID="srv-1")
+    assert report["database"]["state"] != AT_RISK
+    assert "별도 볼륨" in report["database"]["reason"]
+    assert "확인하세요" in report["database"]["reason"]
+
+
+def test_mount_detection_uses_the_filesystem_not_the_path(tmp_path):
+    from apps.api.durability import mounted_volume
+
+    assert mounted_volume(tmp_path) is False
+    assert mounted_volume(tmp_path / "아직" / "없는" / "경로") is False

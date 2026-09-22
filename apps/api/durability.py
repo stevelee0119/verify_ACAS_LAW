@@ -42,6 +42,23 @@ def _sqlite_path(url: str) -> Path | None:
     return Path("/" + path) if url.startswith("sqlite:////") else Path(path or ":memory:")
 
 
+def mounted_volume(path: Path) -> bool:
+    """경로가 상위와 다른 파일시스템에 있으면 별도 볼륨이 붙어 있는 것이다.
+
+    디스크를 애플리케이션 디렉터리 안에 마운트하는 배포도 있다. 경로만 보고
+    위험하다고 하면 정상 구성을 잘못 경고하게 되므로 실제 마운트를 확인한다.
+    """
+    node = path
+    while not node.exists() and node != node.parent:
+        node = node.parent
+    if node == node.parent:
+        return False
+    try:
+        return os.stat(node).st_dev != os.stat(node.parent).st_dev
+    except OSError:  # pragma: no cover - 접근 불가 경로
+        return False
+
+
 def _path_state(path: Path, *, configured: bool) -> tuple[str, str]:
     """경로 하나의 내구성 추정. 마운트 여부는 알 수 없으므로 단정하지 않는다."""
     platform = managed_platform()
@@ -51,6 +68,9 @@ def _path_state(path: Path, *, configured: bool) -> tuple[str, str]:
         return UNKNOWN, "경로를 확인하지 못했습니다"
     if str(resolved) == ":memory:" or "memory" in str(resolved):
         return AT_RISK, "메모리 저장소입니다. 프로세스가 끝나면 사라집니다"
+    if mounted_volume(resolved):
+        return UNKNOWN, (f"{resolved}는 별도 볼륨에 있습니다. 영구 디스크인지, "
+                         f"tmpfs 같은 휘발성 볼륨인지는 배포 설정에서 확인하세요")
     if resolved.is_relative_to(REPO_ROOT):
         return AT_RISK, f"애플리케이션 디렉터리 안({resolved})에 있습니다. 재배포하면 사라집니다"
     if platform and not configured:
