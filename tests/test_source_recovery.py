@@ -148,3 +148,41 @@ def test_deferred_detail_lookup_reuses_successful_search(tmp_path, monkeypatch):
     assert verdict["official_record"]["full_text"].startswith("Synthetic")
     assert verdict["source_lookup"]["cache_hits"] == 1
     assert verdict["source_lookup"]["recovery_status"] == "RECOVERED"
+
+
+def test_consecutive_requests_to_one_source_are_paced():
+    """연속 조회가 상대 서버의 한도를 건드리면 실재하는 판례가 미확인으로 남는다.
+
+    실연동 점검에서 같은 사건번호 조회가 한 번은 성공하고 한 번은 TIMEOUT으로
+    갈렸다. 한도에 걸린 뒤 물러나는 것보다 처음부터 간격을 두는 편이 낫다.
+    """
+    import time as _time
+
+    from packages.source_adapters.transport import LookupSession, _pace
+
+    session = LookupSession(budget_seconds=10.0)
+    session.min_interval_seconds = 0.2
+
+    started = _time.monotonic()
+    _pace(session, "law_go_kr")          # 첫 요청은 기다리지 않는다
+    assert _time.monotonic() - started < 0.1
+    _pace(session, "law_go_kr")          # 두 번째는 간격을 채운다
+    assert _time.monotonic() - started >= 0.2
+    assert session.spent_seconds > 0, "대기 시간은 조회 한도에서 차감되어야 한다"
+
+    # 다른 출처는 서로의 간격에 영향을 주지 않는다.
+    mark = _time.monotonic()
+    _pace(session, "kci")
+    assert _time.monotonic() - mark < 0.1
+
+
+def test_pacing_never_outlasts_the_remaining_budget():
+    from packages.source_adapters.transport import LookupSession, _pace
+
+    session = LookupSession(budget_seconds=0.05)
+    session.min_interval_seconds = 5.0
+    _pace(session, "law_go_kr")
+    import time as _time
+    started = _time.monotonic()
+    _pace(session, "law_go_kr")
+    assert _time.monotonic() - started < 1.0, "남은 한도를 넘겨 기다리면 안 된다"

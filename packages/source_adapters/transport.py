@@ -8,6 +8,7 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 import hashlib
 import json
+import os
 import math
 import time
 from datetime import datetime, timezone
@@ -71,6 +72,13 @@ class LookupSession:
     recovery_used: bool = False
     recovering: bool = False
     recovery_probes: set = field(default_factory=set)
+    # 같은 출처에 연달아 요청하는 간격의 하한. 국가법령정보는 빠르게 이어지는
+    # 조회에서 응답이 끊기는 구간이 실측되었고, 그러면 실재하는 판례가 확인되지
+    # 않은 채 남는다. 한도에 걸린 뒤 물러나는 것보다 처음부터 간격을 두는 편이
+    # 전체적으로 빠르다.
+    min_interval_seconds: float = field(
+        default_factory=lambda: max(0.0, float(os.getenv("LV_SOURCE_MIN_INTERVAL_SECONDS", "0.3"))))
+    last_request_at: dict = field(default_factory=dict)
 
     def remaining(self):
         return max(0.0, self.budget_seconds - self.spent_seconds)
@@ -177,6 +185,26 @@ def _wait(session, seconds):
         session.spent_seconds += time.monotonic() - started
 
 
+def _pace(session, adapter):
+    """같은 출처에 대한 연속 요청 사이에 최소 간격을 둔다.
+
+    캐시 적중에는 적용되지 않는다(요청이 나가지 않으므로 호출되지 않는다).
+    남은 조회 한도를 넘어서까지 기다리지 않는다.
+    """
+    gap = getattr(session, "min_interval_seconds", 0.0)
+    if gap <= 0:
+        return
+    previous = session.last_request_at.get(adapter)
+    now = time.monotonic()
+    if previous is not None:
+        wait = min(gap - (now - previous), session.remaining())
+        if wait > 0:
+            started = time.monotonic()
+            time.sleep(wait)
+            session.spent_seconds += time.monotonic() - started
+    session.last_request_at[adapter] = time.monotonic()
+
+
 def _retry_after(response):
     value = response.headers.get("Retry-After", "")
     try:
@@ -265,6 +293,7 @@ def source_get(adapter, url, *, params=None, headers=None, timeout=12):
             remaining = session.remaining()
             if remaining <= 0:
                 raise SourceRequestStopped("이 문서의 외부 출처 조회 시간 한도를 소진했습니다")
+            _pace(session, adapter)
             attempts += 1
             started = time.monotonic()
             delay = 0.0
