@@ -19,8 +19,7 @@ from .db import (Document, ExportArtifactRow, FindingRow, ReportRow, Verificatio
                  get_session_factory)
 from .identity import (LOCAL_OWNER, Principal, _principal, auth_mode, authenticate_bearer,
                        authenticate_session, authenticate_password_session, require_project,
-                       SESSION_COOKIE, PASSWORD_SESSION_COOKIE, renew_browser_activity)
-from .session_policy import RENEW_INTERVAL, session_lifetimes
+                       SESSION_COOKIE, PASSWORD_SESSION_COOKIE, renew_browser_activity, browser_cookie_deadline)
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
 RESOURCE_MODELS = {"document_id": Document, "run_id": VerificationRun,
@@ -98,6 +97,8 @@ def _authorize(session, request, principal, route, params, payload):
     template = getattr(route, "path", path).rstrip("/")
     read = request.method in READ_METHODS
     minimum = "VIEWER" if read else "MEMBER"
+    if template == "/api/verification-runs/{run_id}/session" and request.method == "POST":
+        minimum = "VIEWER"
     if "/members" in template or "/access" in template or request.method == "DELETE":
         minimum = "ADMIN"
     trash_access = ((template == "/api/projects/{project_id}/restore" and request.method == "POST")
@@ -246,14 +247,12 @@ def _renew_cookie(request, response, principal, secure):
         check_origin(request, secure=secure)
     except HTTPException:
         return
-    idle, _ = session_lifetimes()
-    if principal.expires_at and principal.expires_at > datetime.utcnow() + idle - RENEW_INTERVAL:
-        return
     name = request.state.session_cookie_name
     secret = request.cookies.get(name, "")
     try:
         with get_session_factory()() as session:
-            deadline = renew_browser_activity(session, name, secret)
+            renew_browser_activity(session, name, secret)
+            deadline = browser_cookie_deadline(session, name, secret)
     except HTTPException:
         # Logout, expiry or an account change may have happened during the request.
         return

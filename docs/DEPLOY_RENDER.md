@@ -194,9 +194,11 @@ Environment 탭에 아래를 넣고 배포하면 기동 시 관리자 계정이 
 | `LV_BOOTSTRAP_ADMIN_PASSWORD` | 10자 이상 비밀번호 |
 | `LV_BOOTSTRAP_ADMIN_NAME` | 표시 이름(선택) |
 | `LV_SESSION_TTL_HOURS` | 브라우저 미사용 제한(기본 24시간). 인증된 요청과 검증 진행 조회 시 자동 연장 |
-| `LV_SESSION_ABSOLUTE_HOURS` | 최초 로그인부터 자동 연장 상한(기본 168시간, 7일) |
+| `LV_SESSION_ABSOLUTE_HOURS` | 일반 세션의 최초 로그인 기준 상한(기본 168시간, 분석 보호는 별도) |
+| `LV_ANALYSIS_SESSION_HOURS` | 비밀번호 로그인 분석 보호 상한(분석 시작부터 기본 168시간) |
+| `LV_ANALYSIS_RESULT_HOURS` | 분석 종료 후 결과 확인 유예(기본 24시간) |
 
-계정이 만들어진 뒤에는 이 변수들이 무시된다. **첫 로그인 후 비밀번호를 바꾸고
+계정이 만들어진 뒤에는 `LV_BOOTSTRAP_ADMIN_*` 초기 계정 변수들이 무시된다. 세션 정책 변수는 계속 적용된다. **첫 로그인 후 비밀번호를 바꾸고
 두 환경변수를 삭제한다.** 환경변수는 대시보드에서 다시 볼 수 있다.
 
 ### 셸에서 직접 생성

@@ -81,10 +81,11 @@ def _source_keys() -> Dict[str, bool]:
 
 
 def runtime_capabilities() -> Dict[str, Any]:
-    from .session_policy import session_lifetimes
+    from .session_policy import analysis_lifetimes, session_lifetimes
 
     settings = get_settings()
     idle, absolute = session_lifetimes()
+    analysis, review = analysis_lifetimes()
     return {
         "ocr": _ocr_state(),
         "rasterizer": _rasterizer_state(),
@@ -94,6 +95,8 @@ def runtime_capabilities() -> Dict[str, Any]:
             "idle_hours": idle.total_seconds() / 3600,
             "absolute_hours": absolute.total_seconds() / 3600,
             "renew_on_activity": True,
+            "analysis_protection_hours": analysis.total_seconds() / 3600,
+            "result_review_hours": review.total_seconds() / 3600,
         },
         "network_allowed": bool(settings.allow_network),
         "source_keys_present": _source_keys(),

@@ -43,7 +43,7 @@ def test_default_login_is_24_hours_with_seven_day_cap(merged_auth, monkeypatch):
         "email": "member@example.invalid", "password": PASSWORD})
     assert response.status_code == 200
     assert response.json()["expires_in"] == 86400
-    assert "Max-Age=86400" in response.headers["set-cookie"]
+    assert "Max-Age=604800" in response.headers["set-cookie"]
 
 
 def test_cookie_activity_slides_legacy_12_hour_setting_and_throttles_writes(merged_auth, clock):
@@ -52,7 +52,7 @@ def test_cookie_activity_slides_legacy_12_hour_setting_and_throttles_writes(merg
     first = s.client.get("/api/identity/me")
     assert first.status_code == 200
     cookie = first.headers["set-cookie"]
-    for value in ("HttpOnly", "Secure", "SameSite=strict", "Path=/", "Max-Age=43200"):
+    for value in ("HttpOnly", "Secure", "SameSite=strict", "Path=/", "Max-Age=565200"):
         assert value in cookie
     with s.factory() as session:
         expiry = session.get(SessionToken, "old-member").expires_at
@@ -60,7 +60,7 @@ def test_cookie_activity_slides_legacy_12_hour_setting_and_throttles_writes(merg
     clock.now_value += timedelta(minutes=14)
     second = s.client.get("/api/identity/me")
     assert second.status_code == 200
-    assert "set-cookie" not in second.headers
+    assert "set-cookie" in second.headers
     with s.factory() as session:
         assert session.get(SessionToken, "old-member").expires_at == expiry
     clock.now_value += timedelta(minutes=2)
@@ -221,4 +221,5 @@ def test_diagnostics_reports_effective_legacy_policy(monkeypatch):
     monkeypatch.setenv("LV_SESSION_TTL_HOURS", "12")
     monkeypatch.setenv("LV_SESSION_ABSOLUTE_HOURS", "168")
     assert runtime_capabilities()["browser_session"] == {
-        "idle_hours": 12, "absolute_hours": 168, "renew_on_activity": True}
+        "idle_hours": 12, "absolute_hours": 168, "renew_on_activity": True,
+        "analysis_protection_hours": 168, "result_review_hours": 24}

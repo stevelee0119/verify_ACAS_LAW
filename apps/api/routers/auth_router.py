@@ -123,7 +123,7 @@ def login(
     lifetime_seconds = int(session_lifetimes()[0].total_seconds())
     response.set_cookie(
         PASSWORD_SESSION_COOKIE, token, httponly=True, samesite="strict", path="/",
-        secure=is_https, max_age=lifetime_seconds,
+        secure=is_https, max_age=int(session_lifetimes()[1].total_seconds()),
     )
     response.delete_cookie(SESSION_COOKIE, path="/api", httponly=True, secure=is_https, samesite="lax")
     return {"access_token": token, "token_type": "bearer",

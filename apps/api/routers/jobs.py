@@ -6,7 +6,7 @@ from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from ..db import Project, VerificationRun, get_db
-from ..identity import actor_id, current_principal, require_project, filter_project_query
+from ..identity import actor_id, current_principal, require_project, filter_project_query, bind_analysis_session
 from ..job_control import JobConflict, JobStore, TERMINAL
 from ..access import project_scoped
 from ..schemas import RunOut
@@ -43,7 +43,7 @@ def project_id_for_run(session: Session, run_id: str) -> str:
 
 
 def resolve_job_project(run_id: str, request: Request, session: Session = Depends(get_db)):
-    minimum = "VIEWER" if request.method == "GET" else "MEMBER"
+    minimum = "VIEWER" if request.method == "GET" or request.url.path.endswith("/session") else "MEMBER"
     return require_project(session, project_id_for_run(session, run_id), minimum,
                            principal=current_principal(request))
 
@@ -78,6 +78,17 @@ def retry_job(run_id: str, request: Request, project=Depends(resolve_job_project
         raise HTTPException(404, "Run not found") from None
     except JobConflict as exc:
         raise HTTPException(409, str(exc)) from exc
-    get_runner().submit(child_id)
     session.expire_all()
-    return _run_out(session.get(VerificationRun, child_id))
+    child = session.get(VerificationRun, child_id)
+    bind_analysis_session(session, child, current_principal(request))
+    session.commit()
+    get_runner().submit(child_id)
+    return _run_out(child)
+
+
+@router.post("/verification-runs/{run_id}/session")
+def protect_analysis_session(run_id: str, request: Request, project=Depends(resolve_job_project),
+                             session: Session = Depends(get_db)):
+    protected = bind_analysis_session(session, session.get(VerificationRun, run_id), current_principal(request))
+    session.commit()
+    return {"protected": protected}

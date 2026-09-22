@@ -13,7 +13,8 @@ from sqlalchemy.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
 MERGED_HEAD = "f3a91c"
-CURRENT_HEAD = "a72e10"
+TRASH_HEAD = "a72e10"
+CURRENT_HEAD = "b83f21"
 CREATED = datetime(2026, 9, 1, 10, 0, 0)
 EXPIRES = datetime(2027, 9, 1, 10, 0, 0)
 PASSWORD_HASH = "scrypt$32768$8$1$" + "01" * 16 + "$" + "02" * 32
@@ -148,7 +149,8 @@ def test_published_revision_parents_are_unchanged(migration_db):
     config, _ = migration_db
     graph = ScriptDirectory.from_config(config)
     assert graph.get_heads() == [CURRENT_HEAD]
-    assert graph.get_revision(CURRENT_HEAD).down_revision == MERGED_HEAD
+    assert graph.get_revision(CURRENT_HEAD).down_revision == TRASH_HEAD
+    assert graph.get_revision(TRASH_HEAD).down_revision == MERGED_HEAD
     for revision, parent in {
         "98e07fd05c9e": None,
         "a1c4e77b9d20": "98e07fd05c9e",
@@ -237,7 +239,7 @@ def test_project_trash_upgrade_from_schema_without_trash_columns(migration_db):
     assert {"deleted_at", "deleted_by"}.isdisjoint(
         {column["name"] for column in sa.inspect(engine).get_columns("projects")})
     before = _snapshot(engine)
-    command.upgrade(config, "head")
+    command.upgrade(config, TRASH_HEAD)
     _assert_preserved(engine, before)
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT deleted_at, deleted_by FROM projects").all() == [(None, None), (None, None)]
@@ -249,4 +251,22 @@ def test_project_trash_upgrade_from_schema_without_trash_columns(migration_db):
         command.downgrade(config, MERGED_HEAD)
     _assert_preserved(engine, before)
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == CURRENT_HEAD
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == TRASH_HEAD
+
+
+def test_analysis_session_upgrade_preserves_credentials_and_work_protection(migration_db):
+    config, engine = migration_db
+    command.upgrade(config, TRASH_HEAD)
+    _seed_database(engine)
+    before = _snapshot(engine)
+    command.upgrade(config, "head")
+    _assert_preserved(engine, before)
+    with engine.begin() as connection:
+        _insert(connection, "analysis_session_leases", credential_kind="password", credential_id="session-active",
+                user_id="owner", run_id="run-original", active_until=EXPIRES, expires_at=EXPIRES, review_seconds=86400)
+    before = _snapshot(engine)
+    command.upgrade(config, "head")
+    _assert_preserved(engine, before)
+    with pytest.raises(RuntimeError, match="restore a verified backup"):
+        command.downgrade(config, TRASH_HEAD)
+    _assert_preserved(engine, before)

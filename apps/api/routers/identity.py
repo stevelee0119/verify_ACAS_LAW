@@ -13,7 +13,7 @@ from ..identity import (ApiToken, ExternalIdentity, OIDCSettings,
                         current_principal, issue_token, provision_user,
                         require_org_admin, require_project, issue_browser_session, SESSION_COOKIE,
                         PASSWORD_SESSION_COOKIE, revoke_principal_credential, set_account_enabled,
-                        user_is_enabled)
+                        user_is_enabled, browser_cookie_deadline)
 
 router = APIRouter(tags=["identity"])
 Role = Literal["ADMIN", "MEMBER", "VIEWER"]
@@ -81,9 +81,10 @@ def me():
 def exchange_session(request: Request, response: Response, session: Session = Depends(get_db)):
     row, secret = issue_browser_session(session, current_principal())
     _commit(session)
+    cookie_deadline = browser_cookie_deadline(session, SESSION_COOKIE, secret)
     response.set_cookie(SESSION_COOKIE, secret, httponly=True, secure=request.state.secure_transport,
-                        samesite="lax", path="/api", expires=row.expires_at.replace(tzinfo=timezone.utc),
-                        max_age=max(0, int((row.expires_at - datetime.utcnow()).total_seconds())))
+                        samesite="lax", path="/api", expires=cookie_deadline.replace(tzinfo=timezone.utc),
+                        max_age=max(0, int((cookie_deadline - datetime.utcnow()).total_seconds())))
     response.delete_cookie(PASSWORD_SESSION_COOKIE, path="/", httponly=True,
                            secure=request.state.secure_transport, samesite="strict")
     return {**me(), "expires_at": row.expires_at.isoformat() + "Z"}

@@ -108,8 +108,11 @@ Process-global provider settings are read-only in multi-user mode.
 
 The exchanged browser cookie is HttpOnly, SameSite=Lax, Path=/api, Secure when
 using HTTPS. Password login uses HttpOnly, SameSite=Strict, Path=/ instead.
-Successful browser activity renews the default 24-hour idle lifetime, bounded by
-168 hours from initial issuance. API-token sessions cannot outlive their source;
+Successful browser activity renews the default 24-hour idle lifetime, normally
+bounded by 168 hours from initial issuance. Password sessions explicitly bound
+to verification runs have a server-owned analysis lease and a completion grace
+period; revocation and current project access still take precedence. Cookie
+retention is separate from server-side validity. API-token sessions cannot outlive their source;
 OIDC sessions retain the earlier of eight hours and the verified JWT expiry and
 are not silently renewed. See [session policy](SESSION_ACTIVITY.md) for legacy
 environment overrides and reauthentication behavior.

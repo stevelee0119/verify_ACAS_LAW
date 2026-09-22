@@ -666,6 +666,15 @@ function resumeAuthenticatedRun() {
   }
 }
 
+const protectedRuns = new Map();
+async function protectAnalysisSession(run) {
+  if (!run || terminal(run)) return;
+  const key = `${operationsUI.authVersion()}:${run.id}`;
+  if (protectedRuns.has(key)) return;
+  await api(`/verification-runs/${run.id}/session`, {method:"POST", timeoutMs:15000, interactiveAuth:false});
+  protectedRuns.set(key, true);
+}
+
 function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
   clearTimeout(state.timer);
   const runId = state.run?.id;
@@ -679,6 +688,8 @@ function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
       const run = await api(`/verification-runs/${runId}`, {timeoutMs: 15000, interactiveAuth: false});
       if (generation !== state.generation || state.run?.id !== runId) return;
       if (!run || run.id !== runId || typeof run.state !== "string") throw new Error("진행 상태 응답을 읽지 못했습니다");
+      await protectAnalysisSession(run);
+      if (generation !== state.generation || state.run?.id !== runId) return;
       state.pollError = null;
       state.run = run;
       renderProject();
@@ -1132,7 +1143,7 @@ function renderDiagnostics(data) {
   const dialect = capabilities.database?.dialect;
   const sessionPolicy = capabilities.browser_session;
   if (sessionPolicy) row("로그인 유지", "사용 중 자동 연장",
-    `미사용 ${sessionPolicy.idle_hours}시간 · 최초 로그인부터 최대 ${sessionPolicy.absolute_hours}시간. 로그아웃·비밀번호 변경·계정 중지 시 종료되며, 토큰·SSO의 원본 유효기간을 넘지 않습니다.`);
+    `일반 미사용 ${sessionPolicy.idle_hours}시간 · 일반 로그인 최대 ${sessionPolicy.absolute_hours}시간. 비밀번호 로그인은 분석 시작부터 최대 ${sessionPolicy.analysis_protection_hours || 168}시간 보호하고, 종료 후 ${sessionPolicy.result_review_hours || 24}시간 결과 확인 시간을 둡니다. 로그아웃·비밀번호 변경·계정 중지는 즉시 적용하며 토큰·SSO 원본 만료는 별도입니다.`);
   row("자료 저장소", dialect === "postgresql" ? "PostgreSQL" : dialect === "sqlite" ? "SQLite" : "확인 필요",
     dialect === "sqlite" ? "파일 기반 데이터베이스를 사용 중입니다. 재배포 전에 DB·업로드 원본의 영구 저장소와 백업을 확인하세요."
       : "데이터베이스 연결과 별도로 업로드 원본의 영구 저장 위치 및 백업을 확인해야 합니다.");

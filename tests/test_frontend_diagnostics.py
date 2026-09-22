@@ -15,7 +15,8 @@ def test_diagnostics_layout_and_technical_disclosure(tmp_path):
     data = {"verdict": "DEGRADED", "note": "스캔 문서 읽기 준비가 완료되지 않았습니다.", "capabilities": {
         "ocr": {"ready": False, "available": False, "status": "NOT_INSTALLED", "missing_languages": None},
         "rasterizer": {"available": True}, "database": {"dialect": "sqlite"}, "worker_mode": "auto",
-        "browser_session": {"idle_hours": 12, "absolute_hours": 168, "renew_on_activity": True},
+        "browser_session": {"idle_hours": 12, "absolute_hours": 168, "renew_on_activity": True,
+                            "analysis_protection_hours": 72, "result_review_hours": 6},
         "network_allowed": True, "source_keys_present": {"law_go_kr": True}}}
     def respond(route):
         path = urlsplit(route.request.url).path
@@ -48,7 +49,9 @@ def test_diagnostics_layout_and_technical_disclosure(tmp_path):
                 expect(dialog).to_contain_text("Tesseract")
                 expect(dialog).to_contain_text("백업")
                 expect(dialog).to_contain_text("사용 중 자동 연장")
-                expect(dialog).to_contain_text("미사용 12시간 · 최초 로그인부터 최대 168시간")
+                expect(dialog).to_contain_text("일반 미사용 12시간 · 일반 로그인 최대 168시간")
+                expect(dialog).to_contain_text("분석 시작부터 최대 72시간 보호")
+                expect(dialog).to_contain_text("종료 후 6시간 결과 확인")
                 expect(dialog.locator("pre")).to_be_hidden()
                 assert dialog.evaluate("el => el.scrollWidth <= el.clientWidth")
                 page.screenshot(path=str(tmp_path / f"diagnostics-{width}.png"), full_page=True)

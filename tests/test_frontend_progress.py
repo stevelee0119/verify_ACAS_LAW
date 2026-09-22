@@ -13,6 +13,7 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
     files = {f"/static/{path.relative_to(static).as_posix()}": path for path in static.rglob("*") if path.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
     disconnected = [True]
+    protection_requests = []
     run = {"id": "run", "state": "VERIFYING", "stage_message": "검토의견서.docx 법률 인용 확인 12/46건",
            "progress": 0.52, "document_ids": [], "started_at": "2026-09-21T00:00:00"}
 
@@ -27,6 +28,9 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 route.abort("failed")
             else:
                 route.fulfill(json=run)
+        elif path == "/api/verification-runs/run/session":
+            protection_requests.append(route.request.method)
+            route.fulfill(json={"protected": True})
         else:
             route.fulfill(status=401, json={"detail": "Login required"})
 
@@ -37,6 +41,7 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
         browser = playwright.chromium.launch(**options)
         try:
             for width, height in ((1440, 960), (390, 844)):
+                protection_requests.clear()
                 page = browser.new_page(viewport={"width": width, "height": height})
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -62,6 +67,10 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 page.screenshot(path=str(tmp_path / f"progress-reconnect-{width}.png"), full_page=True)
                 disconnected[0] = False
                 expect(notice).to_contain_text("서버 응답은 정상", timeout=5000)
+                assert protection_requests == ["POST"]
+                page.evaluate("pollRun(state.generation, 0)")
+                page.wait_for_timeout(250)
+                assert protection_requests == ["POST"]
                 page.evaluate("state.run.progress = .6; renderProject(); clearTimeout(state.timer)")
                 expect(notice).to_be_hidden()
                 expect(page.locator("#progressPercent")).to_have_text("60%")

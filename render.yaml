@@ -65,6 +65,10 @@ services:
         value: "24"
       - key: LV_SESSION_ABSOLUTE_HOURS
         value: "168"
+      - key: LV_ANALYSIS_SESSION_HOURS
+        value: "168"
+      - key: LV_ANALYSIS_RESULT_HOURS
+        value: "24"
       - key: LV_LAW_GO_KR_OC
         sync: false
       - key: LV_KCI_KEY

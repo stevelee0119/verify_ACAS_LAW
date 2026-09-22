@@ -28,7 +28,7 @@ from ..auth import (
     is_editor,
 )
 from ..db import User, Document, EvidenceRow, FindingRow, Project, VerificationRun, get_db, get_session_factory
-from ..identity import actor_id, current_principal, require_project
+from ..identity import actor_id, current_principal, require_project, bind_analysis_session
 from ..job_control import JobConflict, enqueue_run, execution_security, execution_settings_snapshot
 from ..workspace import CaseIssue, FindingWorkflow, as_dict
 from ..schemas import FindingOut, RevealRequest, ReviewRequest, RunOut, VerifyRequest
@@ -116,6 +116,7 @@ def _start_run(session: Session, project: Project, document_ids: List[str], payl
     )
     try:
         run, reused = enqueue_run(session, run, force=payload.force)
+        bind_analysis_session(session, run, principal)
         session.commit()
     except JobConflict as exc:
         session.rollback()

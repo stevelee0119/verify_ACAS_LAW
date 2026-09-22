@@ -37,6 +37,9 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             route.fulfill(json={"active_count": sum(r["state"] == "VERIFYING" for r in rows), "runs": rows})
         elif path == "/api/verification-runs/run-alpha":
             route.fulfill(json=run)
+        elif path == "/api/verification-runs/run-alpha/session":
+            assert method == "POST"
+            route.fulfill(json={"protected": True})
         elif path.endswith("/result"):
             route.fulfill(json={"documents": [], "test_marker": "persisted-server-result"})
         elif path == "/api/projects":
@@ -123,7 +126,8 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             expect(page.locator("#projectTitle")).to_have_text("Background case")
             page.evaluate("state.project.can_delete = false; projectTools.renderControls()")
             expect(page.locator("#deleteProject")).to_be_hidden()
-            assert [(m, p) for m, p in requests if m in {"POST", "DELETE"}] == [
+            assert [(m, p) for m, p in requests if m in {"POST", "DELETE"}
+                    and p != "/api/verification-runs/run-alpha/session"] == [
                 ("DELETE", "/api/projects/alpha"), ("DELETE", "/api/projects/beta"), ("POST", "/api/projects/alpha/restore")]
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors

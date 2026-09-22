@@ -16,11 +16,11 @@ from functools import lru_cache
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, String, UniqueConstraint, or_, select, update
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, or_, select, update
 from sqlalchemy.orm import Session
 
-from .db import Base, Organization, Project, ProjectMember, SessionToken, User, new_uuid
-from .session_policy import RENEW_INTERVAL, absolute_deadline, session_deadline
+from .db import Base, Organization, Project, ProjectMember, SessionToken, User, VerificationRun, new_uuid
+from .session_policy import RENEW_INTERVAL, absolute_deadline, analysis_lifetimes, session_deadline
 
 ROLES = {"VIEWER": 1, "MEMBER": 2, "ADMIN": 3}
 LOCAL_OWNER = "local-owner"
@@ -66,6 +66,17 @@ class BrowserSession(Base):
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     revoked_at = Column(DateTime)
+
+
+class AnalysisSessionLease(Base):
+    __tablename__ = "analysis_session_leases"
+    credential_kind = Column(String(12), primary_key=True)
+    credential_id = Column(String(40), primary_key=True)
+    run_id = Column(String(40), ForeignKey("verification_runs.id"), primary_key=True)
+    user_id = Column(String(40), ForeignKey("users.id"), nullable=False)
+    active_until = Column(DateTime, nullable=False)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    review_seconds = Column(Integer, nullable=False)
 
 
 @dataclass(frozen=True)
@@ -178,10 +189,13 @@ def authenticate_password_session(session: Session, secret: str) -> Principal:
     row = session.scalar(select(SessionToken).where(
         SessionToken.token_hash == hashlib.sha256(secret.encode("ascii")).hexdigest()))
     now = datetime.utcnow()
-    if (row is None or row.revoked_at is not None or row.expires_at <= now
-            or absolute_deadline(row.issued_at) <= now):
+    if row is None or row.revoked_at is not None:
         raise _unauthorized()
-    return principal_for_user(session, row.user_id, "password", row.id, row.expires_at)
+    principal = principal_for_user(session, row.user_id, "password", row.id, row.expires_at)
+    deadline = _password_session_deadline(session, row, "password", principal, now)
+    if deadline <= now:
+        raise _unauthorized()
+    return Principal(principal.user_id, principal.organization_id, principal.role, "password", row.id, deadline)
 
 
 def revoke_principal_credential(session: Session, principal: Principal) -> bool:
@@ -321,14 +335,21 @@ def authenticate_session(session: Session, secret: str) -> Principal:
     digest = hashlib.sha256(secret.encode("ascii")).hexdigest()
     row = session.scalar(select(BrowserSession).where(BrowserSession.secret_hash == digest))
     now = datetime.utcnow()
-    if (row is None or row.revoked_at is not None or row.expires_at <= now
-            or absolute_deadline(row.created_at) <= now):
+    if row is None or row.revoked_at is not None:
+        raise _unauthorized()
+    principal = principal_for_user(session, row.user_id, "session", row.id, row.expires_at)
+    deadline = min(row.expires_at, absolute_deadline(row.created_at))
+    if row.source_kind == "password":
+        deadline = _password_session_deadline(session, row, "session", principal, now)
+    if deadline <= now:
         raise _unauthorized()
     if row.source_kind in {"token", "password"}:
         source = session.get(ApiToken if row.source_kind == "token" else SessionToken, row.source_id)
-        if source is None or source.user_id != row.user_id or source.revoked_at is not None or source.expires_at <= now:
+        if source is None or source.user_id != row.user_id or source.revoked_at is not None:
             raise _unauthorized()
-        if row.source_kind == "password" and absolute_deadline(source.issued_at) <= now:
+        source_deadline = (_password_session_deadline(session, source, "password", principal, now)
+                           if row.source_kind == "password" else source.expires_at)
+        if source_deadline <= now:
             raise _unauthorized()
     elif row.source_kind == "oidc":
         source = session.get(ExternalIdentity, row.source_id)
@@ -337,7 +358,91 @@ def authenticate_session(session: Session, secret: str) -> Principal:
             raise _unauthorized()
     else:
         raise _unauthorized()
-    return principal_for_user(session, row.user_id, "session", row.id, row.expires_at)
+    return Principal(principal.user_id, principal.organization_id, principal.role, "session", row.id, deadline)
+
+
+def _analysis_deadline(session, kind, row, principal, now, *, cookie=False):
+    from .job_control import TERMINAL
+
+    query = select(AnalysisSessionLease, VerificationRun.state, VerificationRun.finished_at, Project).join(
+        VerificationRun, VerificationRun.id == AnalysisSessionLease.run_id).join(
+        Project, Project.id == VerificationRun.project_id).where(
+        AnalysisSessionLease.credential_kind == kind, AnalysisSessionLease.credential_id == row.id,
+        AnalysisSessionLease.user_id == row.user_id, AnalysisSessionLease.expires_at > now,
+        Project.deleted_at.is_(None))
+    deadlines = []
+    for lease, state, finished_at, project in session.execute(query):
+        if project_role(session, project, principal) is None:
+            continue
+        if state in TERMINAL:
+            if not finished_at or finished_at > lease.active_until:
+                continue
+            deadline = min(lease.expires_at, finished_at + timedelta(seconds=lease.review_seconds))
+        else:
+            deadline = lease.active_until
+        if deadline > now:
+            deadlines.append(lease.expires_at if cookie else deadline)
+    return max(deadlines, default=datetime.min)
+
+
+def _password_session_deadline(session, row, kind, principal, now):
+    issued_at = row.issued_at if kind == "password" else row.created_at
+    normal = min(row.expires_at, absolute_deadline(issued_at))
+    if normal > now:
+        return normal
+    return max(normal, _analysis_deadline(session, kind, row, principal, now))
+
+
+def bind_analysis_session(session: Session, run: VerificationRun, principal: Principal) -> bool:
+    """Bind verified server identity, never a client-supplied user or credential ID."""
+    from .job_control import TERMINAL
+    from sqlalchemy.dialects.postgresql import insert as pg_insert
+    from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+    if principal.is_local or run.state in TERMINAL:
+        return False
+    require_project(session, run.project_id, principal=principal)
+    principal_for_user(session, principal.user_id, principal.authentication)
+    records = []
+    if principal.authentication == "password":
+        records.append(("password", session.get(SessionToken, principal.credential_id)))
+    elif principal.authentication == "session":
+        browser = session.get(BrowserSession, principal.credential_id)
+        if browser is not None and browser.source_kind == "password":
+            records.extend([("session", browser), ("password", session.get(SessionToken, browser.source_id))])
+    if not records:
+        return False
+    now = datetime.utcnow()
+    for kind, row in records:
+        if (row is None or row.user_id != principal.user_id or row.revoked_at is not None
+                or _password_session_deadline(session, row, kind, principal, now) <= now):
+            raise _unauthorized()
+    active, review = analysis_lifetimes()
+    active_until = (run.started_at or now) + active
+    if active_until <= now:
+        return False
+    insert = pg_insert if session.get_bind().dialect.name == "postgresql" else sqlite_insert
+    for kind, row in records:
+        if session.get(AnalysisSessionLease, (kind, row.id, run.id)) is None:
+            session.execute(insert(AnalysisSessionLease).values(
+                credential_kind=kind, credential_id=row.id, run_id=run.id, user_id=principal.user_id,
+                active_until=active_until, expires_at=active_until + review,
+                review_seconds=int(review.total_seconds())).on_conflict_do_nothing())
+    return True
+
+
+def browser_cookie_deadline(session, cookie_name, secret):
+    authenticate = authenticate_password_session if cookie_name == PASSWORD_SESSION_COOKIE else authenticate_session
+    principal = authenticate(session, secret)
+    model = SessionToken if cookie_name == PASSWORD_SESSION_COOKIE else BrowserSession
+    row = session.get(model, principal.credential_id)
+    if model is BrowserSession and row.source_kind != "password":
+        return row.expires_at
+    issued_at = row.issued_at if model is SessionToken else row.created_at
+    normal = absolute_deadline(issued_at)
+    # Keep the HttpOnly cookie available while the server enforces idle/work limits.
+    return max(normal, _analysis_deadline(session, principal.authentication, row, principal,
+                                         datetime.utcnow(), cookie=True))
 
 
 def renew_browser_activity(session: Session, cookie_name: str, secret: str) -> datetime | None:
@@ -366,7 +471,7 @@ def renew_browser_activity(session: Session, cookie_name: str, secret: str) -> d
         old_expiry = record.expires_at
         return session.execute(update(type(record)).where(
             type(record).id == record.id, type(record).revoked_at.is_(None),
-            type(record).expires_at == old_expiry, type(record).expires_at > now,
+            type(record).expires_at == old_expiry,
         ).values(expires_at=target)).rowcount == 1
 
     if source is not None and isinstance(source, SessionToken) and source.expires_at < deadline:
