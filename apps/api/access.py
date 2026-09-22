@@ -189,6 +189,16 @@ def _authenticate(request):
                 request.state.cookie_authenticated = True
                 request.state.session_cookie_name = name
                 return principal
+        if cookies:
+            # 세션 쿠키가 둘 이상이면 어느 것이 이 사용자의 것인지 정할 수 없으므로
+            # 인증하지 않는다. 다만 그대로 401만 돌려주면 남은 쿠키가 계속 실려
+            # 다시 로그인해도 같은 상태가 반복된다. 실제로 이 경로에 걸리면
+            # 사용자는 "다시 로그인" 안내만 끝없이 보게 된다.
+            # 그래서 응답에서 낡은 쿠키를 지워 다음 로그인이 실제로 복구되게 한다.
+            request.state.clear_session_cookies = True
+            raise HTTPException(401, "세션 쿠키가 여러 개 남아 있어 로그인을 확인하지 못했습니다. "
+                                     "남은 쿠키를 지웠으니 다시 로그인하세요.",
+                                headers={"WWW-Authenticate": "Bearer"})
     if len(authorization) != 1:
         raise HTTPException(401, "Bearer authentication required", headers={"WWW-Authenticate": "Bearer"})
     scheme, _, token = authorization[0].partition(" ")
@@ -267,6 +277,18 @@ def _renew_cookie(request, response, principal, secure):
                             max_age=max(0, int((deadline - datetime.utcnow()).total_seconds())))
 
 
+# 이 앱이 세션 쿠키를 심어 온 경로. 경로가 다르면 같은 이름이라도 다른 쿠키이며
+# Set-Cookie 하나로는 지워지지 않으므로 알려진 경로를 모두 지운다.
+SESSION_COOKIE_PATHS = {SESSION_COOKIE: ("/api", "/"), PASSWORD_SESSION_COOKIE: ("/", "/api")}
+
+
+def _clear_session_cookies(response, secure: bool) -> None:
+    for name, paths in SESSION_COOKIE_PATHS.items():
+        for path in paths:
+            response.delete_cookie(name, path=path, httponly=True, secure=secure,
+                                   samesite="strict" if name == PASSWORD_SESSION_COOKIE else "lax")
+
+
 async def workspace_access(request, call_next):
     try:
         mode = auth_mode()
@@ -321,6 +343,8 @@ async def workspace_access(request, call_next):
         await run_in_threadpool(_renew_cookie, request, response, principal, secure)
     except HTTPException as exc:
         response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+        if getattr(request.state, "clear_session_cookies", False):
+            _clear_session_cookies(response, secure_transport(request))
     except ValueError:
         response = JSONResponse({"detail": "Invalid authentication configuration or request"}, status_code=503)
     response.headers["Cache-Control"] = "no-store"

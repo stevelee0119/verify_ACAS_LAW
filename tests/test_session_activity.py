@@ -223,3 +223,48 @@ def test_diagnostics_reports_effective_legacy_policy(monkeypatch):
     assert runtime_capabilities()["browser_session"] == {
         "idle_hours": 12, "absolute_hours": 168, "renew_on_activity": True,
         "analysis_protection_hours": 168, "result_review_hours": 24}
+
+
+# --- 세션 쿠키가 여러 개 남은 경우 -------------------------------------------
+def _cookie_names(response):
+    return [value.split("=", 1)[0] for value in response.headers.get_list("set-cookie")]
+
+
+def test_leftover_second_session_cookie_does_not_lock_the_user_out(merged_auth):
+    """쿠키가 둘이면 인증하지 않되, 남은 쿠키를 지워 다시 로그인이 실제로 복구되게 한다.
+
+    종전에는 401만 돌려주었다. 낡은 쿠키는 그대로 실려 다시 로그인해도 같은
+    상태가 반복되므로, 사용자는 분석 결과를 볼 수 없는 채 "다시 로그인"
+    안내만 반복해서 보게 된다.
+    """
+    s = merged_auth
+    s.client.cookies.set("lv_session", "legacy-session-member", domain="testserver.local", path="/")
+    assert s.client.get("/api/identity/me").status_code == 200
+
+    s.client.cookies.set("acas_session", "stale-value", domain="testserver.local", path="/api")
+    blocked = s.client.get("/api/identity/me")
+    assert blocked.status_code == 401
+    cleared = _cookie_names(blocked)
+    assert cleared.count("lv_session") >= 1 and cleared.count("acas_session") >= 1, cleared
+    assert "여러 개" in blocked.json()["detail"], blocked.json()
+
+
+def test_same_cookie_repeated_on_two_paths_is_cleared_on_both(merged_auth):
+    """경로가 다르면 같은 이름이라도 Set-Cookie 하나로는 지워지지 않는다."""
+    s = merged_auth
+    s.client.cookies.set("lv_session", "legacy-session-member", domain="testserver.local", path="/")
+    s.client.cookies.set("lv_session", "legacy-session-member", domain="testserver.local", path="/api")
+    blocked = s.client.get("/api/identity/me")
+    assert blocked.status_code == 401
+    paths = {value.split("Path=", 1)[1].split(";")[0]
+             for value in blocked.headers.get_list("set-cookie") if "Path=" in value}
+    assert {"/", "/api"} <= paths, paths
+
+
+def test_single_cookie_authentication_is_unchanged(merged_auth):
+    """정상 상태에는 손대지 않는다. 쿠키 하나면 그대로 인증한다."""
+    s = merged_auth
+    s.client.cookies.set("lv_session", "legacy-session-member", domain="testserver.local", path="/")
+    response = s.client.get("/api/identity/me")
+    assert response.status_code == 200
+    assert "acas_session=;" not in " ".join(response.headers.get_list("set-cookie"))
