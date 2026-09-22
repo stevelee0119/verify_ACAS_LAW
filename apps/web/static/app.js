@@ -651,6 +651,10 @@ function renderProgressNotice() {
   }
   if (authRequired) {
     $("progress").hidden = false;
+    const reason = state.pollError?.detail;
+    if (reason && reason !== message) {
+      $("progressNotice").append(node("span", `서버 안내: ${reason}`, "notice-reason"));
+    }
     const login = button("다시 로그인", () => operationsUI.authenticate(), "resume-login");
     const icon = node("i"); icon.dataset.lucide = "log-in"; login.prepend(icon);
     $("progressNotice").append(login);
@@ -701,7 +705,10 @@ function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
       if (generation !== state.generation || state.run?.id !== runId) return;
       const authRequired = error.status === 401 || error.code === "AUTH_REQUIRED";
       const unavailable = [403, 404].includes(error.status);
-      state.pollError = {runId, authRequired, unavailable};
+      // 서버가 알려준 사유를 함께 담는다. 화면이 고정 문구만 보여 주면 원인이
+      // 쿠키 문제인지 만료인지 구분할 수 없고, 사용자도 무엇을 확인해야 할지
+      // 알 수 없다. 특히 모바일에서는 개발자도구로 응답을 볼 수 없다.
+      state.pollError = {runId, authRequired, unavailable, detail: error.message || ""};
       renderProject();
       if (!authRequired && !unavailable) pollRun(generation);
     } finally {

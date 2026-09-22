@@ -1108,3 +1108,6 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .gate-reasons { grid-column: 1 / -1; margin-top: 0.5rem; }
 .gate-reasons ul { margin: 0.4rem 0 0.2rem 1.1rem; padding: 0; }
 .gate-reasons li { margin-bottom: 0.2rem; line-height: 1.5; }
+
+/* 인증 실패 사유. 고정 문구만으로는 원인을 알 수 없어 서버 안내를 함께 보인다. */
+.notice-reason { display: block; margin-top: 0.4rem; font-size: 0.92em; opacity: 0.85; line-height: 1.5; }

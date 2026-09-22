@@ -146,6 +146,9 @@ def test_expired_poll_pauses_and_explicit_login_resumes_same_results(tmp_path):
                     }""", run)
                     notice = page.locator("#progressNotice")
                     expect(notice).to_contain_text("결과 조회를 잠시 멈췄습니다", timeout=7000)
+                    # 고정 문구만 보이면 원인이 만료인지 쿠키 문제인지 알 수 없다.
+                    # 모바일에서는 개발자도구로 응답을 볼 수 없으므로 서버 사유를 함께 보인다.
+                    expect(notice).to_contain_text("Session expired")
                     expect(login).to_have_count(0)
                     count = len(requests)
                     page.wait_for_timeout(3200)
