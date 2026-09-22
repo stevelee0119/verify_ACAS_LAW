@@ -617,6 +617,22 @@ class VerificationPipeline:
                 "retry_exhausted_count": sum(bool(v.get("source_lookup", {}).get("retryable")) for v in verdicts),
             }
 
+    @staticmethod
+    def _provider_reason(text: str) -> str:
+        """공급자 오류를 결과에 남기되 자격증명 조각이 섞이지 않게 한다.
+
+        오류 본문에는 키 일부가 그대로 실려 오는 경우가 있다. 검증 결과는
+        보고서로 내보내지므로 여기서 지운다.
+        """
+        import re as _re
+
+        if not text:
+            return "사유 미기재"
+        cleaned = _re.sub(r"(sk-[A-Za-z0-9_\-]{8,}|AIza[A-Za-z0-9_\-]{8,}|[A-Za-z0-9_\-]{40,})",
+                          "[REDACTED]", str(text))
+        cleaned = _re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned[:160]
+
     def _semantic_review(self, result, citations, context, pii, *, progress=None):
         """Source-grounded model advice never replaces deterministic findings."""
         by_id = {c.citation_id: c for c in citations}
@@ -654,12 +670,26 @@ class VerificationPipeline:
             model_verdicts = [s["verdict"] for s in outcome.stages if s.get("used") and s.get("verdict")]
             quotes = [q for v in model_verdicts for q in v.get("evidence_quotes", [])]
             grounded = bool(quotes) and all(q.strip() and q in source_text for q in quotes)
+            # 모델이 한 번도 실행되지 않은 것과, 실행됐으나 근거 인용이 확인되지
+            # 않은 것은 전혀 다르다. 둘을 같은 문구로 적으면 공급자 키·모델 ID가
+            # 잘못되어 AI가 아무 일도 하지 않는 동안에도 "검토했으나 채택하지
+            # 않았다"로 읽힌다. 실제로 세 공급자가 모두 실패하는 동안 그렇게
+            # 기록되고 있었다.
+            model_ran = any(s.get("used") for s in outcome.stages)
+            if grounded:
+                reason = outcome.rationale
+            elif model_ran:
+                reason = "공식 전문에 있는 근거 인용이 확인되지 않아 AI 의견을 채택하지 않음"
+            else:
+                reason = (f"AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함"
+                          f"({self._provider_reason(outcome.rationale)})")
             review = {"citation_id": citation.citation_id, "status": "UNVERIFIED",
                       "review_id": verdict.get("review_id"),
                       "source_record_ids": verdict.get("source_record_ids", []),
                       "advisory_only": True, "source_quotes_validated": grounded,
+                      "model_executed": model_ran,
                       "source_truncated": len(str(official["full_text"])) > len(source_text),
-                      "reason": outcome.rationale if grounded else "공식 전문에 있는 근거 인용이 확인되지 않아 AI 의견을 채택하지 않음",
+                      "reason": reason,
                       "stages": outcome.stages if grounded else [], "evidence_quotes": quotes if grounded else []}
             reviews.append(review)
             for level in ("level4", "level5"):

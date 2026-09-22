@@ -58,3 +58,20 @@ def test_anthropic_retries_without_temperature_when_the_model_rejects_it():
             else:
                 os.environ[name] = value
         config.reset_settings()
+
+
+def test_semantic_review_says_when_the_model_never_ran():
+    """모델이 실행되지 않은 것을 "근거 미확인"으로 적으면 안 된다.
+
+    공급자 키·모델 ID가 잘못되어 AI가 아무 일도 하지 않는 동안에도
+    "검토했으나 채택하지 않았다"로 읽혔다. 실제로 세 공급자가 모두 실패하는
+    동안 그렇게 기록되고 있었다.
+    """
+    from packages.verification_engine.pipeline import VerificationPipeline
+
+    # 자격증명 조각은 결과에 남기지 않는다(보고서로 나간다).
+    leaked = 'HTTP 401: Incorrect API key provided: sk-proj-abcdefghijklmnopqrstuvwxyz012345'
+    cleaned = VerificationPipeline._provider_reason(leaked)
+    assert "sk-proj-abcdefghij" not in cleaned and "[REDACTED]" in cleaned
+    assert "HTTP 401" in cleaned, "원인 자체는 남아야 조치할 수 있다"
+    assert VerificationPipeline._provider_reason("") == "사유 미기재"
