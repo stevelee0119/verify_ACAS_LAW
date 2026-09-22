@@ -187,3 +187,57 @@ def test_ownership_check_does_not_take_the_write_lock(tmp_path, monkeypatch):
 
     assert statements, "확인이 DB에 닿지 않았다면 시험이 무의미하다"
     assert "UPDATE" not in statements, f"소유권 확인이 쓰기를 발생시켰다: {statements}"
+
+
+def test_a_disk_mounted_above_the_path_is_detected(monkeypatch, tmp_path):
+    """마운트 지점 안의 경로도 그 볼륨 위에 있는 것으로 봐야 한다.
+
+    /var/data에 디스크를 붙이면 /var/data/legal_verifier.db는 부모와 같은
+    장치다. 한 번의 비교로는 "볼륨 아님"이 되고, 디스크를 제대로 붙인 배포가
+    "재시작 시 초기화됩니다"라는 잘못된 경고를 받는다. 실제로 그렇게 나왔다.
+    """
+    import os
+    from pathlib import Path
+
+    from apps.api.durability import mounted_volume
+
+    # /dev/shm은 tmpfs로 따로 마운트된다. Render 디스크와 구조가 같다.
+    mount = Path("/dev/shm")
+    if not mount.exists() or os.stat(mount).st_dev == os.stat(mount.parent).st_dev:
+        pytest.skip("별도 마운트 지점을 찾지 못했습니다")
+    nested = mount / "lv-durability-test" / "deeper"
+    nested.mkdir(parents=True, exist_ok=True)
+    target = nested / "legal_verifier.db"
+    target.touch()
+    try:
+        assert mounted_volume(mount) is True
+        assert mounted_volume(nested) is True, "마운트 지점 안의 디렉터리"
+        assert mounted_volume(target) is True, "마운트 지점 안의 파일"
+    finally:
+        target.unlink(missing_ok=True)
+        nested.rmdir()
+        nested.parent.rmdir()
+    # 루트와 같은 장치인 경로는 볼륨이 아니다.
+    assert mounted_volume(tmp_path) is (os.stat(tmp_path).st_dev != os.stat("/").st_dev)
+
+
+def test_data_dir_counts_as_a_configured_location(monkeypatch, tmp_path):
+    """LV_DATA_DIR을 지정하면 기본 SQLite 경로도 그것에서 파생된다.
+
+    LV_DATABASE_URL만 확인하면, 디스크를 붙이고 LV_DATA_DIR을 맞춘 배포가
+    "저장 위치가 지정되지 않았습니다"라는 말을 듣는다.
+    """
+    from apps.api.durability import AT_RISK, durability_report
+    from packages.common.config import get_settings
+
+    monkeypatch.setenv("RENDER_SERVICE_ID", "srv-test")
+    monkeypatch.delenv("LV_DATABASE_URL", raising=False)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.setenv("LV_DATA_DIR", str(tmp_path))
+    settings = get_settings()
+    monkeypatch.setattr(settings, "database_url", f"sqlite:////{tmp_path}/legal_verifier.db")
+    monkeypatch.setattr(settings, "storage_root", tmp_path / "storage")
+
+    report = durability_report()
+    assert report["database"]["state"] != AT_RISK, report["database"]["reason"]
+    assert "지정되지 않았습니다" not in report["database"]["reason"]

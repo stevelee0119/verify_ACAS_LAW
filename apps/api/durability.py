@@ -43,20 +43,28 @@ def _sqlite_path(url: str) -> Path | None:
 
 
 def mounted_volume(path: Path) -> bool:
-    """경로가 상위와 다른 파일시스템에 있으면 별도 볼륨이 붙어 있는 것이다.
+    """경로가 루트가 아닌 별도 파일시스템 위에 있는지 본다.
 
     디스크를 애플리케이션 디렉터리 안에 마운트하는 배포도 있다. 경로만 보고
     위험하다고 하면 정상 구성을 잘못 경고하게 되므로 실제 마운트를 확인한다.
+
+    마운트 지점 자체만 보아서는 안 된다. /var/data에 디스크를 붙이면 그 안의
+    /var/data/legal_verifier.db는 부모와 같은 장치이므로 한 번의 비교로는
+    "볼륨 아님"이 된다. 실제로 그렇게 판정해, 디스크를 제대로 붙인 배포에
+    "재시작 시 초기화됩니다"라고 잘못 경고했다. 조상을 거슬러 올라가며
+    장치 경계를 찾는다.
     """
     node = path
     while not node.exists() and node != node.parent:
         node = node.parent
-    if node == node.parent:
-        return False
     try:
-        return os.stat(node).st_dev != os.stat(node.parent).st_dev
+        while node != node.parent:
+            if os.stat(node).st_dev != os.stat(node.parent).st_dev:
+                return True  # 여기가 마운트 지점이다
+            node = node.parent
     except OSError:  # pragma: no cover - 접근 불가 경로
         return False
+    return False
 
 
 def _path_state(path: Path, *, configured: bool) -> tuple[str, str]:
@@ -93,8 +101,11 @@ def durability_report() -> Dict[str, Any]:
                     "reason": "외부 데이터베이스를 사용합니다. 컨테이너 수명과 분리됩니다"}
     else:
         sqlite_path = _sqlite_path(url) or Path("unknown")
-        state, reason = _path_state(sqlite_path,
-                                    configured=bool(os.getenv("LV_DATABASE_URL") or os.getenv("DATABASE_URL")))
+        # 기본 SQLite 경로는 LV_DATA_DIR에서 파생된다. 그것을 지정한 것도
+        # 저장 위치를 지정한 것이다. LV_DATABASE_URL만 보면, 디스크를 붙이고
+        # LV_DATA_DIR을 맞춘 배포가 "지정되지 않았다"는 말을 듣는다.
+        state, reason = _path_state(sqlite_path, configured=bool(
+            os.getenv("LV_DATABASE_URL") or os.getenv("DATABASE_URL") or os.getenv("LV_DATA_DIR")))
         database = {"kind": "sqlite", "state": state, "reason": reason, "path": str(sqlite_path)}
 
     storage_state, storage_reason = _path_state(
