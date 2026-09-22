@@ -1197,9 +1197,9 @@ function renderDiagnostics(data) {
     + "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
   const llm = capabilities.llm;
   if (llm) row("AI 검토 공급자",
-    llm.usable_count ? `${llm.usable_count}곳 설정됨` : "없음",
+    llm.usable_count ? `${llm.usable_count}곳 · 교차검증 ${{all: "전체", auto: "선택적", off: "안 함"}[llm.cross_check] || llm.cross_check}` : "없음",
     (llm.providers || []).map(p => `${p.name}(${p.model})${p.key_present ? "" : " 키 없음"}`).join(", ")
-      + " · " + llm.note,
+      + " · " + llm.note + (llm.cross_check_note ? " " + llm.cross_check_note : ""),
     llm.usable_count ? "LOW" : "HIGH");
   row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",
     capabilities.source_keys_present?.law_go_kr ? "국가법령정보센터 조회 정보가 설정되어 있습니다. 실제 조회 성공 여부는 검증 결과의 출처 기록에서 확인합니다."

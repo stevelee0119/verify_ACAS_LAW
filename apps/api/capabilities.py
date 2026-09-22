@@ -145,9 +145,18 @@ def _llm_state() -> Dict[str, Any]:
         providers.append({"name": name, "model": config.model,
                           "key_present": bool(config.api_key), "kind": config.kind})
     usable = [p for p in providers if p["key_present"] or p["kind"] == "local"]
+    mode = (settings.llm_cross_check or "all").lower()
     return {
         "providers": providers,
         "usable_count": len(usable),
+        # 교차검증 범위. 공급자 수만큼 호출 비용이 늘어난다.
+        "cross_check": mode,
+        "cross_check_note": {
+            "all": "쓸 수 있는 공급자를 모두 거쳐 교차검증합니다. 의견이 엇갈리면 "
+                   "다수결로 정하지 않고 미검증으로 남깁니다.",
+            "auto": "1차 판단의 신뢰도가 낮거나 중대한 항목일 때만 교차검증합니다.",
+            "off": "1차 판단만 사용합니다. 교차검증을 수행하지 않습니다.",
+        }.get(mode, "알 수 없는 설정입니다. LV_LLM_CROSS_CHECK를 확인하세요."),
         "note": ("AI 검토(판례 의미·적용)는 공식 판결 전문을 확보한 인용에만 수행됩니다. "
                  "키가 있어도 모델 ID가 맞지 않으면 호출이 실패하며, 그 경우 검증은 "
                  "규칙 기반으로만 수행됩니다. 실제 호출 성공 여부는 검증 결과의 "

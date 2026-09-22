@@ -372,8 +372,13 @@ class LLMRouter:
             )
 
         primary_verdict = primary.parsed or _extract_verdict(primary.text)
-        need_critic = (
-            profile == VerificationProfile.DEEP_VERIFY
+        # 교차검증 범위. 한 모델의 의견만으로 법률 판단을 뒷받침하지 않는다는 것이
+        # 기본값이다. 공급자 수만큼 비용이 늘어나므로 설정으로 조절할 수 있게 둔다.
+        mode = (self.settings.llm_cross_check or "all").lower()
+        cross_all = mode == "all"
+        need_critic = mode != "off" and (
+            cross_all
+            or profile == VerificationProfile.DEEP_VERIFY
             or severity_hint.rank >= Severity.HIGH.rank
             or float(primary_verdict.get("confidence", 0)) < 0.7
         )
@@ -411,9 +416,10 @@ class LLMRouter:
             critic.used and critic_verdict.get("status") and critic_verdict.get("status") != primary_verdict.get("status")
         )
 
-        # Stage 4: 의견 충돌 시 제3 모델 또는 Grounding
+        # Stage 4: 제3 모델. all에서는 의견이 갈리지 않아도 거친다.
+        # 두 모델이 같은 답을 냈다는 사실만으로는 교차검증이라 하기 어렵다.
         third_verdict: Dict[str, Any] = {}
-        if disagreement and profile == VerificationProfile.DEEP_VERIFY:
+        if cross_all or (disagreement and profile == VerificationProfile.DEEP_VERIFY):
             third = await self.run(
                 LLMRole.WEB_GROUNDER,
                 LLMRequest(
@@ -429,10 +435,16 @@ class LLMRouter:
             third_verdict = third.parsed or _extract_verdict(third.text)
             stages.append({"stage": 4, "name": "grounder", "used": third.used, "verdict": third_verdict})
 
+        # 의견 충돌은 참여한 모든 모델을 놓고 본다. 1차·2차만 비교하면
+        # 제3 모델이 다른 답을 내도 합의로 처리된다.
+        collected = [v for v in (primary_verdict, critic_verdict, third_verdict) if v]
+        statuses = {v.get("status") for v in collected if v.get("status")}
+        disagreement = len(statuses) > 1
+
         # Final Judge: Source Priority 강제
         outcome = self.judge(
             deterministic=deterministic,
-            verdicts=[v for v in (primary_verdict, critic_verdict, third_verdict) if v],
+            verdicts=collected,
             disagreement=disagreement,
         )
         outcome.stages = stages

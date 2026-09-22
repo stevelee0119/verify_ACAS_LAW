@@ -115,3 +115,76 @@ def test_anthropic_is_the_primary_reasoner_and_is_reachable():
             else:
                 os.environ[name] = value
         config.reset_settings()
+
+
+def _fake_router(monkeypatch, answers):
+    """공급자 셋을 흉내내어 캐스케이드가 몇 곳을 거치는지 본다."""
+    import asyncio
+    from dataclasses import dataclass
+
+    from packages.llm_router import router as module
+
+    used = []
+
+    @dataclass
+    class _Exec:
+        provider: str
+
+    class _Result:
+        def __init__(self, name, verdict):
+            self.used, self.note, self.text = True, "", ""
+            self.parsed = verdict
+            self.executions = [_Exec(provider=name)]
+
+    order = ["anthropic", "openai", "gemini"]
+
+    async def fake_run(self, role, request, *, policy=None, exclude=None, expected_task=""):
+        remaining = [n for n in order if n not in (exclude or [])]
+        if not remaining:
+            class _Empty:
+                used, note, text, parsed, executions = False, "남은 공급자 없음", "", {}, []
+            return _Empty()
+        name = remaining[0]
+        used.append(name)
+        return _Result(name, answers.get(name, {"status": "VERIFIED", "confidence": 0.95}))
+
+    monkeypatch.setattr(module.LLMRouter, "run", fake_run)
+    return module, used, asyncio
+
+
+def test_cross_check_all_uses_every_available_provider(monkeypatch):
+    """한 모델 의견만으로 법률 판단을 뒷받침하지 않는다.
+
+    예전에는 1차 신뢰도가 높으면 거기서 끝났고(SINGLE_MODEL_OPINION),
+    제3 모델은 DEEP_VERIFY이면서 의견이 갈릴 때만 돌았다.
+    """
+    module, used, asyncio = _fake_router(monkeypatch, {})
+    router = module.LLMRouter()
+    router.settings.llm_cross_check = "all"
+    outcome = asyncio.run(router.cascade(question="q", evidence={"a": 1}))
+    assert used == ["anthropic", "openai", "gemini"], used
+    assert outcome.winning_source == "MULTIPLE_MODEL_AGREEMENT"
+
+
+def test_cross_check_off_keeps_a_single_opinion(monkeypatch):
+    module, used, asyncio = _fake_router(monkeypatch, {})
+    router = module.LLMRouter()
+    router.settings.llm_cross_check = "off"
+    outcome = asyncio.run(router.cascade(question="q", evidence={"a": 1}))
+    assert used == ["anthropic"], used
+    assert outcome.winning_source == "SINGLE_MODEL_OPINION"
+
+
+def test_a_third_model_disagreeing_is_not_treated_as_agreement(monkeypatch):
+    """1차·2차만 비교하면 제3 모델이 다른 답을 내도 합의로 처리된다."""
+    module, used, asyncio = _fake_router(monkeypatch, {
+        "anthropic": {"status": "VERIFIED", "confidence": 0.95},
+        "openai": {"status": "VERIFIED", "confidence": 0.95},
+        "gemini": {"status": "CONTRADICTED", "confidence": 0.9},
+    })
+    router = module.LLMRouter()
+    router.settings.llm_cross_check = "all"
+    outcome = asyncio.run(router.cascade(question="q", evidence={"a": 1}))
+    assert used == ["anthropic", "openai", "gemini"]
+    assert outcome.disagreement is True
+    assert str(outcome.status) == "UNVERIFIED", "엇갈리면 다수결로 정하지 않는다"

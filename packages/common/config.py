@@ -125,6 +125,11 @@ class Settings:
         default_factory=lambda: os.getenv("LV_CELERY_BACKEND") or resolve_broker_url()
     )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
+    # 교차검증 범위. all=쓸 수 있는 공급자를 모두 거친다(기본), auto=1차 신뢰도가
+    # 낮거나 중대한 항목일 때만 교차검증, off=1차 판단만 쓴다.
+    # 공급자 수만큼 호출 비용이 늘어나므로 예산 설정과 함께 본다.
+    llm_cross_check: str = field(
+        default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
     rule_version: str = "2026.09.21.4"
     prompt_version: str = "v0.2"
