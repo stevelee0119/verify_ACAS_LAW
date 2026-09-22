@@ -278,7 +278,7 @@ function renderProject() {
 function renderSummary() {
   $("summary").replaceChildren();
   let aiStatus = "미분석";
-  let fakeCaseCount = 0;
+  let fakeCaseCount = 0, unconfirmedCount = 0;
   const docs = state.result?.documents || [];
   for (const d of docs) {
     if (d.ai_detector_result?.verdict === "AI_FULL_GENERATION_LIKELY") {
@@ -288,8 +288,11 @@ function renderSummary() {
     } else if (d.ai_detector_result?.verdict === "HUMAN_AUTHORED_LIKELY" && aiStatus === "미분석") {
       aiStatus = "인간 작성 유력";
     }
-    if (d.ai_hallucination_table) {
-      fakeCaseCount += d.ai_hallucination_table.length;
+    // 확인하지 못한 인용과 성립 불가한 인용을 한 숫자에 섞지 않는다.
+    // 실재하는 판례가 "가짜"로 집계되면 그 서면을 쓴 변호사에게 실제 손해가 간다.
+    for (const row of d.ai_hallucination_table || []) {
+      if (row.basis === "FABRICATION_SUSPECTED") fakeCaseCount += 1;
+      else unconfirmedCount += 1;
     }
   }
   if (aiStatus === "미분석" && state.findings.some(f => f.type === "AI_FULL_GENERATION_SUSPECTED")) {
@@ -302,7 +305,8 @@ function renderSummary() {
     ["배포가능 상태", gate ? GATE_LABELS[gate.release_gate] || gate.release_gate : "—"],
     ["검증위험 지수", gate ? `${gate.hallucination_risk}점` : "—"],
     ["AI 작성 진단", state.run ? aiStatus : "—"],
-    ["가짜 판례 의심", state.run ? `${fakeCaseCount}건` : "—"],
+    ["성립 불가 인용", state.run ? `${fakeCaseCount}건` : "—"],
+    ["공식 DB 미확인 인용", state.run ? `${unconfirmedCount}건` : "—"],
     ["확인 전 항목", state.findings.filter(f => f.review_status === "NEEDS_REVIEW").length],
     ["진행 상태", state.run ? label(state.run.state) : "시작 전"]
   ];

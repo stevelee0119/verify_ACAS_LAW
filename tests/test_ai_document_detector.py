@@ -1,5 +1,6 @@
 """AI 법률문서 생성 판별 및 법률 주장 타당성 검토 단위 테스트."""
 import asyncio
+from datetime import date
 import pytest
 
 from packages.common.enums import ClaimType, EvidenceGrade, FindingType, Severity, VerificationStatus
@@ -148,3 +149,67 @@ def test_unavailable_source_does_not_count_as_fake_case_or_ai_generation():
     result = asyncio.run(detect_ai_document(doc, [unavailable] * 46, router=None))
     assert result.score == baseline.score
     assert result.reasons == baseline.reasons
+
+
+# --- 실재 판례를 허위로 단정하지 않는다 ---------------------------------------
+def test_real_case_numbers_are_never_called_fabricated():
+    """공식 DB에서 확인하지 못한 것과 성립할 수 없는 것은 전혀 다르다.
+
+    국가법령정보 판례 DB는 모든 재판을 수록하지 않는다. 미공개 결정·하급심·
+    수록범위 밖 사건은 조회되지 않는다. 그것을 "가공의 판례"로 적으면 실재하는
+    판례를 제대로 인용한 서면이 근거 없이 공격당한다. 실제 배포에서 대법원
+    2011모1839(형사 재항고)가 허위 의심으로 판정됐다.
+    """
+    from packages.legal_engine.normalize import case_number_possible
+
+    # 실재할 수 있는 형태 — 결정(모·마·그)과 하급심·헌재를 포함한다.
+    for number in ("2011모1839", "2015모2524", "2011마1839", "2019헌바127",
+                   "2021구합70769", "2023도12345", "2020다12345", "1998후1234"):
+        assert case_number_possible(number) is True, number
+
+    # 성립할 수 없는 형태 — 아직 오지 않은 해, 재판예규에 없는 사건부호.
+    for number in (f"{date.today().year + 1}다77777", "2088다77777", "2011좋1839"):
+        assert case_number_possible(number) is False, number
+
+
+def test_unconfirmed_citation_is_reported_as_unconfirmed_not_fabricated():
+    """조회 미확인 행은 부존재를 단정하지 않고 확인을 권고해야 한다."""
+    from packages.legal_engine.argument_validity_verifier import _basis_for
+
+    class _C:
+        def __init__(self, number):
+            self.case_number = number
+            self.canonical_case_number = number
+
+    assert _basis_for(_C("2011모1839"), "NOT_FOUND") == "UNCONFIRMED"
+    assert _basis_for(_C("2011모1839"), "CONTRADICTED") == "CONTENT_MISMATCH"
+    assert _basis_for(_C("2088다77777"), "NOT_FOUND") == "FABRICATION_SUSPECTED"
+
+
+def test_unconfirmed_citations_alone_do_not_drive_the_ai_authorship_verdict():
+    """미확인 인용만으로 AI 임의 작성을 추정하지 않는다."""
+    from packages.verification_engine.ai_document_detector import _rule_based_ai_detection
+
+    def not_found(number):
+        return Finding.create(
+            type=FindingType.CASE_NOT_FOUND, status=VerificationStatus.NOT_FOUND,
+            severity=Severity.HIGH, evidence_grade=EvidenceGrade.B,
+            title=f"미확인: {number}", detail="",
+            confidence=0.5, confidence_features={"case_number": number},
+            tags=["LEGAL", "CASE"], engine="test")
+
+    body = ("원고는 피고에게 손해배상을 구한다. 대법원 2011모1839 결정과 "
+            "대법원 2015모2524 결정의 취지에 따른다. 이에 따라 청구를 인용함이 타당하다. ") * 4
+    document = NormalizedDocument(
+        document_id="d1", filename="brief.docx", mime_type="text/plain", sha256="x" * 64,
+        parser_name="test",
+        pages=[Page(page_number=1, width=595.0, height=842.0, blocks=[
+            Block(block_id="b1", text=body, page=1, source_layer="visible_text",
+                  block_type="paragraph", visible=True)])])
+
+    real = _rule_based_ai_detection(document, [not_found("2011모1839"),
+                                               not_found("2015모2524")], False)
+    fake = _rule_based_ai_detection(document, [not_found("2088다77777"),
+                                               not_found("2099다11111")], False)
+    assert real.score < fake.score, "실재 가능한 사건번호가 성립 불가와 같은 점수를 받으면 안 된다"
+    assert not any("가공" in reason for reason in real.reasons), real.reasons

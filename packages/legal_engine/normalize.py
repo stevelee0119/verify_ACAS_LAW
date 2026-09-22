@@ -58,6 +58,27 @@ def split_case_number(raw: str):
     return m.group("year"), m.group("code"), str(int(m.group("serial")))
 
 
+def case_number_possible(raw: str) -> bool:
+    """그 사건번호가 실재할 수 있는 형태인지 본다.
+
+    공식 DB에서 확인하지 못한 것과, 애초에 성립할 수 없는 표기는 전혀 다르다.
+    국가법령정보 판례 DB는 모든 재판을 수록하지 않으므로 미확인은 미확인일 뿐이다.
+    실재하는 판례를 "가공"이라 적으면 그 서면을 쓴 변호사에게 실제 손해가 간다.
+
+    아직 오지 않은 해의 사건번호이거나 재판예규에 없는 사건부호이면 그 표기로는
+    사건이 존재할 수 없다. 그때만 False를 돌려준다.
+    """
+    from datetime import date
+
+    parts = split_case_number(raw or "")
+    if parts is None:
+        return True  # 사건번호를 읽지 못한 것은 성립 불가의 근거가 아니다
+    year, code, _ = parts
+    if int(year) > date.today().year:
+        return False
+    return bool(case_code_meaning(code)) or code.startswith("헌")
+
+
 def case_code_meaning(code: str) -> Optional[str]:
     return CASE_CODE_MEANING.get(code)
 

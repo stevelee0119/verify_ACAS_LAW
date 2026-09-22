@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from packages.common.confidence import score as confidence_score
+from packages.legal_engine.normalize import case_number_possible
 from packages.common.enums import (
     EvidenceGrade,
     ExternalAIPolicy,
@@ -94,18 +95,34 @@ def _rule_based_ai_detection(
         score += min(0.40, cliche_hits * 0.20)
         reasons.append(f"AI 챗봇의 전형적인 관용구/면책/대화형 잔재 문구가 {cliche_hits}건 발견됨")
 
-    # 3. 존재하지 않는 판례(할루시네이션) 발생 정황 결합
-    fake_case_count = sum(1 for f in citation_findings
-                          if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND)
+    # 3. 판례 인용 정황 결합
+    #
+    # "공식 DB에서 확인하지 못함"과 "그 표기로는 존재할 수 없음"은 증거력이 전혀
+    # 다르다. 국가법령정보 판례 DB는 모든 재판을 수록하지 않으므로(미공개 결정,
+    # 하급심, 수록범위 밖) 미확인만으로 AI 생성을 추정하면, 실재하는 판례를 제대로
+    # 인용한 서면이 "AI 임의 작성"으로 판정된다. 실제로 그런 일이 있었다.
+    unconfirmed = [f for f in citation_findings
+                   if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND]
+    impossible = [f for f in unconfirmed
+                  if (f.confidence_features or {}).get("case_number")
+                  and not case_number_possible(str(f.confidence_features["case_number"]))]
     total_case_count = sum(1 for f in citation_findings if "CASE" in f.tags)
-    if fake_case_count > 0:
-        ratio = fake_case_count / max(1, total_case_count)
+
+    if impossible:
+        # 있을 수 없는 연도·사건부호. 수록 범위와 무관하게 실재할 수 없다.
+        score += 0.30 if len(impossible) / max(1, total_case_count) >= 0.5 else 0.15
+        reasons.append(f"실재할 수 없는 사건번호(있을 수 없는 연도 또는 사건부호)가 {len(impossible)}건 인용됨")
+    remaining = len(unconfirmed) - len(impossible)
+    if remaining > 0:
+        ratio = remaining / max(1, total_case_count)
         if ratio >= 0.5:
-            score += 0.30
-            reasons.append(f"인용된 판례 중 공식 DB에서 확인되지 않는 판례(할루시네이션 의심)가 다수({fake_case_count}건) 존재함")
+            # 참고 신호로만 둔다. 이것만으로 AI 작성을 추정하지 않는다.
+            score += 0.10
+            reasons.append(f"인용 판례 중 공식 DB에서 확인되지 않은 것이 다수({remaining}건)임. "
+                           "공식 DB 수록 범위 밖일 수 있어 그 자체로 임의 생성을 뜻하지는 않으며 원문 확인이 필요함")
         else:
-            score += 0.15
-            reasons.append(f"공식 DB에서 확인되지 않는 가공의 판례가 {fake_case_count}건 인용되어 AI 생성 의심을 뒷받침함")
+            reasons.append(f"공식 DB에서 확인되지 않은 판례 인용 {remaining}건(원문 확인 필요). "
+                           "점수에는 반영하지 않음")
 
     # 4. 구조적 특징 (단락별 지나치게 기계적인 번호 매기기, 대칭적 서술)
     list_markers = len(re.findall(r"^\s*(?:\d+\.|\([0-9]\)|첫째|둘째|셋째|넷째|마지막으로)", text, re.MULTILINE))

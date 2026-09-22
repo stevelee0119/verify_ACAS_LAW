@@ -204,7 +204,10 @@ class LegalVerifier:
         if official is None:
             verdict.levels["level1"] = "NOT_FOUND"
             verdict.status = VerificationStatus.NOT_FOUND
-            features = {"official_source_absent": True, "deterministic_rule": True, "source_count": 1}
+            # 사건번호를 함께 남긴다. 뒤 단계가 제목 문자열에서 되짚지 않아도
+            # "확인 못 함"과 "성립할 수 없음"을 구분할 수 있어야 한다.
+            features = {"official_source_absent": True, "deterministic_rule": True, "source_count": 1,
+                        "case_number": case_number}
             verdict.findings.append(
                 Finding.create(
                     type=FindingType.CASE_NOT_FOUND,

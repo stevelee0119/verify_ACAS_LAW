@@ -23,7 +23,8 @@ from typing import Any, Dict, List, Optional
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from packages.common.config import get_settings  # noqa: E402
-from packages.common.enums import AdapterStatus  # noqa: E402
+from packages.common.enums import AdapterStatus
+from packages.legal_engine.normalize import same_case_number  # noqa: E402
 
 # 출력에 섞여 들어갈 수 있는 비밀값 형태를 지운다(이중 안전장치).
 SECRET_LIKE = re.compile(
@@ -171,6 +172,39 @@ def check_law_go_kr(registry) -> List[CheckResult]:
             requires_key=True,
         )
     )
+
+    # 사건번호로 조회했을 때 그 사건이 실제로 돌아오는지 본다.
+    #
+    # 여기가 "확인 못 함"과 "존재하지 않음"이 갈리는 지점이다. 조회가 되지 않으면
+    # 실재하는 판례가 미확인으로 남고, 뒤 단계에서 근거 없이 의심받는다. 배포에서
+    # 대법원 2011모1839(형사 재항고)가 그렇게 판정됐다.
+    #
+    # 판결(도·다·두)과 결정(모·마) 형태를 함께 넣는다. prec 검색이 결정 유형을
+    # 수록하지 않는다면 그 사실이 여기서 드러난다.
+    for case_number, note in (("2011모1839", "형사 재항고 결정"),
+                              ("2015모2524", "형사 재항고 결정"),
+                              ("2014다236311", "민사 상고 판결"),
+                              ("2017두38560", "행정 상고 판결")):
+        response = adapter.search_case(case_number)
+        matched = [r for r in response.records
+                   if same_case_number(case_number, str(r.get("case_number") or ""))]
+        out.append(
+            CheckResult(
+                name=f"law_go_kr:사건번호조회({case_number} · {note})",
+                category="live_legal",
+                configured=adapter.status() == AdapterStatus.READY,
+                status=str(response.status),
+                # 조회가 READY인데 같은 사건번호가 없으면 그것이 문제의 신호다.
+                ok=response.status == AdapterStatus.READY and bool(matched),
+                detail=(f"사건번호 일치 {len(matched)}건 / 응답 {len(response.records)}건. "
+                        + ("일치하는 기록을 찾지 못했다. 이 상태면 실재하는 판례가 "
+                           "'공식 DB 미확인'으로 남는다." if not matched else "정상")
+                        + f" | {_diagnose(response)}"),
+                records=len(response.records),
+                fields=_record_fields(response.records),
+                requires_key=True,
+            )
+        )
     return out
 
 
