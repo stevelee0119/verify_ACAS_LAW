@@ -1165,6 +1165,9 @@ function renderDiagnostics(data) {
         ? `${durability.database?.reason || ""} ${durability.storage?.reason || ""} ${durability.note || ""}`
         : "업로드 원본의 영구 저장 위치와 백업을 확인해야 합니다.",
     atRisk ? "HIGH" : "LOW");
+  const crypto = capabilities.storage_encryption;
+  if (crypto) row("저장 시 암호화", crypto.enabled ? "적용" : "미적용", crypto.note,
+    crypto.enabled ? "LOW" : "HIGH");
   row("검증 작업 실행", {auto: "자동 선택", inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[capabilities.worker_mode] || "확인 필요",
     capabilities.worker_mode === "auto" ? "작업 서버 연결 설정에 따라 실행 방식을 선택합니다. 자동 선택 자체는 오류가 아닙니다." : "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
   row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",

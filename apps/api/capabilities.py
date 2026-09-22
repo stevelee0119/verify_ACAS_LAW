@@ -80,6 +80,25 @@ def _source_keys() -> Dict[str, bool]:
     }
 
 
+def _storage_encryption_state() -> Dict[str, Any]:
+    """저장 시 암호화 상태. 키 값은 절대 담지 않고 공급자 종류만 알린다."""
+    from packages.common.storage import storage_encryption_enabled
+
+    enabled = storage_encryption_enabled()
+    provider = (os.getenv("LV_VAULT_KEY_PROVIDER")
+                or ("env" if os.getenv("LV_VAULT_KEYS") or os.getenv("LV_PSEUDONYM_SECRET") else "file"))
+    return {
+        "enabled": enabled,
+        "key_provider": provider,
+        "note": ("업로드 원본과 보고서 산출물을 봉투 암호화해 보관합니다. 처리 중에는 "
+                 "파서를 위해 평문을 임시로 풀어 두므로 그 구간은 가려지지 않습니다."
+                 if enabled else
+                 "저장 시 암호화가 꺼져 있습니다. 디스크 스냅샷·백업본이 유출되면 "
+                 "사건자료를 그대로 읽을 수 있습니다. 실제 사건자료를 다루면 "
+                 "LV_STORAGE_ENCRYPTION=on으로 켜고 키를 따로 보관하세요."),
+    }
+
+
 def runtime_capabilities() -> Dict[str, Any]:
     from .durability import durability_report
     from .session_policy import analysis_lifetimes, session_lifetimes
@@ -93,6 +112,7 @@ def runtime_capabilities() -> Dict[str, Any]:
         "database": _database_state(),
         # 저장소가 재시작을 견디는지. 이 값이 없으면 잘못된 배포가 정상처럼 보인다.
         "durability": durability_report(),
+        "storage_encryption": _storage_encryption_state(),
         "worker_mode": settings.worker_mode,
         "browser_session": {
             "idle_hours": idle.total_seconds() / 3600,

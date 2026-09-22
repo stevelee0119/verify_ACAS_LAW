@@ -58,7 +58,14 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 }""", run)
                 notice = page.locator("#progressNotice")
                 expect(notice).to_be_hidden()
-                page.evaluate("state.progressSeen.at -= 65000; renderProgressNotice()")
+                # 화면 진입 직후 걸린 조회가 실패하면 그 오류 문구가 먼저 뜬다.
+                # 여기서 보려는 것은 "진행 정보가 멈춰 있을 때의 안내"이므로
+                # 조회 상태를 비우고 검사한다. 조회 실패 문구는 아래에서 따로 본다.
+                # generation을 올려야 이미 날아간 조회의 응답도 무시된다.
+                # clearTimeout은 다음 예약만 취소하고 진행 중인 요청은 못 막는다.
+                page.evaluate("state.generation += 1; clearTimeout(state.timer); "
+                              "state.pollError = null; state.progressSeen.at -= 65000; "
+                              "renderProgressNotice()")
                 expect(notice).to_contain_text("변경되지 않았습니다")
                 disconnected[0] = True
                 page.evaluate("pollRun(state.generation)")

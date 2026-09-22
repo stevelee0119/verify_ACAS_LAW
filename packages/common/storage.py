@@ -109,10 +109,132 @@ _storage: Optional[ObjectStorage] = None
 def get_storage() -> ObjectStorage:
     global _storage
     if _storage is None:
-        _storage = LocalObjectStorage()
+        base: ObjectStorage = LocalObjectStorage()
+        # 암호화는 저장 계층을 감싼다. 상위 코드는 차이를 알 필요가 없다.
+        _storage = EncryptedObjectStorage(base) if storage_encryption_enabled() else base
     return _storage
 
 
 def reset_storage() -> None:  # 테스트용
     global _storage
     _storage = None
+
+
+# ---------------------------------------------------------------------------
+# 저장 시 암호화
+# ---------------------------------------------------------------------------
+STORAGE_CONTEXT = "storage"
+PLAINTEXT_CACHE = "plaintext-cache"
+
+
+class EncryptedObjectStorage(ObjectStorage):
+    """원본과 파생물을 봉투 암호화해 보관한다(제23장).
+
+    디스크 스냅샷·백업본이 유출되어도 키가 없으면 사건자료를 읽을 수 없게 한다.
+    키는 환경변수 또는 KMS에서 오며 자료 디스크에 두지 않는다.
+
+    한계를 분명히 해 둔다. 파서는 파일 경로를 요구하므로 path()는 평문을
+    임시 디렉터리에 풀어 놓는다. 처리 중에는 평문이 디스크에 존재하며,
+    이 구간은 암호화로 가려지지 않는다. purge_plaintext_cache()로 지운다.
+
+    암호화를 켜기 전에 저장된 평문 객체도 계속 읽을 수 있다. 봉투 표지가
+    없으면 평문으로 취급한다.
+    """
+
+    def __init__(self, base: ObjectStorage, *, key_provider=None,
+                 cache_root: Optional[Path] = None) -> None:
+        self.base = base
+        if key_provider is None:
+            from packages.pii_engine.key_provider import default_key_provider
+
+            key_provider = default_key_provider()
+        self.key_provider = key_provider
+        root = cache_root or (Path(get_settings().storage_root) / PLAINTEXT_CACHE)
+        self.cache_root = Path(root)
+        self.cache_root.mkdir(parents=True, exist_ok=True)
+        os.chmod(self.cache_root, 0o700)
+
+    # -- 내부 -------------------------------------------------------------
+    @staticmethod
+    def _project_of(storage_key: str) -> str:
+        """originals/{project_id}/... 에서 사건 식별자를 뽑는다.
+
+        사건마다 다른 키를 쓰기 위한 것이다. 형식이 다르면 빈 값으로 두고
+        전역 키를 쓴다. 키를 못 고르느니 덜 세분화된 키가 낫다.
+        """
+        parts = [p for p in storage_key.split("/") if p]
+        return parts[1] if len(parts) >= 3 else ""
+
+    def _seal(self, storage_key: str, data: bytes) -> bytes:
+        from .envelope import seal
+
+        return seal(data, key_provider=self.key_provider,
+                    project_id=self._project_of(storage_key), context=STORAGE_CONTEXT)
+
+    def _unseal(self, storage_key: str, data: bytes) -> bytes:
+        from .envelope import unseal
+
+        return unseal(data, key_provider=self.key_provider,
+                      project_id=self._project_of(storage_key), context=STORAGE_CONTEXT)
+
+    # -- 인터페이스 -------------------------------------------------------
+    def put_original(self, key: str, data: bytes) -> str:
+        storage_key = f"originals/{key}"
+        if self.base.exists(storage_key):
+            return storage_key  # 제15.1장 Immutable Original
+        return self.base.put_original(key, self._seal(storage_key, data))
+
+    def put_derivative(self, key: str, data: bytes) -> str:
+        return self.base.put_derivative(key, self._seal(f"derivatives/{key}", data))
+
+    def get(self, storage_key: str) -> bytes:
+        return self._unseal(storage_key, self.base.get(storage_key))
+
+    def exists(self, storage_key: str) -> bool:
+        return self.base.exists(storage_key)
+
+    def path(self, storage_key: str) -> Path:
+        """파서가 요구하는 지역 경로. 평문을 임시로 풀어 놓는다."""
+        target = (self.cache_root / storage_key).resolve()
+        if not str(target).startswith(str(self.cache_root.resolve())):
+            raise ValueError("path traversal detected")
+        if target.exists():
+            return target
+        target.parent.mkdir(parents=True, exist_ok=True)
+        partial = target.with_name(target.name + ".part")
+        partial.write_bytes(self.get(storage_key))
+        os.chmod(partial, 0o600)
+        partial.replace(target)  # 덜 풀린 파일을 원본으로 읽지 않게 한다
+        return target
+
+    def copy_to_temp(self, storage_key: str, suffix: str = "") -> Path:
+        source = self.path(storage_key)
+        tmp_dir = self.cache_root / "tmp"
+        tmp_dir.mkdir(parents=True, exist_ok=True)
+        destination = tmp_dir / f"{Path(storage_key).name}{suffix}"
+        shutil.copyfile(source, destination)
+        os.chmod(destination, 0o600)
+        return destination
+
+    def purge_plaintext_cache(self) -> int:
+        """풀어 둔 평문을 지운다. 처리 후 호출한다."""
+        removed = 0
+        for item in sorted(self.cache_root.rglob("*"), reverse=True):
+            try:
+                if item.is_file():
+                    item.unlink()
+                    removed += 1
+                elif item.is_dir():
+                    item.rmdir()
+            except OSError:  # pragma: no cover - 사용 중인 파일
+                continue
+        return removed
+
+
+def storage_encryption_enabled() -> bool:
+    """LV_STORAGE_ENCRYPTION. 기본값은 꺼짐이다.
+
+    켜 두고 키를 잃으면 자료를 복구할 수 없으므로 기본으로 켜지 않는다.
+    실제 사건자료를 다루는 배포는 명시적으로 켜고 키를 따로 보관해야 한다.
+    """
+    return (os.getenv("LV_STORAGE_ENCRYPTION") or "").strip().lower() in ("1", "true", "yes", "on")
