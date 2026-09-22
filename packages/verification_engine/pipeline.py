@@ -602,6 +602,9 @@ class VerificationPipeline:
             if scope == "incident":
                 result.engine_data["legal"] = {k: v for k, v in legal.data.items() if k != "verdicts"}
         result.engine_data["legal"]["dated_review_count"] = len(grouped)
+        # grouped의 판정은 legal_verdicts와 겹쳐 보이지만 중복이 아니다.
+        # 같은 인용이라도 기준일이 다르면 적용 법령 버전이 달라진다(제4.2장).
+        # 기준일별 스냅샷이므로 줄이지 않는다.
         result.engine_data["legal_reviews"] = grouped
         result.engine_data["legal_verdicts"] = verdicts
         result.engine_data["case_applicability_reviews"] = applicability

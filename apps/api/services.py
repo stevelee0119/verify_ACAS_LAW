@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import select
+from sqlalchemy import insert as sa_insert, select
 from sqlalchemy.orm import Session
 
 from packages.audit_engine import AuditChain
@@ -137,6 +137,26 @@ def link_snapshot_evidence(result, snapshot) -> None:
                 "reference_status": match.status, "support_status": "NOT_ASSESSED"} for match in matches]
 
 
+# result_json과 VerificationRun 칼럼에 같이 들어가던 값들. 칼럼이 정본이다.
+RESULT_COLUMN_KEYS = ("scores", "timeline", "unavailable_sources", "unverified_items", "errors")
+
+
+def _insert_all(session: Session, model, rows) -> None:
+    """되읽지 않는 단순 적재는 ORM 객체를 만들지 않고 한 번에 넣는다."""
+    if rows:
+        session.execute(sa_insert(model), rows)
+
+
+def run_result_view(run: VerificationRun) -> dict:
+    """저장된 결과에 전용 칼럼 값을 합쳐 온전한 모양으로 돌려준다."""
+    payload = dict(run.result_json or {})
+    if not payload:
+        return payload
+    for key in RESULT_COLUMN_KEYS:
+        payload.setdefault(key, getattr(run, key, None) or ([] if key != "scores" else {}))
+    return payload
+
+
 def persist_result(session: Session, run: VerificationRun, result: VerificationRunResult,
                    *, lease=None, store=None, commit=True) -> None:
     from packages.report_engine.exporters import to_payload
@@ -159,7 +179,13 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
     run.errors = list(dict.fromkeys([*(run.errors or []), *result.errors]))
     run.finished_at = result.finished_at or datetime.utcnow()
     # 문자열로 만들었다가 다시 읽지 않는다. JSON 칼럼이 알아서 직렬화한다.
-    run.result_json = to_payload(result)
+    payload = to_payload(result)
+    # 전용 칼럼에 이미 들어가는 값은 여기서 또 담지 않는다. 한 건에 수 MB가
+    # 중복되고, 그만큼 직렬화 비용과 메모리가 늘어난다. 응답은 run_result_view가
+    # 칼럼에서 되돌려 붙이므로 밖에서 보이는 모양은 그대로다.
+    for key in RESULT_COLUMN_KEYS:
+        payload.pop(key, None)
+    run.result_json = payload
     run.result_json["input_snapshot"] = run.input_snapshot or {}
 
     for document_result in result.documents:
@@ -198,23 +224,20 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
                     )
 
         session.query(CitationRow).filter(CitationRow.document_id == document_result.document_id).delete()
-        for citation in document_result.citations:
-            session.add(
-                CitationRow(id=citation["citation_id"], document_id=document_result.document_id,
-                            project_id=run.project_id, data=citation)
-            )
+        _insert_all(session, CitationRow, [
+            {"id": citation["citation_id"], "document_id": document_result.document_id,
+              "project_id": run.project_id, "data": citation}
+            for citation in document_result.citations])
         session.query(ClaimRow).filter(ClaimRow.document_id == document_result.document_id).delete()
-        for claim in document_result.claims:
-            session.add(
-                ClaimRow(id=claim["claim_id"], document_id=document_result.document_id,
-                         project_id=run.project_id, data=claim)
-            )
+        _insert_all(session, ClaimRow, [
+            {"id": claim["claim_id"], "document_id": document_result.document_id,
+              "project_id": run.project_id, "data": claim}
+            for claim in document_result.claims])
         session.query(EventRow).filter(EventRow.document_id == document_result.document_id).delete()
-        for eventrow in document_result.events:
-            session.add(
-                EventRow(id=eventrow["event_id"], document_id=document_result.document_id,
-                         project_id=run.project_id, data=eventrow)
-            )
+        _insert_all(session, EventRow, [
+            {"id": eventrow["event_id"], "document_id": document_result.document_id,
+              "project_id": run.project_id, "data": eventrow}
+            for eventrow in document_result.events])
         for entity in document_result.entities:
             if session.get(EntityRow, entity["entity_id"]) is None:
                 session.add(EntityRow(id=entity["entity_id"], project_id=run.project_id, data=entity))

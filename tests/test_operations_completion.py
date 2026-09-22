@@ -271,7 +271,8 @@ def test_dead_process_recovery_fences_old_completion_and_preserves_partial(ops):
     assert history[0]["partial_result"]["documents"][0]["document_id"] == run.document_ids[0]
     with ops() as session:
         saved = session.get(VerificationRun, run.id)
-        assert saved.state == "COMPLETED" and saved.result_json["scores"]["ready"]
+        # scores의 정본은 전용 칼럼이다. result_json은 그것을 중복하지 않는다.
+        assert saved.state == "COMPLETED" and saved.scores["ready"]
         assert "WORKER_LEASE_EXPIRED" in saved.errors
 
 
@@ -1088,3 +1089,35 @@ def test_result_payload_matches_the_json_export(ops):
     run = seeded_run(ops)
     result = completed(run)
     assert to_payload(result) == json.loads(to_json(result).decode("utf-8"))
+
+
+def test_result_response_keeps_its_shape_without_duplicating_columns(ops):
+    """전용 칼럼과 result_json에 같은 값을 두 벌 담지 않는다.
+
+    한 건에 수 MB가 중복되고 그만큼 직렬화 비용과 메모리가 늘어난다.
+    다만 밖에서 보이는 응답 모양은 그대로여야 한다.
+    """
+    from apps.api.services import RESULT_COLUMN_KEYS, persist_result, run_result_view
+    from packages.report_engine import to_payload
+
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    result = completed(run)
+    result.timeline = [{"date": "2021-03-25", "label": "약정"}]
+    result.unverified_items = [{"kind": "citation", "citation_id": "c1"}]
+
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        persist_result(session, saved, result, lease=lease, store=store, commit=False)
+        session.commit()
+
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        for key in RESULT_COLUMN_KEYS:
+            assert key not in saved.result_json, f"{key}가 중복 저장됐습니다"
+        view = run_result_view(saved)
+        assert set(to_payload(result)) <= set(view), "응답에서 빠진 항목이 있습니다"
+        assert view["scores"] == result.scores
+        assert view["timeline"] == result.timeline
+        assert view["unverified_items"] == result.unverified_items

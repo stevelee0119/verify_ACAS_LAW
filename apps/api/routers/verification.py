@@ -179,7 +179,9 @@ def get_run_result(run_id: str, user: User = Depends(current_user),
                    session: Session = Depends(get_db)) -> Dict[str, Any]:
     run = accessible_run(session, user, run_id)
     require_project(session, run.project_id)
-    return run.result_json or {}
+    from ..services import run_result_view
+
+    return run_result_view(run)
 
 
 @router.get("/verification-runs/{run_id}/events")
