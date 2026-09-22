@@ -75,3 +75,43 @@ def test_semantic_review_says_when_the_model_never_ran():
     assert "sk-proj-abcdefghij" not in cleaned and "[REDACTED]" in cleaned
     assert "HTTP 401" in cleaned, "원인 자체는 남아야 조치할 수 있다"
     assert VerificationPipeline._provider_reason("") == "사유 미기재"
+
+
+def test_anthropic_is_the_primary_reasoner_and_is_reachable():
+    """Anthropic이 주 분석 역할이다. 그 경로가 끊기면 검토의 본체가 사라진다.
+
+    모델 ID는 공급자 사정으로 바뀌므로 값 자체를 고정하지는 않는다. 다만
+    비어 있거나 역할 배정에서 빠지면 AI 검토가 통째로 다른 공급자에게
+    넘어가거나 아예 수행되지 않는다.
+    """
+    import json
+    import os
+    from pathlib import Path
+
+    from packages.common import config
+    from packages.common.enums import LLMRole
+    from packages.llm_router.router import ROLE_PREFERENCE, LLMRouter
+
+    assert ROLE_PREFERENCE[LLMRole.PRIMARY_REASONER][0] == "anthropic"
+    assert ROLE_PREFERENCE[LLMRole.JUDGE][0] == "anthropic"
+
+    providers = json.loads(Path("config/providers.json").read_text(encoding="utf-8"))
+    assert providers["anthropic"]["enabled"] is True
+    assert providers["anthropic"]["model"].strip(), "모델이 비어 있으면 호출이 성립하지 않는다"
+    assert providers["anthropic"]["api_key_env"] == "ANTHROPIC_API_KEY"
+
+    previous = (os.environ.get("ANTHROPIC_API_KEY"), os.environ.get("LV_ALLOW_NETWORK"))
+    os.environ["ANTHROPIC_API_KEY"] = "test-key"
+    os.environ["LV_ALLOW_NETWORK"] = "1"
+    config.reset_settings()
+    try:
+        picked = LLMRouter().pick(LLMRole.PRIMARY_REASONER)
+        assert picked is not None and picked.name == "anthropic", \
+            "키가 있는데도 Anthropic이 선택되지 않으면 주 분석이 대체 공급자로 넘어간다"
+    finally:
+        for name, value in zip(("ANTHROPIC_API_KEY", "LV_ALLOW_NETWORK"), previous):
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        config.reset_settings()
