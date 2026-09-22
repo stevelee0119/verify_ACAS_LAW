@@ -258,6 +258,19 @@ def storage_encryption_enabled() -> bool:
     return (os.getenv("LV_STORAGE_ENCRYPTION") or "").strip().lower() in ("1", "true", "yes", "on")
 
 
+_encryption_error: Optional[str] = None
+
+
+def storage_encryption_error() -> Optional[str]:
+    """기동 시 확인에서 드러난 키 설정 오류. 없으면 None."""
+    return _encryption_error
+
+
+def record_storage_encryption_error(message: Optional[str]) -> None:
+    global _encryption_error
+    _encryption_error = message
+
+
 def verify_storage_encryption_config() -> None:
     """기동 시 암호화 키 설정을 확인한다.
 

@@ -82,14 +82,28 @@ def _source_keys() -> Dict[str, bool]:
 
 def _storage_encryption_state() -> Dict[str, Any]:
     """저장 시 암호화 상태. 키 값은 절대 담지 않고 공급자 종류만 알린다."""
-    from packages.common.storage import storage_encryption_enabled
+    from packages.common.storage import storage_encryption_enabled, storage_encryption_error
 
     enabled = storage_encryption_enabled()
     provider = (os.getenv("LV_VAULT_KEY_PROVIDER")
                 or ("env" if os.getenv("LV_VAULT_KEYS") or os.getenv("LV_PSEUDONYM_SECRET") else "file"))
+    failure = storage_encryption_error()
+    if failure:
+        # 키가 없으면 자료를 읽지도 쓰지도 못한다. 서비스는 떠 있으므로
+        # 화면이 원인을 말해 주지 않으면 이용자는 로그인을 의심하게 된다.
+        return {
+            "enabled": enabled, "key_provider": provider, "configured": False,
+            "note": ("저장 시 암호화가 켜져 있으나 키 설정이 올바르지 않아 사건자료를 "
+                     "업로드하거나 열 수 없습니다. LV_VAULT_KEYS는 {\"키ID\": \"base64 32바이트\"} "
+                     "형식의 JSON이어야 하며 꺾쇠(<>)를 포함하면 안 됩니다. "
+                     "LV_VAULT_ACTIVE_KEY_ID도 함께 있어야 합니다. 키를 확인할 수 없으면 "
+                     "LV_STORAGE_ENCRYPTION을 끄십시오. 이미 암호화된 자료는 올바른 키가 있어야 읽힙니다."),
+            "error": failure,
+        }
     return {
         "enabled": enabled,
         "key_provider": provider,
+        "configured": True,
         "note": ("업로드 원본과 보고서 산출물을 봉투 암호화해 보관합니다. 처리 중에는 "
                  "파서를 위해 평문을 임시로 풀어 두므로 그 구간은 가려지지 않습니다."
                  if enabled else

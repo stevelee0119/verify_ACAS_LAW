@@ -1179,8 +1179,9 @@ function renderDiagnostics(data) {
         : "업로드 원본의 영구 저장 위치와 백업을 확인해야 합니다.",
     atRisk ? "HIGH" : "LOW");
   const crypto = capabilities.storage_encryption;
-  if (crypto) row("저장 시 암호화", crypto.enabled ? "적용" : "미적용", crypto.note,
-    crypto.enabled ? "LOW" : "HIGH");
+  if (crypto) row("저장 시 암호화",
+    crypto.configured === false ? "키 설정 오류" : crypto.enabled ? "적용" : "미적용",
+    crypto.note, crypto.enabled && crypto.configured !== false ? "LOW" : "HIGH");
   const worker = capabilities.worker || {};
   const resolved = {inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[worker.mode];
   row("검증 작업 실행", {auto: "자동 선택", inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[capabilities.worker_mode] || "확인 필요",

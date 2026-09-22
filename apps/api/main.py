@@ -18,7 +18,9 @@ from packages.common.config import get_settings
 from fastapi import Depends
 
 from .auth import require_admin
-from packages.common.storage import verify_storage_encryption_config
+from packages.common.storage import (StorageKeyConfigurationError,
+                                     record_storage_encryption_error,
+                                     verify_storage_encryption_config)
 from .capabilities import runtime_capabilities
 from .durability import log_durability_warning
 from .db import User
@@ -123,7 +125,19 @@ def create_app() -> FastAPI:
     # 화면상 정상으로 보이므로 기동 로그에서 먼저 알린다.
     log_durability_warning()
     # 암호화 키 설정 오류는 첫 업로드가 아니라 기동 시점에 드러나야 한다.
-    verify_storage_encryption_config()
+    #
+    # 다만 기동 자체를 막지는 않는다. 설정 오류로 서비스가 뜨지 않으면
+    # 로그인도, 기존 사건자료 조회도, 원인을 알려 줄 진단 화면도 막힌다.
+    # 보고하려던 문제보다 나쁜 상태다. 크게 남기고 진단에 실어 알리되,
+    # 자료를 다루는 경로는 storage 계층이 계속 거부한다.
+    record_storage_encryption_error(None)
+    try:
+        verify_storage_encryption_config()
+    except StorageKeyConfigurationError as exc:
+        record_storage_encryption_error(str(exc))
+        logging.getLogger(__name__).error(
+            "저장 시 암호화 키 설정이 잘못되어 자료 업로드·조회가 거부됩니다. "
+            "서비스는 기동하지만 이 설정을 고치기 전까지 사건자료를 다룰 수 없습니다. %s", exc)
 
     for module in (projects, verification, reports, settings_router, viewer, audit, calculations, workspace, document_review, identity, jobs):
         app.include_router(module.router, prefix="/api")

@@ -194,3 +194,42 @@ def test_startup_check_is_silent_when_encryption_is_off(monkeypatch, tmp_path):
     reset_settings()
     verify_storage_encryption_config()
     reset_settings()
+
+
+def test_bad_key_configuration_does_not_prevent_the_service_from_starting(monkeypatch, tmp_path):
+    """설정 오류가 서비스 전체를 내리면 보고하려던 문제보다 나쁘다.
+
+    실제로 그렇게 배포되어 502가 났다. 기동을 막으면 로그인도, 기존 사건자료
+    조회도, 원인을 알려 줄 진단 화면도 함께 막힌다. 크게 남기고 진단에 실어
+    알리되 서비스는 떠 있어야 한다. 자료를 다루는 경로는 계속 거부한다.
+    """
+    import apps.api.db as db
+    from apps.api.capabilities import runtime_capabilities
+    from apps.api.main import create_app
+    from packages.common.storage import (StorageKeyConfigurationError, get_storage,
+                                          reset_storage)
+
+    monkeypatch.setenv("LV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LV_DATABASE_URL", f"sqlite:///{tmp_path}/boot.db")
+    monkeypatch.setenv("LV_STORAGE_ENCRYPTION", "on")
+    monkeypatch.setenv("LV_VAULT_KEY_PROVIDER", "env")
+    # 꺾쇠를 포함한 값. 사용자가 실제로 입력했던 형태다.
+    monkeypatch.setenv("LV_VAULT_KEYS", '{"k1":"<' + "A" * 43 + '=>"}')
+    monkeypatch.setattr(db, "_engine", None)
+    monkeypatch.setattr(db, "_SessionLocal", None)
+    reset_storage()
+    try:
+        app = create_app()
+        assert app.routes, "설정 오류로 기동이 막히면 안 된다"
+
+        state = runtime_capabilities()["storage_encryption"]
+        assert state["configured"] is False
+        assert "LV_VAULT_KEYS" in state["note"], "무엇을 고쳐야 하는지 화면이 말해야 한다"
+        assert "authentication" not in state["note"].lower()
+
+        # 자료를 다루는 경로는 계속 거부한다. 평문으로 조용히 되돌아가면 안 된다.
+        with pytest.raises(StorageKeyConfigurationError):
+            get_storage()
+    finally:
+        db._engine = db._SessionLocal = None
+        reset_storage()
