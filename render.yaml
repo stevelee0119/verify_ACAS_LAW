@@ -37,6 +37,24 @@ services:
       # Worker를 함께 띄우지 않는다면 inprocess로 두면 Redis 없이 동작한다.
       - key: LV_WORKER_MODE
         value: inprocess
+      # Starter web 인스턴스에서는 긴 OCR/검증 작업을 병렬로 돌리면 CPU·메모리 경합으로
+      # 헬스체크와 진행률 조회가 같이 느려진다. 큐는 DB가 보존하므로 한 번에 하나씩 실행한다.
+      - key: LV_JOB_CONCURRENCY
+        value: "1"
+      - key: LV_JOB_DISPATCH_SECONDS
+        value: "120"
+      - key: LV_JOB_DISPATCH_RETRY_SECONDS
+        value: "30"
+      - key: LV_DB_POOL_SIZE
+        value: "3"
+      - key: LV_DB_MAX_OVERFLOW
+        value: "2"
+      - key: LV_DB_CONNECT_TIMEOUT
+        value: "10"
+      - key: LV_DB_POOL_TIMEOUT
+        value: "30"
+      - key: LV_DB_POOL_RECYCLE_SECONDS
+        value: "1800"
       - key: LV_OCR_LANG
         value: kor+eng
       - key: LV_REQUIRE_OCR
@@ -51,6 +69,12 @@ services:
         value: "12"
       - key: LV_SOURCE_LOOKUP_BUDGET_SECONDS
         value: "120"
+      - key: LV_SOURCE_LOOKUP_MAX_DOCUMENT_SECONDS
+        value: "240"
+      - key: LV_SOURCE_LOOKUP_RECOVERY_SECONDS
+        value: "30"
+      - key: LV_SOURCE_LOOKUP_ATTEMPTS
+        value: "2"
       - key: LV_PSEUDONYM_SECRET
         generateValue: true
       # 최초 관리자. 기존 계정도 이 값도 없으면 보호된 API에 접근할 수 없다.

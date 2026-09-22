@@ -388,17 +388,24 @@ def test_startup_recovers_expired_run_and_shuts_down(ops, monkeypatch):
 def test_celery_delivery_uses_same_claim_and_duplicate_is_noop(ops, monkeypatch):
     import workers.celery_app as celery_module
     run = seeded_run(ops)
+    now = datetime.utcnow()
     calls = []
     class App:
         def send_task(self, name, **kwargs):
             calls.append((name, kwargs))
-            return type("Task", (), {"id": "task-1"})()
+            return type("Task", (), {"id": "task-" + str(len(calls))})()
     monkeypatch.setattr(celery_module, "get_celery_app", lambda: App())
     monkeypatch.setattr(get_settings(), "worker_mode", "celery")
-    runner = JobRunner(JobStore(ops))
+    monkeypatch.delenv("LV_JOB_CELERY_DISPATCH_SECONDS", raising=False)
+    monkeypatch.delenv("LV_JOB_DISPATCH_SECONDS", raising=False)
+    runner = JobRunner(JobStore(ops, clock=lambda: now))
     assert runner.submit(run.id) == "celery"
     runner.submit(run.id)
     assert len(calls) == 1 and runner.task_id(run.id) == "task-1"
+    now += timedelta(seconds=31)
+    runner.submit(run.id)
+    assert len(calls) == 1, "A queued Celery delivery must not be re-sent every local dispatch cycle"
+    assert JobStore(ops, clock=lambda: now).status(run.id)["next_dispatch_at"] > now
     executions = []
     def pipeline(*args, **kwargs):
         executions.append(run.id)
@@ -407,6 +414,31 @@ def test_celery_delivery_uses_same_claim_and_duplicate_is_noop(ops, monkeypatch)
     execute_run(run.id, store=runner.store)
     execute_run(run.id, store=runner.store)
     assert executions == [run.id]
+
+
+def test_explicit_celery_dispatch_failure_uses_bounded_retry_interval(ops, monkeypatch):
+    import workers.celery_app as celery_module
+    run = seeded_run(ops)
+    now = datetime.utcnow()
+    calls = []
+
+    class BrokenApp:
+        def send_task(self, *args, **kwargs):
+            calls.append(now)
+            raise ConnectionError("broker unavailable")
+
+    monkeypatch.setattr(celery_module, "get_celery_app", lambda: BrokenApp())
+    monkeypatch.setattr(get_settings(), "worker_mode", "celery")
+    monkeypatch.setenv("LV_JOB_DISPATCH_RETRY_SECONDS", "45")
+    runner = JobRunner(JobStore(ops, clock=lambda: now))
+    assert runner.submit(run.id) == "queued"
+    assert len(calls) == 1
+    now += timedelta(seconds=30)
+    assert runner.submit(run.id) == "celery"
+    assert len(calls) == 1
+    now += timedelta(seconds=15)
+    assert runner.submit(run.id) == "queued"
+    assert len(calls) == 2
 
 
 class StubProvider(LLMProvider):
