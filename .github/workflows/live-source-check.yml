@@ -49,7 +49,7 @@ jobs:
       LV_ANTHROPIC_MODEL: ${{ vars.LV_ANTHROPIC_MODEL }}
       LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
       LV_ALLOW_NETWORK: "1"
-      LV_HTTP_TIMEOUT: "20"
+      LV_HTTP_TIMEOUT: "30"
       LV_PSEUDONYM_SECRET: live-check-only
 
     steps:
