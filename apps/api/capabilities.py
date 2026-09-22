@@ -127,6 +127,37 @@ def _worker_state() -> Dict[str, Any]:
                 "error": f"{type(exc).__name__}: {exc}"}
 
 
+def _llm_state() -> Dict[str, Any]:
+    """AI 공급자 설정 상태.
+
+    화면에서 AI가 실제로 동작하는지 볼 수 없으면, 키가 잘못되었거나 모델 ID가
+    낡아 호출이 전부 실패해도 아무도 알아채지 못한다. 실제로 세 공급자가 모두
+    실패하는 동안 검증은 규칙 기반으로만 돌고 있었다.
+
+    여기서 실호출은 하지 않는다. 진단 조회마다 과금이 발생해서는 안 된다.
+    설정 상태만 싣고, 실제 성공 여부는 검증 결과의 모델 실행 기록에서 본다.
+    """
+    settings = get_settings()
+    providers = []
+    for name, config in sorted(settings.providers.items()):
+        if not config.enabled:
+            continue
+        providers.append({"name": name, "model": config.model,
+                          "key_present": bool(config.api_key), "kind": config.kind})
+    usable = [p for p in providers if p["key_present"] or p["kind"] == "local"]
+    return {
+        "providers": providers,
+        "usable_count": len(usable),
+        "note": ("AI 검토(판례 의미·적용)는 공식 판결 전문을 확보한 인용에만 수행됩니다. "
+                 "키가 있어도 모델 ID가 맞지 않으면 호출이 실패하며, 그 경우 검증은 "
+                 "규칙 기반으로만 수행됩니다. 실제 호출 성공 여부는 검증 결과의 "
+                 "모델 실행 기록에서 확인하세요."
+                 if usable else
+                 "사용 가능한 AI 공급자가 없습니다. 판례 의미·적용 검토가 수행되지 않고 "
+                 "규칙 기반 검증만 실행됩니다."),
+    }
+
+
 def runtime_capabilities() -> Dict[str, Any]:
     from .durability import durability_report
     from .session_policy import analysis_lifetimes, session_lifetimes
@@ -144,6 +175,8 @@ def runtime_capabilities() -> Dict[str, Any]:
         "worker_mode": settings.worker_mode,
         # 동시 실행 수. 인프로세스에서 둘 이상이면 검증이 API 응답을 밀어낸다.
         "worker": _worker_state(),
+        # AI가 실제로 쓰이는지. 설정만으로는 알 수 없어 화면에 드러나야 한다.
+        "llm": _llm_state(),
         "browser_session": {
             "idle_hours": idle.total_seconds() / 3600,
             "absolute_hours": absolute.total_seconds() / 3600,

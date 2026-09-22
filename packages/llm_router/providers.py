@@ -172,6 +172,10 @@ class OpenAIProvider(LLMProvider):
 class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
+    # 이 모델이 temperature를 거절했는지 기억한다. 매 호출마다 400을 한 번씩
+    # 맞고 다시 보내는 낭비를 하지 않기 위한 것이다.
+    _omit_temperature = False
+
     async def generate(self, request: LLMRequest) -> LLMResponse:
         if not self.available:
             return LLMResponse(False, provider=self.name, error="API Key 없음 또는 비활성")
@@ -180,23 +184,36 @@ class AnthropicProvider(LLMProvider):
         import httpx
 
         started = time.time()
+
+        def body(include_temperature: bool) -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "model": self.config.model,
+                "max_tokens": request.max_tokens,
+                "system": request.system,
+                "messages": [{"role": "user", "content": request.user}],
+            }
+            if include_temperature:
+                payload["temperature"] = request.temperature
+            return payload
+
         try:
             async with httpx.AsyncClient(timeout=self._timeout()) as client:
-                response = await client.post(
-                    f"{self.config.base_url}/messages",
-                    headers={
-                        "x-api-key": self.config.api_key or "",
-                        "anthropic-version": "2023-06-01",
-                        "content-type": "application/json",
-                    },
-                    json={
-                        "model": self.config.model,
-                        "max_tokens": request.max_tokens,
-                        "temperature": request.temperature,
-                        "system": request.system,
-                        "messages": [{"role": "user", "content": request.user}],
-                    },
-                )
+                headers = {
+                    "x-api-key": self.config.api_key or "",
+                    "anthropic-version": "2023-06-01",
+                    "content-type": "application/json",
+                }
+                response = await client.post(f"{self.config.base_url}/messages",
+                                             headers=headers, json=body(not self._omit_temperature))
+                # 일부 모델은 temperature를 받지 않는다. 공급자 사정으로 바뀌는
+                # 값이므로 모델 목록을 코드에 새기지 않고, 거절당하면 그 사실을
+                # 기억해 다음부터 빼고 보낸다. 실제 배포에서 이 한 가지 때문에
+                # Anthropic 호출이 전부 HTTP 400으로 실패하고 있었다.
+                if (response.status_code == 400 and not self._omit_temperature
+                        and "temperature" in response.text.lower()):
+                    self._omit_temperature = True
+                    response = await client.post(f"{self.config.base_url}/messages",
+                                                 headers=headers, json=body(False))
             if response.status_code >= 400:
                 return LLMResponse(False, provider=self.name, model=self.config.model,
                                    error=f"HTTP {response.status_code}: {response.text[:200]}")

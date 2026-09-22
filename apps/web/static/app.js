@@ -1195,6 +1195,12 @@ function renderDiagnostics(data) {
     + (worker.shares_api_process ? "검증이 화면 응답과 같은 서버 자원을 씁니다. 동시 실행을 늘리면 화면이 느려집니다. "
       : worker.shares_api_process === false ? "검증이 별도 서버에서 실행되어 화면 응답에 영향을 주지 않습니다. " : "")
     + "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
+  const llm = capabilities.llm;
+  if (llm) row("AI 검토 공급자",
+    llm.usable_count ? `${llm.usable_count}곳 설정됨` : "없음",
+    (llm.providers || []).map(p => `${p.name}(${p.model})${p.key_present ? "" : " 키 없음"}`).join(", ")
+      + " · " + llm.note,
+    llm.usable_count ? "LOW" : "HIGH");
   row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",
     capabilities.source_keys_present?.law_go_kr ? "국가법령정보센터 조회 정보가 설정되어 있습니다. 실제 조회 성공 여부는 검증 결과의 출처 기록에서 확인합니다."
       : "국가법령정보센터 조회 정보가 설정되지 않았습니다. 공식 출처를 확인하지 못한 항목은 미검증으로 남습니다.");
