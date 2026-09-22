@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import json
 import multiprocessing
 import os
 import threading
@@ -964,3 +965,63 @@ def test_defer_never_overwrites_a_running_run_message(ops):
     store.claim(run.id)
     store.progress.__self__  # 소유 중인 작업은 READY가 아니다
     assert store.defer(run.id, 1) is False
+
+
+def test_checkpoint_stores_counts_not_the_whole_document(ops, monkeypatch, tmp_path):
+    """체크포인트가 문서 결과 전체를 직렬화하면 임차 갱신이 밀린다.
+
+    600문단 문서에서 17MB가 나왔고, 그 값은 JSON 칼럼에 들어가며 한 번 더
+    직렬화된다. json.dumps/loads는 그동안 GIL을 놓지 않으므로 갱신 스레드가
+    실행되지 못하고, 작업은 WORKER_LEASE_EXPIRED로 회수되어 처음부터 다시
+    실행된다. 실제 배포에서 그렇게 실패했다.
+
+    재개에 쓰이지도 않는다. 읽히는 것은 건수뿐이다.
+    """
+    from apps.api.job_control import JobAttempt
+
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    lease = store.claim(run.id)
+    store.checkpoint(lease, document={"document_id": "doc-1", "finding_count": 1800,
+                                      "page_count": 42, "quarantined": False})
+    with ops() as session:
+        attempt = session.execute(select(JobAttempt).where(
+            JobAttempt.run_id == run.id, JobAttempt.fence == lease.fence)).scalar_one()
+        stored = json.dumps(attempt.partial_result, ensure_ascii=False)
+        assert len(stored) < 4096, f"체크포인트가 {len(stored)}바이트로 커졌습니다"
+        document = attempt.partial_result["documents"][0]
+        assert "findings" not in document and "engine_data" not in document
+
+
+def test_partial_summary_still_reads_old_checkpoint_rows(ops):
+    """예전 행은 목록을 담고 있다. 그 행의 건수도 그대로 읽혀야 한다."""
+    from apps.api.job_control import _partial_summary
+
+    legacy = {"documents": [{"document_id": "d1", "findings": [{}, {}, {}],
+                             "pages": [{}], "quarantined": True}]}
+    compact = {"documents": [{"document_id": "d1", "finding_count": 3,
+                              "page_count": 1, "quarantined": True}]}
+    assert _partial_summary(legacy, {"d1"}) == _partial_summary(compact, {"d1"})
+    assert _partial_summary(compact, {"d1"})["documents"][0]["finding_count"] == 3
+
+
+def test_progress_updates_keep_the_lease_alive(ops):
+    """진행 기록은 일이 나아가고 있다는 증거다. 그것으로 임차가 연장돼야 한다.
+
+    갱신 스레드는 CPU 경합이나 GIL을 오래 쥐는 구간에 밀릴 수 있다. 생존
+    판정을 그 스레드 하나에만 맡기면, 정상 실행 중인 작업이 회수되어
+    처음부터 다시 실행된다. 실제 배포에서 그렇게 실패했다.
+    """
+    from packages.common.enums import JobState
+
+    run = seeded_run(ops)
+    store = JobStore(ops, lease_seconds=0.4)
+    lease = store.claim(run.id)
+    for _ in range(4):
+        time.sleep(0.25)
+        store.progress(lease, JobState.VERIFYING, "분석 중", 0.5)
+        assert store.recover() == [], "진행 중인 작업이 회수되면 안 된다"
+    store.check(lease)  # 1초가 지났지만 0.4초 임차는 살아 있다
+
+    time.sleep(0.5)  # 아무 진전이 없으면 종전대로 회수된다
+    assert store.recover() == [run.id]

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import copy
-import json
+import logging
 import threading
 import time
 from contextlib import contextmanager
@@ -17,12 +17,13 @@ from apps.api.job_control import (DurableJob, JobConflict, JobOwnershipLost, Job
                                   execution_security, restricted_policy, snapshot_hash)
 from packages.audit_engine import AuditChain, AuditChainConflict
 from packages.common.config import ProviderConfig, get_settings
-from packages.common.enums import AuditEventType, ExternalAIPolicy, JobState, VerificationProfile
+from packages.common.enums import AuditEventType, ExternalAIPolicy, VerificationProfile
 from packages.common.storage import get_storage, sha256_file
 from packages.llm_router import LLMRouter
 from packages.llm_router.budget import BudgetLedger, write_session
-from packages.report_engine import to_json
-from packages.verification_engine import DocumentInput, ProjectContext, VerificationPipeline, VerificationRunResult
+from packages.verification_engine import DocumentInput, ProjectContext, VerificationPipeline
+
+log = logging.getLogger(__name__)
 
 
 @contextmanager
@@ -54,15 +55,28 @@ def heartbeat(store, lease):
                 store.heartbeat(lease)
             except JobOwnershipLost:
                 state["error"] = "다른 워커가 작업을 이어받았습니다"
+                log.warning("임차 갱신 중단(%s): 소유권 상실", lease.run_id)
                 lost.set()
                 return
             except Exception as exc:
                 state["error"] = f"{type(exc).__name__}: {exc}"
+                # 실패 이유를 남긴다. 메모리에만 두면 회수된 뒤에는 무엇 때문에
+                # 갱신이 끊겼는지 알 수 없고, 남는 것은 WORKER_LEASE_EXPIRED뿐이다.
+                log.warning("임차 갱신 실패(%s, 마지막 성공 %.0f초 전): %s",
+                            lease.run_id, time.monotonic() - state["ok_at"], state["error"])
                 if expired():
+                    log.error("임차 갱신을 %.0f초 동안 하지 못해 작업을 놓습니다(%s): %s",
+                              store.lease_seconds, lease.run_id, state["error"])
                     lost.set()
                     return
                 wait = retry_interval  # 일시적 장애로 보고 더 자주 다시 시도한다
                 continue
+            late = time.monotonic() - state["ok_at"] - interval
+            if late > interval:
+                # 예외 없이 늦었다면 스레드가 밀린 것이다. CPU 경합이나 GIL을
+                # 오래 쥐는 구간이 있다는 뜻이고, 원인이 전혀 다르다.
+                log.warning("임차 갱신이 %.0f초 늦었습니다(%s). 갱신 스레드가 밀리고 있습니다",
+                            late, lease.run_id)
             state["ok_at"], state["error"] = time.monotonic(), ""
             wait = interval
 
@@ -181,10 +195,19 @@ def execute(run_id, *, store=None):
                 def _run_document(self, *args, **kwargs):
                     check()
                     document = super()._run_document(*args, **kwargs)
-                    partial = VerificationRunResult(run_id, project_id, JobState.PARTIAL_COMPLETED, key,
-                                                    documents=[document])
-                    payload = json.loads(to_json(partial))
-                    store.checkpoint(lease, document=payload["documents"][0])
+                    # 체크포인트는 재개에 쓰이지 않는다. 읽히는 것은 건수뿐이다
+                    # (_partial_summary). 그런데 예전에는 문서 결과 전체를
+                    # 직렬화했다. 600문단 문서에서 17MB가 나왔고, 그 값이 JSON
+                    # 칼럼에 들어가며 한 번 더 직렬화된다. json.dumps/loads는
+                    # 그동안 GIL을 놓지 않으므로 임차 갱신 스레드가 실행되지
+                    # 못한다. 0.5 CPU 배포에서 이 구간이 임차를 넘겨 작업이
+                    # WORKER_LEASE_EXPIRED로 회수되고 처음부터 다시 실행됐다.
+                    store.checkpoint(lease, document={
+                        "document_id": document.document_id,
+                        "finding_count": len(document.findings or []),
+                        "page_count": len(getattr(document.normalized, "pages", None) or []),
+                        "quarantined": bool(document.quarantined),
+                    })
                     return document
 
             from apps.api.services import get_registry, link_snapshot_evidence, persist_result

@@ -193,6 +193,15 @@ const operationsUI = (() => {
     content.append(node("p",`${label(job.state)} · 시도 ${job.attempts}/${job.max_attempts}`));
     if(job.next_dispatch_at && !terminal(job))content.append(node("p",`다음 실행 확인 ${dateText(job.next_dispatch_at)}`,"muted"));
     if(job.last_error)content.append(node("p",job.last_error,"error"));
+    // 임차가 만료됐을 때 마지막 갱신이 언제였는지가 원인을 가른다.
+    // 시작 직후까지만 갱신됐다면 갱신이 끊긴 것이고, 만료 직전까지 갱신됐다면
+    // 작업 프로세스가 갑자기 죽은 것이다. 원인도 조치도 서로 다르다.
+    if(job.last_error==="WORKER_LEASE_EXPIRED" && job.heartbeat_at){
+      const last=job.history?.[job.history.length-1], started=last?.started_at;
+      const alive=started?Math.round((new Date(job.heartbeat_at)-new Date(started))/1000):null;
+      content.append(node("p",`마지막 임차 갱신 ${dateText(job.heartbeat_at)}`
+        +(alive!==null?` (시도 시작 ${alive}초 후)`:""),"muted"));
+    }
     content.append(workflowUI.table(["시도","상태","시작","종료","기록"],job.history.map(attempt=>[
       String(attempt.fence),label(attempt.state),dateText(attempt.started_at),dateText(attempt.finished_at),
       `${attempt.error || ""} · 보존 자료 ${(attempt.partial_result?.documents || []).length}개`

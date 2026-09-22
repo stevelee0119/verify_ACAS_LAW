@@ -302,11 +302,21 @@ class JobStore:
             return Lease(run_id, owner, job.fence)
 
     def fence(self, session, lease):
+        """소유권을 확인하면서 임차도 함께 연장한다.
+
+        진행 상태 기록·체크포인트는 모두 이 관문을 지난다. 즉 일이 실제로
+        나아가고 있다는 증거다. 그것으로 임차를 연장하면, 갱신 스레드가
+        CPU 경합이나 GIL을 오래 쥐는 구간에 밀려도 정상 실행 중인 작업이
+        회수되지 않는다. 별도 스레드 하나에만 생존 판정을 맡기지 않는다.
+        """
+        now = self.clock()
         changed = session.execute(update(DurableJob).where(
             DurableJob.run_id == lease.run_id, DurableJob.owner == lease.owner,
             DurableJob.fence == lease.fence, DurableJob.state == "RUNNING",
-            DurableJob.lease_expires_at > self.clock(),
-        ).values(updated_at=self.clock()).execution_options(synchronize_session=False)).rowcount
+            DurableJob.lease_expires_at > now,
+        ).values(updated_at=now, heartbeat_at=now,
+                 lease_expires_at=now + timedelta(seconds=self.lease_seconds)
+                 ).execution_options(synchronize_session=False)).rowcount
         if changed != 1:
             raise JobOwnershipLost(lease.run_id)
 
@@ -542,12 +552,22 @@ def _next_dispatch_at(job):
     return max(candidates) if candidates else None
 
 
+def _count_of(document, compact_key, legacy_key):
+    """새 체크포인트는 건수를 바로 담는다. 예전 행은 목록을 담고 있다."""
+    value = document.get(compact_key)
+    if isinstance(value, int) and value >= 0:
+        return value
+    return len(document.get(legacy_key) or [])
+
+
 def _partial_summary(partial, document_ids):
     # Attempt JSON is retained for recovery, but is not a trusted public response schema.
     documents = partial.get("documents", []) if isinstance(partial, dict) else []
     return {"retained": bool(partial), "documents": [
-        {"document_id": d["document_id"], "finding_count": len(d.get("findings") or []),
-         "page_count": len(d.get("pages") or []), "quarantined": bool(d.get("quarantined"))}
+        {"document_id": d["document_id"],
+         "finding_count": _count_of(d, "finding_count", "findings"),
+         "page_count": _count_of(d, "page_count", "pages"),
+         "quarantined": bool(d.get("quarantined"))}
         for d in documents if isinstance(d, dict) and d.get("document_id") in document_ids
     ]}
 
