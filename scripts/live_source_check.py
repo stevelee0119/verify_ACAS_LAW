@@ -198,7 +198,10 @@ def check_law_go_kr(registry) -> List[CheckResult]:
                 ok=response.status == AdapterStatus.READY and bool(matched),
                 detail=(f"사건번호 일치 {len(matched)}건 / 응답 {len(response.records)}건. "
                         + ("일치하는 기록을 찾지 못했다. 이 상태면 실재하는 판례가 "
-                           "'공식 DB 미확인'으로 남는다." if not matched else "정상")
+                           "'공식 DB 미확인'으로 남는다. 돌아온 사건번호: "
+                           + (", ".join(sanitize(r.get("case_number"), 24)
+                                        for r in response.records[:5]) or "없음")
+                           if not matched else "정상")
                         + f" | {_diagnose(response)}"),
                 records=len(response.records),
                 fields=_record_fields(response.records),
