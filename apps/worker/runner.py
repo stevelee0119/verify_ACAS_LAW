@@ -20,6 +20,7 @@ class JobRunner:
         self._lock = threading.RLock()
         self._stop = threading.Event()
         self._poller = None
+        self._busy = False
 
     @property
     def mode(self):
@@ -41,19 +42,30 @@ class JobRunner:
             self._poller.start()
 
     def _poll(self):
-        while not self._stop.wait(float(os.getenv("LV_JOB_POLL_SECONDS", "2"))):
+        """Back off while idle; recovery polling competes with the run for the DB."""
+        base = float(os.getenv("LV_JOB_POLL_SECONDS", "2"))
+        # 짧은 주기로 설정한 시험이 대기 상한에 걸리지 않도록 base에 비례해 묶는다.
+        idle_max = max(base, min(float(os.getenv("LV_JOB_POLL_IDLE_SECONDS", "15")), base * 15))
+        wait = base
+        while not self._stop.wait(wait):
             try:
                 self.recover()
+                wait = base if self._busy else min(idle_max, wait * 2)
             except Exception:
+                wait = base
                 log.exception("Durable job recovery will retry on the next poll")
 
     def recover(self):
         self.store.adopt_queued()
         recovered = self.store.recover()
-        for run_id in self.store.due():
+        due = self.store.due()
+        for run_id in due:
             self._dispatch(run_id)
         with self._lock:
             self._threads = {rid: t for rid, t in self._threads.items() if t.is_alive()}
+        # 실행 중인 스레드는 폴러를 필요로 하지 않는다. 오히려 그때가 DB 경합을
+        # 줄여야 할 시점이다. 대기 중인 일이 있을 때만 빠른 주기를 유지한다.
+        self._busy = bool(recovered or due)
         return recovered
 
     def stop(self, timeout=10):

@@ -194,16 +194,36 @@ are required. Use the same configuration and database across API/worker processe
 
 | Environment Variable | Default |
 | --- | --- |
-| `LV_JOB_LEASE_SECONDS` | `90`; heartbeat interval is one third of the lease |
+| `LV_JOB_LEASE_SECONDS` | `180`; heartbeat interval is one third of the lease. Must exceed the longest uninterruptible stage, or healthy runs are recovered and restarted |
 | `LV_JOB_MAX_ATTEMPTS` | `3` |
 | `LV_JOB_BACKOFF_SECONDS` | `5`; exponential, capped at 300 seconds |
-| `LV_JOB_POLL_SECONDS` | `2` |
+| `LV_JOB_POLL_SECONDS` | `2`; the interval while work is pending |
+| `LV_JOB_POLL_IDLE_SECONDS` | `15`; the poller doubles up to this while nothing is due, and is also capped at 15× `LV_JOB_POLL_SECONDS` |
 | `LV_JOB_CONCURRENCY` | `2` local threads per process |
+| `LV_SQLITE_BUSY_SECONDS` | `30`; how long a SQLite write waits for the lock before failing |
+| `LV_SQLITE_SYNCHRONOUS` | `NORMAL` under WAL; set `FULL` to fsync every commit |
 | `LV_MONTHLY_BUDGET_USD` | Existing setting, `0` disables the cap |
 | `LV_RUN_BUDGET_USD` | `0` disables the cap |
 | `LV_LLM_MAX_INPUT_TOKENS` | `131072` |
 | `LV_LLM_MAX_OUTPUT_TOKENS` | `4096`; oversized requests are rejected |
 | `LV_LLM_UNKNOWN_CALL_USD` | Unset; unknown pricing blocks calls |
+
+## Lease renewal is not the same as losing ownership
+
+A renewal is a database write, so it fails for reasons that have nothing to do
+with ownership: SQLite write-lock contention, a dropped connection, a slow disk.
+Treating one such failure as ownership loss ended the renewal thread, the lease
+expired, and the run was recovered as `WORKER_LEASE_EXPIRED` and restarted from
+the beginning. Because the contention peaked at the same point every time — the
+per-document checkpoint write — the run appeared to stall at the same stage and
+retry forever.
+
+The renewal thread now stops only on a genuine `JobOwnershipLost`. Any other
+failure is retried at a shorter interval, and ownership is surrendered only
+after a full lease period has passed without a successful renewal. When the
+worker does give up while the lease is still valid, it records the failure
+immediately instead of letting the lease run out, so the retry starts without a
+dead window in which the screen shows a frozen stage.
 
 ## Validation and References
 

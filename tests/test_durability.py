@@ -129,3 +129,29 @@ def test_mount_detection_uses_the_filesystem_not_the_path(tmp_path):
 
     assert mounted_volume(tmp_path) is False
     assert mounted_volume(tmp_path / "아직" / "없는" / "경로") is False
+
+
+def test_sqlite_waits_for_the_write_lock_instead_of_failing(tmp_path, monkeypatch):
+    """갱신 쓰기가 잠금 경합 한 번으로 실패하지 않아야 한다.
+
+    기본 5초로는 느린 디스크에서 큰 체크포인트를 쓰는 동안 임차 갱신이
+    "database is locked"로 떨어졌고, 그 한 번이 작업을 같은 단계에서
+    반복 중단시켰다.
+    """
+    import apps.api.db as db
+    from sqlalchemy import text
+
+    monkeypatch.setenv("LV_SQLITE_BUSY_SECONDS", "17")
+    monkeypatch.setenv("LV_DATABASE_URL", f"sqlite:///{tmp_path}/pragma.db")
+    monkeypatch.setattr(db, "_engine", None)
+    try:
+        with db.get_engine().connect() as connection:
+            def pragma(name):
+                return connection.execute(text(f"PRAGMA {name}")).scalar()
+
+            assert str(pragma("journal_mode")).lower() == "wal"
+            assert int(pragma("busy_timeout")) == 17000
+            assert int(pragma("synchronous")) == 1  # NORMAL
+            assert int(pragma("foreign_keys")) == 1
+    finally:
+        db._engine = None

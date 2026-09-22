@@ -820,3 +820,70 @@ def test_restricted_completion_is_not_reused_under_the_original_policy(ops, monk
         child, reused = enqueue_run(session, candidate)
         session.commit()
         assert not reused and child.id != run.id
+
+
+def test_heartbeat_survives_a_transient_renewal_failure(ops, monkeypatch):
+    """일시적 DB 오류 하나로 임차를 버리지 않는다.
+
+    이 회귀는 실제 배포에서 관찰되었다. 갱신 쓰기가 한 번 실패하면 갱신
+    스레드가 끝났고, 임차가 만료되면 작업은 늘 같은 단계에서 재시도로
+    되돌아갔다. 사용자에게는 특정 지점에서 반복 중단되는 것으로 보인다.
+    """
+    from apps.worker.runtime import heartbeat
+
+    run = seeded_run(ops)
+    store = JobStore(ops, lease_seconds=0.45)
+    lease = store.claim(run.id)
+    original, calls = store.heartbeat, []
+
+    def flaky(current):
+        calls.append(current)
+        if len(calls) == 1:
+            raise RuntimeError("database is locked")
+        return original(current)
+
+    monkeypatch.setattr(store, "heartbeat", flaky)
+    with heartbeat(store, lease) as check:
+        time.sleep(0.9)
+        assert len(calls) >= 2, "갱신 스레드가 첫 실패 뒤에도 살아 있어야 한다"
+        assert store.recover() == []
+        check()
+
+
+def test_heartbeat_gives_up_when_ownership_is_actually_lost(ops):
+    """소유권을 잃은 경우에는 즉시 포기하고 check()가 알린다."""
+    from apps.worker.runtime import heartbeat
+    from apps.api.job_control import JobOwnershipLost
+
+    run = seeded_run(ops)
+    store = JobStore(ops, lease_seconds=0.3)
+    lease = store.claim(run.id)
+    with heartbeat(store, lease) as check:
+        store.cancel(run.id)  # fence가 올라가 이 임차는 더 이상 유효하지 않다
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            try:
+                check()
+            except JobOwnershipLost:
+                return
+            time.sleep(0.05)
+        raise AssertionError("소유권 상실이 check()로 전달되지 않았다")
+
+
+def test_lease_renewal_failure_schedules_the_retry_without_waiting_for_expiry(ops, monkeypatch):
+    """갱신이 끊기면 만료를 기다리지 않고 곧바로 다음 시도를 예약한다."""
+    from apps.api.job_control import JobOwnershipLost
+
+    run = seeded_run(ops)
+    store = JobStore(ops, lease_seconds=30, backoff_seconds=0)
+
+    def pipeline(*args, **kwargs):
+        raise JobOwnershipLost(run.id)
+
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    execute_run(run.id, store=store)
+    status = store.status(run.id)
+    assert status["state"] == "BACKOFF", "임차 만료를 기다리며 멈춰 있으면 안 된다"
+    with ops() as session:
+        saved = session.get(VerificationRun, run.id)
+        assert saved.state == "QUEUED" and "다시 시도" in (saved.stage_message or "")

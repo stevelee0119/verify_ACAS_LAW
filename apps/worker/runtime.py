@@ -4,6 +4,7 @@ from __future__ import annotations
 import copy
 import json
 import threading
+import time
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
@@ -26,24 +27,60 @@ from packages.verification_engine import DocumentInput, ProjectContext, Verifica
 
 @contextmanager
 def heartbeat(store, lease):
+    """임차 갱신이 한 번 실패했다고 작업을 포기하지 않는다.
+
+    갱신은 DB 쓰기다. SQLite 쓰기 잠금 경합, 커넥션 일시 끊김처럼
+    소유권과 무관한 이유로도 실패한다. 예전에는 그 한 번으로 갱신
+    스레드가 끝났고, 임차가 만료되면 작업은 늘 같은 단계에서 재시도로
+    되돌아갔다. 사용자에게는 특정 지점에서 반복 중단되는 것으로 보인다.
+
+    소유권을 실제로 잃은 경우에만 즉시 포기한다. 그 밖의 실패는 임차가
+    남아 있는 동안 짧은 간격으로 다시 시도하고, 임차 기간을 통째로
+    갱신하지 못했을 때 비로소 포기한다.
+    """
     stop = threading.Event()
     lost = threading.Event()
+    interval = max(0.02, store.lease_seconds / 3)
+    retry_interval = max(0.02, min(interval, store.lease_seconds / 10))
+    state = {"ok_at": time.monotonic(), "error": ""}
+
+    def expired():
+        return time.monotonic() - state["ok_at"] >= store.lease_seconds
 
     def beat():
-        while not stop.wait(max(0.02, store.lease_seconds / 3)):
+        wait = interval
+        while not stop.wait(wait):
             try:
                 store.heartbeat(lease)
-            except (JobOwnershipLost, Exception):
+            except JobOwnershipLost:
+                state["error"] = "다른 워커가 작업을 이어받았습니다"
                 lost.set()
                 return
+            except Exception as exc:
+                state["error"] = f"{type(exc).__name__}: {exc}"
+                if expired():
+                    lost.set()
+                    return
+                wait = retry_interval  # 일시적 장애로 보고 더 자주 다시 시도한다
+                continue
+            state["ok_at"], state["error"] = time.monotonic(), ""
+            wait = interval
 
     thread = threading.Thread(target=beat, daemon=True, name="lease-" + lease.run_id)
     thread.start()
     try:
         def check():
             if lost.is_set():
-                raise JobOwnershipLost(lease.run_id)
-            store.check(lease)
+                raise JobOwnershipLost(f"{lease.run_id}: {state['error'] or '임차 갱신 실패'}")
+            try:
+                store.check(lease)
+            except JobOwnershipLost:
+                raise
+            except Exception:
+                # 확인이 실패한 것과 소유권을 잃은 것은 다르다.
+                # 최근 갱신이 살아 있으면 일시적 장애로 보고 진행한다.
+                if expired():
+                    raise
         yield check
     finally:
         stop.set()
@@ -195,7 +232,15 @@ def execute(run_id, *, store=None):
                 run.result_json = {**run.result_json, "effective_security": copy.deepcopy(security),
                                    "security_restricted": restricted}
                 store.complete(session, lease, result, reusable=not restricted)
-    except JobOwnershipLost:
+    except JobOwnershipLost as exc:
+        # 임차가 아직 살아 있다면 여기서 실패를 기록해야 만료를 기다리지 않고
+        # 곧바로 다음 시도로 넘어간다. 그동안 화면은 마지막 단계에 멈춘 채로
+        # 남아 이용자에게는 작업이 조용히 멈춘 것처럼 보였다.
+        # 이미 다른 워커의 것이면 fence가 막으므로 남의 작업을 건드리지 않는다.
+        try:
+            store.fail(lease, f"LEASE_RENEWAL_FAILED: {exc}")
+        except JobOwnershipLost:
+            pass
         return
     except Exception as exc:
         try:

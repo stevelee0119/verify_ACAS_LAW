@@ -454,7 +454,13 @@ def get_engine():
         settings = get_settings()
         url = settings.database_url
         if url.startswith("sqlite"):
-            _engine = create_engine(url, connect_args={"check_same_thread": False}, future=True)
+            # timeout은 쓰기 잠금을 기다리는 시간이다. 기본 5초로는 느린 디스크에서
+            # 큰 체크포인트를 쓰는 동안 임차 갱신 쓰기가 "database is locked"로
+            # 실패했고, 그 한 번이 작업을 같은 단계에서 반복 중단시켰다.
+            _engine = create_engine(url, future=True, connect_args={
+                "check_same_thread": False,
+                "timeout": float(os.getenv("LV_SQLITE_BUSY_SECONDS", "30")),
+            })
         else:
             # 운영 DB는 커넥션 풀과 연결 상태 확인을 켠다
             _engine = create_engine(
@@ -469,7 +475,15 @@ def get_engine():
             @event.listens_for(_engine, "connect")
             def _set_sqlite_pragma(dbapi_connection, connection_record):  # pragma: no cover
                 cursor = dbapi_connection.cursor()
+                busy_ms = int(float(os.getenv("LV_SQLITE_BUSY_SECONDS", "30")) * 1000)
                 cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute(f"PRAGMA busy_timeout={busy_ms}")
+                # WAL에서 NORMAL은 커밋마다의 fsync를 없앤다. DB가 깨지지는
+                # 않지만 전원 장애 시 마지막 커밋 일부를 잃을 수 있다.
+                # 기록 보존을 더 중시하면 LV_SQLITE_SYNCHRONOUS=FULL로 둔다.
+                mode = (os.getenv("LV_SQLITE_SYNCHRONOUS") or "NORMAL").strip().upper()
+                if mode in {"OFF", "NORMAL", "FULL", "EXTRA"}:
+                    cursor.execute(f"PRAGMA synchronous={mode}")
                 cursor.execute("PRAGMA foreign_keys=ON")
                 cursor.close()
 

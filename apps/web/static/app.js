@@ -640,7 +640,8 @@ function renderProgressNotice() {
   const message = unavailable ? "이 검증에 접근할 수 없습니다. 프로젝트 삭제 또는 접근 권한 변경 여부를 확인하세요."
     : authRequired ? "로그인이 만료되어 결과 조회를 잠시 멈췄습니다. 다시 로그인하면 같은 검증의 진행 상태와 결과를 확인합니다."
     : error ? "서버 연결이 지연되어 진행 상태를 갱신하지 못했습니다. 자동으로 다시 연결 중입니다. 검증 작업이 중단된 것으로 확정된 것은 아닙니다."
-    : seconds >= 60 ? `현재 단계의 진행 정보가 ${seconds}초 동안 변경되지 않았습니다. 서버 응답은 정상이며 작업 결과를 기다리고 있습니다.` : "";
+    : seconds >= 60 ? `현재 단계의 진행 정보가 ${seconds}초 동안 변경되지 않았습니다. 서버 응답은 정상이며 작업 결과를 기다리고 있습니다. ` +
+        "외부 법령·판례 조회 단계는 문서 한 건에 수 분이 걸릴 수 있습니다." : "";
   $("progressNotice").textContent = message;
   $("progressNotice").hidden = !message;
   if (unavailable) {
@@ -679,7 +680,17 @@ async function protectAnalysisSession(run) {
   protectedRuns.set(key, true);
 }
 
-function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
+const POLL_BASE_MS = 2000, POLL_MAX_MS = 20000;
+
+// 연속 실패에 같은 간격으로 계속 두드리면, 서버가 느려진 바로 그 순간에
+// 부하를 더한다. 실패가 이어지는 동안만 간격을 늘리고 성공하면 되돌린다.
+function pollDelay() {
+  const failures = state.pollFailures || 0;
+  if (document.hidden) return 30000;
+  return Math.min(POLL_MAX_MS, POLL_BASE_MS * 2 ** Math.min(failures, 4));
+}
+
+function pollRun(generation, delayMs = pollDelay()) {
   clearTimeout(state.timer);
   const runId = state.run?.id;
   if (!runId) return;
@@ -695,6 +706,7 @@ function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
       await protectAnalysisSession(run);
       if (generation !== state.generation || state.run?.id !== runId) return;
       state.pollError = null;
+      state.pollFailures = 0;
       state.run = run;
       renderProject();
       if (terminal(run)) {
@@ -709,6 +721,7 @@ function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
       // 쿠키 문제인지 만료인지 구분할 수 없고, 사용자도 무엇을 확인해야 할지
       // 알 수 없다. 특히 모바일에서는 개발자도구로 응답을 볼 수 없다.
       state.pollError = {runId, authRequired, unavailable, detail: error.message || ""};
+      if (!authRequired && !unavailable) state.pollFailures = (state.pollFailures || 0) + 1;
       renderProject();
       if (!authRequired && !unavailable) pollRun(generation);
     } finally {

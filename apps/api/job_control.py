@@ -219,7 +219,12 @@ class JobStore:
     def __init__(self, factory=None, *, clock=datetime.utcnow, lease_seconds=None, backoff_seconds=None):
         self.factory = factory
         self.clock = clock
-        self.lease_seconds = float(os.getenv("LV_JOB_LEASE_SECONDS", "90") if lease_seconds is None else lease_seconds)
+        # 단일 외부 조회 예산(문서당 기본 120초)보다 짧으면, 그 호출 하나가
+        # C 확장 안에서 GIL을 쥐고 있는 동안 갱신 스레드가 밀려 임차가 만료된다.
+        # 임차가 길면 진짜로 죽은 워커의 회수가 늦어질 뿐이지만, 임차가 짧으면
+        # 멀쩡히 돌던 작업이 같은 단계에서 반복해서 버려진다.
+        self.lease_seconds = float(os.getenv("LV_JOB_LEASE_SECONDS", "180")
+                                   if lease_seconds is None else lease_seconds)
         self.backoff_seconds = float(os.getenv("LV_JOB_BACKOFF_SECONDS", "5")
                                      if backoff_seconds is None else backoff_seconds)
         if self.lease_seconds <= 0 or self.backoff_seconds < 0:
@@ -292,7 +297,8 @@ class JobStore:
             run = session.get(VerificationRun, run_id)
             run.finished_at = None
             run.state = "QUEUED"
-            run.stage_message = "Worker claimed attempt " + str(job.attempts)
+            run.stage_message = f"{job.attempts}번째 시도를 시작합니다"
+            run.progress = 0.0  # 재시도는 처음부터 다시 실행한다
             return Lease(run_id, owner, job.fence)
 
     def fence(self, session, lease):
@@ -367,7 +373,10 @@ class JobStore:
         run = session.get(VerificationRun, job.run_id)
         run.errors = [*(run.errors or []), error]
         run.state = "QUEUED" if retry else "FAILED"
-        run.stage_message = "Retry scheduled" if retry else "Attempts exhausted"
+        wait = max(0, round((job.available_at - now).total_seconds()))
+        run.stage_message = (
+            f"오류가 발생해 {wait}초 뒤 다시 시도합니다({job.attempts}/{job.max_attempts}회)"
+            if retry else f"{job.max_attempts}회 시도가 모두 실패했습니다")
         run.finished_at = None if retry else now
         session.add(VerificationCheck(run_id=job.run_id, name="JOB_ATTEMPT", state=job.state,
                                       detail={"error": error, "attempt": job.attempts, "fence": job.fence}))
