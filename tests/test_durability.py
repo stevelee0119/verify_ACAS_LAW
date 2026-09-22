@@ -155,3 +155,35 @@ def test_sqlite_waits_for_the_write_lock_instead_of_failing(tmp_path, monkeypatc
             assert int(pragma("foreign_keys")) == 1
     finally:
         db._engine = None
+
+
+def test_ownership_check_does_not_take_the_write_lock(tmp_path, monkeypatch):
+    """소유권 확인은 읽기여야 한다.
+
+    외부 출처 조회 중 transport._fetch_with_deadline이 초당 한 번 이 확인을
+    부른다. 그것이 쓰기 트랜잭션이면 문서당 수백 번 쓰기 잠금을 다투고,
+    임차 갱신이 그 경합에 밀린다. 실제로 그렇게 실패했다.
+    """
+    from sqlalchemy import event
+
+    from apps.api.db import get_engine
+    from apps.api.job_control import JobOwnershipLost, JobStore
+
+    store = JobStore()
+    lease = type("Lease", (), {"run_id": "no-such-run", "owner": "nobody", "fence": 1})()
+    statements = []
+
+    def record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement.strip().split()[0].upper())
+
+    engine = get_engine()
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        assert store.owns(lease) is False
+        with pytest.raises(JobOwnershipLost):
+            store.check(lease)   # 파이프라인이 실제로 부르는 경로
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+    assert statements, "확인이 DB에 닿지 않았다면 시험이 무의미하다"
+    assert "UPDATE" not in statements, f"소유권 확인이 쓰기를 발생시켰다: {statements}"

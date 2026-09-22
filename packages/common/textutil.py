@@ -46,17 +46,16 @@ HOMOGLYPHS: Dict[str, str] = {
 }
 
 
+# 문자 단위 파이썬 반복 대신 str.translate로 한 번에 처리한다. 같은 결과를
+# C 수준에서 얻는다. 비교 단위마다 문서 전체를 정규화하므로 이 비용이 쌓인다.
+_INVISIBLE_TABLE = {ord(ch): None for ch in (*ZERO_WIDTH, *BIDI_CONTROLS)}
+_INVISIBLE_TABLE.update({cp: None for cp in range(TAG_RANGE[0], TAG_RANGE[1] + 1)})
+_HOMOGLYPH_TABLE = {ord(source): target for source, target in HOMOGLYPHS.items()}
+
+
 def strip_invisible(text: str) -> str:
     """은닉 제어문자를 제거한 표시용 문자열."""
-    out = []
-    for ch in text:
-        cp = ord(ch)
-        if ch in ZERO_WIDTH or ch in BIDI_CONTROLS:
-            continue
-        if TAG_RANGE[0] <= cp <= TAG_RANGE[1]:
-            continue
-        out.append(ch)
-    return "".join(out)
+    return text.translate(_INVISIBLE_TABLE)
 
 
 def decode_tag_characters(text: str) -> str:
@@ -71,7 +70,7 @@ def decode_tag_characters(text: str) -> str:
 
 def defang_homoglyphs(text: str) -> str:
     """homoglyph를 대응 라틴 문자로 바꿔 우회 탐지를 가능하게 한다."""
-    return "".join(HOMOGLYPHS.get(ch, ch) for ch in text)
+    return text.translate(_HOMOGLYPH_TABLE)
 
 
 def normalize_for_match(text: str) -> str:
@@ -99,18 +98,40 @@ def similarity(a: str, b: str) -> float:
 
 def contains_fuzzy(haystack: str, needle: str, threshold: float = 0.9) -> Tuple[bool, float]:
     """needle이 haystack 안에 (근사) 포함되는지 판정한다."""
-    h, n = normalize_quote(haystack), normalize_quote(needle)
+    return contains_fuzzy_normalized(normalize_quote(haystack), normalize_quote(needle),
+                                     threshold=threshold)
+
+
+def contains_fuzzy_normalized(h: str, n: str, *, threshold: float = 0.9) -> Tuple[bool, float]:
+    """정규화가 끝난 문자열끼리 비교한다.
+
+    같은 문서를 haystack으로 두고 여러 단위를 검사할 때, 문서 전체를 비교
+    단위마다 다시 정규화하는 것은 순수한 낭비다. 호출부가 한 번만 정규화하고
+    이 함수를 부르면 그 반복이 사라진다.
+    """
     if not n:
         return False, 0.0
     if n in h:
         return True, 1.0
     if len(n) > len(h):
-        return False, similarity(h, n)
+        return False, SequenceMatcher(None, h, n).ratio() if h else 0.0
     best = 0.0
     step = max(1, len(n) // 4)
+    # b를 고정한 matcher를 재사용한다. difflib은 b에 대한 색인을 캐시하므로
+    # 창마다 matcher를 새로 만들면 같은 색인을 매번 다시 만든다.
+    matcher = SequenceMatcher(None, "", n)
     for i in range(0, len(h) - len(n) + 1, step):
-        window = h[i : i + len(n)]
-        r = SequenceMatcher(None, window, n).ratio()
+        matcher.set_seq1(h[i : i + len(n)])
+        # real_quick_ratio와 quick_ratio는 ratio의 상한이다. 상한이 지금까지의
+        # 최고값을 넘지 못하면 그 창은 최고값도 기준도 바꿀 수 없으므로
+        # 건너뛴다. 반환되는 비율 자체는 달라지지 않는다.
+        #
+        # 기준(threshold)으로 걸러서는 안 된다. verifier._compare_quote는
+        # 기준에 못 미치는 비율을 TRUNCATED(절단 인용)와 CONTRADICTED(왜곡)를
+        # 가르는 데 쓴다. 상한을 최고값에만 견주어야 그 판단이 보존된다.
+        if matcher.real_quick_ratio() <= best or matcher.quick_ratio() <= best:
+            continue
+        r = matcher.ratio()
         if r > best:
             best = r
         if best >= threshold:

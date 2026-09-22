@@ -101,6 +101,11 @@ class PdfParser(DocumentParser):
         rendered_parts: List[str] = []
         raw_parts: List[str] = []
         hidden_parts: List[str] = []
+        # 표 중복 판정에 쓰는 공백 제거 서명. 줄마다 모아 둔다. 예전에는
+        # 페이지마다 그때까지의 본문 전체를 다시 정규화했고, 그 비용은
+        # 페이지 수의 제곱에 비례해 늘었다. \s+ 제거는 부분마다 해도
+        # 전체에 한 번 해도 결과가 같다.
+        signature_parts: List[str] = []
 
         with pdfplumber.open(path) as pdf:
             doc.metadata.update({k: str(v) for k, v in (pdf.metadata or {}).items()})
@@ -130,6 +135,7 @@ class PdfParser(DocumentParser):
                     )
                     p.blocks.append(block)
                     raw_parts.append(text)
+                    signature_parts.append(_text_signature(text))
                     if hidden_reason:
                         hidden_parts.append(text)
                     else:
@@ -143,8 +149,11 @@ class PdfParser(DocumentParser):
                 # 파편이 된다. 실제 검증보고서에서 주장 101건 중 16건이 이 파편이었다.
                 # 이미 줄 블록으로 읽은 내용과 같은 표는 버린다.
                 try:
-                    line_signature = _text_signature("".join(raw_parts))
-                    for t_index, table in enumerate(page.extract_tables() or []):
+                    tables = page.extract_tables() or []
+                    # 표가 있는 페이지에서만 서명을 잇는다. 법률 서면은 표가
+                    # 드물어 대부분의 페이지가 이 비용을 아예 건너뛴다.
+                    line_signature = "".join(signature_parts) if tables else ""
+                    for t_index, table in enumerate(tables):
                         rows = [[str(c) if c else "" for c in row] for row in table]
                         flat = "\n".join(" | ".join(row) for row in rows)
                         if not flat.strip():
@@ -180,6 +189,11 @@ class PdfParser(DocumentParser):
                 fonts = {c.get("fontname") for c in chars if c.get("fontname")}
                 p.attributes["fonts"] = sorted(f for f in fonts if f)
                 doc.pages.append(p)
+                # pdfplumber는 페이지마다 파싱 결과를 캐시해 둔다. 긴 문서에서는
+                # 그것이 전부 쌓여 메모리를 지배한다. 이 페이지에서 필요한 것은
+                # 모두 읽었으므로 놓아준다.
+                page.flush_cache()
+                chars = []
 
         # annotation 텍스트를 별도 레이어 Block으로 추가
         for ann in doc.structure.get("annotations", []):

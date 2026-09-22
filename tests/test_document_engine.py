@@ -141,3 +141,67 @@ def test_justified_prose_is_not_duplicated_as_table(tmp_path):
 
     real_rows = [["항목", "금액"], ["착수금", "300,000,000"], ["합계", "300,000,000"]]
     assert _covered_by(_text_signature("본문에는 없는 내용"), real_rows) is False, "진짜 표는 남겨야 한다"
+
+
+# --- 자원 사용 -----------------------------------------------------------------
+def test_page_caches_are_released_so_memory_does_not_grow_with_page_count(tmp_path):
+    """긴 문서에서 pdfplumber 페이지 캐시가 쌓이면 메모리가 쪽수에 비례해 늘어난다.
+
+    80쪽 서면 하나로 300MB를 넘겼다. 512MB 인스턴스에서는 그 자체로
+    프로세스가 죽고, 죽은 워커는 임차가 만료되며 작업이 처음부터 다시
+    실행된다. 읽기가 끝난 페이지는 캐시를 놓아주어야 한다.
+    """
+    import pdfplumber
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+
+    from packages.document_engine.pdf_parser import PdfParser
+
+    try:
+        pdfmetrics.getFont("HYSMyeongJo-Medium")
+    except Exception:
+        pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJo-Medium"))
+    path = tmp_path / "long.pdf"
+    drawing = canvas.Canvas(str(path), pagesize=A4)
+    for page in range(6):
+        drawing.setFont("HYSMyeongJo-Medium", 10)
+        y = 780
+        for row in range(10):
+            drawing.drawString(50, y, f"{page + 1}-{row + 1}. 원고는 피고에게 금 1,000,000원을 청구한다.")
+            y -= 23
+        drawing.showPage()
+    drawing.save()
+
+    flushed = []
+    original = pdfplumber.page.Page.flush_cache
+
+    def spy(self, *args, **kwargs):
+        flushed.append(self.page_number)
+        return original(self, *args, **kwargs)
+
+    pdfplumber.page.Page.flush_cache = spy
+    try:
+        document = PdfParser().parse(str(path), document_id="d", filename="long.pdf",
+                                     mime_type="application/pdf", sha256="x" * 64)
+    finally:
+        pdfplumber.page.Page.flush_cache = original
+
+    assert len(document.pages) == 6
+    # 파싱 도중 쪽 순서대로 한 번, 파일을 닫을 때 pdfplumber가 다시 한 번.
+    # 앞의 여섯 개가 없으면 캐시가 문서를 다 읽을 때까지 쌓인 것이다.
+    assert flushed[:6] == [1, 2, 3, 4, 5, 6], f"파싱 도중 쪽마다 놓아주어야 한다: {flushed}"
+    assert len(flushed) > 6, f"닫을 때의 정리만 보인다면 파싱 중에는 쌓인 것이다: {flushed}"
+
+
+def test_table_signature_is_built_incrementally_without_rescanning_the_document():
+    """페이지마다 본문 전체를 다시 정규화하면 비용이 쪽수의 제곱으로 는다.
+
+    \\s+ 제거는 부분마다 해도 전체에 한 번 해도 결과가 같다. 이 성질이
+    깨지면 표 중복 판정이 조용히 달라지므로 시험으로 고정한다.
+    """
+    from packages.document_engine.pdf_parser import _text_signature
+
+    parts = ["원고는 피고에게", "  금 1,000,000원을\t청구한다.", "\n민법 제390조"]
+    assert "".join(_text_signature(p) for p in parts) == _text_signature("".join(parts))

@@ -310,9 +310,25 @@ class JobStore:
         if changed != 1:
             raise JobOwnershipLost(lease.run_id)
 
+    def owns(self, lease):
+        """소유 여부만 본다. 조건은 fence와 같되 쓰기 잠금을 잡지 않는다."""
+        with self.session() as session:
+            return session.execute(select(DurableJob.run_id).where(
+                DurableJob.run_id == lease.run_id, DurableJob.owner == lease.owner,
+                DurableJob.fence == lease.fence, DurableJob.state == "RUNNING",
+                DurableJob.lease_expires_at > self.clock())).first() is not None
+
     def check(self, lease):
-        with write_session(self.factory) as session:
-            self.fence(session, lease)
+        """소유권 확인은 읽기로 충분하다.
+
+        예전에는 fence()의 UPDATE를 그대로 썼다. 조건을 확인하기만 하면
+        되는데 매번 쓰기 트랜잭션을 열었다. 외부 출처 조회 중에는 이 확인이
+        초당 한 번 일어나므로(transport._fetch_with_deadline), 문서당 수백
+        번의 불필요한 쓰기가 발생했고 WAL에서 쓰기 잠금을 다투었다. 임차
+        갱신이 그 경합에 밀려 실패하던 원인 중 하나다.
+        """
+        if not self.owns(lease):
+            raise JobOwnershipLost(lease.run_id)
 
     def heartbeat(self, lease):
         with write_session(self.factory) as session:

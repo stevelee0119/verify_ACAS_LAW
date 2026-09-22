@@ -15,7 +15,8 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Dict, List, Tuple
 
-from packages.common.textutil import contains_fuzzy, normalize_for_match, sentences
+from packages.common.textutil import (contains_fuzzy_normalized, normalize_for_match,
+                                      normalize_quote, sentences)
 
 MIN_SEGMENT_CHARS = 12
 MAX_UNITS = 300
@@ -72,18 +73,52 @@ def _units(text: str) -> List[str]:
     return units
 
 
-def _segments_only_in(right: str, left: str, *, threshold: float) -> List[str]:
+class _Layer:
+    """레이어 한 개의 정규화 결과를 한 번만 만들어 둔다.
+
+    한 레이어는 여러 쌍에 거듭 등장하고(rendered_text는 네 쌍),
+    비교 단위마다 문서 전체를 다시 정규화하면 그만큼 낭비가 쌓인다.
+    """
+
+    __slots__ = ("text", "_norm", "_quoted", "_units")
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+        self._norm = self._quoted = None
+        self._units = None
+
+    @property
+    def norm(self) -> str:
+        if self._norm is None:
+            self._norm = normalize_for_match(self.text)
+        return self._norm
+
+    @property
+    def quoted(self) -> str:
+        """contains_fuzzy가 haystack에 적용하는 것과 같은 정규화."""
+        if self._quoted is None:
+            self._quoted = normalize_quote(self.norm)
+        return self._quoted
+
+    @property
+    def units(self):
+        """(원문 단위, 비교용 정규화 문자열) 목록."""
+        if self._units is None:
+            pairs = []
+            for unit in _units(self.text)[:MAX_UNITS]:
+                normalized = normalize_for_match(unit)
+                if len(normalized) < MIN_SEGMENT_CHARS:
+                    continue
+                pairs.append((unit.strip(), normalize_quote(normalized)))
+            self._units = pairs
+        return self._units
+
+
+def _segments_only_in(right: "_Layer", left: "_Layer", *, threshold: float) -> List[str]:
     """right에만 존재하는(=left에서 확인되지 않는) 문장을 뽑는다."""
-    left_norm = normalize_for_match(left)
-    out: List[str] = []
-    for unit in _units(right)[:MAX_UNITS]:
-        normalized = normalize_for_match(unit)
-        if len(normalized) < MIN_SEGMENT_CHARS:
-            continue
-        found, _ratio = contains_fuzzy(left_norm, normalized, threshold=threshold)
-        if not found:
-            out.append(unit.strip())
-    return out
+    haystack = left.quoted
+    return [unit for unit, needle in right.units
+            if not contains_fuzzy_normalized(haystack, needle, threshold=threshold)[0]]
 
 
 def compare_layers(layers: Dict[str, str]) -> List[LayerDelta]:
@@ -100,6 +135,13 @@ def compare_layers(layers: Dict[str, str]) -> List[LayerDelta]:
         ("independent_ocr", "raw_text"),
     ]
     deltas: List[LayerDelta] = []
+    prepared: Dict[str, _Layer] = {}
+
+    def layer(name: str, text: str) -> _Layer:
+        if name not in prepared:
+            prepared[name] = _Layer(text)
+        return prepared[name]
+
     for left_name, right_name in pairs:
         left = layers.get(left_name)
         right = layers.get(right_name)
@@ -110,8 +152,9 @@ def compare_layers(layers: Dict[str, str]) -> List[LayerDelta]:
 
         is_ocr_pair = bool({left_name, right_name} & OCR_LAYERS)
         threshold = OCR_THRESHOLD if is_ocr_pair else EXACT_THRESHOLD
-        only_right = _segments_only_in(right, left, threshold=threshold)
-        left_norm, right_norm = normalize_for_match(left), normalize_for_match(right)
+        left_layer, right_layer = layer(left_name, left), layer(right_name, right)
+        only_right = _segments_only_in(right_layer, left_layer, threshold=threshold)
+        left_norm, right_norm = left_layer.norm, right_layer.norm
         if not only_right and len(right_norm) <= len(left_norm):
             continue
         deltas.append(

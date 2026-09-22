@@ -204,7 +204,9 @@ async def stream_progress(
 
     async def generator():
         last = None
-        for _ in range(600):  # 최대 5분
+        # 0.5초마다 세션을 새로 열면 5분 스트림 하나가 DB를 600번 두드린다.
+        # 진행 단계는 그보다 훨씬 느리게 바뀌므로 화면에 보이는 차이는 없다.
+        for _ in range(150):  # 최대 5분
             session = get_session_factory()()
             try:
                 run = session.get(VerificationRun, run_id)
@@ -227,7 +229,7 @@ async def stream_progress(
                 last = payload
             if payload["finished"]:
                 return
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(2.0)
 
     return StreamingResponse(generator(), media_type="text/event-stream",
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
