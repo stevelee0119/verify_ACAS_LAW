@@ -81,6 +81,7 @@ def _source_keys() -> Dict[str, bool]:
 
 
 def runtime_capabilities() -> Dict[str, Any]:
+    from .durability import durability_report
     from .session_policy import analysis_lifetimes, session_lifetimes
 
     settings = get_settings()
@@ -90,6 +91,8 @@ def runtime_capabilities() -> Dict[str, Any]:
         "ocr": _ocr_state(),
         "rasterizer": _rasterizer_state(),
         "database": _database_state(),
+        # 저장소가 재시작을 견디는지. 이 값이 없으면 잘못된 배포가 정상처럼 보인다.
+        "durability": durability_report(),
         "worker_mode": settings.worker_mode,
         "browser_session": {
             "idle_hours": idle.total_seconds() / 3600,

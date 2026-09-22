@@ -1151,9 +1151,20 @@ function renderDiagnostics(data) {
   const sessionPolicy = capabilities.browser_session;
   if (sessionPolicy) row("로그인 유지", "사용 중 자동 연장",
     `일반 미사용 ${sessionPolicy.idle_hours}시간 · 일반 로그인 최대 ${sessionPolicy.absolute_hours}시간. 비밀번호 로그인은 분석 시작부터 최대 ${sessionPolicy.analysis_protection_hours || 168}시간 보호하고, 종료 후 ${sessionPolicy.result_review_hours || 24}시간 결과 확인 시간을 둡니다. 로그아웃·비밀번호 변경·계정 중지는 즉시 적용하며 토큰·SSO 원본 만료는 별도입니다.`);
-  row("자료 저장소", dialect === "postgresql" ? "PostgreSQL" : dialect === "sqlite" ? "SQLite" : "확인 필요",
-    dialect === "sqlite" ? "파일 기반 데이터베이스를 사용 중입니다. 재배포 전에 DB·업로드 원본의 영구 저장소와 백업을 확인하세요."
-      : "데이터베이스 연결과 별도로 업로드 원본의 영구 저장 위치 및 백업을 확인해야 합니다.");
+  // 저장소가 재시작을 견디는지. 잘못된 배포는 화면상 정상으로 보이므로
+  // 무엇이 사라지는지와 조치를 함께 적는다.
+  const durability = capabilities.durability;
+  const atRisk = durability?.verdict === "AT_RISK";
+  const storageLabel = dialect === "postgresql" ? "PostgreSQL" : dialect === "sqlite" ? "SQLite" : "확인 필요";
+  row("자료 저장소", atRisk ? `${storageLabel} · 보존되지 않음` : storageLabel,
+    atRisk
+      ? `재시작·재배포하면 ${(durability.at_risk || []).join(", ")}이(가) 사라집니다. `
+        + `데이터베이스: ${durability.database?.reason || "확인 필요"} `
+        + `업로드 원본: ${durability.storage?.reason || "확인 필요"} ${durability.remedy || ""}`
+      : durability
+        ? `${durability.database?.reason || ""} ${durability.storage?.reason || ""} ${durability.note || ""}`
+        : "업로드 원본의 영구 저장 위치와 백업을 확인해야 합니다.",
+    atRisk ? "HIGH" : "LOW");
   row("검증 작업 실행", {auto: "자동 선택", inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[capabilities.worker_mode] || "확인 필요",
     capabilities.worker_mode === "auto" ? "작업 서버 연결 설정에 따라 실행 방식을 선택합니다. 자동 선택 자체는 오류가 아닙니다." : "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
   row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",

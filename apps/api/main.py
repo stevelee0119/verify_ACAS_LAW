@@ -19,6 +19,7 @@ from fastapi import Depends
 
 from .auth import require_admin
 from .capabilities import runtime_capabilities
+from .durability import log_durability_warning
 from .db import User
 from .db import init_db
 from .access import workspace_access
@@ -117,6 +118,9 @@ def create_app() -> FastAPI:
     # 스키마는 앱 생성 시점에 준비한다(운영에서는 Alembic migration을 사용한다).
     init_db()
     _bootstrap_admin()
+    # 저장소가 휘발성이면 재시작마다 로그인·원본·감사기록이 사라진다.
+    # 화면상 정상으로 보이므로 기동 로그에서 먼저 알린다.
+    log_durability_warning()
 
     for module in (projects, verification, reports, settings_router, viewer, audit, calculations, workspace, document_review, identity, jobs):
         app.include_router(module.router, prefix="/api")
@@ -150,9 +154,15 @@ def create_app() -> FastAPI:
             ("ocr", capabilities["ocr"]["ready"]),
             ("rasterizer", capabilities["rasterizer"]["available"]),
         ) if not ready]
+        # 저장소 내구성은 분석 능력과 별개다. blocking에 넣어 OCR 판정을
+        # 흐리지 않고, 따로 경고로 싣는다. 진단 응답이 한 항목 때문에 통째로
+        # 실패하면 남은 항목까지 볼 수 없으므로 없는 키는 건너뛴다.
+        warnings = (["durability"]
+                    if (capabilities.get("durability") or {}).get("verdict") == "AT_RISK" else [])
         return {
             "capabilities": capabilities,
             "blocking": blocking,
+            "warnings": warnings,
             "verdict": "READY" if not blocking else "DEGRADED",
             "note": (
                 "스캔 문서 읽기 준비가 완료되지 않았습니다. 이미지·스캔 PDF의 본문 검증은 "
