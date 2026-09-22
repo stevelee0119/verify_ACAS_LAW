@@ -139,7 +139,7 @@ def link_snapshot_evidence(result, snapshot) -> None:
 
 def persist_result(session: Session, run: VerificationRun, result: VerificationRunResult,
                    *, lease=None, store=None, commit=True) -> None:
-    from packages.report_engine import to_json
+    from packages.report_engine.exporters import to_payload
     from .job_control import DurableJob, JobOwnershipLost, JobStore
 
     store = store or JobStore()
@@ -158,9 +158,8 @@ def persist_result(session: Session, run: VerificationRun, result: VerificationR
     run.unverified_items = result.unverified_items
     run.errors = list(dict.fromkeys([*(run.errors or []), *result.errors]))
     run.finished_at = result.finished_at or datetime.utcnow()
-    import json as _json
-
-    run.result_json = _json.loads(to_json(result).decode("utf-8"))
+    # 문자열로 만들었다가 다시 읽지 않는다. JSON 칼럼이 알아서 직렬화한다.
+    run.result_json = to_payload(result)
     run.result_json["input_snapshot"] = run.input_snapshot or {}
 
     for document_result in result.documents:

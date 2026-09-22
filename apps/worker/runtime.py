@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import os
 import threading
 import time
 from contextlib import contextmanager
@@ -82,12 +83,21 @@ def heartbeat(store, lease):
 
     thread = threading.Thread(target=beat, daemon=True, name="lease-" + lease.run_id)
     thread.start()
+    # 확인 간격의 하한. check()는 인용 한 건마다, 외부 조회 중에는 초당
+    # 한 번 불린다. 매번 DB에 물으면 문서 하나에 수천 번의 조회가 된다.
+    # 취소 감지가 1초 늦어지는 것은 화면 폴링 주기보다 짧아 드러나지 않는다.
+    check_min = max(0.0, float(os.getenv("LV_JOB_CHECK_MIN_SECONDS", "1.0")))
+    last_check = [float("-inf")]
     try:
         def check():
             if lost.is_set():
                 raise JobOwnershipLost(f"{lease.run_id}: {state['error'] or '임차 갱신 실패'}")
+            now = time.monotonic()
+            if now - max(last_check[0], state["ok_at"]) < check_min:
+                return
             try:
                 store.check(lease)
+                last_check[0] = time.monotonic()
             except JobOwnershipLost:
                 raise
             except Exception:
@@ -131,6 +141,23 @@ class FencedAuditSink:
                 continue
         raise AuditChainConflict("Concurrent audit writers exhausted retries")
 
+    def append_chained_many(self, builds):
+        """여러 이벤트를 한 트랜잭션에 잇는다. fence도 한 번만 지난다."""
+        for _ in range(MAX_APPEND_ATTEMPTS):
+            try:
+                with _SEQUENCE_LOCK, write_session(self.store.factory) as session:
+                    self.store.fence(session, self.lease)
+                    sink = DBAuditSink(session)
+                    previous, created = sink.last(), []
+                    for build in builds:
+                        previous = build(previous)
+                        sink.add(previous)
+                        created.append(previous)
+                    return created
+            except IntegrityError:
+                continue
+        raise AuditChainConflict("Concurrent audit writers exhausted retries")
+
 
 class WorkerAuditChain(AuditChain):
     def __init__(self, store, lease, submission):
@@ -139,10 +166,11 @@ class WorkerAuditChain(AuditChain):
         self.submission = {key: submission.get(key) for key in ("actor_id", "organization_id", "authentication")}
         self.submission["actor_id"] = self.submission["actor_id"] or "system"
 
-    def record(self, event_type, payload, **kwargs):
+    def _builder(self, event_type, payload, **kwargs):
+        """단건·묶음 양쪽이 같은 보강을 거치도록 여기서 감싼다."""
         kwargs["actor"] = "system:worker"
-        return super().record(event_type, {**payload, "run_id": self.run_id,
-                                          "submission": self.submission}, **kwargs)
+        return super()._builder(event_type, {**payload, "run_id": self.run_id,
+                                             "submission": self.submission}, **kwargs)
 
 
 def snapshot_settings(snapshot):

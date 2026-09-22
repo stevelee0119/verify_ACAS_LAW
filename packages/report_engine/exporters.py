@@ -31,7 +31,18 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
 
 
 def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
-    """제20.2장 JSON 전체 검증결과."""
+    """제20.2장 JSON 전체 검증결과(바이트)."""
+    return json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed),
+                      ensure_ascii=False, indent=2, default=str).encode("utf-8")
+
+
+def to_payload(run_result: Any, *, reveal_sealed: bool = False) -> dict:
+    """같은 내용을 파이썬 객체로 돌려준다.
+
+    DB의 JSON 칼럼에 넣을 때는 문자열로 만들었다가 다시 읽을 이유가 없다.
+    큰 결과에서 그 왕복은 수 초가 걸리고, json.dumps/loads는 그동안 GIL을
+    놓지 않아 임차 갱신 스레드가 밀린다.
+    """
     payload = {
         "product": "ACASia_LAW",
         "terminology_version": TERMINOLOGY_VERSION,
@@ -88,7 +99,7 @@ def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
         payload["report"] = run_result.report_metadata
         payload["review_snapshot"] = {key: value for key, value in run_result.review_snapshot.items()
                                       if key != "engine_result"}
-    return json.dumps(payload, ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    return payload
 
 
 def safe_cell(value):

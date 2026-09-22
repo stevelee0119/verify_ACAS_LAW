@@ -445,14 +445,16 @@ class VerificationPipeline:
         self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
             JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
             base + span * (0.75 + 0.05 * done / max(1, total))))
-        for record in result.source_records:
-            self.audit.record(
-                AuditEventType.API_QUERY,
-                {"adapter": record.adapter, "query": record.query, "status": str(record.status),
-                 "response_hash": record.response_hash},
-                project_id=context.project_id,
-                document_id=doc.document_id,
-            )
+        # 출처 조회 기록은 한 문서에 수천 건이 나온다. 건수는 줄이지 않되
+        # 한 번에 잇는다. 건마다 트랜잭션을 열면 그 쓰기가 DB 쓰기 잠금을
+        # 독차지해 임차 갱신이 밀리고, 작업이 정상 실행 중에 회수된다.
+        self.audit.record_many([
+            (AuditEventType.API_QUERY,
+             {"adapter": record.adapter, "query": record.query, "status": str(record.status),
+              "response_hash": record.response_hash},
+             {"project_id": context.project_id, "document_id": doc.document_id})
+            for record in result.source_records
+        ])
 
         # 7) Claim / Entity / Event / 계산 검증
         emit(JobState.VERIFYING, f"{document.filename} 주장·사건·금액 분석", base + span * 0.81)

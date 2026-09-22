@@ -1025,3 +1025,66 @@ def test_progress_updates_keep_the_lease_alive(ops):
 
     time.sleep(0.5)  # 아무 진전이 없으면 종전대로 회수된다
     assert store.recover() == [run.id]
+
+
+def test_progress_writes_are_batched_within_a_stage(ops):
+    """파이프라인은 인용 한 건마다 진행을 알린다. 문서 하나에 5천 번을 넘겼고,
+    그때마다 쓰기 트랜잭션과 VerificationCheck 행이 생겼다. 그 쓰기가 SQLite
+    쓰기 잠금을 계속 쥐어 임차 갱신 스레드가 끼어들지 못했다.
+    """
+    from apps.api.db import VerificationCheck
+    from packages.common.enums import JobState
+
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    store.progress_min_seconds = 5.0
+    lease = store.claim(run.id)
+
+    assert store.progress(lease, JobState.VERIFYING, "1/500", 0.10) is True
+    for index in range(2, 60):
+        assert store.progress(lease, JobState.VERIFYING, f"{index}/500", 0.11) is False
+    # 단계가 바뀌면 묶음과 무관하게 반드시 기록한다.
+    assert store.progress(lease, JobState.CROSS_CHECKING, "교차검증", 0.85) is True
+
+    with ops() as session:
+        rows = session.scalars(select(VerificationCheck).where(
+            VerificationCheck.run_id == run.id)).all()
+        names = [r.name for r in rows if r.name in {"VERIFYING", "CROSS_CHECKING"}]
+        assert names == ["VERIFYING", "CROSS_CHECKING"], names
+        saved = session.get(VerificationRun, run.id)
+        assert saved.stage_message == "교차검증"
+
+
+def test_progress_batching_never_outlasts_the_lease(ops):
+    """묶음 간격이 임차에 가까워지면 진행 기록이 생존 증거 구실을 못 한다."""
+    store = JobStore(ops, lease_seconds=2.0)
+    store.progress_min_seconds = 99.0  # 설정이 잘못돼도
+    assert JobStore(ops, lease_seconds=2.0).progress_min_seconds <= 0.2
+
+
+def test_batched_audit_events_form_the_same_chain(ops):
+    """감사기록은 법정 기록이다. 묶어 쓰되 체인은 하나씩 쓴 것과 같아야 한다."""
+    from packages.audit_engine import AuditChain
+    from packages.common.enums import AuditEventType
+
+    items = [(AuditEventType.API_QUERY, {"adapter": "law_go_kr", "n": i}) for i in range(6)]
+
+    one_by_one = AuditChain()
+    for event_type, payload in items:
+        one_by_one.record(event_type, payload)
+    batched = AuditChain()
+    batched.record_many(items)
+
+    single, many = one_by_one.sink.all(), batched.sink.all()
+    assert [e.sequence for e in single] == [e.sequence for e in many] == list(range(1, 7))
+    assert [e.event_hash for e in single] == [e.event_hash for e in many]
+    assert all(many[i].event_hash == many[i + 1].previous_hash for i in range(len(many) - 1))
+
+
+def test_result_payload_matches_the_json_export(ops):
+    """DB에 넣을 때 문자열로 만들었다가 다시 읽지 않는다. 내용은 같아야 한다."""
+    from packages.report_engine import to_json, to_payload
+
+    run = seeded_run(ops)
+    result = completed(run)
+    assert to_payload(result) == json.loads(to_json(result).decode("utf-8"))

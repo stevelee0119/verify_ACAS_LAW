@@ -229,6 +229,14 @@ class JobStore:
                                      if backoff_seconds is None else backoff_seconds)
         if self.lease_seconds <= 0 or self.backoff_seconds < 0:
             raise ValueError("Invalid job lease/backoff configuration")
+        # 같은 단계 안의 잦은 진행 갱신을 묶는 최소 간격. 진행률은 사람이
+        # 보는 값이라 1초보다 잘게 기록할 이유가 없다. 묶지 않으면 문서
+        # 한 건에 수천 번의 쓰기 트랜잭션이 발생해 쓰기 잠금을 독차지한다.
+        # 임차의 1/10을 넘지 않게 묶는다. 이 간격이 임차에 가까워지면 진행
+        # 기록이 생존 증거 구실을 못 해, 정상 실행 중인 작업이 회수된다.
+        self.progress_min_seconds = min(
+            float(os.getenv("LV_JOB_PROGRESS_MIN_SECONDS", "1.0")), self.lease_seconds / 10)
+        self._progress_marks: dict = {}
 
     def session(self):
         return (self.factory or get_session_factory())()
@@ -348,15 +356,33 @@ class JobStore:
                 heartbeat_at=now, lease_expires_at=now + timedelta(seconds=self.lease_seconds)))
 
     def progress(self, lease, state, message, ratio):
+        """진행 상태를 기록한다. 같은 단계 안의 잦은 갱신은 묶는다.
+
+        파이프라인은 인용 한 건마다 진행을 알린다. 문서 하나에 5천 번을
+        넘겼고, 그때마다 쓰기 트랜잭션과 VerificationCheck 행이 하나씩
+        생겼다. 그 쓰기가 SQLite 쓰기 잠금을 계속 쥐고 있어 임차 갱신
+        스레드가 끼어들지 못했고, 작업은 정상 실행 중에 회수되었다.
+
+        단계가 바뀌거나 종료 상태면 반드시 기록한다. 사람이 보는 진행률은
+        1초 간격이면 충분하다.
+        """
+        state = str(state)
+        now = self.clock()
+        key = (lease.run_id, lease.fence)
+        previous = self._progress_marks.get(key)
+        if (previous and previous[0] == state and state not in TERMINAL
+                and (now - previous[1]).total_seconds() < self.progress_min_seconds):
+            return False
         with write_session(self.factory) as session:
             self.fence(session, lease)
             run = session.get(VerificationRun, lease.run_id)
-            state = str(state)
             if state not in TERMINAL:
                 run.state, run.stage_message, run.progress = state, message, round(ratio, 3)
             session.add(VerificationCheck(run_id=lease.run_id, name=state,
                 state="PERSISTING" if state in TERMINAL else "RUNNING",
                 detail={"message": message, "progress": ratio, "fence": lease.fence}))
+        self._progress_marks[key] = (state, now)
+        return True
 
     def checkpoint(self, lease, *, document=None, execution=None):
         with write_session(self.factory) as session:

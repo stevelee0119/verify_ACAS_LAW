@@ -38,6 +38,11 @@ class DBAuditSink:
         self.session = session
 
     def append(self, event: AuditEvent) -> None:
+        self.add(event)
+        self.session.commit()
+
+    def add(self, event: AuditEvent) -> None:
+        """커밋하지 않고 쌓기만 한다. 묶음 기록이 한 트랜잭션을 쓰도록."""
         self.session.add(
             AuditEventRow(
                 sequence=event.sequence,
@@ -51,7 +56,6 @@ class DBAuditSink:
                 created_at=event.created_at,
             )
         )
-        self.session.commit()
 
     def last(self) -> Optional[AuditEvent]:
         row = self.session.execute(

@@ -90,6 +90,16 @@ class InMemoryAuditSink:
             self._events.append(event)
             return event
 
+    def append_chained_many(self, builds):
+        with self._lock:
+            created = []
+            previous = self._events[-1] if self._events else None
+            for build in builds:
+                previous = build(previous)
+                self._events.append(previous)
+                created.append(previous)
+            return created
+
 
 class AuditChain:
     """Append-only 해시 체인. 기존 이벤트는 수정·삭제하지 않는다."""
@@ -97,7 +107,7 @@ class AuditChain:
     def __init__(self, sink: Optional[AuditSink] = None) -> None:
         self.sink = sink or InMemoryAuditSink()
 
-    def record(
+    def _builder(
         self,
         event_type: AuditEventType,
         payload: Dict[str, Any],
@@ -105,7 +115,8 @@ class AuditChain:
         actor: str = "system",
         project_id: Optional[str] = None,
         document_id: Optional[str] = None,
-    ) -> AuditEvent:
+    ) -> Callable[[Optional[AuditEvent]], AuditEvent]:
+        """직전 이벤트를 받아 다음 이벤트를 만드는 함수. 단건·묶음이 공유한다."""
         def build(last: Optional[AuditEvent]) -> AuditEvent:
             previous_hash = last.event_hash if last else GENESIS_HASH
             sequence = (last.sequence + 1) if last else 1
@@ -128,6 +139,20 @@ class AuditChain:
                 document_id=document_id,
             )
 
+        return build
+
+    def record(
+        self,
+        event_type: AuditEventType,
+        payload: Dict[str, Any],
+        *,
+        actor: str = "system",
+        project_id: Optional[str] = None,
+        document_id: Optional[str] = None,
+    ) -> AuditEvent:
+        build = self._builder(event_type, payload, actor=actor,
+                              project_id=project_id, document_id=document_id)
+
         # 직전 이벤트를 읽고 적재하기까지가 하나의 임계구역이어야 한다.
         # 이 사이에 다른 기록자가 끼어들면 두 이벤트가 같은 previous_hash를
         # 물고 들어가 체인이 갈라진다. Sink가 그 보장을 제공하면 위임한다.
@@ -137,6 +162,32 @@ class AuditChain:
         event = build(self.sink.last())
         self.sink.append(event)
         return event
+
+    def record_many(self, items) -> List[AuditEvent]:
+        """여러 이벤트를 한 번에 잇는다.
+
+        결과 체인은 하나씩 기록한 것과 같다. 다른 점은 트랜잭션 수뿐이다.
+        출처 조회 기록처럼 한 문서에 수천 건이 나오는 경우, 건마다 트랜잭션을
+        열면 그 쓰기가 DB 쓰기 잠금을 독차지해 다른 작업이 밀린다.
+
+        items는 (event_type, payload) 또는 (event_type, payload, kwargs)다.
+        """
+        builds = []
+        for item in items:
+            event_type, payload = item[0], item[1]
+            kwargs = item[2] if len(item) > 2 else {}
+            builds.append(self._builder(event_type, payload, **kwargs))
+        if not builds:
+            return []
+        batched = getattr(self.sink, "append_chained_many", None)
+        if batched is not None:
+            return list(batched(builds))
+        events = []
+        for build in builds:
+            event = build(self.sink.last())
+            self.sink.append(event)
+            events.append(event)
+        return events
 
     def verify(self) -> Dict[str, Any]:
         """체인 무결성을 검증한다."""
