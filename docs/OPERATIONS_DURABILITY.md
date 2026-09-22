@@ -199,7 +199,7 @@ are required. Use the same configuration and database across API/worker processe
 | `LV_JOB_BACKOFF_SECONDS` | `5`; exponential, capped at 300 seconds |
 | `LV_JOB_POLL_SECONDS` | `2`; the interval while work is pending |
 | `LV_JOB_POLL_IDLE_SECONDS` | `15`; the poller doubles up to this while nothing is due, and is also capped at 15× `LV_JOB_POLL_SECONDS` |
-| `LV_JOB_CONCURRENCY` | `2` local threads per process |
+| `LV_JOB_CONCURRENCY` | Unset: `1` in-process, `2` in a separate worker process. In-process runs share the API's CPU and GIL, so a second concurrent run delays HTTP responses. Set it explicitly to override |
 | `LV_SQLITE_BUSY_SECONDS` | `30`; how long a SQLite write waits for the lock before failing |
 | `LV_SQLITE_SYNCHRONOUS` | `NORMAL` under WAL; set `FULL` to fsync every commit |
 | `LV_MONTHLY_BUDGET_USD` | Existing setting, `0` disables the cap |

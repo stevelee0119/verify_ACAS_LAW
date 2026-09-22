@@ -425,6 +425,22 @@ class JobStore:
             session.execute(update(DurableJob).where(
                 DurableJob.run_id == run_id, DurableJob.state.in_(READY)).values(**values))
 
+    def defer(self, run_id, running):
+        """정원이 찼을 때 대기 중임을 화면에 알린다.
+
+        동시 실행을 1로 두면 두 번째 검증은 시작하지 못하고 기다린다.
+        아무 안내가 없으면 화면은 시작조차 못한 것과 멈춘 것을 구분할 수
+        없다. 실행 중인 작업의 메시지는 건드리지 않는다.
+        """
+        with write_session(self.factory) as session:
+            job = session.get(DurableJob, run_id)
+            run = session.get(VerificationRun, run_id)
+            if job is None or run is None or job.state not in READY or run.state in TERMINAL:
+                return False
+            run.stage_message = (f"앞선 검증 {running}건이 끝나면 시작합니다"
+                                 if running else "순서를 기다리고 있습니다")
+            return True
+
     def cancel(self, run_id, *, actor="system"):
         self.ensure(run_id)
         with write_session(self.factory) as session:

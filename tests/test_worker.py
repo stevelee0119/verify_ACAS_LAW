@@ -285,3 +285,36 @@ def test_dispatches_to_real_broker(tmp_path, restore_worker_settings):
         assert job.task_id == task_id
         assert [item["document_id"] for item in job.snapshot["documents"]] == [document_id]
         assert job.snapshot["documents"][0]["sha256"] == digest
+
+
+# --- 동시 실행 정원 -----------------------------------------------------------
+def test_inprocess_runs_one_at_a_time_and_a_worker_process_runs_two(runner, monkeypatch):
+    """인프로세스 검증은 API와 같은 프로세스를 쓰므로 하나씩 돌린다.
+
+    둘씩 돌리면 파싱 구간이 겹쳐 화면이 "서버 연결 지연"으로 보인다.
+    별도 Worker 프로세스는 API를 밀어내지 않으므로 둘을 허용한다.
+    """
+    monkeypatch.delenv("LV_JOB_CONCURRENCY", raising=False)
+    assert runner.concurrency("inprocess") == 1
+    assert runner.concurrency("celery") == 2
+
+
+def test_explicit_concurrency_wins_and_a_bad_value_falls_back(runner, monkeypatch):
+    monkeypatch.setenv("LV_JOB_CONCURRENCY", "4")
+    assert runner.concurrency("inprocess") == 4
+    monkeypatch.setenv("LV_JOB_CONCURRENCY", "0")
+    assert runner.concurrency("inprocess") == 1, "정원 0은 아무것도 실행하지 못한다"
+    monkeypatch.setenv("LV_JOB_CONCURRENCY", "하나")
+    assert runner.concurrency("inprocess") == 1, "잘못된 값이 실행을 막으면 안 된다"
+
+
+def test_blueprint_keeps_inprocess_concurrency_at_one():
+    """청사진과 코드 기본값이 어긋나면 배포에서만 다르게 동작한다."""
+    import yaml
+    from pathlib import Path
+
+    blueprint = yaml.safe_load(Path("render.yaml").read_text(encoding="utf-8"))
+    web = next(s for s in blueprint["services"] if s["type"] == "web")
+    env = {item["key"]: item.get("value") for item in web["envVars"]}
+    assert env["LV_WORKER_MODE"] == "inprocess"
+    assert env["LV_JOB_CONCURRENCY"] == "1"

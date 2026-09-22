@@ -22,6 +22,22 @@ class JobRunner:
         self._poller = None
         self._busy = False
 
+    def concurrency(self, mode=None):
+        """인프로세스 실행은 API와 같은 프로세스를 쓴다.
+
+        파싱·정규식 구간은 GIL을 쥐므로 그동안 HTTP 응답이 밀린다. 검증을
+        둘씩 돌리면 그 구간이 겹쳐 화면이 "서버 연결 지연"으로 보인다.
+        별도 Worker 프로세스라면 API를 밀어내지 않으므로 둘을 허용한다.
+        LV_JOB_CONCURRENCY로 명시하면 그 값을 따른다.
+        """
+        configured = (os.getenv("LV_JOB_CONCURRENCY") or "").strip()
+        if configured:
+            try:
+                return max(1, int(configured))
+            except ValueError:
+                log.warning("LV_JOB_CONCURRENCY=%r is not an integer; using the default", configured)
+        return 1 if (mode or self.mode) == "inprocess" else 2
+
     @property
     def mode(self):
         settings = get_settings()
@@ -85,10 +101,12 @@ class JobRunner:
 
     def _dispatch(self, run_id):
         mode = self.mode
+        limit = self.concurrency(mode)
         if mode == "inprocess":
             with self._lock:
                 active = sum(t.is_alive() for t in self._threads.values())
-                if active >= max(1, int(os.getenv("LV_JOB_CONCURRENCY", "2"))):
+                if active >= limit:
+                    self.store.defer(run_id, active)
                     return "queued"
         if not self.store.acquire_dispatch(run_id):
             return mode
@@ -111,8 +129,10 @@ class JobRunner:
             current = self._threads.get(run_id)
             if current and current.is_alive():
                 return "inprocess"
-            if sum(t.is_alive() for t in self._threads.values()) >= max(1, int(os.getenv("LV_JOB_CONCURRENCY", "2"))):
+            active = sum(t.is_alive() for t in self._threads.values())
+            if active >= limit:
                 self.store.dispatch_result(run_id, error="LOCAL_CAPACITY_BUSY")
+                self.store.defer(run_id, active)
                 return "queued"
             thread = threading.Thread(target=execute_run, args=(run_id,), kwargs={"store": self.store},
                                       daemon=True, name="verification-" + run_id)

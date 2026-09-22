@@ -5,6 +5,7 @@ import asyncio
 import copy
 import multiprocessing
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
@@ -887,3 +888,47 @@ def test_lease_renewal_failure_schedules_the_retry_without_waiting_for_expiry(op
     with ops() as session:
         saved = session.get(VerificationRun, run.id)
         assert saved.state == "QUEUED" and "다시 시도" in (saved.stage_message or "")
+
+
+def test_a_second_run_waits_its_turn_and_says_so(ops, monkeypatch):
+    """동시 실행 1에서 두 번째 검증은 대기하되, 대기 중임을 화면에 알린다.
+
+    안내가 없으면 화면은 시작조차 못한 것과 멈춘 것을 구분할 수 없다.
+    """
+    monkeypatch.setenv("LV_JOB_CONCURRENCY", "1")
+    first, second = seeded_run(ops), seeded_run(ops)
+    store = JobStore(ops)
+    runner = JobRunner(store)
+    started, release = threading.Event(), threading.Event()
+
+    def pipeline(self, run_id, *args, **kwargs):
+        if run_id == first.id:
+            started.set()
+            release.wait(10)
+        return completed(first if run_id == first.id else second)
+
+    monkeypatch.setattr(VerificationPipeline, "run", pipeline)
+    try:
+        assert runner.submit(first.id) == "inprocess"
+        assert started.wait(10)
+        assert runner.submit(second.id) == "queued"
+        with ops() as session:
+            waiting = session.get(VerificationRun, second.id)
+            assert waiting.state == "QUEUED"
+            assert "기다" in waiting.stage_message or "시작합니다" in waiting.stage_message
+        release.set()
+        runner.wait(first.id, 15)
+        runner.wait(second.id, 15)
+    finally:
+        release.set()
+        runner.stop()
+    assert store.status(first.id)["state"] == "COMPLETED"
+    assert store.status(second.id)["state"] == "COMPLETED", "대기하던 검증이 결국 실행되어야 한다"
+
+
+def test_defer_never_overwrites_a_running_run_message(ops):
+    run = seeded_run(ops)
+    store = JobStore(ops)
+    store.claim(run.id)
+    store.progress.__self__  # 소유 중인 작업은 READY가 아니다
+    assert store.defer(run.id, 1) is False

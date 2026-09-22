@@ -99,6 +99,20 @@ def _storage_encryption_state() -> Dict[str, Any]:
     }
 
 
+def _worker_state() -> Dict[str, Any]:
+    """설정한 값이 실제로 적용됐는지 배포 후 확인할 수 있어야 한다."""
+    try:
+        from .services import get_runner
+
+        runner = get_runner()
+        mode = runner.mode
+        return {"mode": mode, "concurrency": runner.concurrency(mode),
+                "shares_api_process": mode == "inprocess"}
+    except Exception as exc:  # pragma: no cover - 기동 순서에 따라 아직 없을 수 있다
+        return {"mode": "unknown", "concurrency": None, "shares_api_process": None,
+                "error": f"{type(exc).__name__}: {exc}"}
+
+
 def runtime_capabilities() -> Dict[str, Any]:
     from .durability import durability_report
     from .session_policy import analysis_lifetimes, session_lifetimes
@@ -114,6 +128,8 @@ def runtime_capabilities() -> Dict[str, Any]:
         "durability": durability_report(),
         "storage_encryption": _storage_encryption_state(),
         "worker_mode": settings.worker_mode,
+        # 동시 실행 수. 인프로세스에서 둘 이상이면 검증이 API 응답을 밀어낸다.
+        "worker": _worker_state(),
         "browser_session": {
             "idle_hours": idle.total_seconds() / 3600,
             "absolute_hours": absolute.total_seconds() / 3600,

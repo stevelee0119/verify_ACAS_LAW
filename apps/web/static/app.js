@@ -1181,8 +1181,15 @@ function renderDiagnostics(data) {
   const crypto = capabilities.storage_encryption;
   if (crypto) row("저장 시 암호화", crypto.enabled ? "적용" : "미적용", crypto.note,
     crypto.enabled ? "LOW" : "HIGH");
+  const worker = capabilities.worker || {};
+  const resolved = {inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[worker.mode];
   row("검증 작업 실행", {auto: "자동 선택", inprocess: "서버 내부 처리", celery: "별도 작업 서버"}[capabilities.worker_mode] || "확인 필요",
-    capabilities.worker_mode === "auto" ? "작업 서버 연결 설정에 따라 실행 방식을 선택합니다. 자동 선택 자체는 오류가 아닙니다." : "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
+    (capabilities.worker_mode === "auto" && resolved ? `현재 ${resolved}로 동작합니다. 자동 선택 자체는 오류가 아닙니다. `
+      : capabilities.worker_mode === "auto" ? "작업 서버 연결 설정에 따라 실행 방식을 선택합니다. 자동 선택 자체는 오류가 아닙니다. " : "")
+    + (worker.concurrency ? `동시에 ${worker.concurrency}건까지 실행합니다. ` : "")
+    + (worker.shares_api_process ? "검증이 화면 응답과 같은 서버 자원을 씁니다. 동시 실행을 늘리면 화면이 느려집니다. "
+      : worker.shares_api_process === false ? "검증이 별도 서버에서 실행되어 화면 응답에 영향을 주지 않습니다. " : "")
+    + "실제 작업의 진행 및 오류는 작업 기록에서 확인합니다.");
   row("법률정보 조회", capabilities.network_allowed ? "외부 연결 허용" : "외부 연결 차단",
     capabilities.source_keys_present?.law_go_kr ? "국가법령정보센터 조회 정보가 설정되어 있습니다. 실제 조회 성공 여부는 검증 결과의 출처 기록에서 확인합니다."
       : "국가법령정보센터 조회 정보가 설정되지 않았습니다. 공식 출처를 확인하지 못한 항목은 미검증으로 남습니다.");

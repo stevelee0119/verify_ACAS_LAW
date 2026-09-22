@@ -37,6 +37,11 @@ services:
       # Worker를 함께 띄우지 않는다면 inprocess로 두면 Redis 없이 동작한다.
       - key: LV_WORKER_MODE
         value: inprocess
+      # 인프로세스에서는 검증이 API와 같은 프로세스를 쓴다. 둘씩 돌리면
+      # 파싱 구간이 겹쳐 화면이 "서버 연결 지연"으로 보인다. 비워 두면
+      # 인프로세스 1, 별도 Worker 2가 자동으로 적용된다.
+      - key: LV_JOB_CONCURRENCY
+        value: "1"
       - key: LV_OCR_LANG
         value: kor+eng
       - key: LV_REQUIRE_OCR
