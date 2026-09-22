@@ -91,7 +91,10 @@ def test_empty_success_is_not_retried_as_a_timeout(tmp_path, monkeypatch):
         result = verifier(tmp_path).verify_citations(citations())
     assert result.data["verdicts"][0]["status"] == "NOT_FOUND"
     assert not result.data["verdicts"][0]["source_lookup"]["deferred_retry"]
-    assert len(calls) == 3  # Exact lookup and the existing date/court alternatives.
+    # 정확 조회 1 + 사건번호 지정 조회 1(본문검색이 빗나가는 유형을 위한 대안) +
+    # 선고일·법원 재검색 2. 대안은 순수 사건번호일 때만, 최초 조회가 실패했을 때만
+    # 붙으므로 인용 한 건당 최대 1회 증가한다.
+    assert len(calls) == 4
 
 
 def test_timeout_in_fallback_search_is_not_reported_as_absent_case(tmp_path, monkeypatch):

@@ -57,32 +57,79 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                 status,
                 "국가법령정보 OC가 없거나 네트워크가 비활성이다. 해당 항목은 UNVERIFIED로 표시한다.",
             )
-        try:
-            response = self._http_get(
-                SEARCH_URL,
-                params={"OC": self.api_key, "target": "detc" if court == "헌법재판소" else "prec", "type": "JSON", "search": 2, "query": case_number},
-            )
-            if response.status_code == 429:
-                return self._unavailable(case_number, AdapterStatus.RATE_LIMITED, "요청 한도 초과")
-            if response.status_code >= 400:
-                return self._unavailable(case_number, AdapterStatus.ERROR, f"HTTP {response.status_code}")
-            payload = response.json()
-        except Exception as exc:  # 네트워크·파싱 오류는 Job을 실패시키지 않는다
-            return self._transport_unavailable(case_number, exc)
+        # legal_engine이 source_adapters를 불러오므로 모듈 최상단에서 가져오지 않는다.
+        from packages.legal_engine.normalize import split_case_number
 
-        records = _normalize_case_payload(payload)
-        return AdapterResponse(
-            AdapterStatus.READY,
-            records,
-            self._record(
-                case_number,
+        target = "detc" if court == "헌법재판소" else "prec"
+        wanted = split_case_number(case_number)
+
+        # 조회 방식이 하나뿐이면, 그 방식이 이 사건 유형에 맞지 않을 때 실재하는
+        # 판례가 통째로 미확인으로 남는다. 본문검색(search=2)은 사건번호가 본문에
+        # 드러나지 않는 유형에서 빗나갈 수 있다. 문서화된 방식들을 차례로 시도하고
+        # 사건번호가 일치하는 기록이 나오면 거기서 멈춘다.
+        #
+        # 추가 시도가 오탐을 만들지는 않는다. 채택 조건이 "사건번호 완전일치"이고,
+        # 일치가 없으면 종전과 같은 결과(첫 응답)를 그대로 돌려주기 때문이다.
+        # 대안은 하나만 둔다. 인용 한 건마다 요청이 배로 늘면 외부 조회 예산을
+        # 잠식하고, 확인되지 않는 사건에서는 그 비용이 그대로 낭비된다.
+        # 법원·선고일을 덧붙인 재검색은 상위(verifier._retry_search)가 이미 한다.
+        attempts = [{"search": 2, "query": case_number}]   # 본문검색(종전 방식)
+        # 순수 사건번호일 때만 대안을 시도한다. 상위 재검색은 "대법원 2020다123"
+        # 처럼 법원·선고일을 덧붙여 부르는데, 그 문자열은 사건번호 지정 조회의
+        # 인자가 될 수 없어 요청만 낭비된다.
+        bare = wanted is not None and re.fullmatch(r"\s*[\d가-힣]+\s*", case_number) is not None
+        if bare:
+            attempts.append({"nb": case_number.strip()})   # 사건번호 지정 조회
+
+        first: Optional[AdapterResponse] = None
+        tried: List[str] = []
+        for extra in attempts:
+            params = {"OC": self.api_key, "target": target, "type": "JSON", **extra}
+            try:
+                response = self._http_get(SEARCH_URL, params=params)
+                if response.status_code == 429:
+                    return self._unavailable(case_number, AdapterStatus.RATE_LIMITED, "요청 한도 초과")
+                if response.status_code >= 400:
+                    if first is not None:
+                        break
+                    return self._unavailable(case_number, AdapterStatus.ERROR, f"HTTP {response.status_code}")
+                payload = response.json()
+            except Exception as exc:  # 네트워크·파싱 오류는 Job을 실패시키지 않는다
+                if first is not None:
+                    break
+                return self._transport_unavailable(case_number, exc)
+
+            records = _normalize_case_payload(payload)
+            label = ",".join(f"{k}={v}" for k, v in extra.items() if k != "query")
+            tried.append(label or "query")
+            matched = wanted is not None and any(
+                split_case_number(str(r.get("case_number") or "")) == wanted for r in records)
+            result = AdapterResponse(
                 AdapterStatus.READY,
-                payload=payload,
-                result_id=records[0].get("case_number") if records else None,
-                url=SEARCH_URL,
-                used_fields=["사건번호", "법원명", "선고일자", "판시사항", "판결요지"],
-            ),
-        )
+                records,
+                self._record(
+                    case_number,
+                    AdapterStatus.READY,
+                    payload=payload,
+                    result_id=records[0].get("case_number") if records else None,
+                    url=SEARCH_URL,
+                    used_fields=["사건번호", "법원명", "선고일자", "판시사항", "판결요지"],
+                ),
+                f"조회 방식 {label or 'query'}에서 사건번호 일치" if matched else "",
+            )
+            if matched:
+                return result
+            if first is None:
+                first = result
+            # 사건번호가 아닌 키워드 조회(예: "손해배상")는 첫 응답으로 끝낸다.
+            if wanted is None:
+                return result
+
+        if first is not None and not first.message:
+            first = AdapterResponse(first.status, first.records, first.source_record,
+                                    f"사건번호 일치 없음(조회 방식 시도: {' → '.join(tried)})")
+        return first if first is not None else self._unavailable(
+            case_number, AdapterStatus.ERROR, "조회를 수행하지 못했다")
 
     # -- 법령 -------------------------------------------------------------
     def search_law(self, law_name: str, *, article: Optional[str] = None, as_of: Optional[str] = None) -> AdapterResponse:

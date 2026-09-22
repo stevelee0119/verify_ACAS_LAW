@@ -171,3 +171,117 @@ def test_oc_credential_never_reaches_source_records():
     for record in (case, law):
         assert "DL_stevelaw" not in str(record)
         assert "[REDACTED]" in str(record["detail_link"])
+
+
+def test_case_lookup_tries_a_second_query_shape_before_giving_up(mock_law_api, monkeypatch):
+    """조회 방식이 하나뿐이면 그 방식이 맞지 않는 사건 유형이 통째로 미확인이 된다.
+
+    배포에서 대법원 2011모1839(형사 재항고 결정)가 확인되지 않았다. 본문검색이
+    빗나가는 유형을 위해 사건번호 지정 조회를 대안으로 둔다. 채택 조건은 여전히
+    사건번호 완전일치이므로, 대안이 오탐을 만들 수는 없다.
+    """
+    seen = []
+
+    def spy(url, *, params=None, **kwargs):
+        seen.append(dict(params or {}))
+        return original(url, params=params, **kwargs)
+
+    adapter = mock_law_api.law
+    original = adapter._http_get
+    monkeypatch.setattr(adapter, "_http_get", spy)
+
+    adapter.search_case("2099도99999")           # 존재하지 않는 사건
+    shapes = [tuple(sorted(k for k in p if k not in ("OC", "target", "type"))) for p in seen]
+    assert ("query", "search") in shapes, shapes
+    assert ("nb",) in shapes, "사건번호 지정 조회를 시도해야 한다"
+
+    # 법원·선고일을 덧붙인 조합 질의에는 대안을 붙이지 않는다(요청 낭비).
+    seen.clear()
+    adapter.search_case("대법원 2099도99999")
+    assert all("nb" not in p for p in seen), seen
+
+
+def test_case_lookup_stops_at_the_matching_shape(mock_law_api, monkeypatch):
+    """사건번호가 일치하면 더 조회하지 않는다."""
+    seen = []
+    adapter = mock_law_api.law
+    original = adapter._http_get
+
+    def spy(url, *, params=None, **kwargs):
+        seen.append(dict(params or {}))
+        return original(url, params=params, **kwargs)
+
+    monkeypatch.setattr(adapter, "_http_get", spy)
+    response = adapter.search_case("2020다12345")   # mock이 일치 기록을 돌려주는 사건
+    assert response.records
+    assert len(seen) == 1, f"일치했는데도 추가 조회가 일어났다: {seen}"
+
+
+# --- 결정(모) 사건이 조회부터 전문까지 이어지는가 -------------------------------
+DECISION_RESPONSE: Dict[str, Any] = {
+    "PrecSearch": {"prec": [{
+        "사건번호": "2011모1839",
+        "법원명": "대법원",
+        "선고일자": "20110526",
+        "사건명": "준항고기각결정에대한재항고",
+        "판결유형": "결정",
+        "판시사항": "판시사항 본문이다.",
+        "판결요지": "판결요지 본문이다.",
+        "판례일련번호": "123456",
+        "판례상세링크": "/precInfoP.do?precSeq=123456",
+    }]}
+}
+DECISION_DETAIL: Dict[str, Any] = {
+    "PrecService": {
+        "사건번호": "2011모1839", "법원명": "대법원", "선고일자": "20110526",
+        "판결유형": "결정",
+        "판례내용": "이 사건 결정의 전문이다. 압수·수색의 범위에 관하여 판시한다.",
+    }
+}
+
+
+def test_decision_case_flows_from_lookup_to_full_text(monkeypatch, tmp_path):
+    """결정(모) 사건도 조회 → 사건번호 일치 → 전문 확보까지 이어져야 한다.
+
+    전문이 없으면 파이프라인의 의미·적용 검토(AI 단계)가 "공식 판결 전문이 없어
+    수행하지 않음"으로 건너뛴다. 조회가 막히면 AI도 아무 일을 하지 않는다.
+    """
+    import packages.source_adapters.law_go_kr as module
+    from packages.common.enums import AdapterStatus
+    from packages.source_adapters.law_go_kr import LawGoKrAdapter
+    from packages.source_adapters.local_mirror import LocalLegalMirror
+
+    monkeypatch.setenv("LV_LAW_GO_KR_OC", "TEST_OC")
+    monkeypatch.setenv("LV_ALLOW_NETWORK", "1")
+    from packages.common import config
+    config.reset_settings()
+
+    class _Resp:
+        status_code = 200
+        def __init__(self, body): self._body = body
+        def json(self): return self._body
+        def raise_for_status(self): return None
+
+    adapter = LawGoKrAdapter(mirror=LocalLegalMirror(root=tmp_path / "none"))
+    calls = []
+
+    def fake_get(url, *, params=None, **kwargs):
+        calls.append(dict(params or {}))
+        if url == module.SERVICE_URL:
+            return _Resp(DECISION_DETAIL)
+        # 본문검색(search=2)은 이 사건을 돌려주지 못한다고 가정한다.
+        if (params or {}).get("search") == 2:
+            return _Resp({"PrecSearch": {"prec": []}})
+        return _Resp(DECISION_RESPONSE)
+
+    monkeypatch.setattr(adapter, "_http_get", fake_get)
+
+    response = adapter.search_case("2011모1839")
+    assert response.status == AdapterStatus.READY
+    assert [r["case_number"] for r in response.records] == ["2011모1839"], \
+        "대안 조회로 결정 사건을 찾아야 한다"
+
+    detail = adapter.fetch_case(response.records[0])
+    assert detail.records and detail.records[0].get("full_text"), \
+        "전문이 없으면 의미·적용 검토가 통째로 건너뛰어진다"
+    config.reset_settings()
