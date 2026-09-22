@@ -15,6 +15,8 @@ from starlette.concurrency import run_in_threadpool
 from starlette.routing import Match
 from sqlalchemy.exc import SQLAlchemyError
 
+from packages.common.storage import StorageKeyConfigurationError
+
 from .db import (Document, ExportArtifactRow, FindingRow, ReportRow, VerificationRun,
                  get_session_factory)
 from .identity import (LOCAL_OWNER, Principal, _principal, auth_mode, authenticate_bearer,
@@ -345,6 +347,9 @@ async def workspace_access(request, call_next):
         response = JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
         if getattr(request.state, "clear_session_cookies", False):
             _clear_session_cookies(response, secure_transport(request))
+    except StorageKeyConfigurationError as exc:
+        # 저장소 키 설정 오류를 인증 오류로 표시하면 엉뚱한 곳을 보게 된다.
+        response = JSONResponse({"detail": str(exc)}, status_code=503)
     except ValueError:
         response = JSONResponse({"detail": "Invalid authentication configuration or request"}, status_code=503)
     response.headers["Cache-Control"] = "no-store"

@@ -134,3 +134,63 @@ def test_get_storage_wraps_only_when_enabled(monkeypatch, tmp_path):
     assert isinstance(module.get_storage(), EncryptedObjectStorage)
     module.reset_storage()
     reset_settings()
+
+
+# --- 설정 오류를 인증 오류로 표시하지 않는다 ---------------------------------
+@pytest.fixture()
+def broken_vault(monkeypatch, tmp_path):
+    from packages.common import storage as module
+    from packages.common.config import reset_settings
+
+    monkeypatch.setenv("LV_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LV_STORAGE_ENCRYPTION", "on")
+    monkeypatch.setenv("LV_VAULT_KEY_PROVIDER", "env")
+    monkeypatch.setenv("LV_VAULT_KEYS", '{"k1":"not-a-valid-key"}')
+    monkeypatch.delenv("LV_VAULT_ACTIVE_KEY_ID", raising=False)
+    reset_settings()
+    module.reset_storage()
+    yield module
+    module.reset_storage()
+    reset_settings()
+
+
+def test_bad_vault_configuration_names_the_real_cause(broken_vault):
+    """종전에는 이 오류가 "Invalid authentication configuration"으로 표시됐다.
+
+    원인은 저장소 키인데 사용자는 로그인을 들여다보게 된다. 실제로 그렇게
+    시간을 썼다. 예외를 분리해 원인을 가리키게 한다.
+    """
+    from packages.common.storage import StorageKeyConfigurationError
+
+    with pytest.raises(StorageKeyConfigurationError) as excinfo:
+        broken_vault.get_storage()
+    message = str(excinfo.value)
+    assert "LV_VAULT_ACTIVE_KEY_ID" in message
+    assert "LV_STORAGE_ENCRYPTION" in message, "끄는 방법을 알려야 한다"
+    assert "authentication" not in message.lower()
+
+
+def test_bad_vault_configuration_is_not_a_value_error(broken_vault):
+    """ValueError로 두면 상위의 포괄적 처리가 인증 오류로 바꿔 버린다."""
+    from packages.common.storage import StorageKeyConfigurationError
+
+    assert not issubclass(StorageKeyConfigurationError, ValueError)
+
+
+def test_startup_check_fails_before_the_first_upload(broken_vault):
+    """첫 업로드 때가 아니라 기동 시점에 드러나야 한다."""
+    from packages.common.storage import StorageKeyConfigurationError, verify_storage_encryption_config
+
+    with pytest.raises(StorageKeyConfigurationError):
+        verify_storage_encryption_config()
+
+
+def test_startup_check_is_silent_when_encryption_is_off(monkeypatch, tmp_path):
+    from packages.common.config import reset_settings
+    from packages.common.storage import verify_storage_encryption_config
+
+    monkeypatch.delenv("LV_STORAGE_ENCRYPTION", raising=False)
+    monkeypatch.setenv("LV_DATA_DIR", str(tmp_path))
+    reset_settings()
+    verify_storage_encryption_config()
+    reset_settings()

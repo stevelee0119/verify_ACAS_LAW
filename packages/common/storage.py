@@ -127,6 +127,15 @@ STORAGE_CONTEXT = "storage"
 PLAINTEXT_CACHE = "plaintext-cache"
 
 
+class StorageKeyConfigurationError(RuntimeError):
+    """저장소 암호화 키 설정이 잘못되었다.
+
+    ValueError로 두면 상위의 포괄적 예외 처리가 이것을 인증 오류로 바꿔
+    표시한다. 실제로 그런 일이 있었고, 사용자는 키 설정이 아니라 로그인을
+    들여다보게 된다. 원인을 가리키는 고유한 예외로 분리한다.
+    """
+
+
 class EncryptedObjectStorage(ObjectStorage):
     """원본과 파생물을 봉투 암호화해 보관한다(제23장).
 
@@ -147,7 +156,16 @@ class EncryptedObjectStorage(ObjectStorage):
         if key_provider is None:
             from packages.pii_engine.key_provider import default_key_provider
 
-            key_provider = default_key_provider()
+            try:
+                key_provider = default_key_provider()
+            except Exception as exc:
+                raise StorageKeyConfigurationError(
+                    "저장 시 암호화가 켜져 있으나 키 설정이 올바르지 않습니다. "
+                    "LV_VAULT_KEY_PROVIDER=env이면 LV_VAULT_KEYS(키 ID -> base64 32바이트 JSON)와 "
+                    "LV_VAULT_ACTIVE_KEY_ID가 함께 있어야 합니다. 키를 확인할 수 없으면 "
+                    "LV_STORAGE_ENCRYPTION을 끄십시오. 이미 암호화된 자료는 올바른 키가 있어야 읽힙니다. "
+                    f"({type(exc).__name__}: {exc})"
+                ) from exc
         self.key_provider = key_provider
         root = cache_root or (Path(get_settings().storage_root) / PLAINTEXT_CACHE)
         self.cache_root = Path(root)
@@ -238,3 +256,22 @@ def storage_encryption_enabled() -> bool:
     실제 사건자료를 다루는 배포는 명시적으로 켜고 키를 따로 보관해야 한다.
     """
     return (os.getenv("LV_STORAGE_ENCRYPTION") or "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def verify_storage_encryption_config() -> None:
+    """기동 시 암호화 키 설정을 확인한다.
+
+    첫 업로드 때 실패하면 원인이 화면에 드러나지 않는다. 배포 직후 로그에서
+    바로 보이도록 기동 시점에 확인한다.
+    """
+    if not storage_encryption_enabled():
+        return
+    from packages.pii_engine.key_provider import default_key_provider
+
+    try:
+        default_key_provider()
+    except Exception as exc:
+        raise StorageKeyConfigurationError(
+            "저장 시 암호화가 켜져 있으나 키 공급자를 만들 수 없습니다. "
+            f"({type(exc).__name__}: {exc})"
+        ) from exc

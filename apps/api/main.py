@@ -18,6 +18,7 @@ from packages.common.config import get_settings
 from fastapi import Depends
 
 from .auth import require_admin
+from packages.common.storage import verify_storage_encryption_config
 from .capabilities import runtime_capabilities
 from .durability import log_durability_warning
 from .db import User
@@ -121,6 +122,8 @@ def create_app() -> FastAPI:
     # 저장소가 휘발성이면 재시작마다 로그인·원본·감사기록이 사라진다.
     # 화면상 정상으로 보이므로 기동 로그에서 먼저 알린다.
     log_durability_warning()
+    # 암호화 키 설정 오류는 첫 업로드가 아니라 기동 시점에 드러나야 한다.
+    verify_storage_encryption_config()
 
     for module in (projects, verification, reports, settings_router, viewer, audit, calculations, workspace, document_review, identity, jobs):
         app.include_router(module.router, prefix="/api")
