@@ -183,3 +183,80 @@ def test_expired_poll_pauses_and_explicit_login_resumes_same_results(tmp_path):
                     page.close()
         finally:
             browser.close()
+
+
+def test_missing_ui_module_is_not_shown_as_empty_data(tmp_path):
+    """구성요소 하나가 로드되지 않았을 때 "자료 없음"처럼 보이면 안 된다.
+
+    실제로 operations.js가 오지 않아 "operationsUI is not defined"와 빈
+    프로젝트 목록만 남은 적이 있다. 자료가 사라진 것으로 읽히지만 실제로는
+    조회를 시작하지도 못한 상태다.
+    """
+    static = ROOT / "apps/web/static"
+    files = {f"/static/{path.relative_to(static).as_posix()}": path
+             for path in static.rglob("*") if path.is_file()}
+    files["/"] = ROOT / "apps/web/index.html"
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        if path == "/static/operations.js":
+            route.abort("failed")
+        elif path in files:
+            route.fulfill(path=str(files[path]))
+        elif path == "/api/health":
+            route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        else:
+            route.fulfill(json=[])
+
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
+            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
+        browser = playwright.chromium.launch(**options)
+        try:
+            page = browser.new_page(viewport={"width": 390, "height": 844})
+            page.route("**/*", respond)
+            page.goto("http://loadfail.test/")
+            empty = page.locator("#emptyState")
+            expect(empty).to_contain_text("불러오지 못했습니다", timeout=7000)
+            expect(empty).to_contain_text("로그인·계정")
+            expect(empty).to_contain_text("영향을 받지 않습니다")
+            expect(page.get_by_role("button", name="새로고침")).to_be_visible()
+            assert "검토할 프로젝트가 없습니다" not in empty.inner_text()
+            page.close()
+        finally:
+            browser.close()
+
+
+def test_normal_load_does_not_report_missing_modules(tmp_path):
+    """const 선언은 globalThis의 속성이 아니다. globalThis로 찾으면 정상일
+    때도 "없음"이 되어 앱이 항상 오류 화면을 띄운다."""
+    static = ROOT / "apps/web/static"
+    files = {f"/static/{path.relative_to(static).as_posix()}": path
+             for path in static.rglob("*") if path.is_file()}
+    files["/"] = ROOT / "apps/web/index.html"
+
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        if path in files:
+            route.fulfill(path=str(files[path]))
+        elif path == "/api/health":
+            route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        else:
+            route.fulfill(json=[])
+
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
+            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
+        browser = playwright.chromium.launch(**options)
+        try:
+            page = browser.new_page(viewport={"width": 1280, "height": 900})
+            page.route("**/*", respond)
+            page.goto("http://normalload.test/")
+            page.wait_for_timeout(1200)
+            assert page.evaluate("missingModules().length") == 0
+            assert "불러오지 못했습니다" not in page.locator("#emptyState").inner_text()
+            page.close()
+        finally:
+            browser.close()

@@ -1193,8 +1193,42 @@ $("calculationForm").onsubmit = action(async e => {
   });
   $("calculationResult").replaceChildren(node("h3", `이자 ${Number(result.interest).toLocaleString("ko-KR")}원`), node("p", `${result.days}일 · 합계 ${Number(result.total).toLocaleString("ko-KR")}원`), node("p", result.formula, "technical"), node("p", "연 365일 기준 단리 계산. 적용 이율·기간 및 초일 산입 여부는 담당 변호사가 확정합니다.", "muted"));
 });
+// 화면 구성요소는 각각 별도 파일이다. 배포 중이거나 캐시가 어긋나면 그중
+// 하나가 로드되지 않을 수 있고, 그때 남는 것은 "operationsUI is not defined"
+// 같은 문구와 빈 프로젝트 목록이다. 자료가 사라진 것처럼 보이지만 실제로는
+// 조회를 시작하지도 못한 상태다. 그 둘을 구분해 알린다.
+// 각 구성요소는 최상위 const로 선언된다. const 바인딩은 globalThis의 속성이
+// 아니므로 globalThis[name]으로 찾으면 정상일 때도 "없음"이 된다.
+// 식별자에 직접 typeof를 쓴다. 선언되지 않은 식별자에도 typeof는 안전하다.
+function missingModules() {
+  return [
+    [typeof operationsUI, "로그인·계정"],
+    [typeof workflowUI, "검토 작업"],
+    [typeof projectTools, "프로젝트 관리"],
+    [typeof calculationWorkbench, "금액 계산"],
+  ].filter(([kind]) => kind === "undefined").map(([, label]) => label);
+}
+
+function showLoadFailure(missing) {
+  $("connection").textContent = "화면 구성요소 미로드";
+  const panel = $("emptyState");
+  if (panel) {
+    panel.hidden = false;
+    panel.replaceChildren(
+      node("h1", "화면을 완전히 불러오지 못했습니다"),
+      node("p", `${missing.join(", ")} 구성요소가 로드되지 않았습니다. 배포 직후이거나 ` +
+        "브라우저 캐시가 어긋났을 때 생깁니다."),
+      node("p", "저장된 프로젝트와 자료는 영향을 받지 않습니다. 조회를 시작하지 못한 상태입니다.", "muted"),
+      button("새로고침", () => location.reload(), "primary")
+    );
+  }
+  toast(`화면 구성요소를 불러오지 못했습니다(${missing.join(", ")}). 새로고침하세요.`);
+}
+
 async function init() {
   icons();
+  const missing = missingModules();
+  if (missing.length) return showLoadFailure(missing);
   try {
     const health = await api("/health");
     const identity = await operationsUI.refreshIdentity();
@@ -1208,8 +1242,10 @@ async function init() {
     toast(error.message);
   }
 }
-workflowUI.init();
-operationsUI.init();
-projectTools.init();
-calculationWorkbench.init();
+if (!missingModules().length) {
+  workflowUI.init();
+  operationsUI.init();
+  projectTools.init();
+  calculationWorkbench.init();
+}
 init();
