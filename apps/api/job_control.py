@@ -433,11 +433,11 @@ class JobStore:
                 or_(DurableJob.dispatch_until.is_(None), DurableJob.dispatch_until <= self.clock()),
             ).values(dispatch_until=self.clock() + timedelta(seconds=seconds))).rowcount == 1
 
-    def dispatch_result(self, run_id, *, task_id=None, error=None):
+    def dispatch_result(self, run_id, *, task_id=None, error=None, seconds=5):
         with write_session(self.factory) as session:
             values = {"task_id": task_id}
             if error is not None:
-                values.update(last_error=str(error), dispatch_until=self.clock() + timedelta(seconds=5))
+                values.update(last_error=str(error), dispatch_until=self.clock() + timedelta(seconds=max(1, seconds)))
             session.execute(update(DurableJob).where(
                 DurableJob.run_id == run_id, DurableJob.state.in_(READY)).values(**values))
 
@@ -519,7 +519,9 @@ class JobStore:
             return {"run_id": run_id, "project_id": job.project_id, "state": job.state,
                     "attempts": job.attempts, "max_attempts": job.max_attempts,
                     "available_at": job.available_at, "lease_expires_at": job.lease_expires_at,
-                    "heartbeat_at": job.heartbeat_at, "retry_of": job.retry_of,
+                    "heartbeat_at": job.heartbeat_at, "dispatch_until": job.dispatch_until,
+                    "next_dispatch_at": _next_dispatch_at(job),
+                    "retry_of": job.retry_of,
                     "last_error": _status_error(job.last_error),
                     "history": [{"fence": a.fence, "state": a.state, "error": _status_error(a.error),
                                  "partial_result": _partial_summary(a.partial_result, document_ids),
@@ -533,6 +535,11 @@ def _status_error(error):
     code = str(error).split(":", 1)[0]
     return code if code in {"WORKER_LEASE_EXPIRED", "BUDGET_ADMISSION_FAILED", "INVALID_RESPONSE_SCHEMA",
                            "PROVIDER_EXCEPTION", "PROVIDER_POLICY_BLOCKED"} else "JOB_ATTEMPT_FAILED"
+
+
+def _next_dispatch_at(job):
+    candidates = [value for value in (job.available_at, job.dispatch_until) if value is not None]
+    return max(candidates) if candidates else None
 
 
 def _partial_summary(partial, document_ids):

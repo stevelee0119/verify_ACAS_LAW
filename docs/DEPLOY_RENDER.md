@@ -70,6 +70,15 @@ Worker를 두지 않으면 웹 서비스에 `LV_WORKER_MODE=inprocess`를 설정
 Redis 없이 DB 작업 큐와 임대 기반 복구를 사용한다. 다중 프로세스의 작업 중복 실행은
 임대와 실행 세대 번호로 차단한다. 장애 복구 시 재시도 여부는 작업 상태에서 확인한다.
 
+Render starter 단일 web 서비스에서는 `LV_JOB_CONCURRENCY=1`을 권장한다. OCR·PDF 렌더링·외부
+출처 조회가 동시에 여러 건 실행되면 같은 인스턴스의 헬스체크, 진행률 조회, 업로드 응답까지 함께
+느려질 수 있다. 큐는 PostgreSQL에 보존되므로 동시 실행을 줄여도 작업은 사라지지 않는다.
+
+Celery worker를 추가한 경우에도 DB 임대가 실제 실행 권한이다. 브로커에 전달한 뒤 워커가 늦게
+받아가는 동안 같은 run이 짧은 주기로 중복 전달되지 않도록 `LV_JOB_CELERY_DISPATCH_SECONDS`
+또는 공통 `LV_JOB_DISPATCH_SECONDS`를 조정한다. 브로커 연결 실패 재시도 간격은
+`LV_JOB_DISPATCH_RETRY_SECONDS`로 조정한다.
+
 ## `$PORT`
 
 Render는 `PORT` 환경변수로 포트를 지정한다. 시작 모듈이 이를 검증해 `--port`에 전달하고
@@ -86,6 +95,8 @@ Render가 주는 PostgreSQL URL은 `postgres://` 형식이라 SQLAlchemy가 인�
 
 변수명은 `LV_DATABASE_URL`이 우선이고 없으면 `DATABASE_URL`을 쓴다.
 브로커도 `LV_CELERY_BROKER` → `REDIS_URL` 순으로 찾는다.
+PostgreSQL 연결 지연은 `LV_DB_CONNECT_TIMEOUT`, 풀 대기는 `LV_DB_POOL_TIMEOUT`, 오래된 연결
+재사용은 `LV_DB_POOL_RECYCLE_SECONDS`로 제한한다.
 
 ## 반드시 확인할 것
 

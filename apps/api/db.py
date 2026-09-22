@@ -463,12 +463,16 @@ def get_engine():
             })
         else:
             # 운영 DB는 커넥션 풀과 연결 상태 확인을 켠다
+            connect_timeout = max(1, int(os.getenv("LV_DB_CONNECT_TIMEOUT", "10")))
             _engine = create_engine(
                 url,
                 future=True,
                 pool_pre_ping=True,
                 pool_size=int(os.getenv("LV_DB_POOL_SIZE", "5")),
                 max_overflow=int(os.getenv("LV_DB_MAX_OVERFLOW", "10")),
+                pool_timeout=int(os.getenv("LV_DB_POOL_TIMEOUT", "30")),
+                pool_recycle=int(os.getenv("LV_DB_POOL_RECYCLE_SECONDS", "1800")),
+                connect_args={"connect_timeout": connect_timeout},
             )
         if url.startswith("sqlite"):
 

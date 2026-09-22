@@ -191,6 +191,7 @@ const operationsUI = (() => {
   async function jobDetails(run) {
     const job=await api(`/verification-runs/${run.id}/job`), content=node("div",null,"full");
     content.append(node("p",`${label(job.state)} · 시도 ${job.attempts}/${job.max_attempts}`));
+    if(job.next_dispatch_at && !terminal(job))content.append(node("p",`다음 실행 확인 ${dateText(job.next_dispatch_at)}`,"muted"));
     if(job.last_error)content.append(node("p",job.last_error,"error"));
     content.append(workflowUI.table(["시도","상태","시작","종료","기록"],job.history.map(attempt=>[
       String(attempt.fence),label(attempt.state),dateText(attempt.started_at),dateText(attempt.finished_at),

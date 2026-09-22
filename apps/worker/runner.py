@@ -13,6 +13,14 @@ from packages.common.config import get_settings
 log = logging.getLogger(__name__)
 
 
+def _env_seconds(name, default):
+    try:
+        value = float(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(1.0, value)
+
+
 class JobRunner:
     def __init__(self, store=None):
         self.store = store or JobStore()
@@ -108,7 +116,11 @@ class JobRunner:
                 if active >= limit:
                     self.store.defer(run_id, active)
                     return "queued"
-        if not self.store.acquire_dispatch(run_id):
+        dispatch_seconds = (_env_seconds("LV_JOB_CELERY_DISPATCH_SECONDS",
+                                         os.getenv("LV_JOB_DISPATCH_SECONDS", "300"))
+                            if mode == "celery" else
+                            _env_seconds("LV_JOB_DISPATCH_SECONDS", "30"))
+        if not self.store.acquire_dispatch(run_id, seconds=dispatch_seconds):
             return mode
         if mode == "celery":
             try:
@@ -121,7 +133,8 @@ class JobRunner:
                 return "celery"
             except Exception as exc:
                 if get_settings().worker_mode == "celery":
-                    self.store.dispatch_result(run_id, error=type(exc).__name__)
+                    self.store.dispatch_result(run_id, error=type(exc).__name__,
+                                               seconds=_env_seconds("LV_JOB_DISPATCH_RETRY_SECONDS", "30"))
                     return "queued"
                 # Auto mode may run locally; both transports must obtain the same DB lease.
         from apps.api.services import execute_run
@@ -131,7 +144,8 @@ class JobRunner:
                 return "inprocess"
             active = sum(t.is_alive() for t in self._threads.values())
             if active >= limit:
-                self.store.dispatch_result(run_id, error="LOCAL_CAPACITY_BUSY")
+                self.store.dispatch_result(run_id, error="LOCAL_CAPACITY_BUSY",
+                                           seconds=_env_seconds("LV_JOB_DISPATCH_RETRY_SECONDS", "5"))
                 self.store.defer(run_id, active)
                 return "queued"
             thread = threading.Thread(target=execute_run, args=(run_id,), kwargs={"store": self.store},
