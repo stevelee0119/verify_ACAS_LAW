@@ -87,6 +87,15 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                         && (!index || rect.left >= rects[index - 1].right));
                 }""")
                 expect(page.get_by_role("link", name="ACASia_LAW 홈")).to_be_visible()
+                title = page.locator(".brand-title")
+                expect(title).to_be_visible()
+                page.evaluate("document.fonts.ready")
+                assert title.evaluate("el => getComputedStyle(el).fontSize") == "22px"
+                assert page.evaluate("document.fonts.check('600 22px \"ACAS Title\"', '법률문서 검증시스템')")
+                assert title.evaluate("""el => {
+                    const r = el.getBoundingClientRect(), bar = el.closest('header').getBoundingClientRect();
+                    return r.left >= 0 && r.right <= innerWidth && r.bottom <= bar.bottom && el.scrollWidth <= el.clientWidth;
+                }""")
                 page.screenshot(path=str(tmp_path / f"emblem-workspace-{width}.png"), full_page=True)
                 if width <= 700:
                     page.get_by_role("button", name="프로젝트 목록", exact=True).click()

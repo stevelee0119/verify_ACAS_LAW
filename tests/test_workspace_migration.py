@@ -28,5 +28,5 @@ def test_upgrade_existing_review_database(tmp_path, monkeypatch):
     assert "base_revision" in {c["name"] for c in schema.get_columns("review_drafts")}
     with engine.connect() as connection:
         assert connection.execute(text("SELECT filename FROM documents WHERE id='existing-document'")).scalar_one() == "original.pdf"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "f3a91c"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "a72e10"
     engine.dispose()

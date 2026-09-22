@@ -17,6 +17,7 @@ from packages.common.enums import ExternalAIPolicy
 from packages.llm_router.budget import budget_settings, write_session
 
 from .db import Base, Document, JSONType, Organization, Project, VerificationCheck, VerificationRun, get_session_factory
+from .project_lifecycle import lock_project
 
 TERMINAL = {"COMPLETED", "PARTIAL_COMPLETED", "FAILED", "CANCELLED"}
 READY = {"QUEUED", "BACKOFF"}
@@ -42,7 +43,7 @@ def execution_security(session, project_id, policy, *, saved=None, lock=False):
     """Workers enforce current restrictions without inventing an HTTP principal."""
     saved = saved or {}
     project = session.get(Project, project_id, with_for_update=lock)
-    if project is None:
+    if project is None or project.deleted_at is not None:
         raise JobConflict("Execution project is unavailable")
     if saved.get("organization_id") and saved["organization_id"] != project.organization_id:
         raise JobConflict("Execution organization changed or was removed")
@@ -175,10 +176,9 @@ def enqueue_run(session, run, *, force=False):
 
     Returns (canonical_run, reused). A unique key resolves concurrent submits.
     """
-    if session.get_bind().dialect.name == "sqlite":
-        connection = session.connection()
-        if not connection.connection.driver_connection.in_transaction:
-            connection.exec_driver_sql("BEGIN IMMEDIATE")
+    project = lock_project(session, run.project_id)
+    if project is None or project.deleted_at is not None:
+        raise JobConflict("Project is in the trash or unavailable")
     if not force:
         existing = session.execute(select(VerificationRun).where(
             VerificationRun.project_id == run.project_id,
@@ -444,6 +444,9 @@ class JobStore:
             source = session.get(VerificationRun, run_id)
             if source is None:
                 raise KeyError(run_id)
+            project = lock_project(session, source.project_id)
+            if project is None or project.deleted_at is not None:
+                raise JobConflict("Project is in the trash or unavailable")
             existing = session.execute(select(DurableJob).where(DurableJob.retry_of == run_id)).scalar_one_or_none()
             if existing:
                 return existing.run_id

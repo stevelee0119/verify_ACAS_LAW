@@ -100,6 +100,10 @@ def _authorize(session, request, principal, route, params, payload):
     minimum = "VIEWER" if read else "MEMBER"
     if "/members" in template or "/access" in template or request.method == "DELETE":
         minimum = "ADMIN"
+    trash_access = ((template == "/api/projects/{project_id}/restore" and request.method == "POST")
+                    or (template == "/api/projects/{project_id}" and request.method == "DELETE"))
+    if trash_access:
+        minimum = "ADMIN"
     project_ids = set()
     for key, value in params.items():
         if key == "project_id" or key in RESOURCE_MODELS:
@@ -108,12 +112,16 @@ def _authorize(session, request, principal, route, params, payload):
         if len(project_ids) != 1:
             raise HTTPException(404, "Resources must belong to the same project")
         project_id = next(iter(project_ids))
-        require_project(session, project_id, minimum, principal)
+        require_project(session, project_id, minimum, principal, include_deleted=trash_access)
         query_values = {key: request.query_params.getlist(key) for key in request.query_params}
         references = list(_references(payload)) + list(_references(query_values))
         for key, value in references:
             if _resource_project(session, key, value) != project_id:
                 raise HTTPException(404, "Resource not found in this project")
+        return
+    if template == "/api/verification-runs" and read:
+        if not getattr(getattr(route, "endpoint", None), "__project_scoped__", False):
+            raise HTTPException(503, "Run collection identity integration is required")
         return
     if template.endswith("/projects"):
         if request.method not in {"GET", "HEAD", "POST"}:

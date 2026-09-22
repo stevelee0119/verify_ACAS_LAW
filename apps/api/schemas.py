@@ -82,6 +82,8 @@ class ProjectOut(BaseModel):
     included_document_count: int = 0
     scope_revision: int = 0
     key_dates: Dict[str, str] = Field(default_factory=dict)
+    deleted_at: Optional[datetime] = None
+    can_delete: bool = False
 
 
 class DocumentOut(BaseModel):

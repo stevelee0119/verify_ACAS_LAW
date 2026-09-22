@@ -1,3 +1,11 @@
+@font-face {
+  font-family: "ACAS Title";
+  src: url("/static/fonts/acas-title.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+}
+
 :root {
   font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
   color: #202b2a;
@@ -186,6 +194,11 @@ h3 {
 }
 
 .brand-title {
+  font-family: "ACAS Title", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: #234540;
   white-space: nowrap;
 }
 
@@ -195,9 +208,6 @@ h3 {
 
 /* 부제는 제품명과 같은 줄에 두되 구분선으로 분리한다. */
 .brand-sub {
-  font-size: 12px;
-  font-weight: 400;
-  color: var(--muted);
   padding-left: 11px;
   margin-left: 2px;
   border-left: 1px solid var(--line);
@@ -790,9 +800,11 @@ table {
 }
 
 @media(max-width:1050px) {
-  .brand-title {
+  .connection {
     display: none;
   }
+
+  .topbar>#accountButton { margin-left: auto; }
 
   main {
     padding: 24px 20px
@@ -826,9 +838,11 @@ table {
 
 @media(max-width:700px) {
   .topbar {
+    position: relative;
     padding: 0 12px;
+    padding-bottom: 36px;
     gap: 9px;
-    height: 60px
+    height: 96px
   }
 
   .brand {
@@ -840,9 +854,15 @@ table {
     width: 152px;
   }
 
-  /* 좁은 화면에서는 제품명만 남긴다. 부제까지 넣으면 연결 상태가 밀린다. */
   .brand-sub {
-    display: none
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 9px;
+    padding: 0;
+    margin: 0;
+    border: 0;
+    text-align: center
   }
 
   .connection {
@@ -850,7 +870,7 @@ table {
   }
 
   .topbar>#settingsButton {
-    margin-left: auto
+    margin-left: 0
   }
 
   .mobile {
@@ -859,16 +879,16 @@ table {
 
   .workspace {
     display: block;
-    min-height: calc(100vh - 60px)
+    min-height: calc(100vh - 96px)
   }
 
   aside {
     display: none;
     position: absolute;
-    top: 60px;
+    top: 96px;
     left: 0;
     width: min(290px, 90vw);
-    min-height: calc(100vh - 60px);
+    min-height: calc(100vh - 96px);
     z-index: 10;
     box-shadow: 10px 0 20px #0001
   }
@@ -1045,6 +1065,18 @@ table {
   margin-top: 12px;
   max-width: 100%;
 }
+
+.sidebar-tools { display: flex; gap: 6px; flex-wrap: wrap; }
+.sidebar-tools button { padding: 7px 9px; flex: 1; white-space: nowrap; }
+.project-trash-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.project-trash-item>div { min-width: 0; overflow-wrap: anywhere; }
+.project-trash-item p { margin: 6px 0 0; }
+.project-trash-item>button { flex-shrink: 0; }
+.background-job { overflow-wrap: anywhere; }
+.background-job>.badge { margin-left: 10px; }
+.background-job progress { display: block; width: 100%; height: 6px; }
+.background-job p { margin: 10px 0; }
+#deleteProject { color: #a13d37; }
 
 #progressText { min-width: 0; overflow-wrap: anywhere; }
 #progressPercent { flex-shrink: 0; }

@@ -171,6 +171,70 @@ def test_rejects_empty_document_run_before_dispatch(restore_worker_settings):
 
 
 # --- 실제 브로커 통합 ----------------------------------------------------------
+def test_server_completes_verification_without_browser_polling(tmp_path, monkeypatch, restore_worker_settings):
+    import threading
+    import time
+
+    from helpers import make_pdf
+    from apps.api.db import Document, Project, VerificationRun, get_session_factory, init_db
+    from apps.api.job_control import DurableJob
+    from apps.worker.runner import JobRunner
+    from packages.common.storage import get_storage, sha256_bytes
+    from packages.verification_engine import VerificationPipeline
+
+    restore_worker_settings.worker_mode = "inprocess"
+    monkeypatch.setenv("LV_JOB_POLL_SECONDS", "0.1")
+    init_db()
+    factory = get_session_factory()
+    with factory() as session:
+        project = Project(name="Background execution regression")
+        session.add(project)
+        session.flush()
+        data = make_pdf(tmp_path / "background.pdf", ["Synthetic background verification document."]).read_bytes()
+        digest = sha256_bytes(data)
+        key = get_storage().put_original(f"{project.id}/{digest}.pdf", data)
+        document = Document(project_id=project.id, filename="background.pdf", mime_type="application/pdf",
+                            size_bytes=len(data), sha256=digest, storage_key=key)
+        session.add(document)
+        session.flush()
+        run = VerificationRun(project_id=project.id, document_ids=[document.id], profile="STANDARD",
+                              state="QUEUED", verification_key="background-without-client")
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    started, release = threading.Event(), threading.Event()
+    original_run = VerificationPipeline.run
+
+    def slow_run(self, *args, **kwargs):
+        started.set()
+        assert release.wait(15)
+        return original_run(self, *args, **kwargs)
+
+    monkeypatch.setattr(VerificationPipeline, "run", slow_run)
+    runner = JobRunner()
+    try:
+        runner.start()
+        assert started.wait(15), "The server recovery poller must pick up the persisted job"
+        release.set()
+        # Observe only the DB: no HTTP status requests, submit(), recover(), or runner.wait().
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            with factory() as session:
+                finished = session.get(VerificationRun, run_id)
+                if finished.state in {"COMPLETED", "PARTIAL_COMPLETED", "FAILED", "CANCELLED"}:
+                    assert finished.state in {"COMPLETED", "PARTIAL_COMPLETED"}
+                    assert finished.result_json
+                    assert session.get(DurableJob, run_id).state in {"COMPLETED", "PARTIAL_COMPLETED"}
+                    break
+            time.sleep(.05)
+        else:
+            pytest.fail("Server did not complete the persisted job without browser polling")
+    finally:
+        release.set()
+        runner.stop(timeout=30)
+
+
 @celery_integration
 def test_dispatches_to_real_broker(tmp_path, restore_worker_settings):
     """브로커가 있으면 Celery로 넘기고 task id를 남긴다."""

@@ -230,6 +230,8 @@ async function openProject(id) {
   document.dispatchEvent(new Event("acas-project-changed"));
   state.documents = docs;
   state.run = runs[0] || null;
+  state.pollError = null;
+  state.progressSeen = null;
   state.findings = [];
   state.result = {};
   $("sidebar").classList.remove("open");
@@ -250,11 +252,11 @@ function renderProject() {
   $("policyLabel").textContent = label(p.external_ai_policy);
   $("staleNotice").hidden = !state.run || state.run.input_snapshot?.scope_revision === p.scope_revision;
   const busy = state.run && !terminal(state.run);
-  const loginRequired = state.pollError?.runId === state.run?.id && state.pollError?.authRequired;
+  const progressIssue = state.run && state.pollError?.runId === state.run.id;
   $("verifyBtn").disabled = !!busy || !!state.uploadBatch?.busy || !state.documents.some(d => d.included_in_verification);
   $("reverify").disabled = $("verifyBtn").disabled;
-  $("progress").hidden = !busy && !loginRequired;
-  if (busy || loginRequired) {
+  $("progress").hidden = !busy && !progressIssue;
+  if (busy || progressIssue) {
     const percent = Math.round(state.run.progress * (state.run.progress <= 1 ? 100 : 1));
     $("progressText").textContent = state.run.stage_message || label(state.run.state);
     $("progressPercent").textContent = `${percent}%`;
@@ -268,6 +270,7 @@ function renderProject() {
   renderIssues();
   renderTimeline();
   operationsUI.renderJobControls();
+  projectTools.renderControls();
   $("reportScope").textContent = state.run ? `${dateText(state.run.started_at)} · 자료 ${state.run.document_ids.length}개 · ${label(state.run.state)}${$("staleNotice").hidden?"":" · 변경 전 자료 기준"}` : "검증 결과가 없습니다.";
   $("createReport").disabled = !["COMPLETED","PARTIAL_COMPLETED"].includes(state.run?.state);
 }
@@ -616,6 +619,7 @@ async function verify() {
     renderFindings();
     if (terminal(state.run)) await loadResults(state.generation);
     else pollRun(state.generation);
+    projectTools.refresh();
   } catch (error) {
     renderProject();
     throw error;
@@ -632,11 +636,19 @@ function renderProgressNotice() {
   const seconds = Math.floor((Date.now() - state.progressSeen.at) / 1000);
   const error = state.pollError?.runId === run.id;
   const authRequired = error && state.pollError.authRequired;
-  const message = authRequired ? "로그인이 만료되어 결과 조회를 잠시 멈췄습니다. 다시 로그인하면 같은 검증의 진행 상태와 결과를 확인합니다."
+  const unavailable = error && state.pollError.unavailable;
+  const message = unavailable ? "이 검증에 접근할 수 없습니다. 프로젝트 삭제 또는 접근 권한 변경 여부를 확인하세요."
+    : authRequired ? "로그인이 만료되어 결과 조회를 잠시 멈췄습니다. 다시 로그인하면 같은 검증의 진행 상태와 결과를 확인합니다."
     : error ? "서버 연결이 지연되어 진행 상태를 갱신하지 못했습니다. 자동으로 다시 연결 중입니다. 검증 작업이 중단된 것으로 확정된 것은 아닙니다."
     : seconds >= 60 ? `현재 단계의 진행 정보가 ${seconds}초 동안 변경되지 않았습니다. 서버 응답은 정상이며 작업 결과를 기다리고 있습니다.` : "";
   $("progressNotice").textContent = message;
   $("progressNotice").hidden = !message;
+  if (unavailable) {
+    $("progressNotice").append(button("프로젝트 목록", async () => {
+      projectTools.clearProject(); await loadProjects();
+      if (state.projects.length) await openProject(state.projects[0].id);
+    }));
+  }
   if (authRequired) {
     $("progress").hidden = false;
     const login = button("다시 로그인", () => operationsUI.authenticate(), "resume-login");
@@ -654,12 +666,15 @@ function resumeAuthenticatedRun() {
   }
 }
 
-function pollRun(generation) {
+function pollRun(generation, delayMs = document.hidden ? 30000 : 1500) {
   clearTimeout(state.timer);
   const runId = state.run?.id;
   if (!runId) return;
   state.timer = setTimeout(async () => {
     if (generation !== state.generation || state.run?.id !== runId) return;
+    if (state.pollInFlight?.generation === generation && state.pollInFlight.runId === runId) return;
+    const pending = {generation, runId};
+    state.pollInFlight = pending;
     try {
       const run = await api(`/verification-runs/${runId}`, {timeoutMs: 15000, interactiveAuth: false});
       if (generation !== state.generation || state.run?.id !== runId) return;
@@ -674,11 +689,14 @@ function pollRun(generation) {
     } catch (error) {
       if (generation !== state.generation || state.run?.id !== runId) return;
       const authRequired = error.status === 401 || error.code === "AUTH_REQUIRED";
-      state.pollError = {runId, authRequired};
+      const unavailable = [403, 404].includes(error.status);
+      state.pollError = {runId, authRequired, unavailable};
       renderProject();
-      if (!authRequired) pollRun(generation);
+      if (!authRequired && !unavailable) pollRun(generation);
+    } finally {
+      if (state.pollInFlight === pending) state.pollInFlight = null;
     }
-  }, 1500);
+  }, delayMs);
 }
 async function loadResults(generation, options = {}) {
   if (!state.run) {
@@ -1148,6 +1166,7 @@ async function init() {
   try {
     const health = await api("/health");
     const identity = await operationsUI.refreshIdentity();
+    projectTools.start();
     $("connection").textContent = `${identity.authentication === "local" ? "로컬" : "조직"} 작업 공간 · v${health.version}`;
     await loadProjects();
     const id = localStorage.getItem("acas-project");
@@ -1159,5 +1178,6 @@ async function init() {
 }
 workflowUI.init();
 operationsUI.init();
+projectTools.init();
 calculationWorkbench.init();
 init();

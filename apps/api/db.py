@@ -182,6 +182,8 @@ class Project(Base):
     scope_revision = Column(Integer, nullable=False, default=0, server_default="0")
     creation_key = Column(String(80), unique=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    deleted_at = Column(DateTime, index=True)
+    deleted_by = Column(String(80))
 
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
 

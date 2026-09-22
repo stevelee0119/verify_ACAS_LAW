@@ -1,15 +1,38 @@
 """Authorized durable job status, cancellation and immutable-input retries."""
-from fastapi import APIRouter, Depends, HTTPException, Request
+from datetime import datetime, timedelta
+
+from fastapi import APIRouter, Depends, HTTPException, Request, Query
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
-from ..db import VerificationRun, get_db
-from ..identity import actor_id, current_principal, require_project
-from ..job_control import JobConflict, JobStore
+from ..db import Project, VerificationRun, get_db
+from ..identity import actor_id, current_principal, require_project, filter_project_query
+from ..job_control import JobConflict, JobStore, TERMINAL
+from ..access import project_scoped
 from ..schemas import RunOut
 from ..services import get_runner
 from .verification import _run_out
 
 router = APIRouter(tags=["jobs"])
+
+
+@router.get("/verification-runs")
+@project_scoped
+def background_runs(limit: int = Query(default=50, ge=1, le=100), session: Session = Depends(get_db)):
+    active = VerificationRun.state.not_in(TERMINAL)
+    active_count = session.scalar(filter_project_query(select(func.count(VerificationRun.id)), session,
+                                                       VerificationRun.project_id).where(active)) or 0
+    query = filter_project_query(select(VerificationRun, Project.name).join(Project), session,
+                                 VerificationRun.project_id).where(or_(
+        active, VerificationRun.finished_at >= datetime.utcnow() - timedelta(days=1)))
+    rows = session.execute(query.order_by(case((active, 0), else_=1),
+                                          VerificationRun.started_at.desc(), VerificationRun.id).limit(limit)).all()
+    return {"active_count": active_count, "runs": [{
+        "id": run.id, "project_id": run.project_id, "project_name": name,
+        "state": run.state, "progress": run.progress or 0,
+        "stage_message": run.stage_message or "", "started_at": run.started_at,
+        "finished_at": run.finished_at,
+    } for run, name in rows]}
 
 
 def project_id_for_run(session: Session, run_id: str) -> str:

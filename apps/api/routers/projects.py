@@ -17,13 +17,15 @@ from packages.common.enums import AuditEventType
 from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
-from ..db import Document, DocumentVersion, Project, get_db
+from ..db import Document, DocumentVersion, Project, VerificationRun, get_db
+from ..job_control import DurableJob, TERMINAL
+from ..project_lifecycle import lock_project
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
 from ..services import make_audit
 from ..security import scan_upload
 from ..access import project_scoped
 from ..identity import (actor_id, apply_organization_policy, filter_project_query,
-                        project_creation_defaults, require_project)
+                        project_creation_defaults, require_project, project_role)
 
 router = APIRouter(tags=["projects"])
 logger = logging.getLogger(__name__)
@@ -53,6 +55,8 @@ def _project_out(session: Session, project: Project) -> ProjectOut:
             Document.project_id == project.id, Document.included_in_verification.is_(True))) or 0,
         scope_revision=project.scope_revision or 0,
         key_dates=project.key_dates or {},
+        deleted_at=project.deleted_at,
+        can_delete=project_role(session, project) == "ADMIN",
     )
 
 
@@ -182,9 +186,44 @@ def update_document(document_id: str, payload: DocumentUpdate, session: Session 
 
 @router.get("/projects", response_model=List[ProjectOut])
 @project_scoped
-def list_projects(session: Session = Depends(get_db)) -> List[ProjectOut]:
-    projects = session.execute(filter_project_query(select(Project), session).order_by(Project.created_at.desc())).scalars().all()
+def list_projects(deleted: bool = False, session: Session = Depends(get_db)) -> List[ProjectOut]:
+    query = filter_project_query(select(Project), session, include_deleted=deleted)
+    if deleted:
+        query = query.where(Project.deleted_at.is_not(None))
+    projects = session.execute(query.order_by(Project.created_at.desc())).scalars().all()
+    if deleted:
+        projects = [p for p in projects if project_role(session, p) == "ADMIN"]
     return [_project_out(session, p) for p in projects]
+
+
+@router.delete("/projects/{project_id}", status_code=204)
+def delete_project(project_id: str, session: Session = Depends(get_db)):
+    lock_project(session, project_id)
+    project = require_project(session, project_id, "ADMIN", include_deleted=True)
+    if project.deleted_at is None:
+        active_run = session.scalar(select(VerificationRun.id).where(
+            VerificationRun.project_id == project_id, VerificationRun.state.not_in(TERMINAL)).limit(1))
+        active_job = session.scalar(select(DurableJob.run_id).where(
+            DurableJob.project_id == project_id, DurableJob.state.not_in(TERMINAL)).limit(1))
+        if active_run or active_job:
+            raise HTTPException(409, "진행 중이거나 대기 중인 검증이 있습니다. 완료 후 또는 검증 취소 후 삭제하세요.")
+        project.deleted_at, project.deleted_by = datetime.utcnow(), actor_id()
+        session.commit()
+        make_audit(session).record(AuditEventType.USER_OVERRIDE, {"action": "PROJECT_TRASHED"},
+                                  project_id=project_id, actor=actor_id())
+    return Response(status_code=204)
+
+
+@router.post("/projects/{project_id}/restore", response_model=ProjectOut)
+def restore_project(project_id: str, session: Session = Depends(get_db)):
+    lock_project(session, project_id)
+    project = require_project(session, project_id, "ADMIN", include_deleted=True)
+    if project.deleted_at is not None:
+        project.deleted_at = project.deleted_by = None
+        session.commit()
+        make_audit(session).record(AuditEventType.USER_OVERRIDE, {"action": "PROJECT_RESTORED"},
+                                  project_id=project_id, actor=actor_id())
+    return _project_out(session, project)
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
@@ -254,6 +293,8 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
         raise HTTPException(400, issue)
 
     digest = sha256_bytes(data)
+    lock_project(session, project_id)
+    require_project(session, project_id, "MEMBER")
     storage = get_storage()
     storage_key = storage.put_original(f"{project_id}/{digest}{suffix}", data)
 

@@ -13,6 +13,7 @@ from sqlalchemy.engine import Engine
 
 ROOT = Path(__file__).resolve().parents[1]
 MERGED_HEAD = "f3a91c"
+CURRENT_HEAD = "a72e10"
 CREATED = datetime(2026, 9, 1, 10, 0, 0)
 EXPIRES = datetime(2027, 9, 1, 10, 0, 0)
 PASSWORD_HASH = "scrypt$32768$8$1$" + "01" * 16 + "$" + "02" * 32
@@ -146,7 +147,8 @@ def _assert_preserved(engine, snapshot):
 def test_published_revision_parents_are_unchanged(migration_db):
     config, _ = migration_db
     graph = ScriptDirectory.from_config(config)
-    assert graph.get_heads() == [MERGED_HEAD]
+    assert graph.get_heads() == [CURRENT_HEAD]
+    assert graph.get_revision(CURRENT_HEAD).down_revision == MERGED_HEAD
     for revision, parent in {
         "98e07fd05c9e": None,
         "a1c4e77b9d20": "98e07fd05c9e",
@@ -178,7 +180,7 @@ def test_upgrade_preserves_existing_deployments(migration_db, starting_revision)
     _assert_preserved(engine, merged)
 
     with engine.connect() as connection:
-        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalars().all() == [MERGED_HEAD]
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalars().all() == [CURRENT_HEAD]
         assert {"session_tokens", "identity_accounts", "identity_api_tokens", "identity_browser_sessions",
                 "identity_external", "review_drafts", "review_revisions", "durable_jobs", "budget_accounts"} <= set(merged)
         users = sa.Table("users", sa.MetaData(), autoload_with=connection)
@@ -219,10 +221,32 @@ def test_merge_downgrade_refuses_to_discard_auth_history(migration_db):
     config, engine = migration_db
     command.upgrade(config, "b2d5f88c0e31")
     _seed_database(engine)
-    command.upgrade(config, "head")
+    command.upgrade(config, MERGED_HEAD)
     before = _snapshot(engine)
     with pytest.raises(RuntimeError, match="restore a verified backup"):
         command.downgrade(config, "e2fc39")
     _assert_preserved(engine, before)
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == MERGED_HEAD
+
+
+def test_project_trash_upgrade_from_schema_without_trash_columns(migration_db):
+    config, engine = migration_db
+    command.upgrade(config, MERGED_HEAD)
+    _seed_database(engine)
+    assert {"deleted_at", "deleted_by"}.isdisjoint(
+        {column["name"] for column in sa.inspect(engine).get_columns("projects")})
+    before = _snapshot(engine)
+    command.upgrade(config, "head")
+    _assert_preserved(engine, before)
+    with engine.connect() as connection:
+        assert connection.exec_driver_sql("SELECT deleted_at, deleted_by FROM projects").all() == [(None, None), (None, None)]
+        assert "ix_projects_deleted_at" in {index["name"] for index in sa.inspect(connection).get_indexes("projects")}
+    with engine.begin() as connection:
+        connection.execute(sa.text("UPDATE projects SET deleted_at=:at, deleted_by='owner' WHERE id='case-original'"), {"at": CREATED})
+    before = _snapshot(engine)
+    with pytest.raises(RuntimeError, match="restore a verified backup"):
+        command.downgrade(config, MERGED_HEAD)
+    _assert_preserved(engine, before)
+    with engine.connect() as connection:
+        assert connection.execute(sa.text("SELECT version_num FROM alembic_version")).scalar_one() == CURRENT_HEAD

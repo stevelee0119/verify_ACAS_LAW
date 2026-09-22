@@ -78,6 +78,7 @@ const operationsUI = (() => {
             authVersion += 1;
             resolve();
             if (typeof resumeAuthenticatedRun === "function") resumeAuthenticatedRun();
+            if (typeof projectTools !== "undefined") projectTools.start();
           }
         } catch (e) { error.textContent = e.message; }
         finally { password.value = token.value = ""; submit.disabled = false; modeButtons.forEach(tab => tab.disabled = false); }
@@ -225,5 +226,5 @@ const operationsUI = (() => {
     $("settingsButton").before(accountButton);
     const jobs=node("div",null,"toolbar job-controls");jobs.id="jobControls";$("progress").after(jobs);
   }
-  return {init,authenticate,refreshIdentity,renderJobControls,authVersion:()=>authVersion};
+  return {init,authenticate,refreshIdentity,renderJobControls,selectRun,authVersion:()=>authVersion};
 })();

@@ -399,8 +399,10 @@ def project_role(session: Session, project: Project, principal: Principal | None
 
 
 def require_project(session: Session, project_id: str, minimum: str = "VIEWER",
-                    principal: Principal | None = None) -> Project:
+                    principal: Principal | None = None, *, include_deleted: bool = False) -> Project:
     project = session.get(Project, project_id)
+    if project is not None and project.deleted_at is not None and not include_deleted:
+        raise HTTPException(404, "Project not found")
     role = project_role(session, project, principal) if project is not None else None
     if role is None:
         raise HTTPException(404, "Project not found")
@@ -416,13 +418,15 @@ def require_org_admin(principal: Principal | None = None) -> Principal:
     return principal
 
 
-def visible_project_ids(session: Session, principal: Principal | None = None) -> list[str] | None:
+def visible_project_ids(session: Session, principal: Principal | None = None, *, include_deleted=False) -> list[str] | None:
     principal = principal or current_principal()
     if principal.is_local:
         return None
     if principal.role not in ROLES:
         return []
     query = select(Project.id).where(Project.organization_id == principal.organization_id)
+    if not include_deleted:
+        query = query.where(Project.deleted_at.is_(None))
     if principal.role != "ADMIN" or not principal.organization_id:
         memberships = select(ProjectMember.project_id).where(
             ProjectMember.user_id == principal.user_id, ProjectMember.role.in_(ROLES))
@@ -430,9 +434,11 @@ def visible_project_ids(session: Session, principal: Principal | None = None) ->
     return list(session.scalars(query))
 
 
-def filter_project_query(query, session: Session, project_column=Project.id):
+def filter_project_query(query, session: Session, project_column=Project.id, *, include_deleted=False):
     """Apply BEFORE count/order/offset/limit, also for audit and export queries."""
-    ids = visible_project_ids(session)
+    if not include_deleted:
+        query = query.filter(project_column.in_(select(Project.id).where(Project.deleted_at.is_(None))))
+    ids = visible_project_ids(session, include_deleted=include_deleted)
     return query if ids is None else query.filter(project_column.in_(ids))
 
 
