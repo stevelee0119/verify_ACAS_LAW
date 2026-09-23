@@ -251,3 +251,43 @@ def test_all_providers_failing_still_reports_why(monkeypatch):
     outcome = asyncio.run(module.LLMRouter().cascade(question="q", evidence={"a": 1}))
     assert str(outcome.status) == "UNVERIFIED"
     assert outcome.rationale, "왜 수행하지 못했는지 남아야 한다"
+
+
+def test_live_check_reports_every_provider_in_the_real_cascade(monkeypatch):
+    """배포 점검이 공급자를 따로 부르는 데서 그치지 않고, 실제 분석 경로에서
+    세 모델이 모두 참여했는지와 근거 인용이 공식 전문에 있는지를 보고한다."""
+    import asyncio
+    import sys
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.router import ModelExecution
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
+    import live_source_check
+
+    source = "재항고를 기각한다. 원심의 판단에 법리오해의 위법이 없다."
+    order = ["anthropic", "openai", "gemini"]
+
+    async def fake_run(self, role, request, *, policy=None, exclude=None, expected_task=""):
+        name = next(n for n in order if n not in (exclude or []))
+        quote = "원심의 판단에 법리오해의 위법이 없다" if name != "gemini" else "지어낸 문구"
+        return SimpleNamespace(used=True, note="", text="",
+                               parsed={"status": "VERIFIED", "confidence": 0.9, "evidence_quotes": [quote]},
+                               executions=[ModelExecution(role=str(role), provider=name, model="m", ok=True)])
+
+    monkeypatch.setattr(module.LLMRouter, "run", fake_run)
+    from packages.common.config import get_settings
+
+    # 앞선 테스트가 공유 설정 객체를 바꿔 두므로 여기서 명시한다.
+    monkeypatch.setattr(get_settings(), "llm_cross_check", "all")
+    law = SimpleNamespace(
+        search_case=lambda n: SimpleNamespace(status="READY", records=[{"case_number": "2011모1839", "source_id": "1"}]),
+        fetch_case=lambda record: SimpleNamespace(records=[{"full_text": source}]))
+    rows = asyncio.run(live_source_check.check_cascade(True, SimpleNamespace(law=law)))
+    by_name = {row.name: row for row in rows}
+    assert by_name["cascade:참여 공급자"].ok, by_name["cascade:참여 공급자"].detail
+    assert "anthropic, gemini, openai" in by_name["cascade:참여 공급자"].detail
+    assert "일치 1건" in by_name["cascade:stage2:primary"].detail
+    assert "일치 0건" in by_name["cascade:stage4:grounder"].detail

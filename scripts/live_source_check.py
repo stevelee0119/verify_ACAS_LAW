@@ -281,6 +281,68 @@ async def check_llm(include: bool) -> List[CheckResult]:
     return out
 
 
+async def check_cascade(include: bool, registry) -> List[CheckResult]:
+    """실제 분석과 같은 경로(_semantic_review)로 교차검증 단계를 1회 돌린다.
+
+    공급자를 하나씩 부르는 점검은 키·모델 ID만 확인한다. 세 모델이 실제로
+    Primary → Critic → 제3 모델 순서로 모두 참여하는지, 공식 전문의 문구를
+    근거로 인용하는지는 이 점검에서만 드러난다.
+    """
+    from packages.llm_router import LLMRouter
+
+    if not include:
+        return [CheckResult(name="cascade", category="llm_cascade", configured=False, status="SKIPPED",
+                            ok=False, detail="--with-llm 미지정으로 호출하지 않음")]
+    case_number = "2011모1839"
+    adapter = registry.law
+    found = adapter.search_case(case_number)
+    record = next((r for r in found.records
+                   if same_case_number(case_number, str(r.get("case_number") or ""))), None)
+    full_text = str((record or {}).get("full_text") or "")
+    if record and not full_text:  # 실제 검증 경로(verifier)와 같이 상세 조회로 전문을 받는다.
+        detail = adapter.fetch_case(record)
+        full_text = str((detail.records[0] if detail.records else {}).get("full_text") or "")
+    if not full_text:
+        return [CheckResult(name="cascade", category="llm_cascade", configured=True, status="NO_SOURCE",
+                            ok=False, requires_key=True,
+                            detail=f"{case_number} 공식 전문을 받지 못해 교차검증을 돌리지 않음"
+                                   f"({found.status})")]
+    source_text = full_text[:24000]
+    router = LLMRouter()
+    outcome = await router.cascade(
+        question="인용된 판결의 취지와 문서의 주장이 부합하는지, 사실관계 차이와 적용상 한계를 검토하라. "
+                 "반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라.",
+        evidence={"official": {"case_number": case_number, "full_text": source_text},
+                  "document": f"본 서면은 대법원 {case_number} 결정을 인용한다."})
+    out: List[CheckResult] = []
+    providers = []
+    for stage in outcome.stages:
+        if stage.get("stage", 0) < 2:
+            continue
+        runs = [e for e in outcome.executions if e.role == {2: "PRIMARY_REASONER", 3: "INDEPENDENT_CRITIC",
+                                                          4: "WEB_GROUNDER"}.get(stage["stage"])]
+        used = [e for e in runs if e.ok]
+        verdict = stage.get("verdict") or {}
+        quotes = [q for q in verdict.get("evidence_quotes", []) if isinstance(q, str) and q.strip()]
+        grounded = sum(q in source_text for q in quotes)
+        providers += [e.provider for e in used]
+        tried = ", ".join(f"{e.provider}{'' if e.ok else '(실패)'}" for e in runs) or "-"
+        out.append(CheckResult(
+            name=f"cascade:stage{stage['stage']}:{stage['name']}", category="llm_cascade",
+            configured=True, requires_key=True, status="OK" if stage.get("used") else "NOT_USED",
+            ok=bool(stage.get("used")),
+            detail=(f"시도 {tried} — 판단 {verdict.get('status', '-')}, "
+                    f"근거 인용 {len(quotes)}건 중 공식 전문과 일치 {grounded}건"
+                    + (f" — {sanitize(stage.get('note'))}" if stage.get("note") else ""))))
+    distinct = sorted(set(providers))
+    out.append(CheckResult(
+        name="cascade:참여 공급자", category="llm_cascade", configured=True, requires_key=True,
+        status="OK" if len(distinct) >= 3 else "PARTIAL", ok=len(distinct) >= 3,
+        detail=(f"{len(distinct)}개({', '.join(distinct) or '없음'}) · 최종 {outcome.status} "
+                f"· 의견 불일치 {outcome.disagreement} · 교차검증 설정 {router.settings.llm_cross_check}")))
+    return out
+
+
 # ---------------------------------------------------------------------------
 def partition_failures(groups: Dict[str, List[CheckResult]]):
     """치명적 실패(키 문제)와 경고(공개 Source 일시 장애)를 나눈다."""
@@ -332,6 +394,11 @@ def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
         mark = "✅" if item.ok else ("⚪" if item.status in ("SKIPPED", "MISSING_KEY") else "❌")
         lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
 
+    lines += ["", "## 5. 3개 모델 교차검증(실제 분석 경로)", "", "| 단계 | 결과 | 비고 |", "|---|---|---|"]
+    for item in groups.get("llm_cascade", []):
+        mark = "✅" if item.ok else ("⚪" if item.status == "SKIPPED" else "❌")
+        lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
+
     fatal, warnings = partition_failures(groups)
     lines += ["", "## 판정", ""]
     if fatal:
@@ -374,6 +441,7 @@ def main() -> int:
         "live_legal": check_law_go_kr(registry),
         "live_academic": check_academic(registry),
         "llm": asyncio.run(check_llm(args.with_llm)),
+        "llm_cascade": asyncio.run(check_cascade(args.with_llm, registry)),
     }
 
     markdown = render_markdown(groups)
