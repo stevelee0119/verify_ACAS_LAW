@@ -114,6 +114,22 @@ ROLE_PREFERENCE = {
     LLMRole.LOW_COST_EXTRACTOR: ["gemini", "openai", "anthropic", "local"],
 }
 
+def _normalize_enums(parsed: Dict[str, Any], schema: Dict[str, Any]) -> None:
+    """정해진 값 목록이 있는 최상위 문자열 항목의 표기 차이(대소문자·공백·하이픈)만 맞춘다.
+
+    뜻이 다른 말을 허용 값으로 바꾸지는 않는다. 'verified'·'Partially Verified'처럼
+    같은 값을 다르게 적은 경우만 받아들인다.
+    """
+    for key, rule in (schema.get("properties") or {}).items():
+        allowed = rule.get("enum")
+        value = parsed.get(key)
+        if not allowed or not isinstance(value, str) or value in allowed:
+            continue
+        canonical = re.sub(r"[\s\-]+", "_", value.strip()).upper()
+        if canonical in allowed:
+            parsed[key] = canonical
+
+
 def describe_failure(error: str) -> str:
     """실행 기록의 오류를 보고서에 쓸 짧은 문장으로 바꾼다.
 
@@ -125,6 +141,9 @@ def describe_failure(error: str) -> str:
     code = re.match(r"^HTTP (\d{3})", text)
     if text.startswith("OUTPUT_TRUNCATED"):
         return "응답이 출력 한도에서 잘림"
+    if code and "quota" in text.lower():
+        # 기다려도 풀리지 않는다. 공급자 콘솔에서 요금제·결제·한도를 확인해야 한다.
+        return f"사용 한도(쿼터) 초과(HTTP {code.group(1)}) — 공급자 요금제·결제 확인 필요"
     if code and ("insufficient_quota" in text or code.group(1) == "402"):
         return f"잔액·사용 한도 부족(HTTP {code.group(1)})"
     if code and code.group(1) in {"429", "500", "502", "503", "504", "529"}:
@@ -133,7 +152,10 @@ def describe_failure(error: str) -> str:
         return f"API 키 또는 권한 오류(HTTP {code.group(1)})"
     if code:
         return f"요청 거절(HTTP {code.group(1)})"
-    for prefix, label in (("PROVIDER_TIMEOUT", "응답 시간 초과"), ("INVALID_RESPONSE_SCHEMA", "응답 형식 오류"),
+    if text.startswith("INVALID_RESPONSE_SCHEMA"):
+        detail = text.partition(":")[2].strip()
+        return f"응답 형식 오류({detail})" if detail else "응답 형식 오류"
+    for prefix, label in (("PROVIDER_TIMEOUT", "응답 시간 초과"),
                           ("EMPTY_RESPONSE", "본문 없는 응답"), ("BUDGET_ADMISSION_FAILED", "예산 한도로 호출하지 않음"),
                           ("PROVIDER_POLICY_BLOCKED", "정책상 사용 불가"), ("PROVIDER_EXCEPTION", "호출 중 오류")):
         if text.startswith(prefix):
@@ -374,7 +396,9 @@ class LLMRouter:
             except Exception as exc:
                 response = LLMResponse(False, provider=provider.name, model=provider.config.model,
                                        error="PROVIDER_EXCEPTION: " + type(exc).__name__)
-            if response.ok or not _TRANSIENT.match(response.error or ""):
+            error = response.error or ""
+            # 쿼터 초과(429 insufficient_quota 등)는 몇 초 기다려도 풀리지 않는다.
+            if response.ok or not _TRANSIENT.match(error) or "quota" in error.lower():
                 break
         if attempt and not response.ok:
             response.error = f"{response.error} (재시도 {attempt}회 후에도 실패)"
@@ -421,6 +445,8 @@ class LLMRouter:
 
         from .providers import _extract_json
         parsed = _extract_json(response.text) if request.schema else None
+        if request.schema and isinstance(parsed, dict):
+            _normalize_enums(parsed, request.schema)
         if request.schema:
             from jsonschema import validate, ValidationError
             try:
@@ -666,6 +692,16 @@ class LLMRouter:
 # 한국어 JSON은 공급자마다 토큰 사용량이 크게 다르다. 기본값(1200)에서는 한
 # 모델만 잘려 형식 오류로 탈락했다. 분량 상한을 프롬프트에 두고 한도는 넉넉히 준다.
 _VERDICT_MAX_TOKENS = 2500
+_VERDICT_FORMAT = (
+    "[응답 형식] 다음 키를 가진 JSON 객체 하나만 출력하라.\n"
+    "- status: 아래 영문 값 중 하나를 그대로 쓴다.\n"
+    "  VERIFIED(공식 전문이 문서의 주장을 뒷받침함) / PARTIALLY_VERIFIED(일부만 뒷받침하거나 적용에 한계가 있음) /\n"
+    "  CONTRADICTED(공식 전문이 문서의 주장과 반대됨) / UNVERIFIED(판단할 근거가 부족함)\n"
+    "- confidence: 0부터 1 사이의 숫자\n"
+    "- rationale: 판단 이유(문자열)\n"
+    "- evidence_quotes: 공식 전문에 있는 문장을 글자 그대로 옮긴 문자열 배열\n"
+    "- contradicts: true 또는 false"
+)
 _VERDICT_BREVITY = "[분량] rationale은 400자 이내, evidence_quotes는 최대 3개(각 200자 이내)로 쓰고 JSON 객체 하나만 답하라."
 
 _VERDICT_SCHEMA = {
@@ -690,7 +726,9 @@ def _build_prompt(question: str, evidence: Dict[str, Any], primary_verdict: Opti
              json.dumps(evidence.get("official", {}), ensure_ascii=False, indent=2)]
     if primary_verdict:
         parts += ["", "[1차 판단]", json.dumps(primary_verdict, ensure_ascii=False, indent=2)]
-    parts += ["", "[응답 형식] status, confidence, rationale, evidence_quotes, contradicts 를 담은 JSON만 출력하라."]
+    # 허용 값을 알려주지 않으면 모델마다 다른 말(예: SUPPORTED, 부합)을 써서 스키마에서
+    # 탈락한다. 실제 판결 전문으로 물었을 때 OpenAI·Anthropic이 모두 이렇게 빠졌다.
+    parts += ["", _VERDICT_FORMAT]
     body = evidence.get("document", "")
     return wrap_untrusted(body, "\n".join(parts)) if body else "\n".join(parts)
 

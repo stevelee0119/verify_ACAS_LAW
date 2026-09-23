@@ -452,3 +452,62 @@ def test_when_every_provider_fails_the_note_says_why():
     assert not result.used
     assert result.note == ("모든 공급자가 응답하지 못함: anthropic(응답이 출력 한도에서 잘림), "
                            "gemini(API 키 또는 권한 오류(HTTP 401))")
+
+
+def test_verdict_prompt_lists_allowed_statuses_and_spelling_is_normalized():
+    """허용 값을 알리지 않아 실제 판결 전문으로 물었을 때 OpenAI·Anthropic이 모두 형식 오류로 빠졌다."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    prompt = module._build_prompt("q", {"official": {"full_text": "t"}})
+    for value in ("VERIFIED", "PARTIALLY_VERIFIED", "CONTRADICTED", "UNVERIFIED"):
+        assert value in prompt
+
+    class _Provider:
+        name, available = "openai", True
+        config = SimpleNamespace(kind="local", model="m", name="openai")
+
+        def __init__(self, status):
+            self.status = status
+
+        async def generate(self, request):
+            return LLMResponse(True, provider="openai", text='{"status": "%s", "rationale": "r"}' % self.status)
+
+    def ask(status):
+        router = module.LLMRouter(providers={"openai": _Provider(status)})
+        request = module.LLMRequest(system="s", user="u", schema=module._VERDICT_SCHEMA)
+        return asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, request))
+
+    assert ask("partially verified").parsed["status"] == "PARTIALLY_VERIFIED"
+    rejected = ask("SUPPORTED")  # 뜻이 다른 말은 허용 값으로 바꾸지 않는다
+    assert not rejected.used
+    assert module.describe_failure(rejected.executions[0].error) == "응답 형식 오류(enum 위반(status))"
+
+
+def test_quota_errors_are_named_and_not_retried():
+    import asyncio
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    quota = 'HTTP 429: {"error": {"message": "You exceeded your current quota, please check your plan and billing details."}}'
+
+    class _Provider:
+        name, available, calls = "gemini", True, 0
+        config = SimpleNamespace(kind="local", model="m", name="gemini")
+
+        async def generate(self, request):
+            self.calls += 1
+            return LLMResponse(False, provider="gemini", error=quota)
+
+    provider = _Provider()
+    router = module.LLMRouter(providers={"gemini": provider})
+    router.retry_delays = (0.0, 0.0)
+    result = asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert provider.calls == 1
+    assert module.describe_failure(result.executions[0].error) == \
+        "사용 한도(쿼터) 초과(HTTP 429) — 공급자 요금제·결제 확인 필요"
