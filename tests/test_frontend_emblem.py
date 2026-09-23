@@ -90,8 +90,14 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 title = page.locator(".brand-title")
                 expect(title).to_be_visible()
                 page.evaluate("document.fonts.ready")
-                assert title.evaluate("el => getComputedStyle(el).fontSize") == "22px"
+                size = float(title.evaluate("el => getComputedStyle(el).fontSize").removesuffix("px"))
+                assert size == 22 if width > 700 else 13 <= size <= 22
                 assert page.evaluate("document.fonts.check('600 22px \"ACAS Title\"', '법률문서 검증시스템')")
+                # 폭과 무관하게 제목은 엠블럼 바로 옆(같은 줄)에 있어야 한다.
+                assert title.evaluate("""el => {
+                    const t = el.getBoundingClientRect(), e = document.querySelector('.brand-emblem').getBoundingClientRect();
+                    return t.left >= e.right && t.left - e.right <= 24 && t.top < e.bottom && t.bottom > e.top;
+                }""")
                 assert title.evaluate("""el => {
                     const r = el.getBoundingClientRect(), bar = el.closest('header').getBoundingClientRect();
                     return r.left >= 0 && r.right <= innerWidth && r.bottom <= bar.bottom && el.scrollWidth <= el.clientWidth;
