@@ -270,6 +270,18 @@ class GeminiProvider(LLMProvider):
         if candidates:
             text = "".join(p.get("text", "") for p in candidates[0].get("content", {}).get("parts", []))
         usage = data.get("usageMetadata", {})
+        if not text.strip():
+            # 생각(thinking) 토큰이 출력 한도를 다 쓰면 본문 없이 끝난다. 이를 성공으로
+            # 넘기면 뒤에서 '응답 형식 오류'로만 남아 원인을 알 수 없다.
+            finish = (candidates[0].get("finishReason") if candidates else None) or \
+                (data.get("promptFeedback") or {}).get("blockReason") or "UNKNOWN"
+            return LLMResponse(False, provider=self.name, model=self.config.model,
+                               input_tokens=usage.get("promptTokenCount", 0),
+                               output_tokens=usage.get("candidatesTokenCount", 0),
+                               latency_ms=int((time.time() - started) * 1000),
+                               error=f"EMPTY_RESPONSE: 본문 없는 응답(finishReason={finish}, "
+                                     f"thinking {usage.get('thoughtsTokenCount', 0)} tokens, "
+                                     f"한도 {request.max_tokens})")
         return LLMResponse(
             ok=True,
             text=text,

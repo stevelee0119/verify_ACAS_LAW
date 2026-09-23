@@ -468,6 +468,10 @@ class VerificationPipeline:
         result.findings.extend(self.calculation.verify_document(doc))
         result.findings.extend(analyze_timeline(events))
 
+        # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다.
+        mask_for_models = (None if context.external_ai_policy == ExternalAIPolicy.ORIGINAL
+                           else (lambda text: pii.mask_text(text).masked_text))
+
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
         emit(JobState.VERIFYING, f"{document.filename} 법률 주장 타당성 검토", base + span * 0.85)
         try:
@@ -479,6 +483,7 @@ class VerificationPipeline:
                     claims,
                     router=self.router,
                     external_ai_policy=context.external_ai_policy,
+                    mask=mask_for_models,
                 )
             )
             result.findings.extend(arg_validity.findings)
@@ -508,6 +513,7 @@ class VerificationPipeline:
                     router=self.router,
                     external_ai_policy=context.external_ai_policy,
                     metadata_indications=metadata_hint,
+                    mask=mask_for_models,
                 )
             )
             result.ai_detector_result = ai_detector_res.to_dict()

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
@@ -92,9 +92,15 @@ class HallucinationTableRow:
     #   CONTENT_MISMATCH 사건은 있으나 인용 내용이 공식 기록과 다르다
     #   FABRICATION_SUSPECTED 형식 자체가 성립하지 않는 등 적극적 근거가 있다
     basis: str = "UNCONFIRMED"
+    item_id: int = 0
+    # 모델별 참고 의견. 판정(basis·Finding)에는 쓰지 않는다.
+    ai_opinions: List[Dict[str, Any]] = field(default_factory=list)
+    ai_agreement: str = "NONE"   # AGREE / DISAGREE / SINGLE / NONE
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "ai_opinions": self.ai_opinions,
+            "ai_agreement": self.ai_agreement,
             "location": self.location,
             "claim_text": self.claim_text,
             "cited_authority": self.cited_authority,
@@ -112,12 +118,15 @@ class ArgumentValidityResult:
     rows: List[HallucinationTableRow] = field(default_factory=list)
     overall_validity_summary: str = ""
     findings: List[Finding] = field(default_factory=list)
+    ai_summary: str = ""
+    ai_providers: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "rows": [r.to_dict() for r in self.rows],
             "overall_validity_summary": self.overall_validity_summary,
             "findings_count": len(self.findings),
+            "ai_providers": self.ai_providers,
         }
 
 
@@ -129,6 +138,7 @@ async def verify_argument_validity(
     *,
     router: Optional[LLMRouter] = None,
     external_ai_policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
+    mask: Optional[Callable[[str], str]] = None,
 ) -> ArgumentValidityResult:
     """허위 판례 인용 및 법률 주장에 대한 타당성 종합 검토를 수행하고 대조표를 생성한다."""
     result = ArgumentValidityResult()
@@ -162,143 +172,21 @@ async def verify_argument_validity(
         result.overall_validity_summary = "공식 소스에서 확인되지 않은 인용이나 중대한 법률 주장 결함이 발견되지 않았습니다."
         return result
 
-    # 3. LLM(OpenAI/Gemini)을 활용한 심층 법률 타당성 검토
-    can_use_llm = False
-    if router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY:
-        if hasattr(router, "has_available_provider"):
-            can_use_llm = router.has_available_provider(policy=external_ai_policy)
-        elif hasattr(router, "available_providers"):
-            can_use_llm = len(router.available_providers(policy=external_ai_policy)) > 0
-
-    if can_use_llm and unverified_cases:
-        # LLM 프롬프트 준비
-        case_items_for_prompt = []
-        for idx, item in enumerate(unverified_cases, 1):
-            c: Citation = item["citation"]
-            case_items_for_prompt.append({
-                "item_id": idx,
-                "page": c.page or 1,
-                "cited_case": c.raw_text,
-                "surrounding_context_and_claim": item["context"][:1000],
-            })
-
-        system_prompt = (
-            "당신은 대한민국 최고 수준의 판사·변호사 출신 법률 인공지능 검토관입니다.\n"
-            "법률문서 검토 중 '공식 법원 판례 DB에서 전혀 존재하지 않는 가공의 판례(AI 환각 생성 판례)'가 인용된 정황이 발견되었습니다.\n\n"
-            "각 항목에 대해 다음 사항을 정밀하게 검토하십시오:\n"
-            "1. 작성자가 해당 가짜 판례를 통해 입증하려고 하는 '법률적 주장(Claim)'이 무엇인가?\n"
-            "2. 왜 이 판례가 AI의 임의 생성(환각)으로 판단되는가? (사건번호 형식, 존재하지 않는 법리 등)\n"
-            "3. [중요] 해당 가공의 판례를 제외하고 볼 때, 해당 법률적 주장이 대한민국 실정법(민법, 형법 등) 및 실제 대법원 확립된 판례 법리에 비추어 타당한가, 아니면 법리적으로 배척될 부당한 주장인가?\n"
-            "4. 상대방 또는 검토 변호사가 법정에서 이를 어떻게 지적하고 반박해야 하는가? (구체적 실무 반박 논거 및 실제 관련 판례 제시)\n\n"
-            "반드시 아래 JSON 포맷으로만 응답하십시오:\n"
-            "{\n"
-            '  "overall_summary": "종합적인 법률 주장 타당성 및 AI 환각 발생 평가 요약",\n'
-            '  "rows": [\n'
-            "    {\n"
-            '      "item_id": 1,\n'
-            '      "claim_text": "문서에 기재된 법률적 주장 핵심 요약",\n'
-            '      "ai_generation_basis": "AI 임의 생성(가짜 판례)으로 판단되는 구체적 이유",\n'
-            '      "validity_verdict": "부당 (법리 오해)" | "근거 결여" | "일부 타당하나 증명 부족" | "타당",\n'
-            '      "legal_reasoning": "실제 대한민국 법리 및 대법원 실제 태도에 비춘 심층 검토 내용",\n'
-            '      "recommended_counteraction": "상대방에 대한 효과적인 실무 반박 논거 및 지적 방안"\n'
-            "    }\n"
-            "  ]\n"
-            "}"
-        )
-
-        user_content = json.dumps({
-            "unverified_cases": case_items_for_prompt,
-            "document_title": doc.filename,
-        }, ensure_ascii=False)
-
-        req = LLMRequest(
-            system=system_prompt,
-            user=user_content,
-            temperature=0.1,
-            max_tokens=2500,
-        )
-
-        try:
-            provider = (
-                router.primary(policy=external_ai_policy)
-                if hasattr(router, "primary")
-                else (router.pick(LLMRole.PRIMARY_REASONER, policy=external_ai_policy) if hasattr(router, "pick") else None)
-            )
-            if not provider:
-                raise RuntimeError("No LLM provider available")
-            resp = await provider.structured_output(schema={}, request=req)
-            if resp.ok and resp.parsed:
-                parsed = resp.parsed
-                result.overall_validity_summary = parsed.get("overall_summary", "")
-                parsed_rows = {r.get("item_id"): r for r in parsed.get("rows", [])}
-
-                for idx, item in enumerate(unverified_cases, 1):
-                    c = item["citation"]
-                    p_row = parsed_rows.get(idx, {})
-
-                    claim = p_row.get("claim_text") or (c.context[:150] if c.context else "판례 인용 주장")
-                    basis = p_row.get("ai_generation_basis") or "대법원 종합법률정보 공식 DB 검색 결과 일치하는 판례 없음 (NOT_FOUND)"
-                    verdict_text = p_row.get("validity_verdict") or "근거 결여 (허위 판례 인용)"
-                    reasoning = p_row.get("legal_reasoning") or "존재하지 않는 가공의 판례를 근거로 삼고 있어 법리적 타당성을 인정하기 어렵습니다."
-                    counter = p_row.get("recommended_counteraction") or "판례 부존재 석명 요구 및 실제 확립된 법리에 따른 배척 주장 필요."
-
-                    row = HallucinationTableRow(
-                        location=f"{c.page or 1}면",
-                        claim_text=claim,
-                        cited_authority=c.raw_text,
-                        authority_exists=False,
-                        ai_generation_basis=basis,
-                        validity_verdict=verdict_text,
-                        legal_reasoning=reasoning,
-                        recommended_counteraction=counter,
-                    )
-                    result.rows.append(row)
-
-                    # Finding 생성
-                    feats = {"deterministic_rule": False, "used_llm": True, "fake_citation": c.raw_text}
-                    result.findings.append(
-                        Finding.create(
-                            type=FindingType.LEGAL_ARGUMENT_INVALID,
-                            status=VerificationStatus.CONTRADICTED,
-                            severity=Severity.HIGH,
-                            evidence_grade=EvidenceGrade.B,
-                            title=f"허위 판례에 근거한 법률 주장 발견: {c.raw_text}",
-                            detail=f"주장: {claim}. 검토 결과: [{verdict_text}] {reasoning}",
-                            confidence=confidence_score(feats),
-                            confidence_features=feats,
-                            document_id=doc.document_id,
-                            page=c.page,
-                            engine=ENGINE_NAME,
-                            tags=["LEGAL", "ARGUMENT_VALIDITY", "AI_HALLUCINATION"],
-                            evidence=[
-                                Evidence.create(
-                                    description="가짜 판례 인용 법률 주장",
-                                    grade=EvidenceGrade.B,
-                                    document_id=doc.document_id,
-                                    excerpt=c.context[:300] if c.context else c.raw_text,
-                                    supports=False,
-                                )
-                            ],
-                        )
-                    )
-                return result
-        except Exception:
-            # LLM 장애 시 규칙 기반 폴백
-            pass
-
-    # 4. 규칙 기반 폴백 처리
+    # 3. 판정은 규칙 기반으로만 만든다.
     #
     # 여기서 "부존재"를 단정하지 않는다. 조회가 성공했고 같은 사건번호가 없었다는
     # 사실은 "공식 DB에 없다"까지만 말해 준다. 국가법령정보 판례 DB는 모든 재판을
     # 수록하지 않으며, 미공개 결정·하급심·최신 사건은 빠져 있을 수 있다. 실재하는
     # 판례를 "가공의 판례"로 적어 두면 그 서면을 쓴 변호사에게 실제 손해가 간다.
     # 판정을 만든 verifier도 "'존재하지 않는 판례'라고 단정하지 않는다"고 적었다.
-    for item in unverified_cases:
+    for index, item in enumerate(unverified_cases, 1):
         c = item["citation"]
         basis = item.get("basis", "UNCONFIRMED")
         mismatch = basis == "CONTENT_MISMATCH"
         if basis == "FABRICATION_SUSPECTED":
-            result.rows.append(_fabrication_row(c))
+            row = _fabrication_row(c)
+            row.item_id = index
+            result.rows.append(row)
             result.findings.append(_fabrication_finding(c, doc))
             continue
         row = HallucinationTableRow(
@@ -328,6 +216,7 @@ async def verify_argument_validity(
                 "판결문 사본 또는 출처를 확인하고, 대법원 종합법률정보 등 다른 공식 경로에서도 "
                 "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음."),
         )
+        row.item_id = index
         result.rows.append(row)
 
         feats = {"deterministic_rule": True, "unconfirmed_citation": c.raw_text}
@@ -355,9 +244,151 @@ async def verify_argument_validity(
             )
         )
 
+    # 4. AI 교차검토(참고). 판정·심각도는 바꾸지 않는다.
+    #
+    # 예전에는 모델에게 "존재하지 않는 가공의 판례"라고 전제를 주고, 그 답을
+    # 그대로 '허위 판례에 근거한 주장(CONTRADICTED·HIGH)'으로 기록했다. 조회가
+    # 잠시 실패한 실재 판례도 모델 하나의 말로 허위가 됐다. 이제 모델에게는
+    # 확인 상태를 사실대로 알리고, 사용 가능한 모델 모두의 의견을 모아 일치
+    # 여부와 함께 참고 의견으로만 붙인다.
+    can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
+                       and hasattr(router, "consult_all")
+                       and router.has_available_provider(policy=external_ai_policy))
+    if can_use_llm and unverified_cases:
+        await _attach_ai_opinions(result, unverified_cases, router, external_ai_policy, mask)
+
     if result.rows:
-        result.overall_validity_summary = f"공식 DB에서 확인되지 않는 가짜 판례가 {len(result.rows)}건 인용되어, 이에 기초한 법률적 주장의 타당성에 중대한 결함이 있습니다."
+        counts = {basis: sum(r.basis == basis for r in result.rows)
+                  for basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH", "UNCONFIRMED")}
+        parts = [f"성립할 수 없는 사건번호 {counts['FABRICATION_SUSPECTED']}건" if counts["FABRICATION_SUSPECTED"] else "",
+                 f"인용 내용이 공식 기록과 다른 판례 {counts['CONTENT_MISMATCH']}건" if counts["CONTENT_MISMATCH"] else "",
+                 f"공식 DB에서 확인되지 않은 판례 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else ""]
+        summary = ", ".join(p for p in parts if p) + "을(를) 근거로 한 주장이 있습니다. "
+        summary += ("미확인은 부존재를 뜻하지 않으므로 원문 확인이 필요합니다."
+                    if counts["UNCONFIRMED"] else "원문 대조가 필요합니다.")
+        if result.ai_summary:
+            summary += f" {result.ai_summary}"
+        result.overall_validity_summary = summary
     else:
         result.overall_validity_summary = "중대한 법률적 주장 결함이 발견되지 않았습니다."
 
     return result
+
+
+_BASIS_LABEL = {
+    "UNCONFIRMED": "공식 DB에서 같은 사건번호를 찾지 못함(공식 DB는 모든 재판을 수록하지 않으므로 부존재를 뜻하지 않음)",
+    "CONTENT_MISMATCH": "사건은 확인되나 인용 내용이 공식 기록과 다름",
+    "FABRICATION_SUSPECTED": "사건번호 형식상 성립할 수 없음(있을 수 없는 연도 또는 사건부호)",
+}
+
+_OPINION_SCHEMA = {
+    "type": "object",
+    "required": ["rows"],
+    "properties": {
+        "overall_summary": {"type": "string"},
+        "rows": {"type": "array", "items": {
+            "type": "object",
+            "required": ["item_id", "validity_verdict"],
+            "properties": {
+                "item_id": {"type": ["integer", "string"]},
+                "claim_text": {"type": "string"},
+                "validity_verdict": {"type": "string"},
+                "legal_reasoning": {"type": "string"},
+                "recommended_check": {"type": "string"},
+            },
+        }},
+    },
+}
+
+_OPINION_SYSTEM = (
+    "대한민국 법률 서면 검토를 보조한다. 각 항목의 인용 판례에는 국가법령정보 공식 판례 DB 조회 결과가 "
+    "'확인 상태'로 적혀 있다. 확인 상태는 사실로 받아들이되 그 이상을 추정하지 마라. 특히 공식 DB에서 "
+    "찾지 못했다는 사실만으로 판례가 존재하지 않는다거나 AI가 지어냈다고 단정하지 마라. 새로운 판례·조문·"
+    "사건번호를 지어내지 마라.\n"
+    "각 항목에 대해 (1) 작성자가 그 인용으로 뒷받침하려는 법률적 주장, (2) 그 인용을 빼고 볼 때 그 주장이 "
+    "대한민국 실정법과 확립된 법리에 비추어 타당한지, (3) 확인하거나 다툴 때 검토할 사항을 적어라.\n"
+    "validity_verdict는 '타당', '일부 타당', '부당', '판단 불가' 중 하나로 적어라. JSON으로만 답하라:\n"
+    '{"overall_summary": "...", "rows": [{"item_id": 1, "claim_text": "...", "validity_verdict": "...", '
+    '"legal_reasoning": "...", "recommended_check": "..."}]}'
+)
+
+
+async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: List[Dict[str, Any]],
+                              router: Any, policy: ExternalAIPolicy,
+                              mask: Optional[Callable[[str], str]]) -> None:
+    """사용 가능한 모델 모두에게 묻고, 항목별 의견과 일치 여부를 행에 붙인다."""
+    from packages.llm_router.providers import _extract_json
+
+    hide = mask or (lambda text: text)
+    items = [{
+        "item_id": index,
+        "page": item["citation"].page or 1,
+        "cited_case": hide(item["citation"].raw_text),
+        "확인 상태": _BASIS_LABEL.get(item.get("basis", "UNCONFIRMED"), _BASIS_LABEL["UNCONFIRMED"]),
+        "surrounding_context_and_claim": hide(item["context"][:1000]),
+    } for index, item in enumerate(unverified_cases, 1)]
+    request = LLMRequest(system=_OPINION_SYSTEM, user=json.dumps({"items": items}, ensure_ascii=False),
+                         temperature=0.1, max_tokens=2500, schema=_OPINION_SCHEMA)
+    try:
+        answers = await router.consult_all(LLMRole.PRIMARY_REASONER, request, policy=policy,
+                                           expected_task="법률 주장 타당성 검토")
+    except Exception as exc:  # 참고 의견이 없어도 판정은 이미 끝났다.
+        result.ai_summary = f"AI 교차검토를 수행하지 못함({type(exc).__name__})."
+        return
+
+    opinions_by_item: Dict[int, List[Dict[str, Any]]] = {}
+    summaries, used, failed = [], [], []
+    for answer in answers:
+        execution = next((e for e in reversed(answer.executions) if getattr(e, "provider", "")), None)
+        provider = getattr(execution, "provider", "") or "unknown"
+        if not answer.used:
+            failed.append(provider)
+            continue
+        parsed = answer.parsed or _extract_json(answer.text) or {}
+        used.append(provider)
+        if parsed.get("overall_summary"):
+            summaries.append(f"{provider}: {str(parsed['overall_summary'])[:300]}")
+        for row in parsed.get("rows") or []:
+            try:
+                item_id = int(row.get("item_id"))
+            except (TypeError, ValueError):
+                continue
+            opinions_by_item.setdefault(item_id, []).append({
+                "provider": provider,
+                "model": getattr(execution, "model", ""),
+                "claim_text": str(row.get("claim_text") or "")[:400],
+                "verdict": str(row.get("validity_verdict") or "판단 불가")[:40],
+                "reasoning": str(row.get("legal_reasoning") or "")[:800],
+                "check": str(row.get("recommended_check") or "")[:400],
+            })
+
+    agree = disagree = 0
+    for row in result.rows:
+        opinions = opinions_by_item.get(row.item_id, [])
+        row.ai_opinions = opinions
+        verdicts = {o["verdict"] for o in opinions}
+        if not opinions:
+            row.ai_agreement = "NONE"
+            continue
+        if len(opinions) == 1:
+            row.ai_agreement, label = "SINGLE", "1개 모델 의견(교차검증 아님)"
+        elif len(verdicts) == 1:
+            row.ai_agreement, label = "AGREE", f"{len(opinions)}개 모델 의견 일치"
+            agree += 1
+        else:
+            row.ai_agreement, label = "DISAGREE", f"{len(opinions)}개 모델 의견 불일치 — 직접 검토 필요"
+            disagree += 1
+        lines = [f"{o['provider']}: {o['verdict']} — {o['reasoning']}" for o in opinions]
+        row.legal_reasoning = f"{row.legal_reasoning}\n[AI 교차검토 참고 · {label}]\n" + "\n".join(lines)
+        checks = [f"{o['provider']}: {o['check']}" for o in opinions if o["check"]]
+        if checks:
+            row.recommended_counteraction = f"{row.recommended_counteraction}\n[AI 참고] " + " / ".join(checks)
+
+    result.ai_providers = sorted(set(used))
+    if used:
+        result.ai_summary = (f"AI 교차검토(참고): {len(set(used))}개 모델({', '.join(sorted(set(used)))}) 참여, "
+                             f"의견 일치 {agree}건·불일치 {disagree}건. 판정에는 반영하지 않음.")
+        if failed:
+            result.ai_summary += f" 응답하지 못한 모델: {', '.join(sorted(set(failed)))}."
+    else:
+        result.ai_summary = "AI 교차검토를 수행하지 못함(응답한 모델 없음)."

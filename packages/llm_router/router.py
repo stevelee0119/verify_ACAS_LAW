@@ -223,6 +223,36 @@ class LLMRouter:
             return last
         return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 
+    async def consult_all(
+        self,
+        role: LLMRole,
+        request: LLMRequest,
+        *,
+        policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
+        expected_task: str = "",
+    ) -> List[RouterResult]:
+        """사용 가능한 공급자 모두에게 같은 질문을 던진다(교차검증).
+
+        한 모델의 의견만으로 법률 판단을 뒷받침하지 않는다. 호출마다 run()을
+        거치므로 정책 확인·예산·출력 격리·실행 기록이 공급자별로 그대로 적용된다.
+        돌려주는 목록에는 실패한 공급자의 결과(used=False)도 들어 있다.
+        """
+        preference = ROLE_PREFERENCE.get(role, [])
+        names = sorted(self.available_providers(policy=policy),
+                       key=lambda n: preference.index(n) if n in preference else len(preference))
+        # 비용 조절 설정은 캐스케이드와 같다. off면 1순위 한 곳에만 묻는다.
+        if (self.settings.llm_cross_check or "all").lower() == "off":
+            names = names[:1]
+
+        async def ask(name: str) -> RouterResult:
+            others = [n for n in names if n != name]
+            return await self.run(role, request, policy=policy, exclude=others,
+                                  expected_task=expected_task)
+
+        # DB를 쓰는 예약·정산은 await 사이에 동기적으로 끝나므로 한 스레드
+        # 안에서 서로 끼어들지 않는다. 기다리는 동안의 HTTP만 겹친다.
+        return list(await asyncio.gather(*(ask(name) for name in names)))
+
     # -- 단일 호출 ----------------------------------------------------------
     async def run(
         self,

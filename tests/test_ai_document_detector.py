@@ -213,3 +213,88 @@ def test_unconfirmed_citations_alone_do_not_drive_the_ai_authorship_verdict():
                                                not_found("2099다11111")], False)
     assert real.score < fake.score, "실재 가능한 사건번호가 성립 불가와 같은 점수를 받으면 안 된다"
     assert not any("가공" in reason for reason in real.reasons), real.reasons
+
+
+class _ConsultRouter:
+    """consult_all만 흉내낸다. 공급자별 답과 받은 요청을 기록한다."""
+
+    def __init__(self, answers):
+        self.answers, self.requests = answers, []
+
+    def has_available_provider(self, *, policy=None):
+        return True
+
+    async def consult_all(self, role, request, *, policy=None, expected_task=""):
+        from types import SimpleNamespace
+        self.requests.append(request)
+        return [SimpleNamespace(used=parsed is not None, parsed=parsed, text="",
+                                executions=[SimpleNamespace(provider=name, model="m")])
+                for name, parsed in self.answers.items()]
+
+
+def _unconfirmed_case():
+    text = ("원고 홍길동(010-1234-5678)은 대법원 2011모1839 결정에 따라 이 사건 처분이 위법하다고 주장한다.")
+    doc = _make_sample_doc(text)
+    citation = Citation(citation_id="cit_1", type=CitationType.CASE, raw_text="대법원 2011모1839 결정",
+                        case_number="2011모1839", context=text, document_id=doc.document_id, page=1)
+    verdicts = [{"citation_id": "cit_1", "status": "NOT_FOUND", "levels": {"level1": "NOT_FOUND"}}]
+    return doc, citation, verdicts
+
+
+def test_ai_opinions_never_turn_an_unconfirmed_case_into_a_fake_one():
+    """키가 살아나자 모델 하나의 답으로 미확인 판례가 '허위 판례(CONTRADICTED·HIGH)'가 됐다.
+
+    판정은 규칙이 정하고, 모델 의견은 모두 모아 일치 여부와 함께 참고로만 붙인다.
+    """
+    doc, citation, verdicts = _unconfirmed_case()
+    row = {"item_id": 1, "claim_text": "처분 위법", "validity_verdict": "부당", "legal_reasoning": "법리상 부당",
+           "recommended_check": "판결문 확인"}
+    router = _ConsultRouter({"anthropic": {"rows": [row]}, "openai": {"rows": [row]},
+                             "gemini": {"rows": [{**row, "validity_verdict": "판단 불가"}]}})
+    masked = []
+    result = asyncio.run(verify_argument_validity(
+        doc, [citation], verdicts, [], router=router,
+        mask=lambda text: masked.append(text) or text.replace("010-1234-5678", "[전화번호]")))
+
+    finding = result.findings[0]
+    assert finding.status == VerificationStatus.UNVERIFIED and finding.severity == Severity.MEDIUM
+    assert "허위" not in finding.title
+    table = result.rows[0]
+    assert table.basis == "UNCONFIRMED" and table.ai_agreement == "DISAGREE"
+    assert "[AI 교차검토 참고 · 3개 모델 의견 불일치" in table.legal_reasoning
+    assert {o["provider"] for o in table.ai_opinions} == {"anthropic", "openai", "gemini"}
+    assert result.ai_providers == ["anthropic", "gemini", "openai"]
+    # 모델에게 '존재하지 않는 가공의 판례'라는 전제를 주지 않고, 개인정보는 가린다.
+    sent = router.requests[0].system + router.requests[0].user
+    assert "가공의 판례" not in sent and "부존재를 뜻하지 않음" in sent
+    assert "010-1234-5678" not in router.requests[0].user and masked
+
+
+def test_authorship_verdict_needs_a_majority_of_models():
+    """한 모델만 'AI 전체 작성'이라 해도 그대로 채택하던 것을 막는다."""
+    text = "원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 요약하자면 피고의 책임이 인정됩니다."
+    doc = _make_sample_doc(text)
+
+    def run(answers):
+        return asyncio.run(detect_ai_document(doc, [], router=_ConsultRouter(answers)))
+
+    full = {"verdict": "AI_FULL_GENERATION_LIKELY", "ai_score": 0.9,
+            "suspicious_excerpts": [{"snippet": "요약하자면 피고의 책임이 인정됩니다.", "reason": "상투구"},
+                                    {"snippet": "본문에 없는 지어낸 문장입니다", "reason": "환각"}]}
+    human = {"verdict": "HUMAN_AUTHORED_LIKELY", "ai_score": 0.1}
+    uncertain = {"verdict": "UNCERTAIN", "ai_score": 0.4}
+
+    split = run({"anthropic": full, "openai": human, "gemini": uncertain})
+    assert split.verdict == "UNCERTAIN" and split.signals["llm_agreement"] == "DISAGREE"
+    assert create_ai_detector_findings(doc, split) == [] or all(
+        f.type != FindingType.AI_FULL_GENERATION_SUSPECTED for f in create_ai_detector_findings(doc, split))
+    assert run({"anthropic": full, "openai": human}).verdict == "HUMAN_AUTHORED_LIKELY"
+
+    agreed = run({"anthropic": full, "openai": full, "gemini": None})
+    assert agreed.verdict == "AI_FULL_GENERATION_LIKELY" and agreed.signals["llm_agreement"] == "AGREE"
+    snippets = [e["snippet"] for e in agreed.suspicious_excerpts]
+    assert "요약하자면 피고의 책임이 인정됩니다." in snippets
+    assert all("지어낸" not in s for s in snippets), "본문에 없는 의심 문단은 버린다"
+    grades = {f.evidence_grade for f in create_ai_detector_findings(doc, agreed)
+              if f.type == FindingType.AI_FULL_GENERATION_SUSPECTED}
+    assert grades == {EvidenceGrade.B}

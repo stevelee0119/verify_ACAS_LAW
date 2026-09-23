@@ -138,6 +138,10 @@ def _record_fields(records: List[Dict[str, Any]]) -> List[str]:
     return sorted(k for k, v in records[0].items() if k != "raw" and v not in (None, "", []))
 
 
+# 사건번호 조회에서 일치한 기록. 교차검증 점검이 같은 조회를 되풀이하지 않고 쓴다.
+MATCHED_CASES: List[Dict[str, Any]] = []
+
+
 def check_law_go_kr(registry) -> List[CheckResult]:
     """국가법령정보 실호출. 특정 판례의 존재를 단정하지 않고 응답 형태만 확인한다."""
     out: List[CheckResult] = []
@@ -188,6 +192,7 @@ def check_law_go_kr(registry) -> List[CheckResult]:
         response = adapter.search_case(case_number)
         matched = [r for r in response.records
                    if same_case_number(case_number, str(r.get("case_number") or ""))]
+        MATCHED_CASES.extend(matched[:1])
         out.append(
             CheckResult(
                 name=f"law_go_kr:사건번호조회({case_number} · {note})",
@@ -258,7 +263,9 @@ async def check_llm(include: bool) -> List[CheckResult]:
         request = LLMRequest(
             system="You are a connectivity probe. Answer with a single digit only.",
             user="Reply with the digit 1 and nothing else.",
-            max_tokens=8,
+            # 생각(thinking) 모델은 이 한도 안에서 생각 토큰도 쓴다. 너무 작으면
+            # 연결은 정상인데 본문 없이 끝난다. 실제 과금은 생성한 만큼만 된다.
+            max_tokens=256,
             temperature=0.0,
         )
         response = await provider.generate(request)
@@ -293,27 +300,39 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     if not include:
         return [CheckResult(name="cascade", category="llm_cascade", configured=False, status="SKIPPED",
                             ok=False, detail="--with-llm 미지정으로 호출하지 않음")]
-    case_number = "2011모1839"
     adapter = registry.law
-    found = adapter.search_case(case_number)
-    record = next((r for r in found.records
-                   if same_case_number(case_number, str(r.get("case_number") or ""))), None)
-    full_text = str((record or {}).get("full_text") or "")
-    if record and not full_text:  # 실제 검증 경로(verifier)와 같이 상세 조회로 전문을 받는다.
-        detail = adapter.fetch_case(record)
-        full_text = str((detail.records[0] if detail.records else {}).get("full_text") or "")
+    candidates = list(MATCHED_CASES)
+    if not candidates:  # 단독 호출 시
+        found = adapter.search_case("2011모1839")
+        candidates = [r for r in found.records if same_case_number("2011모1839", str(r.get("case_number") or ""))]
+    # 실제 검증 경로(verifier)와 같이 상세 조회(lawService)로 전문을 받는다.
+    # 한 사건의 전문 조회가 일시적으로 실패해도 다음 사건으로 점검을 이어 간다.
+    case_number, full_text, failures = "", "", []
+    for record in candidates:
+        case_number = str(record.get("case_number") or "")
+        full_text = str(record.get("full_text") or "")
+        if not full_text:
+            if not record.get("source_id"):
+                failures.append(f"{case_number}: 판례일련번호 없음")
+                continue
+            detail = adapter.fetch_case(record)
+            full_text = str((detail.records[0] if detail.records else {}).get("full_text") or "")
+            if not full_text:
+                failures.append(f"{case_number}: {detail.status} {sanitize(detail.message, 80)}")
+        if full_text:
+            break
     if not full_text:
         return [CheckResult(name="cascade", category="llm_cascade", configured=True, status="NO_SOURCE",
                             ok=False, requires_key=True,
-                            detail=f"{case_number} 공식 전문을 받지 못해 교차검증을 돌리지 않음"
-                                   f"({found.status})")]
+                            detail="공식 전문을 받지 못해 교차검증을 돌리지 않음 — "
+                                   + ("; ".join(failures) or "사건번호가 일치한 판례 없음"))]
     source_text = full_text[:24000]
     router = LLMRouter()
     outcome = await router.cascade(
         question="인용된 판결의 취지와 문서의 주장이 부합하는지, 사실관계 차이와 적용상 한계를 검토하라. "
                  "반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라.",
         evidence={"official": {"case_number": case_number, "full_text": source_text},
-                  "document": f"본 서면은 대법원 {case_number} 결정을 인용한다."})
+                  "document": f"본 서면은 대법원 {case_number}을(를) 인용한다."})
     out: List[CheckResult] = []
     providers = []
     for stage in outcome.stages:
@@ -338,7 +357,8 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     out.append(CheckResult(
         name="cascade:참여 공급자", category="llm_cascade", configured=True, requires_key=True,
         status="OK" if len(distinct) >= 3 else "PARTIAL", ok=len(distinct) >= 3,
-        detail=(f"{len(distinct)}개({', '.join(distinct) or '없음'}) · 최종 {outcome.status} "
+        detail=(f"{len(distinct)}개({', '.join(distinct) or '없음'}) · 대상 {case_number} "
+                f"(전문 {len(full_text)}자) · 최종 {outcome.status} "
                 f"· 의견 불일치 {outcome.disagreement} · 교차검증 설정 {router.settings.llm_cross_check}")))
     return out
 

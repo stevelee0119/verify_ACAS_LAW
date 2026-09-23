@@ -291,3 +291,60 @@ def test_live_check_reports_every_provider_in_the_real_cascade(monkeypatch):
     assert "anthropic, gemini, openai" in by_name["cascade:참여 공급자"].detail
     assert "일치 1건" in by_name["cascade:stage2:primary"].detail
     assert "일치 0건" in by_name["cascade:stage4:grounder"].detail
+
+
+def test_gemini_empty_reply_is_a_failure_with_its_reason(monkeypatch):
+    """본문 없는 응답을 성공으로 넘기면 뒤에서 '응답 형식 오류'로만 남아,
+    생각 토큰이 출력 한도를 다 쓴 것인지 차단된 것인지 알 수 없다."""
+    import asyncio
+
+    import httpx
+
+    from packages.common import config
+    from packages.common.config import ProviderConfig
+    from packages.llm_router.providers import GeminiProvider, LLMRequest
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, *, params=None, json=None):
+            return httpx.Response(200, json={
+                "candidates": [{"content": {"parts": []}, "finishReason": "MAX_TOKENS"}],
+                "usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 0, "thoughtsTokenCount": 8}})
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("LV_ALLOW_NETWORK", "1")
+    config.reset_settings()
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    try:
+        provider = GeminiProvider(ProviderConfig(
+            name="gemini", enabled=True, api_key_env="GEMINI_API_KEY", model="gemini-3.8-flash",
+            base_url="https://generativelanguage.googleapis.com/v1beta", kind="cloud"))
+        result = asyncio.run(provider.generate(LLMRequest(system="s", user="u", max_tokens=8)))
+        assert not result.ok
+        assert "EMPTY_RESPONSE" in result.error and "MAX_TOKENS" in result.error and "thinking 8" in result.error
+    finally:
+        monkeypatch.undo()
+        config.reset_settings()
+
+
+def test_consult_all_asks_every_available_provider_once(monkeypatch):
+    module, used, asyncio = _fake_router(monkeypatch, {})
+    router = module.LLMRouter()
+    monkeypatch.setattr(module.LLMRouter, "available_providers",
+                        lambda self, *, policy=None: ["anthropic", "openai", "gemini"])
+    results = asyncio.run(router.consult_all(module.LLMRole.PRIMARY_REASONER,
+                                             module.LLMRequest(system="s", user="u")))
+    assert sorted(used) == ["anthropic", "gemini", "openai"]
+    assert sorted(r.executions[0].provider for r in results) == ["anthropic", "gemini", "openai"]
+
+
+def test_consult_all_respects_the_cross_check_cost_switch(monkeypatch):
+    module, used, asyncio = _fake_router(monkeypatch, {})
+    router = module.LLMRouter()
+    monkeypatch.setattr(router.settings, "llm_cross_check", "off")
+    monkeypatch.setattr(module.LLMRouter, "available_providers",
+                        lambda self, *, policy=None: ["gemini", "openai", "anthropic"])
+    asyncio.run(router.consult_all(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert used == ["anthropic"], "off면 역할 1순위 공급자 한 곳만"

@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from packages.common.confidence import score as confidence_score
 from packages.legal_engine.normalize import case_number_possible
@@ -107,6 +107,7 @@ def _rule_based_ai_detection(
                   if (f.confidence_features or {}).get("case_number")
                   and not case_number_possible(str(f.confidence_features["case_number"]))]
     total_case_count = sum(1 for f in citation_findings if "CASE" in f.tags)
+    signals["impossible_case_numbers"] = [str(f.confidence_features["case_number"]) for f in impossible]
 
     if impossible:
         # 있을 수 없는 연도·사건부호. 수록 범위와 무관하게 실재할 수 없다.
@@ -161,6 +162,7 @@ async def detect_ai_document(
     router: Optional[LLMRouter] = None,
     external_ai_policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
     metadata_indications: bool = False,
+    mask: Optional[Callable[[str], str]] = None,
 ) -> AIDetectorResult:
     """문서의 AI 전체/부분 생성 여부를 종합 분석하여 판정한다.
     
@@ -179,32 +181,29 @@ async def detect_ai_document(
     rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications)
 
     # LLM을 사용할 수 없거나 정책이 LOCAL_ONLY인 경우 규칙 기반 결과 반환
-    can_use_llm = False
-    if router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY:
-        if hasattr(router, "has_available_provider"):
-            can_use_llm = router.has_available_provider(policy=external_ai_policy)
-        elif hasattr(router, "available_providers"):
-            can_use_llm = len(router.available_providers(policy=external_ai_policy)) > 0
+    can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
+                       and hasattr(router, "consult_all")
+                       and router.has_available_provider(policy=external_ai_policy))
 
     if not can_use_llm:
         return rule_res
 
-    # 가짜 판례 목록 요약
-    fake_cases = [
-        f.title for f in citation_findings
-        if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND
-    ][:5]
+    # 모델에게는 사실만 준다. 공식 DB 미확인을 "가짜 판례"라고 넘기면 모델이
+    # 그 전제를 받아 AI 작성으로 기운다. 성립 불가 사건번호만 적극적 근거로 준다.
+    impossible = rule_res.signals.get("impossible_case_numbers", [])
+    hide = mask or (lambda value: value)
 
-    # LLM 심층 판별 프롬프트 구성
     system_prompt = (
-        "당신은 법률 문서의 진정성 및 AI 생성(환각/위조) 여부를 전문적으로 감정하는 대한민국 법률 AI 포렌식 전문가입니다.\n"
-        "제공된 법률 서면 텍스트와 정황을 분석하여, 이 문서가 LLM(ChatGPT, Gemini 등)에 의해 임의로 전체 작성되었는지, "
-        "일부 AI가 작성한 내용을 복사·인용한 것인지, 아니면 실제 인간(변호사/당사자)이 작성한 실무 서면인지 판정하십시오.\n\n"
+        "당신은 법률 문서의 작성 경위를 감정하는 대한민국 법률 포렌식 전문가입니다.\n"
+        "제공된 법률 서면 텍스트를 분석하여, 이 문서가 LLM(ChatGPT, Gemini 등)에 의해 전체 작성되었는지, "
+        "일부 AI가 작성한 내용을 옮긴 것인지, 아니면 사람(변호사/당사자)이 작성한 실무 서면인지 판정하십시오.\n\n"
         "판정 기준:\n"
-        "1. 대한민국 법원 제출 실무 서면(소장, 답변서, 준비서면 등)의 전형적인 형식(당사자 표시, 청구취지에 대한 답변, "
-        "청구원인에 대한 인부 및 항변 구조)과의 부합성.\n"
-        "2. AI 특유의 번역투, 피상적이고 일반론적인 원론 서술, 과도한 나열식 설명문 형식, 챗봇 상투구.\n"
-        "3. 존재하지 않는 가공의 판례나 조문을 지어내어 논리의 근거로 삼았는지 여부.\n\n"
+        "1. 대한민국 법원 제출 실무 서면(소장, 답변서, 준비서면 등)의 전형적인 형식과의 부합성.\n"
+        "2. AI 특유의 번역투, 피상적이고 일반론적인 서술, 과도한 나열식 설명문 형식, 챗봇 상투구.\n"
+        "3. 형식상 성립할 수 없는 사건번호 인용(제공된 경우에만). 공식 DB에서 찾지 못한 판례는 수록 범위 "
+        "밖일 수 있으므로 근거로 삼지 마십시오.\n"
+        "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
+        "문장을 그대로 옮기십시오.\n\n"
         "반드시 아래 JSON 형식으로만 응답하십시오:\n"
         "{\n"
         '  "verdict": "AI_FULL_GENERATION_LIKELY" | "AI_PARTIAL_GENERATION" | "HUMAN_AUTHORED_LIKELY" | "UNCERTAIN",\n'
@@ -216,62 +215,118 @@ async def detect_ai_document(
         "}"
     )
 
+    sample = hide(text[:6000])  # 상위 6000자 검토
     user_payload = {
-        "document_filename": doc.filename,
+        "document_filename": hide(doc.filename),
         "metadata_ai_hint": metadata_indications,
-        "unverified_fake_cases_found": fake_cases,
-        "document_sample_text": text[:6000],  # 상위 6000자 검토
+        "impossible_case_numbers": [hide(str(n)) for n in impossible][:5],
+        "document_sample_text": sample,
     }
-
     req = LLMRequest(
         system=system_prompt,
         user=json.dumps(user_payload, ensure_ascii=False),
         temperature=0.1,
         max_tokens=1500,
+        schema=_DETECTOR_SCHEMA,
     )
-
     try:
-        # LLMRouter의 primary provider(OpenAI 또는 Gemini)를 통해 분석 요청
-        provider = (
-            router.primary(policy=external_ai_policy)
-            if hasattr(router, "primary")
-            else (router.pick(LLMRole.PRIMARY_REASONER, policy=external_ai_policy) if hasattr(router, "pick") else None)
-        )
-        if not provider:
-            return rule_res
-        resp = await provider.structured_output(schema={}, request=req)
-        if resp.ok and resp.parsed:
-            parsed = resp.parsed
-            llm_verdict = parsed.get("verdict", rule_res.verdict)
-            llm_score = float(parsed.get("ai_score", rule_res.score))
-            llm_reasons = parsed.get("reasons", [])
-            llm_excerpts = parsed.get("suspicious_excerpts", [])
-
-            # 규칙 기반에서 발견된 치명적 상투구/정황이 있다면 병합
-            combined_reasons = list(llm_reasons)
-            for r in rule_res.reasons:
-                if not any(r[:10] in cr for cr in combined_reasons):
-                    combined_reasons.append(r)
-
-            combined_excerpts = list(llm_excerpts) + rule_res.suspicious_excerpts
-
-            return AIDetectorResult(
-                verdict=llm_verdict,
-                score=llm_score,
-                reasons=combined_reasons,
-                suspicious_excerpts=combined_excerpts,
-                signals={
-                    "llm_provider": resp.provider,
-                    "llm_model": resp.model,
-                    "rule_score": rule_res.score,
-                },
-                used_llm=True,
-            )
+        answers = await router.consult_all(LLMRole.PRIMARY_REASONER, req, policy=external_ai_policy,
+                                           expected_task="AI 작성 여부 판별")
     except Exception:
-        # LLM 호출 실패 시 안전하게 규칙 기반 결과로 fallback
-        pass
+        return rule_res  # LLM 호출 실패 시 규칙 기반 결과
+    return _combine_model_verdicts(rule_res, answers, sample)
 
-    return rule_res
+
+_DETECTOR_SCHEMA = {
+    "type": "object",
+    "required": ["verdict"],
+    "properties": {
+        "verdict": {"enum": ["AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION",
+                             "HUMAN_AUTHORED_LIKELY", "UNCERTAIN"]},
+        "ai_score": {"type": "number"},
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "suspicious_excerpts": {"type": "array", "items": {"type": "object"}},
+    },
+}
+
+# 심각도 순서. 여러 모델의 판정을 합칠 때 쓴다.
+_VERDICT_RANK = {"HUMAN_AUTHORED_LIKELY": 0, "UNCERTAIN": 1, "AI_PARTIAL_GENERATION": 2,
+                 "AI_FULL_GENERATION_LIKELY": 3}
+
+
+def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], sample: str) -> AIDetectorResult:
+    """모델 판정을 교차검증해 합친다.
+
+    과반이 지지하는 가장 무거운 판정을 택한다. 모델 둘이면 둘 다 동의해야
+    올라가고, 셋이면 가운데 판정이 된다. 한 모델만 'AI 작성'이라 해도 그대로
+    채택하던 것을 막는다. 의심 문단은 본문에 실제로 있는 것만 남긴다.
+    """
+    import statistics
+
+    from packages.llm_router.providers import _extract_json
+
+    opinions = []
+    for answer in answers:
+        if not getattr(answer, "used", False):
+            continue
+        execution = next((e for e in reversed(answer.executions) if getattr(e, "provider", "")), None)
+        parsed = answer.parsed or _extract_json(answer.text) or {}
+        verdict = parsed.get("verdict")
+        if verdict not in _VERDICT_RANK:
+            continue
+        try:
+            score = min(1.0, max(0.0, float(parsed.get("ai_score", rule_res.score))))
+        except (TypeError, ValueError):
+            score = rule_res.score
+        opinions.append({"provider": getattr(execution, "provider", "unknown"),
+                         "model": getattr(execution, "model", ""), "verdict": verdict, "score": score,
+                         "reasons": [str(r)[:300] for r in (parsed.get("reasons") or [])][:4],
+                         "excerpts": [e for e in (parsed.get("suspicious_excerpts") or []) if isinstance(e, dict)]})
+    if not opinions:
+        return rule_res
+
+    ranks = sorted(_VERDICT_RANK[o["verdict"]] for o in opinions)
+    majority = len(opinions) // 2 + 1
+    # 과반이 "이 정도 이상"이라고 본 가장 높은 단계
+    final_rank = max(r for r in ranks if sum(x >= r for x in ranks) >= majority)
+    verdict = next(v for v, r in _VERDICT_RANK.items() if r == final_rank)
+    agreement = ("SINGLE" if len(opinions) == 1
+                 else "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE")
+
+    reasons = []
+    if agreement == "DISAGREE":
+        reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
+                       + ". 과반이 지지하는 판단을 택함")
+    elif agreement == "SINGLE":
+        reasons.append(f"1개 모델({opinions[0]['provider']})의 의견만 있어 교차검증되지 않음")
+    for o in opinions:
+        reasons.extend(f"[{o['provider']}] {r}" for r in o["reasons"][:2])
+    for r in rule_res.reasons:
+        if not any(r[:10] in cr for cr in reasons):
+            reasons.append(r)
+
+    normalized = " ".join(sample.split())
+    excerpts, seen = [], set()
+    for o in opinions:
+        for e in o["excerpts"]:
+            snippet = " ".join(str(e.get("snippet") or "").split())
+            if len(snippet) >= 8 and snippet in normalized and snippet not in seen:
+                seen.add(snippet)
+                excerpts.append({"snippet": snippet, "reason": f"[{o['provider']}] {str(e.get('reason') or '')[:200]}"})
+    excerpts += [e for e in rule_res.suspicious_excerpts if e.get("snippet") not in seen]
+
+    return AIDetectorResult(
+        verdict=verdict,
+        score=float(statistics.median(o["score"] for o in opinions)),
+        reasons=reasons,
+        suspicious_excerpts=excerpts,
+        signals={**rule_res.signals,
+                 "llm_providers": [o["provider"] for o in opinions],
+                 "llm_verdicts": {o["provider"]: o["verdict"] for o in opinions},
+                 "llm_agreement": agreement,
+                 "rule_score": rule_res.score},
+        used_llm=True,
+    )
 
 
 def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResult) -> List[Finding]:
@@ -281,7 +336,11 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
         "ai_score": result.score,
         "used_llm": result.used_llm,
         "verdict": result.verdict,
+        "llm_agreement": result.signals.get("llm_agreement", "NONE"),
     }
+    # 여러 모델이 같은 판단을 냈을 때만 한 단계 높은 증거등급을 준다.
+    cross_checked_grade = (EvidenceGrade.B if result.used_llm and result.signals.get("llm_agreement") == "AGREE"
+                           else EvidenceGrade.C)
 
     if result.verdict == "AI_FULL_GENERATION_LIKELY":
         findings.append(
@@ -289,7 +348,7 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
                 type=FindingType.AI_FULL_GENERATION_SUSPECTED,
                 status=VerificationStatus.SUSPICIOUS,
                 severity=Severity.HIGH,
-                evidence_grade=EvidenceGrade.B if result.used_llm else EvidenceGrade.C,
+                evidence_grade=cross_checked_grade,
                 title=f"문서 전체의 AI 임의 생성 유력 (신뢰도: {int(result.score * 100)}%)",
                 detail="; ".join(result.reasons[:3]) + " 법원 제출 전 실무 법률문서 요건과 진정성립에 대한 면밀한 검토가 필요합니다.",
                 confidence=confidence_score(features),
@@ -300,7 +359,7 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
                 evidence=[
                     Evidence.create(
                         description="AI 생성 판단 근거",
-                        grade=EvidenceGrade.B if result.used_llm else EvidenceGrade.C,
+                        grade=cross_checked_grade,
                         document_id=doc.document_id,
                         excerpt=" / ".join(result.reasons[:3]),
                     )
