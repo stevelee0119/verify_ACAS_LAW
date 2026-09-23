@@ -348,3 +348,79 @@ def test_consult_all_respects_the_cross_check_cost_switch(monkeypatch):
                         lambda self, *, policy=None: ["gemini", "openai", "anthropic"])
     asyncio.run(router.consult_all(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
     assert used == ["anthropic"], "off면 역할 1순위 공급자 한 곳만"
+
+
+def test_transient_overload_is_retried_but_request_errors_are_not(monkeypatch):
+    """Gemini가 503(high demand)으로 한 번에 탈락해 교차검증에서 빠졌다."""
+    import asyncio
+
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    class _Provider:
+        name = "gemini"
+        available = True
+        config = SimpleNamespace(kind="local", model="m", name="gemini")
+
+        def __init__(self, replies):
+            self.replies, self.calls = list(replies), 0
+
+        async def generate(self, request):
+            self.calls += 1
+            return self.replies.pop(0)
+
+    overloaded = LLMResponse(False, provider="gemini", error='HTTP 503: {"message": "high demand"}')
+    fine = LLMResponse(True, provider="gemini", text='{"status": "VERIFIED", "rationale": "r"}')
+    provider = _Provider([overloaded, overloaded, fine])
+    router = module.LLMRouter(providers={"gemini": provider})
+    router.retry_delays = (0.0, 0.0)
+    result = asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert result.used and provider.calls == 3
+
+    denied = _Provider([LLMResponse(False, provider="gemini", error="HTTP 401: invalid key")] * 3)
+    router = module.LLMRouter(providers={"gemini": denied})
+    router.retry_delays = (0.0, 0.0)
+    result = asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert not result.used and denied.calls == 1
+
+    still = _Provider([overloaded] * 3)
+    router = module.LLMRouter(providers={"gemini": still})
+    router.retry_delays = (0.0, 0.0)
+    result = asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert module.describe_failure(result.executions[0].error) == "공급자 일시 과부하(HTTP 503) — 재시도 후에도 실패"
+
+
+def test_truncated_answers_are_failures_with_a_clear_reason(monkeypatch):
+    """한도에서 잘린 JSON이 '형식 오류'로만 남아 Anthropic이 빠진 이유가 가려졌다."""
+    import asyncio
+
+    import httpx
+
+    from packages.common import config
+    from packages.common.config import ProviderConfig
+    from packages.llm_router.providers import AnthropicProvider, LLMRequest
+    from packages.llm_router.router import describe_failure
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, *, headers=None, json=None):
+            return httpx.Response(200, json={"content": [{"text": '{"verdict": "UNCER'}],
+                                             "stop_reason": "max_tokens", "usage": {"input_tokens": 9, "output_tokens": 8}})
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "k")
+    monkeypatch.setenv("LV_ALLOW_NETWORK", "1")
+    config.reset_settings()
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    try:
+        provider = AnthropicProvider(ProviderConfig(name="anthropic", enabled=True, api_key_env="ANTHROPIC_API_KEY",
+                                                    model="claude-sonnet-5", base_url="https://x", kind="cloud"))
+        result = asyncio.run(provider.generate(LLMRequest(system="s", user="u", max_tokens=8)))
+        assert not result.ok and result.error.startswith("OUTPUT_TRUNCATED")
+        assert describe_failure(result.error) == "응답이 출력 한도에서 잘림"
+    finally:
+        monkeypatch.undo()
+        config.reset_settings()

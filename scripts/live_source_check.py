@@ -303,7 +303,7 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     adapter = registry.law
     candidates = list(MATCHED_CASES)
     if not candidates:  # 단독 호출 시
-        found = adapter.search_case("2011모1839")
+        found = await asyncio.to_thread(adapter.search_case, "2011모1839")
         candidates = [r for r in found.records if same_case_number("2011모1839", str(r.get("case_number") or ""))]
     # 실제 검증 경로(verifier)와 같이 상세 조회(lawService)로 전문을 받는다.
     # 한 사건의 전문 조회가 일시적으로 실패해도 다음 사건으로 점검을 이어 간다.
@@ -315,7 +315,9 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
             if not record.get("source_id"):
                 failures.append(f"{case_number}: 판례일련번호 없음")
                 continue
-            detail = adapter.fetch_case(record)
+            # 어댑터는 동기 코드이고 안에서 asyncio.run을 쓴다. 이벤트 루프 안에서 바로
+            # 부르면 RuntimeError가 나서, 전문 조회가 실패한 것처럼 잘못 보고됐다.
+            detail = await asyncio.to_thread(adapter.fetch_case, record)
             full_text = str((detail.records[0] if detail.records else {}).get("full_text") or "")
             if not full_text:
                 failures.append(f"{case_number}: {detail.status} {sanitize(detail.message, 80)}")

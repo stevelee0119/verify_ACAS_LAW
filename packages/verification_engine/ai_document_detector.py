@@ -203,7 +203,9 @@ async def detect_ai_document(
         "3. 형식상 성립할 수 없는 사건번호 인용(제공된 경우에만). 공식 DB에서 찾지 못한 판례는 수록 범위 "
         "밖일 수 있으므로 근거로 삼지 마십시오.\n"
         "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
-        "문장을 그대로 옮기십시오.\n\n"
+        "문장을 그대로 옮기십시오.\n"
+        "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
+        "이내). JSON 객체 하나만 답하십시오.\n\n"
         "반드시 아래 JSON 형식으로만 응답하십시오:\n"
         "{\n"
         '  "verdict": "AI_FULL_GENERATION_LIKELY" | "AI_PARTIAL_GENERATION" | "HUMAN_AUTHORED_LIKELY" | "UNCERTAIN",\n'
@@ -226,7 +228,9 @@ async def detect_ai_document(
         system=system_prompt,
         user=json.dumps(user_payload, ensure_ascii=False),
         temperature=0.1,
-        max_tokens=1500,
+        # 한국어 JSON에서 Anthropic은 OpenAI보다 몇 배 많은 토큰을 쓴다. 1500이면 짧은
+        # 서면에서도 한도의 90%를 넘겨 잘리곤 했다. 과금은 실제 생성량 기준이다.
+        max_tokens=4096,
         schema=_DETECTOR_SCHEMA,
     )
     try:
@@ -264,6 +268,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     import statistics
 
     from packages.llm_router.providers import _extract_json
+    from packages.llm_router.router import failure_summary
+
+    failures = failure_summary(answers)
+    failed_text = ", ".join(f"{name}({why})" for name, why in sorted(failures.items()))
 
     opinions = []
     for answer in answers:
@@ -283,6 +291,9 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                          "reasons": [str(r)[:300] for r in (parsed.get("reasons") or [])][:4],
                          "excerpts": [e for e in (parsed.get("suspicious_excerpts") or []) if isinstance(e, dict)]})
     if not opinions:
+        if failed_text:
+            rule_res.reasons.append(f"AI 교차검토를 수행하지 못해 규칙 기반 결과만 사용함 — 응답하지 못한 모델: {failed_text}")
+            rule_res.signals["llm_failures"] = failures
         return rule_res
 
     ranks = sorted(_VERDICT_RANK[o["verdict"]] for o in opinions)
@@ -298,7 +309,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
                        + ". 과반이 지지하는 판단을 택함")
     elif agreement == "SINGLE":
-        reasons.append(f"1개 모델({opinions[0]['provider']})의 의견만 있어 교차검증되지 않음")
+        reasons.append(f"1개 모델({opinions[0]['provider']})의 의견만 있어 교차검증되지 않음"
+                       + (f" — 응답하지 못한 모델: {failed_text}" if failed_text else ""))
+    if failed_text and agreement != "SINGLE":
+        reasons.append(f"응답하지 못한 모델: {failed_text}")
     for o in opinions:
         reasons.extend(f"[{o['provider']}] {r}" for r in o["reasons"][:2])
     for r in rule_res.reasons:
@@ -324,6 +338,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "llm_providers": [o["provider"] for o in opinions],
                  "llm_verdicts": {o["provider"]: o["verdict"] for o in opinions},
                  "llm_agreement": agreement,
+                 "llm_failures": failures,
                  "rule_score": rule_res.score},
         used_llm=True,
     )

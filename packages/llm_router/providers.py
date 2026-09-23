@@ -105,6 +105,18 @@ def _extract_json(text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _checked(response: "LLMResponse", *, truncated: bool, limit: int) -> "LLMResponse":
+    """출력 한도에서 잘린 응답은 성공으로 넘기지 않는다.
+
+    잘린 JSON은 뒤에서 '응답 형식 오류'로만 남아 원인이 가려진다. 한국어 JSON은
+    공급자마다 토큰을 쓰는 양이 크게 달라, 같은 한도에서 한 모델만 잘리곤 했다.
+    """
+    if truncated:
+        response.ok = False
+        response.error = f"OUTPUT_TRUNCATED: 응답이 출력 한도({limit} 토큰)에서 잘림"
+    return response
+
+
 class NullProvider(LLMProvider):
     """Provider가 없거나 LOCAL_ONLY 정책에서 사용 가능한 모델이 없을 때 사용한다."""
 
@@ -158,15 +170,16 @@ class OpenAIProvider(LLMProvider):
         except Exception as exc:
             return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
         usage = data.get("usage", {})
-        return LLMResponse(
+        choice = data["choices"][0]
+        return _checked(LLMResponse(
             ok=True,
-            text=data["choices"][0]["message"]["content"],
+            text=choice["message"]["content"] or "",
             provider=self.name,
             model=self.config.model,
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
             latency_ms=int((time.time() - started) * 1000),
-        )
+        ), truncated=choice.get("finish_reason") == "length", limit=request.max_tokens)
 
 
 class AnthropicProvider(LLMProvider):
@@ -222,7 +235,7 @@ class AnthropicProvider(LLMProvider):
             return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
         text = "".join(block.get("text", "") for block in data.get("content", []))
         usage = data.get("usage", {})
-        return LLMResponse(
+        return _checked(LLMResponse(
             ok=True,
             text=text,
             provider=self.name,
@@ -230,7 +243,7 @@ class AnthropicProvider(LLMProvider):
             input_tokens=usage.get("input_tokens", 0),
             output_tokens=usage.get("output_tokens", 0),
             latency_ms=int((time.time() - started) * 1000),
-        )
+        ), truncated=data.get("stop_reason") == "max_tokens", limit=request.max_tokens)
 
 
 class GeminiProvider(LLMProvider):
@@ -256,6 +269,8 @@ class GeminiProvider(LLMProvider):
                         "generationConfig": {
                             "temperature": request.temperature,
                             "maxOutputTokens": request.max_tokens,
+                            # 형식이 정해진 요청은 JSON으로만 답하게 한다(OpenAI의 json_object와 같은 역할).
+                            **({"responseMimeType": "application/json"} if request.schema else {}),
                         },
                     },
                 )
@@ -282,7 +297,7 @@ class GeminiProvider(LLMProvider):
                                error=f"EMPTY_RESPONSE: 본문 없는 응답(finishReason={finish}, "
                                      f"thinking {usage.get('thoughtsTokenCount', 0)} tokens, "
                                      f"한도 {request.max_tokens})")
-        return LLMResponse(
+        return _checked(LLMResponse(
             ok=True,
             text=text,
             provider=self.name,
@@ -290,7 +305,8 @@ class GeminiProvider(LLMProvider):
             input_tokens=usage.get("promptTokenCount", 0),
             output_tokens=usage.get("candidatesTokenCount", 0),
             latency_ms=int((time.time() - started) * 1000),
-        )
+        ), truncated=(candidates[0].get("finishReason") == "MAX_TOKENS" if candidates else False),
+            limit=request.max_tokens)
 
 
 class LocalLLMProvider(LLMProvider):

@@ -298,3 +298,53 @@ def test_authorship_verdict_needs_a_majority_of_models():
     grades = {f.evidence_grade for f in create_ai_detector_findings(doc, agreed)
               if f.type == FindingType.AI_FULL_GENERATION_SUSPECTED}
     assert grades == {EvidenceGrade.B}
+
+
+class _FailingConsultRouter(_ConsultRouter):
+    """일부 공급자가 실패한 consult_all. 실패 사유를 실행 기록에 담는다."""
+
+    def __init__(self, answers, errors):
+        super().__init__(answers)
+        self.errors = errors
+
+    async def consult_all(self, role, request, *, policy=None, expected_task=""):
+        from types import SimpleNamespace
+        results = await super().consult_all(role, request, policy=policy, expected_task=expected_task)
+        return results + [SimpleNamespace(used=False, parsed=None, text="",
+                                          executions=[SimpleNamespace(provider=name, model="m", error=error)])
+                          for name, error in self.errors.items()]
+
+
+def test_reports_say_which_models_did_not_answer_and_why():
+    """'1개 모델(openai) 의견만'만 남으면 나머지가 왜 빠졌는지 알 수 없었다."""
+    doc, citation, verdicts = _unconfirmed_case()
+    errors = {"gemini": 'HTTP 503: {"message": "high demand"} (재시도 2회 후에도 실패)',
+              "anthropic": "OUTPUT_TRUNCATED: 응답이 출력 한도(4096 토큰)에서 잘림"}
+    detector = asyncio.run(detect_ai_document(doc, [], router=_FailingConsultRouter(
+        {"openai": {"verdict": "UNCERTAIN", "ai_score": 0.3}}, errors)))
+    text = " ".join(detector.reasons)
+    assert "1개 모델(openai)의 의견만" in text
+    assert "gemini(공급자 일시 과부하(HTTP 503) — 재시도 후에도 실패)" in text
+    assert "anthropic(응답이 출력 한도에서 잘림)" in text
+    assert detector.signals["llm_failures"]["gemini"].startswith("공급자 일시 과부하")
+
+    row = {"item_id": 1, "validity_verdict": "부당", "legal_reasoning": "r"}
+    validity = asyncio.run(verify_argument_validity(doc, [citation], verdicts, [], router=_FailingConsultRouter(
+        {"openai": {"rows": [row]}}, errors)))
+    assert "응답하지 못한 모델: anthropic(응답이 출력 한도에서 잘림), gemini(" in validity.ai_summary
+    assert "응답하지 못한 모델" in validity.rows[0].legal_reasoning
+
+
+def test_many_citations_are_asked_in_small_batches():
+    """인용을 한 번에 모두 물으면 응답이 출력 한도에서 잘렸다."""
+    doc, _, _ = _unconfirmed_case()
+    citations, verdicts = [], []
+    for i in range(9):
+        citations.append(Citation(citation_id=f"c{i}", type=CitationType.CASE, raw_text=f"대법원 2011모{1800 + i} 결정",
+                                  case_number=f"2011모{1800 + i}", context="문맥", document_id=doc.document_id, page=1))
+        verdicts.append({"citation_id": f"c{i}", "status": "NOT_FOUND", "levels": {"level1": "NOT_FOUND"}})
+    router = _ConsultRouter({"openai": {"rows": []}})
+    asyncio.run(verify_argument_validity(doc, citations, verdicts, [], router=router))
+    import json
+    sizes = [len(json.loads(r.user)["items"]) for r in router.requests]
+    assert sizes == [4, 4, 1] and all(r.max_tokens == 4096 for r in router.requests)

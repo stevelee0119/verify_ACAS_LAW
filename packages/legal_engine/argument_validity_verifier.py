@@ -120,6 +120,7 @@ class ArgumentValidityResult:
     findings: List[Finding] = field(default_factory=list)
     ai_summary: str = ""
     ai_providers: List[str] = field(default_factory=list)
+    ai_failures: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -127,6 +128,7 @@ class ArgumentValidityResult:
             "overall_validity_summary": self.overall_validity_summary,
             "findings_count": len(self.findings),
             "ai_providers": self.ai_providers,
+            "ai_failures": self.ai_failures,
         }
 
 
@@ -281,6 +283,9 @@ _BASIS_LABEL = {
     "FABRICATION_SUSPECTED": "사건번호 형식상 성립할 수 없음(있을 수 없는 연도 또는 사건부호)",
 }
 
+# 한 요청에 묻는 인용 수. 인용 1건에 Anthropic이 약 900토큰을 썼다(실측).
+_OPINION_BATCH = 4
+
 _OPINION_SCHEMA = {
     "type": "object",
     "required": ["rows"],
@@ -307,7 +312,9 @@ _OPINION_SYSTEM = (
     "사건번호를 지어내지 마라.\n"
     "각 항목에 대해 (1) 작성자가 그 인용으로 뒷받침하려는 법률적 주장, (2) 그 인용을 빼고 볼 때 그 주장이 "
     "대한민국 실정법과 확립된 법리에 비추어 타당한지, (3) 확인하거나 다툴 때 검토할 사항을 적어라.\n"
-    "validity_verdict는 '타당', '일부 타당', '부당', '판단 불가' 중 하나로 적어라. JSON으로만 답하라:\n"
+    "validity_verdict는 '타당', '일부 타당', '부당', '판단 불가' 중 하나로 적어라.\n"
+    "분량: claim_text 100자, legal_reasoning 300자, recommended_check 150자, overall_summary 200자 이내. "
+    "JSON 객체 하나만 답하라:\n"
     '{"overall_summary": "...", "rows": [{"item_id": 1, "claim_text": "...", "validity_verdict": "...", '
     '"legal_reasoning": "...", "recommended_check": "..."}]}'
 )
@@ -319,6 +326,8 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
     """사용 가능한 모델 모두에게 묻고, 항목별 의견과 일치 여부를 행에 붙인다."""
     from packages.llm_router.providers import _extract_json
 
+    from packages.llm_router.router import failure_summary
+
     hide = mask or (lambda text: text)
     items = [{
         "item_id": index,
@@ -327,22 +336,27 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
         "확인 상태": _BASIS_LABEL.get(item.get("basis", "UNCONFIRMED"), _BASIS_LABEL["UNCONFIRMED"]),
         "surrounding_context_and_claim": hide(item["context"][:1000]),
     } for index, item in enumerate(unverified_cases, 1)]
-    request = LLMRequest(system=_OPINION_SYSTEM, user=json.dumps({"items": items}, ensure_ascii=False),
-                         temperature=0.1, max_tokens=2500, schema=_OPINION_SCHEMA)
-    try:
-        answers = await router.consult_all(LLMRole.PRIMARY_REASONER, request, policy=policy,
-                                           expected_task="법률 주장 타당성 검토")
-    except Exception as exc:  # 참고 의견이 없어도 판정은 이미 끝났다.
-        result.ai_summary = f"AI 교차검토를 수행하지 못함({type(exc).__name__})."
-        return
+    # 한 번에 모두 물으면 인용이 많을 때 응답이 출력 한도에서 잘린다. 한국어 JSON은
+    # 공급자마다 토큰 사용량이 달라, 잘리는 모델만 교차검증에서 빠졌다.
+    answers = []
+    for start in range(0, len(items), _OPINION_BATCH):
+        request = LLMRequest(system=_OPINION_SYSTEM,
+                             user=json.dumps({"items": items[start:start + _OPINION_BATCH]}, ensure_ascii=False),
+                             temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA)
+        try:
+            answers += await router.consult_all(LLMRole.PRIMARY_REASONER, request, policy=policy,
+                                                expected_task="법률 주장 타당성 검토")
+        except Exception as exc:  # 참고 의견이 없어도 판정은 이미 끝났다.
+            result.ai_summary = f"AI 교차검토를 수행하지 못함({type(exc).__name__})."
+            return
 
     opinions_by_item: Dict[int, List[Dict[str, Any]]] = {}
-    summaries, used, failed = [], [], []
+    summaries, used = [], []
+    failures = failure_summary(answers)
     for answer in answers:
         execution = next((e for e in reversed(answer.executions) if getattr(e, "provider", "")), None)
         provider = getattr(execution, "provider", "") or "unknown"
         if not answer.used:
-            failed.append(provider)
             continue
         parsed = answer.parsed or _extract_json(answer.text) or {}
         used.append(provider)
@@ -371,7 +385,11 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
             row.ai_agreement = "NONE"
             continue
         if len(opinions) == 1:
-            row.ai_agreement, label = "SINGLE", "1개 모델 의견(교차검증 아님)"
+            missing = ", ".join(f"{n}({why})" for n, why in sorted(failures.items())
+                                if n != opinions[0]["provider"])
+            row.ai_agreement = "SINGLE"
+            label = f"1개 모델({opinions[0]['provider']}) 의견(교차검증 아님)" + (
+                f" — 응답하지 못한 모델: {missing}" if missing else "")
         elif len(verdicts) == 1:
             row.ai_agreement, label = "AGREE", f"{len(opinions)}개 모델 의견 일치"
             agree += 1
@@ -388,7 +406,11 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
     if used:
         result.ai_summary = (f"AI 교차검토(참고): {len(set(used))}개 모델({', '.join(sorted(set(used)))}) 참여, "
                              f"의견 일치 {agree}건·불일치 {disagree}건. 판정에는 반영하지 않음.")
-        if failed:
-            result.ai_summary += f" 응답하지 못한 모델: {', '.join(sorted(set(failed)))}."
+        missing = {n: why for n, why in failures.items() if n not in used}
+        if missing:
+            result.ai_summary += " 응답하지 못한 모델: " + ", ".join(
+                f"{n}({why})" for n, why in sorted(missing.items())) + "."
     else:
-        result.ai_summary = "AI 교차검토를 수행하지 못함(응답한 모델 없음)."
+        result.ai_summary = "AI 교차검토를 수행하지 못함(" + (
+            ", ".join(f"{n}: {why}" for n, why in sorted(failures.items())) or "응답한 모델 없음") + ")."
+    result.ai_failures = failures
