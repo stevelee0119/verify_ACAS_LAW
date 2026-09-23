@@ -511,3 +511,25 @@ def test_quota_errors_are_named_and_not_retried():
     assert provider.calls == 1
     assert module.describe_failure(result.executions[0].error) == \
         "사용 한도(쿼터) 초과(HTTP 429) — 공급자 요금제·결제 확인 필요"
+
+
+def test_quarantined_answers_are_reported_with_a_reason():
+    """출력 검사에서 격리된 응답이 실패로 기록되지 않아 보고서에 '사유 미기재'로 남았다."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    class _Provider:
+        name, available = "anthropic", True
+        config = SimpleNamespace(kind="local", model="m", name="anthropic")
+
+        async def generate(self, request):
+            return LLMResponse(True, provider="anthropic", text='{"verdict": "UNCERTAIN", "reasons": ["임차인 800101-1234567"]}')
+
+    router = module.LLMRouter(providers={"anthropic": _Provider()})
+    answers = asyncio.run(router.consult_all(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert not answers[0].used and not answers[0].executions[0].ok
+    assert module.failure_summary(answers) == {
+        "anthropic": "응답이 출력 보안 검사에서 격리됨(주민등록번호 형식의 숫자 포함)"}

@@ -314,6 +314,7 @@ _OPINION_SYSTEM = (
     "대한민국 실정법과 확립된 법리에 비추어 타당한지, (3) 확인하거나 다툴 때 검토할 사항을 적어라.\n"
     "validity_verdict는 '타당', '일부 타당', '부당', '판단 불가' 중 하나로 적어라.\n"
     "분량: claim_text 100자, legal_reasoning 300자, recommended_check 150자, overall_summary 200자 이내. "
+    "주민등록번호 등 개인 식별번호와 인터넷 주소(URL)는 쓰지 마라(응답이 보안 검사에서 격리된다). "
     "JSON 객체 하나만 답하라:\n"
     '{"overall_summary": "...", "rows": [{"item_id": 1, "claim_text": "...", "validity_verdict": "...", '
     '"legal_reasoning": "...", "recommended_check": "..."}]}'

@@ -152,6 +152,13 @@ def describe_failure(error: str) -> str:
         return f"API 키 또는 권한 오류(HTTP {code.group(1)})"
     if code:
         return f"요청 거절(HTTP {code.group(1)})"
+    if text.startswith("OUTPUT_QUARANTINED"):
+        labels = {"PII_IN_OUTPUT": "주민등록번호 형식의 숫자 포함", "UNEXPECTED_EXTERNAL_URL": "허용되지 않은 외부 주소 포함",
+                  "SECRET_EXPOSURE": "비밀키 형식 문자열 포함", "SYSTEM_PROMPT_LEAK": "지시문 노출",
+                  "UNEXPECTED_TOOL_REQUEST": "도구 실행 요청 포함", "TASK_SWITCH": "과업 이탈"}
+        detail = text.partition(":")[2].strip()
+        named = [labels.get(code.strip(), code.strip()) for code in detail.split("(")[0].split(",") if code.strip()]
+        return "응답이 출력 보안 검사에서 격리됨(" + (", ".join(named) or "사유 미상") + ")"
     if text.startswith("INVALID_RESPONSE_SCHEMA"):
         detail = text.partition(":")[2].strip()
         return f"응답 형식 오류({detail})" if detail else "응답 형식 오류"
@@ -171,7 +178,8 @@ def failure_summary(answers: List["RouterResult"]) -> Dict[str, str]:
             continue
         executions = [e for e in getattr(answer, "executions", []) if getattr(e, "provider", "")]
         if executions:
-            failed[executions[-1].provider] = describe_failure(getattr(executions[-1], "error", ""))
+            error = getattr(executions[-1], "error", "") or getattr(answer, "note", "")
+            failed[executions[-1].provider] = describe_failure(error)
     return failed
 
 
@@ -436,6 +444,12 @@ class LLMRouter:
         if scan.quarantined:
             execution.quarantined = True
             execution.quarantine_reasons = scan.reasons
+            # 격리된 응답은 쓰지 않으므로 실패로 기록한다. 오류를 비워 두면 보고서에
+            # '사유 미기재'로만 남아, 모델이 왜 빠졌는지 알 수 없었다.
+            execution.ok = False
+            hosts = scan.details.get("unexpected_hosts") or []
+            execution.error = "OUTPUT_QUARANTINED: " + ", ".join(scan.reasons) + (
+                f" ({', '.join(hosts[:3])})" if hosts else "")
             return finish(RouterResult(
                 text="",
                 executions=[execution],

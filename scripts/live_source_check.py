@@ -367,6 +367,57 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     return out
 
 
+async def check_gemini_models(include: bool) -> List[CheckResult]:
+    """이 키로 실제 호출할 수 있는 Gemini 모델을 찾는다.
+
+    설정 모델이 쿼터 초과(429)면 교차검증에서 Gemini가 통째로 빠진다. 모델 이름을
+    추측하지 않고, 키가 접근할 수 있는 모델 목록을 받아 각 모델에 요청 1건씩 보낸다.
+    """
+    import httpx
+
+    from packages.llm_router import build_providers
+
+    provider = build_providers().get("gemini")
+    if not include or provider is None or not provider.available:
+        return []
+    base, key, current = provider.config.base_url, provider.config.api_key, provider.config.model
+    out: List[CheckResult] = []
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            listed = await client.get(f"{base}/models", params={"key": key, "pageSize": 200})
+            if listed.status_code >= 400:
+                return [CheckResult(name="gemini:모델 목록", category="gemini_models", configured=True,
+                                    requires_key=True, status=f"HTTP {listed.status_code}", ok=False,
+                                    detail=sanitize(listed.text, 160))]
+            names = [m["name"].split("/", 1)[-1] for m in listed.json().get("models", [])
+                     if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+            usable = [n for n in names if n.startswith("gemini") and not any(
+                word in n for word in ("embedding", "tts", "image", "audio", "live", "robotics", "computer-use"))]
+            # 설정 모델을 먼저, 그다음 flash·pro 순으로 최대 6개만 시험한다(분당 한도를 아끼기 위해).
+            ordered = sorted(set(usable), key=lambda n: (n != current, "flash" not in n, "pro" not in n, n))[:6]
+            out.append(CheckResult(name="gemini:모델 목록", category="gemini_models", configured=True,
+                                   requires_key=True, status="OK", ok=True,
+                                   detail=f"생성 가능 모델 {len(usable)}개 중 {len(ordered)}개 시험: {', '.join(ordered)}"))
+            for index, name in enumerate(ordered):
+                if index:
+                    await asyncio.sleep(2)
+                reply = await client.post(f"{base}/models/{name}:generateContent", params={"key": key}, json={
+                    "contents": [{"role": "user", "parts": [{"text": "Reply with the digit 1 and nothing else."}]}],
+                    "generationConfig": {"maxOutputTokens": 256}})
+                ok = reply.status_code < 400
+                message = "" if ok else sanitize((reply.json().get("error") or {}).get("message", reply.text)
+                                                 if reply.headers.get("content-type", "").startswith("application/json")
+                                                 else reply.text, 120)
+                out.append(CheckResult(
+                    name=f"gemini:{name}{' (현재 설정)' if name == current else ''}", category="gemini_models",
+                    configured=True, requires_key=True, status="OK" if ok else f"HTTP {reply.status_code}",
+                    ok=ok, detail="호출 가능" if ok else message))
+    except Exception as exc:  # 키가 담긴 URL이 메시지에 있을 수 있어 예외 이름만 남긴다
+        out.append(CheckResult(name="gemini:모델 점검", category="gemini_models", configured=True,
+                               requires_key=True, status="ERROR", ok=False, detail=type(exc).__name__))
+    return out
+
+
 # 점검용 합성 서면. 실제 사건이 아니다.
 _PROBE_BRIEF = (
     "준 비 서 면\n사건 2026가합0000 손해배상(기)\n원고 갑 / 피고 을\n\n"
@@ -492,6 +543,14 @@ def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
         mark = "✅" if item.ok else ("⚪" if item.status == "SKIPPED" else "❌")
         lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
 
+    if groups.get("gemini_models"):
+        lines += ["", "## 7. 이 키로 호출 가능한 Gemini 모델", "",
+                  "쿼터가 남은 모델이 있으면 `LV_GEMINI_MODEL`에 그 ID를 넣으면 된다.", "",
+                  "| 모델 | 결과 | 비고 |", "|---|---|---|"]
+        for item in groups["gemini_models"]:
+            mark = "✅" if item.ok else "❌"
+            lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
+
     fatal, warnings = partition_failures(groups)
     lines += ["", "## 판정", ""]
     if fatal:
@@ -543,6 +602,7 @@ def main() -> int:
         "llm": asyncio.run(check_llm(args.with_llm)),
         "llm_cascade": asyncio.run(check_cascade(args.with_llm, registry)),
         "llm_consensus": asyncio.run(check_model_consensus(args.with_llm)),
+        "gemini_models": asyncio.run(check_gemini_models(args.with_llm)),
     }
 
     markdown = render_markdown(groups)

@@ -205,7 +205,8 @@ async def detect_ai_document(
         "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
         "문장을 그대로 옮기십시오.\n"
         "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
-        "이내). JSON 객체 하나만 답하십시오.\n\n"
+        "이내). 주민등록번호 등 개인 식별번호가 든 문장은 발췌하지 말고, 인터넷 주소(URL)는 쓰지 마십시오"
+        "(응답이 보안 검사에서 격리됩니다). JSON 객체 하나만 답하십시오.\n\n"
         "반드시 아래 JSON 형식으로만 응답하십시오:\n"
         "{\n"
         '  "verdict": "AI_FULL_GENERATION_LIKELY" | "AI_PARTIAL_GENERATION" | "HUMAN_AUTHORED_LIKELY" | "UNCERTAIN",\n'
