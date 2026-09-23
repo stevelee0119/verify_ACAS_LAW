@@ -441,6 +441,14 @@ class LLMRouter:
 
         # 제7.8장 Output 검사
         scan = scan_output(response.text, expected_task=expected_task)
+        if scan.reasons == ["PII_IN_OUTPUT"]:
+            # 주민등록번호 형식만 걸렸다면 문서에 있던 번호를 모델이 옮긴 것이다. 응답을
+            # 통째로 버리면 그 모델이 교차검증에서 빠지므로 번호만 가리고 쓴다.
+            # 비밀키·지시문 노출·외부 URL 등 다른 사유는 종전대로 격리한다.
+            from packages.adversarial_engine.output_scanner import RRN_RE as _OUTPUT_RRN
+            response.text = _OUTPUT_RRN.sub("[주민등록번호 가림]", response.text)
+            execution.quarantine_reasons = ["PII_REDACTED"]
+            scan = scan_output(response.text, expected_task=expected_task)
         if scan.quarantined:
             execution.quarantined = True
             execution.quarantine_reasons = scan.reasons

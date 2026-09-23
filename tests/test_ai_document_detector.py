@@ -348,3 +348,24 @@ def test_many_citations_are_asked_in_small_batches():
     import json
     sizes = [len(json.loads(r.user)["items"]) for r in router.requests]
     assert sizes == [4, 4, 1] and all(r.max_tokens == 4096 for r in router.requests)
+
+
+def test_a_single_model_cannot_raise_the_authorship_verdict_alone():
+    """두 모델이 빠진 채 한 모델만 'AI 전체 작성'이라 해도 95%로 표시되던 것을 막는다."""
+    text = "원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다."
+    doc = _make_sample_doc(text)
+    errors = {"anthropic": "HTTP 503: overloaded", "openai": "HTTP 503: overloaded"}
+    result = asyncio.run(detect_ai_document(doc, [], router=_FailingConsultRouter(
+        {"gemini": {"verdict": "AI_FULL_GENERATION_LIKELY", "ai_score": 0.95}}, errors)))
+    assert result.verdict != "AI_FULL_GENERATION_LIKELY"
+    assert result.score < 0.95
+    assert any("참고로만 두고" in r for r in result.reasons)
+    assert all(f.type != FindingType.AI_FULL_GENERATION_SUSPECTED for f in create_ai_detector_findings(doc, result))
+
+
+def test_ocr_spaced_resident_numbers_are_masked_before_leaving():
+    from packages.pii_engine.detector import detect
+
+    for sample in ("주민등록번호 : 800101 - 1234567", "800101  1234567", "800101-1234567"):
+        assert any(m.kind == "RRN" for m in detect(sample)), sample
+    assert not any(m.kind == "RRN" for m in detect("800101\n1234567")), "줄을 넘는 숫자는 묶지 않는다"

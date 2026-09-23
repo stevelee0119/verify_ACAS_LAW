@@ -304,6 +304,13 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     verdict = next(v for v, r in _VERDICT_RANK.items() if r == final_rank)
     agreement = ("SINGLE" if len(opinions) == 1
                  else "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE")
+    single_downgraded = False
+    if agreement == "SINGLE":
+        # 한 모델의 의견만으로 판정을 올리지 않는다. 규칙 기반 판정보다 무거우면 규칙 쪽을 따른다.
+        rule_rank = _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"])
+        if final_rank > rule_rank:
+            final_rank, single_downgraded = rule_rank, True
+            verdict = next(v for v, r in _VERDICT_RANK.items() if r == final_rank)
 
     reasons = []
     if agreement == "DISAGREE":
@@ -312,6 +319,9 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     elif agreement == "SINGLE":
         reasons.append(f"1개 모델({opinions[0]['provider']})의 의견만 있어 교차검증되지 않음"
                        + (f" — 응답하지 못한 모델: {failed_text}" if failed_text else ""))
+        if single_downgraded:
+            reasons.append(f"그 모델의 판단({opinions[0]['verdict']})은 참고로만 두고, "
+                           f"규칙 기반 판정({rule_res.verdict})을 유지함")
     if failed_text and agreement != "SINGLE":
         reasons.append(f"응답하지 못한 모델: {failed_text}")
     for o in opinions:
@@ -332,7 +342,8 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
 
     return AIDetectorResult(
         verdict=verdict,
-        score=float(statistics.median(o["score"] for o in opinions)),
+        score=(rule_res.score if single_downgraded
+               else float(statistics.median(o["score"] for o in opinions))),
         reasons=reasons,
         suspicious_excerpts=excerpts,
         signals={**rule_res.signals,

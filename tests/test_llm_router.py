@@ -526,10 +526,36 @@ def test_quarantined_answers_are_reported_with_a_reason():
         config = SimpleNamespace(kind="local", model="m", name="anthropic")
 
         async def generate(self, request):
-            return LLMResponse(True, provider="anthropic", text='{"verdict": "UNCERTAIN", "reasons": ["임차인 800101-1234567"]}')
+            return LLMResponse(True, provider="anthropic",
+                               text='{"verdict": "UNCERTAIN", "reasons": ["자세한 내용은 https://evil.example.com 참조"]}')
 
     router = module.LLMRouter(providers={"anthropic": _Provider()})
     answers = asyncio.run(router.consult_all(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
     assert not answers[0].used and not answers[0].executions[0].ok
     assert module.failure_summary(answers) == {
-        "anthropic": "응답이 출력 보안 검사에서 격리됨(주민등록번호 형식의 숫자 포함)"}
+        "anthropic": "응답이 출력 보안 검사에서 격리됨(허용되지 않은 외부 주소 포함)"}
+
+
+def test_a_resident_number_copied_from_the_document_is_masked_not_quarantined():
+    """임대차계약서처럼 주민등록번호가 든 문서에서 OpenAI·Anthropic이 모두 격리되어
+    Gemini 한 모델 의견만 남았다. 번호만 가리고 의견은 쓴다."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    class _Provider:
+        name, available = "anthropic", True
+        config = SimpleNamespace(kind="local", model="m", name="anthropic")
+
+        async def generate(self, request):
+            return LLMResponse(True, provider="anthropic",
+                               text='{"verdict": "UNCERTAIN", "reasons": ["임차인 800101-1234567 기재"]}')
+
+    router = module.LLMRouter(providers={"anthropic": _Provider()})
+    request = module.LLMRequest(system="s", user="u", schema={"type": "object", "required": ["verdict"]})
+    result = asyncio.run(router.run(module.LLMRole.PRIMARY_REASONER, request))
+    assert result.used and result.executions[0].ok
+    assert result.parsed["reasons"] == ["임차인 [주민등록번호 가림] 기재"]
+    assert result.executions[0].quarantine_reasons == ["PII_REDACTED"]
