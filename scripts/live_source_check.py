@@ -367,6 +367,34 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     return out
 
 
+def _gemini_quota_detail(response) -> str:
+    """Google 429 응답에서 어느 프로젝트의 어떤 한도에 걸렸는지 꺼낸다.
+
+    메시지 앞부분만 보면 '쿼터 초과'만 보이고, 키가 어느 프로젝트 소속인지·한도가
+    몇인지는 뒤쪽 details에 있다. 프로젝트 번호는 식별자이지 비밀값이 아니다.
+    """
+    try:
+        error = response.json().get("error") or {}
+    except ValueError:
+        return sanitize(response.text, 160)
+    found: Dict[str, str] = {}
+    for detail in error.get("details") or []:
+        for key, value in (detail.get("metadata") or {}).items():
+            found.setdefault(key, str(value))
+        for violation in detail.get("violations") or []:
+            for key in ("quotaId", "quotaMetric", "quotaValue"):
+                if violation.get(key):
+                    found.setdefault(key, str(violation[key]))
+    consumer = found.get("consumer") or (re.search(r"projects/\d+", error.get("message", "")) or [None])[0]
+    parts = [f"프로젝트 {consumer}" if consumer else "",
+             f"한도 {found.get('quota_limit_value') or found.get('quotaValue')}" if (
+                 found.get("quota_limit_value") or found.get("quotaValue")) else "",
+             f"지역 {found.get('quota_location')}" if found.get("quota_location") else "",
+             f"항목 {found.get('quota_limit') or found.get('quotaId')}" if (
+                 found.get("quota_limit") or found.get("quotaId")) else ""]
+    return " · ".join(p for p in parts if p) or sanitize(error.get("message", ""), 160)
+
+
 async def check_gemini_models(include: bool) -> List[CheckResult]:
     """이 키로 실제 호출할 수 있는 Gemini 모델을 찾는다.
 
@@ -384,17 +412,28 @@ async def check_gemini_models(include: bool) -> List[CheckResult]:
     out: List[CheckResult] = []
     try:
         async with httpx.AsyncClient(timeout=30) as client:
+            # 설정 모델에 먼저 1건 보내, 실패하면 어느 프로젝트의 어떤 한도인지 본다.
+            first = await client.post(f"{base}/models/{current}:generateContent", params={"key": key}, json={
+                "contents": [{"role": "user", "parts": [{"text": "Reply with the digit 1 and nothing else."}]}],
+                "generationConfig": {"maxOutputTokens": 256}})
+            out.append(CheckResult(
+                name=f"gemini:{current} (현재 설정)", category="gemini_models", configured=True,
+                requires_key=True, status="OK" if first.status_code < 400 else f"HTTP {first.status_code}",
+                ok=first.status_code < 400,
+                detail="호출 가능" if first.status_code < 400 else _gemini_quota_detail(first)))
+            await asyncio.sleep(2)
             listed = await client.get(f"{base}/models", params={"key": key, "pageSize": 200})
             if listed.status_code >= 400:
-                return [CheckResult(name="gemini:모델 목록", category="gemini_models", configured=True,
-                                    requires_key=True, status=f"HTTP {listed.status_code}", ok=False,
-                                    detail=sanitize(listed.text, 160))]
+                out.append(CheckResult(name="gemini:모델 목록", category="gemini_models", configured=True,
+                                       requires_key=True, status=f"HTTP {listed.status_code}", ok=False,
+                                       detail=_gemini_quota_detail(listed)))
+                return out
             names = [m["name"].split("/", 1)[-1] for m in listed.json().get("models", [])
                      if "generateContent" in (m.get("supportedGenerationMethods") or [])]
             usable = [n for n in names if n.startswith("gemini") and not any(
                 word in n for word in ("embedding", "tts", "image", "audio", "live", "robotics", "computer-use"))]
             # 설정 모델을 먼저, 그다음 flash·pro 순으로 최대 6개만 시험한다(분당 한도를 아끼기 위해).
-            ordered = sorted(set(usable), key=lambda n: (n != current, "flash" not in n, "pro" not in n, n))[:6]
+            ordered = sorted(set(usable) - {current}, key=lambda n: ("flash" not in n, "pro" not in n, n))[:5]
             out.append(CheckResult(name="gemini:모델 목록", category="gemini_models", configured=True,
                                    requires_key=True, status="OK", ok=True,
                                    detail=f"생성 가능 모델 {len(usable)}개 중 {len(ordered)}개 시험: {', '.join(ordered)}"))
@@ -405,11 +444,9 @@ async def check_gemini_models(include: bool) -> List[CheckResult]:
                     "contents": [{"role": "user", "parts": [{"text": "Reply with the digit 1 and nothing else."}]}],
                     "generationConfig": {"maxOutputTokens": 256}})
                 ok = reply.status_code < 400
-                message = "" if ok else sanitize((reply.json().get("error") or {}).get("message", reply.text)
-                                                 if reply.headers.get("content-type", "").startswith("application/json")
-                                                 else reply.text, 120)
+                message = "" if ok else _gemini_quota_detail(reply)
                 out.append(CheckResult(
-                    name=f"gemini:{name}{' (현재 설정)' if name == current else ''}", category="gemini_models",
+                    name=f"gemini:{name}", category="gemini_models",
                     configured=True, requires_key=True, status="OK" if ok else f"HTTP {reply.status_code}",
                     ok=ok, detail="호출 가능" if ok else message))
     except Exception as exc:  # 키가 담긴 URL이 메시지에 있을 수 있어 예외 이름만 남긴다
