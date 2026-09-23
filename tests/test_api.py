@@ -464,3 +464,33 @@ def test_required_ocr_prevents_worker_start_when_runtime_is_not_ready(client, mo
     with pytest.raises(RuntimeError, match="OCR_READINESS_FAILED"):
         with TestClient(client.app):
             pass
+
+
+def test_run_listings_and_status_polls_never_read_the_stored_result(client, project, tmp_path):
+    """결과 본문(result_json)은 한 건에 수 MB다. 프로젝트 열기·작업 목록·상태
+    폴링이 매번 이를 읽으면 서버가 느려지고 프로젝트 클릭이 먹지 않는 것처럼 보인다."""
+    from sqlalchemy import event
+
+    from apps.api.db import get_engine
+
+    pdf = make_pdf(tmp_path / "brief.pdf", ["대법원 2011모1839 결정과 민법 제750조에 따라 청구한다."])
+    assert upload(client, project["id"], pdf).status_code == 201
+    run = run_and_wait(client, f"/api/projects/{project['id']}/verify")
+
+    statements = []
+    engine = get_engine()
+    listener = lambda conn, cursor, statement, *args: statements.append(statement)
+    event.listen(engine, "before_cursor_execute", listener)
+    try:
+        for path in (f"/api/projects/{project['id']}/runs", "/api/verification-runs",
+                     f"/api/verification-runs/{run['id']}"):
+            statements.clear()
+            response = client.get(path)
+            assert response.status_code == 200, path
+            assert not any("result_json" in sql for sql in statements), path
+        statements.clear()
+        result = client.get(f"/api/verification-runs/{run['id']}/result")
+        assert result.status_code == 200 and result.json()["documents"]
+        assert any("result_json" in sql for sql in statements)
+    finally:
+        event.remove(engine, "before_cursor_execute", listener)

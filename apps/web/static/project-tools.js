@@ -16,7 +16,7 @@ const projectTools = (() => {
   function clearProject() {
     clearTimeout(state.timer);
     state.generation++;
-    state.project = state.run = state.viewing = state.pollError = state.progressSeen = null;
+    state.project = state.run = state.viewing = state.pollError = state.progressSeen = state.opening = null;
     if (!state.uploadBatch?.busy) state.uploadBatch = null;
     state.editing = null;
     state.documents = []; state.findings = []; state.pages = []; state.result = {};

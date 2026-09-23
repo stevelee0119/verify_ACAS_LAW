@@ -264,6 +264,18 @@ aside {
   box-shadow: inset 3px 0 var(--green)
 }
 
+#projectList button[aria-busy="true"] {
+  cursor: progress;
+  background: white;
+  border-color: var(--line);
+  box-shadow: inset 3px 0 var(--green);
+  opacity: .7
+}
+
+#projectList button[aria-busy="true"] small::after {
+  content: " · 여는 중…"
+}
+
 #projectList small {
   display: block;
   color: var(--muted);
@@ -504,11 +516,13 @@ td {
   margin: 0 auto 18px;
 }
 
-.empty-sub {
-  margin-top: -6px;
-  margin-bottom: 18px;
-  color: var(--muted);
-  font-size: 14px
+/* 엠블럼이 제품명을 이미 보여 주므로 아래에는 시스템 이름만 둔다. */
+.empty-title {
+  margin: 0 0 22px;
+  font-family: "ACAS Title", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-size: 22px;
+  font-weight: 600;
+  color: #234540
 }
 
 .empty-small {
@@ -838,31 +852,31 @@ table {
 
 @media(max-width:700px) {
   .topbar {
-    position: relative;
     padding: 0 12px;
-    padding-bottom: 36px;
     gap: 9px;
-    height: 96px
+    height: 66px
   }
 
   .brand {
+    flex: 1;
     font-size: 15px;
-    gap: 7px
+    gap: 8px
   }
 
+  /* 폭이 좁아도 제목은 엠블럼 바로 옆에 둔다. 둘 다 폭에 맞춰 줄고,
+     그래도 모자라면 제목만 단어 단위로 두 줄이 된다. */
   .brand .brand-emblem {
-    width: 152px;
+    width: clamp(104px, 34vw, 152px);
   }
 
   .brand-sub {
-    position: absolute;
-    left: 12px;
-    right: 12px;
-    bottom: 9px;
-    padding: 0;
-    margin: 0;
-    border: 0;
-    text-align: center
+    padding-left: 8px;
+    margin-left: 0;
+    font-size: clamp(14px, 4.2vw, 19px);
+    line-height: 1.2;
+    white-space: normal;
+    word-break: keep-all;
+    min-width: 0
   }
 
   .connection {
@@ -879,16 +893,16 @@ table {
 
   .workspace {
     display: block;
-    min-height: calc(100vh - 96px)
+    min-height: calc(100vh - 66px)
   }
 
   aside {
     display: none;
     position: absolute;
-    top: 96px;
+    top: 66px;
     left: 0;
     width: min(290px, 90vw);
-    min-height: calc(100vh - 96px);
+    min-height: calc(100vh - 66px);
     z-index: 10;
     box-shadow: 10px 0 20px #0001
   }
@@ -995,6 +1009,33 @@ table {
 .evidence-link-row label:has(textarea) { grid-column: 1 / -1; }
 .workflow-dialog textarea, .workflow-dialog input, .workflow-dialog select { width: 100%; max-width: 100%; }
 .detail-section.form-grid .full { grid-column: 1 / -1; }
+/* 360px 이하 휴대폰: 버튼·간격을 줄여 제목이 엠블럼 옆에 온전히 들어가게 한다. */
+@media(max-width:380px) {
+  .topbar {
+    padding: 0 8px;
+    gap: 6px
+  }
+
+  .topbar .icon {
+    width: 34px;
+    height: 34px;
+    padding: 7px
+  }
+
+  .brand {
+    gap: 6px
+  }
+
+  .brand .brand-emblem {
+    width: 92px
+  }
+
+  .brand-sub {
+    padding-left: 6px;
+    font-size: 13px
+  }
+}
+
 @media (max-width: 680px) {
   .comparison-columns { grid-template-columns: minmax(0,1fr); }
   .evidence-link-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr); }

@@ -24,7 +24,7 @@ from sqlalchemy import (
     create_engine,
     event,
 )
-from sqlalchemy.orm import DeclarativeBase, Session, relationship, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Session, deferred, relationship, sessionmaker
 from sqlalchemy.types import TypeDecorator
 
 from packages.common.config import get_settings
@@ -310,7 +310,9 @@ class VerificationRun(Base):
     unavailable_sources = Column(JSONType, default=list)
     unverified_items = Column(JSONType, default=list)
     errors = Column(JSONType, default=list)
-    result_json = Column(JSONType)
+    # 한 건에 수 MB다. 목록·상태 조회·권한 확인은 이 값을 쓰지 않으므로
+    # 실제로 읽을 때만 가져온다.
+    result_json = deferred(Column(JSONType))
     input_snapshot = Column(JSONType, default=dict)
     started_at = Column(DateTime, default=datetime.utcnow)
     finished_at = Column(DateTime)

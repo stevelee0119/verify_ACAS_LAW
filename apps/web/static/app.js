@@ -214,18 +214,37 @@ function renderProjects() {
   $("projectList").replaceChildren();
   for (const p of state.projects.filter(p => `${p.name} ${p.case_number||""}`.toLowerCase().includes(query))) {
     const b = button(p.name, () => openProject(p.id), p.id === state.project?.id ? "active" : "");
+    b.dataset.projectId = p.id;
+    if (p.id === state.opening) b.setAttribute("aria-busy", "true");
     b.append(node("small", `${p.case_number||"사건번호 미지정"} · 자료 ${p.document_count}개`));
     $("projectList").append(b);
   }
 }
+// 누른 즉시 어느 프로젝트를 여는 중인지 보여 준다. 서버 응답을 기다리는 동안
+// 화면이 그대로면 클릭이 먹지 않은 것처럼 보인다.
+function markOpening(id) {
+  state.opening = id;
+  for (const b of $("projectList").querySelectorAll("button[data-project-id]")) {
+    if (b.dataset.projectId === id) b.setAttribute("aria-busy", "true");
+    else b.removeAttribute("aria-busy");
+  }
+}
+
 async function openProject(id) {
   clearTimeout(state.timer);
   const generation = ++state.generation;
   state.selected.clear();
-  const p = await api(`/projects/${id}`);
-  const docs = await api(`/projects/${id}/documents`);
-  const runs = await api(`/projects/${id}/runs`);
+  markOpening(id);
+  let p, docs, runs;
+  try {
+    [p, docs, runs] = await Promise.all([
+      api(`/projects/${id}`), api(`/projects/${id}/documents`), api(`/projects/${id}/runs?limit=1`)]);
+  } catch (error) {
+    if (generation === state.generation) markOpening(null);
+    throw requestError(`프로젝트를 열지 못했습니다: ${error.message}`, error.code, {status: error.status});
+  }
   if (generation !== state.generation) return;
+  markOpening(null);
   state.project = p;
   document.dispatchEvent(new Event("acas-project-changed"));
   state.documents = docs;
