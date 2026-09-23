@@ -367,6 +367,47 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     return out
 
 
+async def check_model_catalog(include: bool) -> List[CheckResult]:
+    """OpenAI·Anthropic 키로 쓸 수 있는 모델 ID를 공급자에게서 직접 받는다.
+
+    모델 ID를 추측해 넣으면 틀린 공급자가 교차검증에서 통째로 빠진다.
+    """
+    import httpx
+
+    from packages.llm_router import build_providers
+
+    if not include:
+        return []
+    providers = build_providers()
+    out: List[CheckResult] = []
+    async with httpx.AsyncClient(timeout=30) as client:
+        for name, headers_of, pattern in (
+            ("openai", lambda key: {"Authorization": f"Bearer {key}"}, r"gpt-6|luna|gpt-5|gpt-4\.1"),
+            ("anthropic", lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"}, r"opus|sonnet"),
+        ):
+            provider = providers.get(name)
+            if provider is None or not provider.available:
+                continue
+            try:
+                reply = await client.get(f"{provider.config.base_url}/models",
+                                         headers=headers_of(provider.config.api_key), params={"limit": 1000})
+                if reply.status_code >= 400:
+                    out.append(CheckResult(name=f"{name}:모델 목록", category="model_catalog", configured=True,
+                                           requires_key=True, status=f"HTTP {reply.status_code}", ok=False,
+                                           detail=sanitize(reply.text, 160)))
+                    continue
+                ids = sorted(m.get("id", "") for m in reply.json().get("data", []))
+                picked = [i for i in ids if re.search(pattern, i)]
+                out.append(CheckResult(name=f"{name}:모델 목록", category="model_catalog", configured=True,
+                                       requires_key=True, status="OK", ok=True,
+                                       detail=f"현재 설정 {provider.config.model} · 관련 모델 {len(picked)}개: "
+                                              + ", ".join(picked[:40])))
+            except Exception as exc:
+                out.append(CheckResult(name=f"{name}:모델 목록", category="model_catalog", configured=True,
+                                       requires_key=True, status="ERROR", ok=False, detail=type(exc).__name__))
+    return out
+
+
 def _gemini_quota_detail(response) -> str:
     """Google 429 응답에서 어느 프로젝트의 어떤 한도에 걸렸는지 꺼낸다.
 
@@ -580,8 +621,13 @@ def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
         mark = "✅" if item.ok else ("⚪" if item.status == "SKIPPED" else "❌")
         lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
 
+    if groups.get("model_catalog"):
+        lines += ["", "## 7. 공급자별 사용 가능 모델 ID", "", "| 공급자 | 결과 | 모델 |", "|---|---|---|"]
+        for item in groups["model_catalog"]:
+            lines.append(f"| `{item.name}` | {'✅' if item.ok else '❌'} {item.status} | {item.detail} |")
+
     if groups.get("gemini_models"):
-        lines += ["", "## 7. 이 키로 호출 가능한 Gemini 모델", "",
+        lines += ["", "## 8. 이 키로 호출 가능한 Gemini 모델", "",
                   "쿼터가 남은 모델이 있으면 `LV_GEMINI_MODEL`에 그 ID를 넣으면 된다.", "",
                   "| 모델 | 결과 | 비고 |", "|---|---|---|"]
         for item in groups["gemini_models"]:
@@ -640,6 +686,7 @@ def main() -> int:
         "llm_cascade": asyncio.run(check_cascade(args.with_llm, registry)),
         "llm_consensus": asyncio.run(check_model_consensus(args.with_llm)),
         "gemini_models": asyncio.run(check_gemini_models(args.with_llm)),
+        "model_catalog": asyncio.run(check_model_catalog(args.with_llm)),
     }
 
     markdown = render_markdown(groups)
