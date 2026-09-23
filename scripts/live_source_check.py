@@ -363,6 +363,70 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     return out
 
 
+# 점검용 합성 서면. 실제 사건이 아니다.
+_PROBE_BRIEF = (
+    "준 비 서 면\n사건 2026가합0000 손해배상(기)\n원고 갑 / 피고 을\n\n"
+    "1. 피고는 원고에게 이 사건 계약에 따른 잔대금 5,000만 원을 지급할 의무가 있습니다.\n"
+    "2. 피고는 하자를 이유로 지급을 거절하나, 대법원 2011모1839 결정의 취지에 비추어 볼 때 "
+    "피고의 항변은 이유 없습니다. 요약하자면 피고의 책임이 인정됩니다.\n"
+    "3. 따라서 원고의 청구는 인용되어야 합니다.\n"
+)
+
+
+async def check_model_consensus(include: bool) -> List[CheckResult]:
+    """주장 타당성·AI 작성 판별을 실제 코드 그대로 1회씩 돌려 공급자별 참여를 본다.
+
+    세 모델에 모두 묻는데 보고서에 '1개 모델 의견'만 남으면, 어느 공급자가
+    왜 빠졌는지가 여기서 드러난다(응답 잘림, JSON 아님, 형식 불일치 등).
+    """
+    if not include:
+        return [CheckResult(name="consensus", category="llm_consensus", configured=False,
+                            status="SKIPPED", ok=False, detail="--with-llm 미지정으로 호출하지 않음")]
+    from apps.api.db import init_db
+    from packages.common.schemas import Block, Citation, CitationType, NormalizedDocument, Page
+    from packages.legal_engine.argument_validity_verifier import verify_argument_validity
+    from packages.llm_router import LLMRouter
+    from packages.verification_engine.ai_document_detector import detect_ai_document
+
+    init_db()  # 예산 원장이 쓰는 표
+    executions: List[Any] = []
+    router = LLMRouter(on_execution=executions.append)
+    doc = NormalizedDocument(document_id="probe", filename="probe.txt", mime_type="text/plain", sha256="probe")
+    page = Page(page_number=1)
+    page.blocks.append(Block(block_id="b1", text=_PROBE_BRIEF, page=1, source_layer="visible_text"))
+    doc.pages.append(page)
+    doc.raw_layers["visible_text"] = _PROBE_BRIEF
+    citation = Citation(citation_id="c1", type=CitationType.CASE, raw_text="대법원 2011모1839 결정",
+                        case_number="2011모1839", context=_PROBE_BRIEF, document_id="probe", page=1)
+    out: List[CheckResult] = []
+    for label, run in (
+        ("AI 작성 판별", lambda: detect_ai_document(doc, [], router=router)),
+        ("주장 타당성", lambda: verify_argument_validity(
+            doc, [citation], [{"citation_id": "c1", "status": "NOT_FOUND", "levels": {"level1": "NOT_FOUND"}}],
+            [], router=router)),
+    ):
+        executions.clear()
+        try:
+            await run()
+        except Exception as exc:
+            out.append(CheckResult(name=f"consensus:{label}", category="llm_consensus", configured=True,
+                                   requires_key=True, status="ERROR", ok=False,
+                                   detail=f"실행 오류 {type(exc).__name__}"))
+            continue
+        ok_names = sorted({e.provider for e in executions if e.ok})
+        for e in executions:
+            out.append(CheckResult(
+                name=f"consensus:{label}:{e.provider}", category="llm_consensus", configured=True,
+                requires_key=True, status="OK" if e.ok else "FAILED", ok=bool(e.ok),
+                detail=(f"모델 {e.model}, 토큰 in {e.input_tokens}/out {e.output_tokens}, {e.latency_ms}ms"
+                        + ("" if e.ok else f" — {sanitize(e.error, 200)}"))))
+        out.append(CheckResult(
+            name=f"consensus:{label}:참여", category="llm_consensus", configured=True, requires_key=True,
+            status="OK" if len(ok_names) >= 3 else "PARTIAL", ok=len(ok_names) >= 3,
+            detail=f"응답을 채택할 수 있었던 모델 {len(ok_names)}개({', '.join(ok_names) or '없음'})"))
+    return out
+
+
 # ---------------------------------------------------------------------------
 def partition_failures(groups: Dict[str, List[CheckResult]]):
     """치명적 실패(키 문제)와 경고(공개 Source 일시 장애)를 나눈다."""
@@ -419,6 +483,11 @@ def render_markdown(groups: Dict[str, List[CheckResult]]) -> str:
         mark = "✅" if item.ok else ("⚪" if item.status == "SKIPPED" else "❌")
         lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
 
+    lines += ["", "## 6. 주장 타당성·AI 작성 판별 교차검증(실제 코드)", "", "| 호출 | 결과 | 비고 |", "|---|---|---|"]
+    for item in groups.get("llm_consensus", []):
+        mark = "✅" if item.ok else ("⚪" if item.status == "SKIPPED" else "❌")
+        lines.append(f"| `{item.name}` | {mark} {item.status} | {item.detail} |")
+
     fatal, warnings = partition_failures(groups)
     lines += ["", "## 판정", ""]
     if fatal:
@@ -462,6 +531,7 @@ def main() -> int:
         "live_academic": check_academic(registry),
         "llm": asyncio.run(check_llm(args.with_llm)),
         "llm_cascade": asyncio.run(check_cascade(args.with_llm, registry)),
+        "llm_consensus": asyncio.run(check_model_consensus(args.with_llm)),
     }
 
     markdown = render_markdown(groups)
