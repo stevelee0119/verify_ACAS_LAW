@@ -347,16 +347,28 @@ const GATE_LABELS = {
   BLOCK: "배포 차단"
 };
 
+// 사유는 접어 두지 않는다. 판정만 보이고 이유가 숨어 있으면 무엇을 고쳐야
+// 하는지 한 번 더 눌러야 알 수 있다. 차단 사유와 검토 사유는 대응이 달라 나눈다.
 function renderGateReasons(gate) {
-  const reasons = [...(gate.hard_block_reasons || []), ...(gate.review_reasons || [])];
-  if (!reasons.length) return;
-  const details = node("details", null, "gate-reasons");
-  details.append(node("summary", `${GATE_LABELS[gate.release_gate] || gate.release_gate} 사유 ${reasons.length}건`));
-  const list = node("ul");
-  for (const reason of reasons) list.append(node("li", friendlyText(reason)));
-  details.append(list);
-  details.append(node("p", gate.risk_index_note || "", "muted"));
-  $("summary").append(details);
+  const groups = [
+    ["배포 차단 사유", gate.hard_block_reasons || [], "gate-group-block"],
+    ["사람 검토 사유", gate.review_reasons || [], "gate-group-review"]
+  ].filter(([, reasons]) => reasons.length);
+  if (!groups.length) return;
+  const total = groups.reduce((sum, [, reasons]) => sum + reasons.length, 0);
+  const section = node("section", null, `gate-reasons gate-${String(gate.release_gate).toLowerCase()}`);
+  section.setAttribute("aria-label", "배포가능 판정 사유");
+  section.append(node("h2", `${GATE_LABELS[gate.release_gate] || gate.release_gate} — 사유 ${total}건`));
+  for (const [title, reasons, cls] of groups) {
+    const group = node("div", null, `gate-group ${cls}`);
+    group.append(node("h3", `${title} ${reasons.length}건`));
+    const list = node("ol");
+    for (const reason of reasons) list.append(node("li", friendlyText(reason)));
+    group.append(list);
+    section.append(group);
+  }
+  if (gate.risk_index_note) section.append(node("p", gate.risk_index_note, "gate-note"));
+  $("summary").append(section);
 }
 
 function filteredDocuments() {
