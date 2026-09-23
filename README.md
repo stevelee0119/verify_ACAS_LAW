@@ -75,7 +75,11 @@ API Key가 하나도 없어도 동작한다. 이 경우 외부 Source 검증 항
 |---|---|
 | `LV_LAW_GO_KR_OC` | 국가법령정보 공동활용 OC (판례·법령 공식 검증) |
 | `LV_KCI_KEY` | KCI 학술 API Key |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | LLM Provider |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GEMINI_API_KEY` | LLM Provider. 기본 모델은 `config/providers.json`(gpt-4.1 · claude-sonnet-5 · gemini-3.8-flash) |
+| `LV_OPENAI_MODEL` / `LV_ANTHROPIC_MODEL` / `LV_GEMINI_MODEL` | 모델 ID 덮어쓰기(공급자가 모델을 바꿨을 때) |
+| `LV_LLM_CROSS_CHECK` | AI 교차검증 범위. `all`(기본, 사용 가능한 모델 모두) · `auto`(판례 의미·적용 검토에서만 신뢰도가 낮거나 중요도가 높을 때 반증 모델 사용, 다른 검토는 `all`과 같음) · `off`(1순위 모델 하나) |
+| `LV_HTTP_TIMEOUT` | 외부 출처 요청 제한시간(초, 기본 12). law.go.kr 응답이 느리면 30 권장 |
+| `LV_SOURCE_MIN_INTERVAL_SECONDS` | 같은 출처에 연달아 보내는 요청 간격(초, 기본 0.3) |
 | `LV_PSEUDONYM_SECRET` | 실명-가명 매핑 암호화 키. **운영에서는 반드시 교체한다.** |
 | `LV_DATABASE_URL` | 기본 SQLite. 운영은 `postgresql+psycopg://...` |
 | `LV_CELERY_BROKER` | 설정하면 Celery Worker로 분산 처리한다. 없으면 인프로세스. |
@@ -134,6 +138,25 @@ QUEUED → PARSING → ADVERSARIAL_SCANNING → EXTRACTING → PII_PROCESSING
 Adversarial Scan은 **모든 LLM 호출보다 먼저** 실행된다. MM-2·MM-3에서 추출된 원문은
 LLM Context에 투입되지 않고 유형 태그·위치·길이·해시만 전달된다.
 
+### AI 교차검증
+
+LLM을 쓰는 세 곳 모두 사용 가능한 모델(OpenAI·Anthropic·Gemini)을 함께 거친다.
+한 공급자가 실패하면 다음 공급자로 넘어가고, 호출마다 정책 확인·예산 원장·출력 검사가 적용된다.
+외부 모델에 보내는 본문은 `MASKED` 정책에서 개인정보를 가린다.
+
+| 검토 | 모델 사용 방식 | 판정을 정하는 것 |
+|---|---|---|
+| 판례 의미·적용(Level 4·5) | 주 분석 → 반증 → 제3 모델 순서의 캐스케이드. 근거 인용이 공식 전문에 실제로 있어야 채택 | 공식 출처 우선. 모델 의견이 엇갈리면 `UNVERIFIED` |
+| 법률 주장 타당성 | 모든 모델에 같은 질문. 항목별 의견과 일치·불일치를 **참고 의견**으로 표시 | 규칙(성립 불가 사건번호 / 인용 내용 불일치 / 공식 DB 미확인). 모델 답으로 '허위'가 되지 않는다 |
+| AI 작성 여부 | 모든 모델에 같은 질문. 본문에 없는 의심 문단은 버린다 | 과반이 지지하는 판정(모델 둘이면 둘 다 동의해야 상향). 모델이 일치할 때만 증거등급 B |
+
+**공식 DB에서 확인하지 못한 판례는 '미확인'이지 '부존재'가 아니다.** 국가법령정보 판례 DB는
+모든 재판을 수록하지 않는다. 사건번호의 연도·사건부호가 성립할 수 없을 때만 임의 생성을 의심한다.
+
+판례 의미·적용 검토는 **공식 판결 전문을 받아야** 수행된다. 전문 조회가 실패하면 이 단계는
+건너뛰어지고 사유가 기록된다. 배포 서버에서 전문 조회가 되는지는 아래
+[배포 후 확인](#배포-후-확인)의 `/api/diagnostics/sources`로 확인한다.
+
 ## 은닉 메타메시지 4유형
 
 | 유형 | 수신자 | 처리 |
@@ -161,7 +184,7 @@ MM-2·MM-3 원문은 봉인 상태로 저장된다. 열람은 사용자의 명�
 | 워크플로 | 트리거 | 하는 일 |
 |---|---|---|
 | `CI` | push·PR | SQLite와 PostgreSQL/pgvector+Redis 양쪽에서 전체 테스트, 감사추적 append-only 트리거 확인. Secret을 쓰지 않는다. |
-| `외부 Source 실연동 점검` | 수동 또는 `[live-check]` 커밋 | Secret 주입 상태 → Adapter 상태 → **실제 API 호출** → LLM Provider 순으로 점검한다. |
+| `외부 Source 실연동 점검` | 수동 또는 `[live-check]` 커밋 | Secret 주입 상태 → Adapter 상태 → **실제 API 호출** → LLM Provider → **세 모델 교차검증(실제 분석 경로)** 순으로 점검한다. LLM 호출은 `with_llm` 입력을 켤 때만. |
 | `문서 검증 실행` | 수동 또는 `[run-verify]` 커밋 | **검증 파이프라인을 끝까지 돌리고** 보고서 6종을 아티팩트로 남긴다. |
 
 `workflow_dispatch` 버튼은 워크플로 파일이 **기본 브랜치에 있어야** Actions 탭에 나타난다.
@@ -194,6 +217,10 @@ OPENAI_API_KEY    ANTHROPIC_API_KEY   GEMINI_API_KEY
 # 로컬에서도 같은 점검을 할 수 있다
 python scripts/live_source_check.py --with-llm --strict
 ```
+
+GitHub 러너는 국외 IP라 **law.go.kr 응답이 자주 끊기거나 시간 초과된다.** 이 워크플로에서
+law.go.kr 항목이 실패해도 배포 서버의 상태를 뜻하지 않는다. 운영 서버의 판단은
+`/api/diagnostics/sources`로 한다.
 
 ### CLI 일괄 검증
 
@@ -230,6 +257,16 @@ Internal Database URL을 그대로 붙여넣어도 된다.
 
 **영구 디스크 없이 배포하면 업로드 원본이 재배포 때 사라져 Chain of Custody가
 성립하지 않는다.** 자세한 내용은 [docs/DEPLOY_RENDER.md](docs/DEPLOY_RENDER.md).
+
+### 배포 후 확인
+
+관리자로 로그인한 브라우저에서 아래 주소를 연다. 비밀값은 응답에 포함되지 않는다.
+
+| 주소 | 확인할 것 |
+|---|---|
+| `/api/health` | `commit`이 방금 병합한 커밋인지 |
+| `/api/diagnostics` | OCR·디스크 내구성·저장소 암호화, AI 공급자별 키 보유와 `cross_check` 설정 |
+| `/api/diagnostics/sources` | 이 서버에서 law.go.kr 사건번호 조회와 **판례 전문 조회**가 되는지. `verdict`가 `FULL_TEXT_UNAVAILABLE`이면 `steps[].message`가 원인이다(HTTP 상태, JSON이 아닌 응답, 형식 차이 등) |
 
 ## Release Gate
 
