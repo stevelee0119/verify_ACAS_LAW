@@ -266,6 +266,10 @@ class LLMRouter:
             tried.extend(names)
         if last is not None:
             last.executions = attempted
+            if attempted:
+                # 마지막 시도(고를 공급자 없음)의 문구만 남기면 실제 실패 사유가 가려진다.
+                last.note = "모든 공급자가 응답하지 못함: " + ", ".join(
+                    f"{e.provider}({describe_failure(e.error)})" for e in attempted)
             return last
         return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 

@@ -424,3 +424,31 @@ def test_truncated_answers_are_failures_with_a_clear_reason(monkeypatch):
     finally:
         monkeypatch.undo()
         config.reset_settings()
+
+
+def test_when_every_provider_fails_the_note_says_why():
+    """모두 실패하면 '사용 가능한 Provider가 없어'라는 엉뚱한 문구만 남아 원인이 가려졌다."""
+    import asyncio
+    from types import SimpleNamespace
+
+    from packages.llm_router import router as module
+    from packages.llm_router.providers import LLMResponse
+
+    class _Provider:
+        available = True
+
+        def __init__(self, name, error):
+            self.name, self.error = name, error
+            self.config = SimpleNamespace(kind="local", model="m", name=name)
+
+        async def generate(self, request):
+            return LLMResponse(False, provider=self.name, error=self.error)
+
+    router = module.LLMRouter(providers={
+        "anthropic": _Provider("anthropic", "OUTPUT_TRUNCATED: 응답이 출력 한도(8 토큰)에서 잘림"),
+        "gemini": _Provider("gemini", "HTTP 401: bad key")})
+    router.retry_delays = ()
+    result = asyncio.run(router.run_any(module.LLMRole.PRIMARY_REASONER, module.LLMRequest(system="s", user="u")))
+    assert not result.used
+    assert result.note == ("모든 공급자가 응답하지 못함: anthropic(응답이 출력 한도에서 잘림), "
+                           "gemini(API 키 또는 권한 오류(HTTP 401))")

@@ -296,6 +296,7 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
     근거로 인용하는지는 이 점검에서만 드러난다.
     """
     from packages.llm_router import LLMRouter
+    from packages.llm_router.router import describe_failure
 
     if not include:
         return [CheckResult(name="cascade", category="llm_cascade", configured=False, status="SKIPPED",
@@ -347,7 +348,8 @@ async def check_cascade(include: bool, registry) -> List[CheckResult]:
         quotes = [q for q in verdict.get("evidence_quotes", []) if isinstance(q, str) and q.strip()]
         grounded = sum(q in source_text for q in quotes)
         providers += [e.provider for e in used]
-        tried = ", ".join(f"{e.provider}{'' if e.ok else '(실패)'}" for e in runs) or "-"
+        tried = ", ".join(e.provider if e.ok else f"{e.provider}(실패: {describe_failure(e.error)})"
+                          for e in runs) or "-"
         out.append(CheckResult(
             name=f"cascade:stage{stage['stage']}:{stage['name']}", category="llm_cascade",
             configured=True, requires_key=True, status="OK" if stage.get("used") else "NOT_USED",
@@ -526,6 +528,13 @@ def main() -> int:
     from packages.source_adapters import SourceRegistry
 
     registry = SourceRegistry()
+    if args.with_llm:
+        # 라우터는 호출마다 예산 원장에 예약한다. 원장 표는 그 모델이 import된 뒤
+        # 만들어야 한다. 이 순서를 어겨 교차검증 점검이 '예산 승인 실패'로 끝났다.
+        import packages.llm_router.budget  # noqa: F401
+        from apps.api.db import init_db
+
+        init_db()
     groups: Dict[str, List[CheckResult]] = {
         "secret": check_secrets(),
         "adapter_status": check_adapters(registry),
