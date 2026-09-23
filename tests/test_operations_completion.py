@@ -361,10 +361,13 @@ def test_late_result_after_cancellation_cannot_complete(ops, monkeypatch):
 def test_heartbeat_prevents_recovery_during_slow_work(ops):
     from apps.worker.runtime import heartbeat
     run = seeded_run(ops)
-    store = JobStore(ops, lease_seconds=0.3)
+    # 기다리는 시간은 임차보다 길어야 한다(갱신이 없으면 회수되는 조건).
+    # 임차를 0.3초로 두면 갱신 간격이 0.1초라, 부하 걸린 CI 러너에서 0.2초만
+    # 멈춰도 갱신이 늦어 실패했다. 간격을 넓혀 판정의 의미는 그대로 둔다.
+    store = JobStore(ops, lease_seconds=1.2)
     lease = store.claim(run.id)
     with heartbeat(store, lease) as check:
-        time.sleep(0.5)
+        time.sleep(2.0)
         assert store.recover() == []
         check()
 
