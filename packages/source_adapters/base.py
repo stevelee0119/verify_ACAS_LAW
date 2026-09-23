@@ -126,5 +126,6 @@ class SourceAdapter(ABC):
             return self._unavailable(query, exc.status, str(exc))
         if isinstance(exc, httpx.TimeoutException):
             return self._unavailable(query, AdapterStatus.TIMEOUT, "외부 출처 조회 시간이 초과되었습니다")
-        # Raw transport errors can include credential-bearing URLs.
-        return self._unavailable(query, AdapterStatus.ERROR, "외부 출처 연결 또는 응답 처리에 실패했습니다")
+        # Raw transport errors can include credential-bearing URLs. 예외 이름만 남긴다.
+        return self._unavailable(query, AdapterStatus.ERROR,
+                                 f"외부 출처 연결 또는 응답 처리에 실패했습니다({type(exc).__name__})")

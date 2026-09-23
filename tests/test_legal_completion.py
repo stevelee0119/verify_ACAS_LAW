@@ -498,3 +498,27 @@ def test_pipeline_case_review_is_not_repeated_for_each_statute_date(registry):
     assert review["status"] == "REVIEW_NEEDED" and review["applies_to_case"] is None
     assert review["source_record_ids"]
     assert not document.engine_data["legal_reviews"][1]["citation_ids"]
+
+
+@pytest.mark.parametrize("response,expected", [
+    (httpx.Response(200, text="<html>오류</html>", headers={"content-type": "text/html"}), "JSON이 아님(content-type text/html"),
+    (httpx.Response(200, json={"Law": "사용자 정보 검증에 실패"}), "형식이 예상과 다름"),
+    (httpx.Response(500, text="x"), "HTTP 500"),
+])
+def test_case_full_text_failures_say_why(adapter, monkeypatch, response, expected):
+    """전문 조회가 실패하면 의미·적용 검토(세 모델 교차검증)가 건너뛰어진다.
+
+    배포 점검에서 사건번호 조회는 되는데 전문 조회만 매번 '연결 또는 응답 처리
+    실패' 한 문장으로 끝나, 무엇이 문제인지 알 수 없었다.
+    """
+    monkeypatch.setattr(adapter, "_http_get", lambda url, *, params: response)
+    result = adapter.fetch_case({"case_number": "2011모1839", "source_id": "1"})
+    assert result.status != "READY" and expected in result.message
+    assert "OC" not in result.message
+
+
+def test_case_full_text_without_wrapper_is_still_read(adapter, monkeypatch):
+    body = {"사건번호": "2011모1839", "판례내용": "재항고를 기각한다."}
+    monkeypatch.setattr(adapter, "_http_get", lambda url, *, params: httpx.Response(200, json=body))
+    result = adapter.fetch_case({"case_number": "2011모1839", "source_id": "1"})
+    assert result.records and "재항고를 기각한다" in result.records[0].get("full_text", "")

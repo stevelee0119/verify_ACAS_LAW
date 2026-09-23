@@ -184,13 +184,32 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
         identifier = case.get("source_id") or _first(raw, "판례일련번호", "판례정보일련번호", "헌재결정례일련번호")
         if not identifier or self.status() != AdapterStatus.READY:
             return self._unavailable(str(case.get("case_number")), self.status() if self.status() != AdapterStatus.READY else AdapterStatus.ERROR, "판례 전문을 조회할 수 없다")
+        label = str(case.get("case_number"))
         try:
             response = self._http_get(SERVICE_URL, params={"OC": self.api_key, "target": target, "type": "JSON", "ID": identifier})
-            response.raise_for_status()
+        except Exception as exc:
+            return self._transport_unavailable(label, exc)
+        # 전문 조회가 실패하면 의미·적용 검토(세 모델 교차검증)가 통째로 건너뛰어진다.
+        # 실패 이유를 한 문장으로 뭉개지 않고 구분해 남긴다. URL·OC는 넣지 않는다.
+        if response.status_code >= 400:
+            return self._unavailable(label, AdapterStatus.RATE_LIMITED if response.status_code == 429
+                                     else AdapterStatus.ERROR, f"판례 전문 조회 HTTP {response.status_code}")
+        try:
             payload = response.json()
-            raw_detail = payload.get("PrecService") or payload.get("DetcService") or payload
-            if not isinstance(raw_detail, dict):
-                raise ValueError("unexpected detail payload")
+        except ValueError:
+            kind = (response.headers.get("content-type") or "알 수 없음").split(";")[0]
+            head = mask_oc(re.sub(r"\s+", " ", response.text[:120]))
+            return self._unavailable(label, AdapterStatus.ERROR,
+                                     f"판례 전문 응답이 JSON이 아님(content-type {kind}, 앞부분 {head!r})")
+        raw_detail = None
+        if isinstance(payload, dict):
+            raw_detail = payload.get("PrecService") or payload.get("DetcService")
+            if raw_detail is None and any(k in payload for k in ("사건번호", "판례내용", "전문")):
+                raw_detail = payload  # 감싸는 키 없이 본문이 바로 오는 형태
+        if not isinstance(raw_detail, dict):
+            keys = list(payload)[:5] if isinstance(payload, dict) else type(payload).__name__
+            return self._unavailable(label, AdapterStatus.ERROR, f"판례 전문 응답 형식이 예상과 다름(최상위 {keys})")
+        try:
             normalized = _normalize_case_payload([raw_detail])[0]
             from html import unescape
             normalized = {k: unescape(re.sub(r"<[^>]+>", " ", v)) if isinstance(v, str) else v for k, v in normalized.items()}
@@ -199,7 +218,8 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                 result_id=str(identifier), url=f"{SERVICE_URL}?target={target}&ID={identifier}", used_fields=["판례내용", "판시사항", "판결요지"])
             return AdapterResponse(AdapterStatus.READY, [normalized], record)
         except Exception as exc:
-            return self._transport_unavailable(str(case.get("case_number")), exc)
+            return self._unavailable(label, AdapterStatus.ERROR,
+                                     f"판례 전문 응답을 정리하지 못함({type(exc).__name__})")
 
     def fetch_articles(self, law: Dict[str, Any]) -> Optional[List[str]]:
         """법령 본문을 조회해 수록된 조문 번호 목록을 만든다.
