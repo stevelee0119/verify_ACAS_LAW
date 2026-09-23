@@ -144,8 +144,10 @@ def _authorize(session, request, principal, route, params, payload):
         if not read:
             raise HTTPException(403, "Global settings changes require local administration")
         return
-    if template.endswith("/diagnostics") and principal.role != "ADMIN":
+    if template.endswith(("/diagnostics", "/diagnostics/sources")) and principal.role != "ADMIN":
         raise HTTPException(403, "Administrator required")
+    if read and template.endswith("/diagnostics/sources"):
+        return
     if read and template.endswith(("/health", "/diagnostics", "/project-defaults")):
         return
     if template.endswith("/calculations/interest") and principal.role in {"MEMBER", "ADMIN"}:

@@ -6,7 +6,7 @@ import os
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -155,6 +155,43 @@ def create_app() -> FastAPI:
                 r"[0-9a-fA-F]{40}", os.getenv("RENDER_GIT_COMMIT", "")) else None),
             "principles": ["Source First", "Evidence First", "Human Final Decision"],
         }
+
+    @app.get("/api/diagnostics/sources")
+    def source_diagnostics(admin: User = Depends(require_admin)) -> Dict[str, Any]:
+        """이 서버에서 국가법령정보를 실제로 조회해 본다(관리자 전용, 요청 2~3건).
+
+        판례 전문을 받지 못하면 의미·적용 검토(세 모델 교차검증)가 건너뛰어진다.
+        GitHub 러너는 국외 IP라 law.go.kr 응답이 불안정해 이 판단에 쓸 수 없다.
+        실제 분석이 도는 서버에서 확인해야 한다. 비밀값은 담지 않는다.
+        """
+        from packages.legal_engine.normalize import same_case_number
+
+        from .services import get_registry
+
+        adapter = get_registry().law
+        case_number = "2011모1839"
+        steps: List[Dict[str, Any]] = []
+        found = adapter.search_case(case_number)
+        record = next((r for r in found.records
+                       if same_case_number(case_number, str(r.get("case_number") or ""))), None)
+        steps.append({"step": "사건번호 조회(lawSearch)", "status": str(found.status),
+                      "matched": record is not None, "records": len(found.records),
+                      "has_source_id": bool(record and record.get("source_id")),
+                      "message": found.message})
+        full_text = ""
+        if record is not None:
+            full_text = str(record.get("full_text") or "")
+            if not full_text:
+                detail = adapter.fetch_case(record)
+                full_text = str((detail.records[0] if detail.records else {}).get("full_text") or "")
+                steps.append({"step": "판례 전문 조회(lawService)", "status": str(detail.status),
+                              "full_text_chars": len(full_text), "message": detail.message})
+        return {"case_number": case_number, "full_text_available": bool(full_text), "steps": steps,
+                "verdict": "READY" if full_text else "FULL_TEXT_UNAVAILABLE",
+                "note": ("판례 전문을 받을 수 있어 의미·적용 검토(세 모델 교차검증)가 수행됩니다."
+                         if full_text else
+                         "판례 전문을 받지 못해 의미·적용 검토(세 모델 교차검증)가 수행되지 않습니다. "
+                         "steps의 message가 원인입니다.")}
 
     @app.get("/api/diagnostics")
     def diagnostics(admin: User = Depends(require_admin)) -> Dict[str, Any]:

@@ -494,3 +494,30 @@ def test_run_listings_and_status_polls_never_read_the_stored_result(client, proj
         assert any("result_json" in sql for sql in statements)
     finally:
         event.remove(engine, "before_cursor_execute", listener)
+
+
+def test_source_diagnostics_reports_why_full_text_is_missing(client, monkeypatch):
+    """판례 전문을 못 받으면 세 모델 교차검증이 건너뛰어진다. 서버에서 이유를 확인한다."""
+    import httpx
+
+    from apps.api.services import get_registry
+    from packages.common.enums import AdapterStatus
+
+    law = get_registry().law
+    monkeypatch.setattr(type(law), "status", lambda self: AdapterStatus.READY)
+    monkeypatch.setattr(type(law), "api_key", property(lambda self: "SECRET_OC_VALUE"))
+
+    def request(url, *, params):
+        if url.endswith("lawSearch.do"):
+            return httpx.Response(200, json={"PrecSearch": {"prec": [
+                {"사건번호": "2011모1839", "판례일련번호": "123", "법원명": "대법원"}]}})
+        return httpx.Response(200, text="<html>error</html>", headers={"content-type": "text/html"})
+
+    monkeypatch.setattr(law, "_http_get", request)
+    body = client.get("/api/diagnostics/sources")
+    assert body.status_code == 200
+    payload = body.json()
+    assert payload["verdict"] == "FULL_TEXT_UNAVAILABLE"
+    assert payload["steps"][0]["matched"] is True and payload["steps"][0]["has_source_id"] is True
+    assert "JSON이 아님" in payload["steps"][1]["message"]
+    assert "SECRET_OC_VALUE" not in body.text
