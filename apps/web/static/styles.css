@@ -1075,6 +1075,12 @@ table {
 .summary-card { background: #f8faf9; border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
 .summary-card h3 { font-size: 15px; margin: 0 0 10px; color: #1e3a34; font-weight: 700; }
 .summary-card .card-item { margin-bottom: 8px; font-size: 14px; }
+.model-opinions { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
+.model-opinions h4 { margin: 0 0 8px; font-size: 14px; color: #1e3a34; }
+.model-opinion { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin-bottom: 10px; }
+.model-opinion-failed { border-left-style: dashed; }
+.model-opinion-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.model-opinion p { margin: 4px 0 0; font-size: 13px; }
 .summary-card .reason-list { margin: 6px 0 0 18px; padding: 0; font-size: 13px; color: #4a5b56; }
 .summary-card .safe-text { color: #1f6b52; font-size: 14px; font-weight: 500; }
 .summary-card .warning-text { color: #b84e1b; font-size: 14px; font-weight: 600; }

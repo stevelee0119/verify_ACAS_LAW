@@ -223,6 +223,13 @@ def build_report_pdf(
         reasons_str = "; ".join(det.get("reasons", [])) if det.get("reasons") else " ".join(a.get("notes", []))
         ai_rows.append([d.filename, verdict_str, score_str, reasons_str])
     story.append(table(ai_rows, [90, 80, 40, 280]))
+    from .model_opinions import model_opinion_rows
+
+    opinion_rows = model_opinion_rows(run_result.documents)
+    if opinion_rows:
+        story.append(Spacer(1, 4))
+        story.append(Paragraph(_escape("모델별 AI 작성 판정"), styles["h2"]))
+        story.append(table([["문서", "모델", "판정", "점수", "근거"], *opinion_rows], [80, 70, 70, 30, 240]))
 
     # AI 환각 및 법률 주장 타당성 대조표
     all_hallucination_rows = []

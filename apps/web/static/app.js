@@ -371,6 +371,43 @@ function renderGateReasons(gate) {
   $("summary").append(section);
 }
 
+const PROVIDER_NAMES = {openai: "OpenAI", anthropic: "Anthropic", gemini: "Gemini"};
+
+function authorshipVerdict(verdict) {
+  return {
+    AI_FULL_GENERATION_LIKELY: ["AI 임의 전체 작성 유력", "badge CRITICAL"],
+    AI_PARTIAL_GENERATION: ["일부 AI 작성·인용 내용 확인", "badge HIGH"],
+    HUMAN_AUTHORED_LIKELY: ["인간(변호사/당사자) 작성 유력", "badge VERIFIED"]
+  }[verdict] || ["판단 보류", "badge INFO"];
+}
+
+// 교차검증에 참여한 모델마다 결론·점수·설명을 모두 보인다. 응답하지 못한 모델은 사유와 함께 둔다.
+function modelOpinions(opinions, failures) {
+  const box = node("div", null, "model-opinions");
+  box.append(node("h4", `모델별 판정 (${opinions.length}개 응답${failures.length ? ` · ${failures.length}개 불참` : ""})`));
+  for (const o of opinions) {
+    const [verdictLabel, badgeClass] = authorshipVerdict(o.verdict);
+    const block = node("div", null, "model-opinion");
+    const head = node("div", null, "model-opinion-head");
+    head.append(node("strong", PROVIDER_NAMES[o.provider] || o.provider), node("span", verdictLabel, badgeClass),
+                node("small", `점수 ${Math.round((o.score || 0) * 100)}%${o.model ? ` · ${o.model}` : ""}`, "muted"));
+    block.append(head);
+    const list = node("ul", null, "reason-list");
+    for (const r of o.reasons || []) list.append(node("li", r));
+    if (!(o.reasons || []).length) list.append(node("li", "설명 없음", "muted"));
+    block.append(list);
+    box.append(block);
+  }
+  for (const [provider, why] of failures) {
+    const block = node("div", null, "model-opinion model-opinion-failed");
+    const head = node("div", null, "model-opinion-head");
+    head.append(node("strong", PROVIDER_NAMES[provider] || provider), node("span", "응답 없음", "badge INFO"));
+    block.append(head, node("p", why, "muted"));
+    box.append(block);
+  }
+  return box;
+}
+
 function filteredDocuments() {
   return state.documents.filter(d => $("scopeFilter").value === "all" || d.included_in_verification === ($("scopeFilter").value === "included"));
 }
@@ -834,31 +871,24 @@ function renderAIVerification() {
   card1.append(node("h3", "문서 AI 생성 여부 진단"));
   if (detectorResults.length > 0) {
     for (const res of detectorResults) {
-      let verdictLabel = "판단 보류";
-      let badgeClass = "badge INFO";
-      if (res.verdict === "AI_FULL_GENERATION_LIKELY") {
-        verdictLabel = "AI 임의 전체 작성 유력";
-        badgeClass = "badge CRITICAL";
-      } else if (res.verdict === "AI_PARTIAL_GENERATION") {
-        verdictLabel = "일부 AI 작성·인용 내용 확인";
-        badgeClass = "badge HIGH";
-      } else if (res.verdict === "HUMAN_AUTHORED_LIKELY") {
-        verdictLabel = "인간(변호사/당사자) 작성 유력";
-        badgeClass = "badge VERIFIED";
-      }
+      const [verdictLabel, badgeClass] = authorshipVerdict(res.verdict);
       const item = node("div", null, "card-item");
       item.append(
         node("div", `${res.filename}: `),
         node("span", verdictLabel, badgeClass),
         node("small", ` (신뢰도: ${Math.round((res.score || 0) * 100)}%)`, "muted")
       );
-      if (res.reasons && res.reasons.length > 0) {
+      const opinions = res.signals?.llm_opinions || [];
+      const failures = Object.entries(res.signals?.llm_failures || {});
+      // 모델별 설명은 모델 블록에서 모두 보이므로 요약에서는 뺀다. 예전 결과처럼
+      // 모델별 기록이 없으면 근거를 자르지 않고 모두 보인다.
+      const summary = (res.reasons || []).filter(r => !opinions.length || !/^\[[a-z]+\] /.test(r));
+      if (summary.length) {
         const reasonList = node("ul", null, "reason-list");
-        for (const r of res.reasons.slice(0, 3)) {
-          reasonList.append(node("li", r));
-        }
+        for (const r of summary) reasonList.append(node("li", r));
         item.append(reasonList);
       }
+      if (opinions.length || failures.length) item.append(modelOpinions(opinions, failures));
       card1.append(item);
     }
   } else {

@@ -324,8 +324,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                            f"규칙 기반 판정({rule_res.verdict})을 유지함")
     if failed_text and agreement != "SINGLE":
         reasons.append(f"응답하지 못한 모델: {failed_text}")
+    # 모델마다 근거를 모두 싣는다. 앞의 두 개만 남기면 화면·보고서에서 어느 모델의
+    # 설명이 빠졌는지 알 수 없었다. 모델별 결론은 llm_opinions에 따로 둔다.
     for o in opinions:
-        reasons.extend(f"[{o['provider']}] {r}" for r in o["reasons"][:2])
+        reasons.extend(f"[{o['provider']}] {r}" for r in o["reasons"])
     for r in rule_res.reasons:
         if not any(r[:10] in cr for cr in reasons):
             reasons.append(r)
@@ -349,6 +351,8 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         signals={**rule_res.signals,
                  "llm_providers": [o["provider"] for o in opinions],
                  "llm_verdicts": {o["provider"]: o["verdict"] for o in opinions},
+                 "llm_opinions": [{"provider": o["provider"], "model": o["model"], "verdict": o["verdict"],
+                                   "score": round(o["score"], 3), "reasons": o["reasons"]} for o in opinions],
                  "llm_agreement": agreement,
                  "llm_failures": failures,
                  "rule_score": rule_res.score},

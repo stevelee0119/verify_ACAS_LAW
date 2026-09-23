@@ -115,6 +115,12 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
         ai_rows.append([d.filename, v, score, reasons])
     if ai_rows:
         table(["문서", "AI 진단", "확신도", "판정 근거"], ai_rows, [1.5, 1.3, 0.8, 3.4])
+    from .model_opinions import model_opinion_rows
+
+    opinion_rows = model_opinion_rows(run_result.documents)
+    if opinion_rows:
+        doc.add_heading("모델별 AI 작성 판정", 2)
+        table(["문서", "모델", "판정", "점수", "근거"], opinion_rows, [1.3, 1.2, 1.1, 0.5, 2.9])
 
     all_hallucination_rows = []
     for d in run_result.documents:

@@ -369,3 +369,27 @@ def test_ocr_spaced_resident_numbers_are_masked_before_leaving():
     for sample in ("주민등록번호 : 800101 - 1234567", "800101  1234567", "800101-1234567"):
         assert any(m.kind == "RRN" for m in detect(sample)), sample
     assert not any(m.kind == "RRN" for m in detect("800101\n1234567")), "줄을 넘는 숫자는 묶지 않는다"
+
+
+def test_every_model_verdict_and_explanation_is_kept():
+    """화면에는 근거 3개만, 저장은 모델마다 2개만 남아 OpenAI·Gemini 설명이 빠졌다."""
+    doc = _make_sample_doc("원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 요약하자면 피고의 책임이 인정됩니다.")
+    answers = {
+        "anthropic": {"verdict": "UNCERTAIN", "ai_score": 0.4, "reasons": ["a1", "a2", "a3"]},
+        "openai": {"verdict": "AI_PARTIAL_GENERATION", "ai_score": 0.6, "reasons": ["o1", "o2"]},
+        "gemini": {"verdict": "AI_FULL_GENERATION_LIKELY", "ai_score": 0.9, "reasons": ["g1", "g2", "g3"]},
+    }
+    result = asyncio.run(detect_ai_document(doc, [], router=_ConsultRouter(answers)))
+    opinions = {o["provider"]: o for o in result.signals["llm_opinions"]}
+    assert {p: o["verdict"] for p, o in opinions.items()} == {p: a["verdict"] for p, a in answers.items()}
+    assert {p: o["reasons"] for p, o in opinions.items()} == {p: a["reasons"] for p, a in answers.items()}
+    for provider, answer in answers.items():
+        for reason in answer["reasons"]:
+            assert f"[{provider}] {reason}" in result.reasons
+
+    from types import SimpleNamespace
+
+    from packages.report_engine.model_opinions import model_opinion_rows
+    rows = model_opinion_rows([SimpleNamespace(filename="a.pdf", ai_detector_result=result.to_dict())])
+    assert [r[1].split(" ")[0] for r in rows] == ["Anthropic", "OpenAI", "Gemini"]
+    assert "- g3" in rows[2][4] and rows[2][2] == "AI 임의 전체 작성 유력"
