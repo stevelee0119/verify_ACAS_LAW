@@ -398,3 +398,17 @@ def test_r10_axis_uses_the_same_verdict_as_the_document_result():
     doc.ai_detector_result = {"verdict": "AI_FULL_GENERATION_LIKELY", "score": 0.8}
     unified = unified_authorship(doc)
     assert unified["verdict"] == "AI_FULL_GENERATION_LIKELY" and unified["stylometry_signal"] == "ABSTAIN"
+
+
+# --- R4/B8: 같은 값을 '재판유형 불일치'로 내지 않는다 ------------------------------------
+def test_nbsp_and_spacing_are_not_metadata_differences():
+    from packages.legal_engine.verifier import LegalVerifier
+    [citation] = extract_citations(paged(["대법원 1995. 7. 11. 선고 94누4615 전원합의체 판결¶"]))
+    official = {"court": "대법원", "decision_date": "1995-07-11", "case_kind": "전원합의체 판결"}
+    assert LegalVerifier._compare_metadata(citation, official) == []
+
+
+def test_nbsp_separated_law_name_is_kept_whole():
+    doc = paged(["가. 군인징계구제에 관한 특별법 제12조 제2항은 감경을 규정합니다.¶"])
+    [statute] = by_type(extract_citations(doc), CitationType.STATUTE)
+    assert statute.law_name == "군인징계구제에 관한 특별법"

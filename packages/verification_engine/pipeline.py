@@ -72,6 +72,7 @@ from packages.legal_engine.omission import analyze_omissions, omission_findings
 
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document
 from .finalize import finalize_document_findings
+from packages.document_engine.reading_text import SPACE_MAP
 from .authorship import analyze_authorship, authorship_findings
 from .scoring import aggregate_scores
 
@@ -574,8 +575,9 @@ class VerificationPipeline:
             unverified_ids = {item.get("citation_id") for item in result.unverified_items
                               if item.get("kind") == "citation"}
             unverified_citations = [c for c in citations if c.citation_id in unverified_ids]
+            # 인용 원문(raw_text)은 NBSP를 일반 공백으로 바꾼 읽기 본문에서 뽑았으므로 같은 기준으로 맞춘다.
             body = "\n".join(block.text for page in doc.pages for block in page.blocks
-                              if block.source_layer == "visible_text" and block.text)
+                              if block.source_layer == "visible_text" and block.text).translate(SPACE_MAP)
             result.findings.extend(analyze_assertions(
                 body, citations=citations, unverified_citations=unverified_citations,
                 document_id=doc.document_id,

@@ -50,6 +50,9 @@ SIGNATURE_OMITTED_RE = re.compile(r"(서명|날인|기명날인)\s*(생략|없�
 LIMITATION_RE = re.compile(r"(들을\s*수\s*(는\s*)?없|듣지\s*못|보지\s*못|볼\s*수\s*(는\s*)?없|알\s*수\s*(는\s*)?없|"
                            r"기억(하지|나지)\s*(못|않)|확인하지\s*못)")
 CERTAINTY_RE = re.compile(r"확실|분명|틀림없|단언|명백")
+# 진술인의 위치: 가까이 있었다는 표현과 떨어져 있었다는 표현
+PROXIMITY_RE = re.compile(r"같은\s*테이블|바로\s*옆|옆\s*자리|함께\s*앉|맞은\s*편|곁에")
+DISTANCE_RE = re.compile(r"\d+\s*(?:미터|m|M)\s*(?:가량|정도|쯤)?\s*떨어진|다른\s*테이블|멀리\s*떨어")
 # 진술인 명의 문서의 제목 줄(문단 전체가 제목). 증거 목록 속 "각 진술서"는 제목이 아니다.
 STATEMENT_HEADING_RE = re.compile(r"(?:^|\n)\s*(?:진\s*술\s*서|사\s*실\s*확\s*인\s*서|확\s*인\s*서)\s*(?:\n|$)")
 COPY_MIN_CHARS = 30
@@ -277,15 +280,32 @@ def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]]
                             f"진술서에 서명이 없다: '{m.group(0)}'",
                             "진술인의 서명·날인이 생략되어 작성 명의를 확인할 수 없다.",
                             text[max(0, m.start() - 40):m.end() + 20]))
+    statement_start = _statement_start(text)
+    proximity: List[str] = []
+    distance: List[str] = []
     for start, end in sentence_bounds(text):
         sentence = text[start:end]
+        # 발췌는 원래 줄 글자를 띄어 이어 붙인다(읽기 본문은 줄바꿈 자리를 붙여 쓴다).
+        shown = " ".join(b.text.strip() for b in reading.blocks_between(start, end)) or sentence.strip()
         if LIMITATION_RE.search(sentence) and CERTAINTY_RE.search(sentence):
             out.append(_finding(doc, FindingType.STATEMENT_BEYOND_PERCEPTION, EvidenceGrade.C, Severity.MEDIUM,
-                                "지각하지 못했다고 하면서 사실을 단정한다",
+                                "지각 범위를 넘는 단정: 지각하지 못했다고 하면서 사실을 확실하다고 한다",
                                 "같은 문장에서 보거나 듣지 못했다고 하면서 그 사실을 확실하다고 한다. "
                                 "진술의 신빙성은 사람이 판단한다.",
-                                sentence.strip(), status=VerificationStatus.UNVERIFIED,
-                                features={"human_review": True}))
+                                shown, status=VerificationStatus.UNVERIFIED,
+                                features={"human_review": True, "rule_id": "EVI.BEYOND_PERCEPTION"}))
+        if statement_start is not None and start >= statement_start:
+            if PROXIMITY_RE.search(sentence):
+                proximity.append(shown)
+            if DISTANCE_RE.search(sentence):
+                distance.append(shown)
+    if proximity and distance and proximity[0] != distance[0]:
+        out.append(_finding(doc, FindingType.FACT_CONTRADICTION, EvidenceGrade.B, Severity.MEDIUM,
+                            "진술 내부 모순: 가까이 있었다는 진술과 떨어져 있었다는 진술이 함께 있다",
+                            "같은 진술서 안에서 진술인의 위치를 서로 다르게 적었다. 어느 쪽이 맞는지 사람이 확인한다.",
+                            f"{proximity[0]} ↔ {distance[0]}",
+                            features={"rule_id": "EVI.STATEMENT_LOCATION_CONFLICT",
+                                      "statements": [proximity[0][:200], distance[0][:200]]}))
     for fields in _statement_fields(text):
         for row in exhibits:
             if fields["name"] not in row.get("author", "") or not re.search(r"진술|확인서", row.get("name", "")):

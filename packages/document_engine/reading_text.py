@@ -36,6 +36,7 @@ _LATIN = re.compile(r"[A-Za-z]")
 # 줄 끝에 오면 뒤와 붙여 쓰는 여는 기호, 줄 앞에 오면 앞과 붙여 쓰는 닫는 기호
 _OPENERS = "([{「『“‘<《〈【"
 _CLOSERS = ")]}」』”’>》〉】,.;:!?%·"
+SPACE_MAP = {0x00A0: " ", 0x2007: " ", 0x202F: " ", 0x3000: " "}
 EDGE_ZONE = 0.12       # 쪽 위·아래 12% 안의 줄만 머리글·바닥글 후보
 FULL_LINE_SLACK = 0.06  # 본문 오른쪽 끝에서 이 비율 안에서 끝나면 '꽉 찬 줄'
 
@@ -195,7 +196,9 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
     cursor = 0
     previous: Optional[Block] = None
     for block in chosen:
-        text = (block.text or "").strip()
+        # 줄바꿈 없는 공백(U+00A0 등)은 같은 길이의 일반 공백으로 바꾼다(위치표는 그대로). PDF 서면은 단어 사이를
+        # NBSP로 채우는 경우가 많아, 그대로 두면 법령명·재판유형 같은 같은 말이 서로 다르게 비교된다.
+        text = (block.text or "").strip().translate(SPACE_MAP)
         if not text:
             continue
         if previous is not None:

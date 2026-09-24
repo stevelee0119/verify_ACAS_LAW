@@ -552,6 +552,9 @@ class PdfParser(DocumentParser):
         doc.structure["embedded_stream_text"] = _extract_stream_text(raw)
         doc.structure["has_invisible_render_mode"] = _has_invisible_render_mode(raw)
         doc.structure["has_filled_shapes"] = _has_filled_shapes(raw)
+        zero_width = _actual_text_zero_width(raw)
+        if zero_width:
+            doc.structure["actual_text_zero_width"] = zero_width
 
 
 def _decode_stream(chunk: bytes, filters: str) -> bytes:
@@ -712,6 +715,39 @@ def _embedded_files(reader: Any) -> List[Dict[str, Any]]:
                         break
             out.append(entry)
     return out
+
+
+ACTUAL_TEXT_RE = re.compile(rb"/ActualText\s*(?:<([0-9A-Fa-f\s]+)>|\(((?:\\.|[^\\)])*)\))")
+ZERO_WIDTH_NAMES = {"\u200b": "ZERO WIDTH SPACE", "\u200c": "ZERO WIDTH NON-JOINER", "\u200d": "ZERO WIDTH JOINER",
+                    "\u2060": "WORD JOINER", "\ufeff": "ZERO WIDTH NO-BREAK SPACE"}
+
+
+def _actual_text_zero_width(raw: bytes) -> Dict[str, int]:
+    """표시 글자 대신 쓰일 문자열(ActualText)에 들어 있는 폭 0 문자. 추출기는 이 문자를 버리는 경우가 많다."""
+    counts: Dict[str, int] = {}
+    body = raw[:8_000_000]
+    stream_re = re.compile(rb"stream\r?\n(.*?)endstream", re.S)
+    chunks = [stream_re.sub(b"", body)]  # 스트림 밖(구조 트리 등)
+    for m in stream_re.finditer(body):
+        header = body[max(0, m.start() - 400) : m.start()]
+        chunks.append(_decode_stream(m.group(1), header.decode("latin-1", "ignore")))
+    for data in chunks:
+        for m in ACTUAL_TEXT_RE.finditer(data or b""):
+            if m.group(1) is not None:
+                hexdigits = re.sub(rb"\s", b"", m.group(1)).decode()
+                if hexdigits.upper().startswith("FEFF"):
+                    hexdigits = hexdigits[4:]  # UTF-16 바이트 순서 표시(BOM)는 글자가 아니다
+                try:
+                    text = bytes.fromhex(hexdigits).decode("utf-16-be", "ignore")
+                except ValueError:
+                    continue
+            else:
+                text = m.group(2).decode("latin-1", "ignore")
+            for ch, name in ZERO_WIDTH_NAMES.items():
+                if ch in text:
+                    key = f"U+{ord(ch):04X} {name}"
+                    counts[key] = counts.get(key, 0) + text.count(ch)
+    return counts
 
 
 def _has_filled_shapes(raw: bytes) -> bool:

@@ -463,8 +463,8 @@ class LegalVerifier:
     def _compare_metadata(citation: Citation, official: Dict[str, Any]) -> List[Tuple[str, str, str]]:
         mismatches: List[Tuple[str, str, str]] = []
         if citation.court and official.get("court"):
-            doc_court = citation.court.replace(" ", "")
-            off_court = str(official["court"]).replace(" ", "")
+            doc_court = re.sub(r"\s+", "", citation.court)
+            off_court = re.sub(r"\s+", "", str(official["court"]))
             if doc_court not in off_court and off_court not in doc_court:
                 mismatches.append(("법원", citation.court, str(official["court"])))
         if citation.decision_date and official.get("decision_date"):
@@ -477,8 +477,9 @@ class LegalVerifier:
             if left and right and left not in right and right not in left:
                 mismatches.append(("사건명", doc_name, str(official["case_name"])))
         if citation.case_kind and official.get("case_kind"):
-            doc_kind = citation.case_kind.replace("선고", "").strip()
-            off_kind = str(official["case_kind"]).strip()
+            # 공백 종류(NBSP 등)·띄어쓰기 차이는 재판유형 차이가 아니다(같은 값을 '불일치'로 내던 원인).
+            doc_kind = re.sub(r"\s+", "", citation.case_kind.replace("선고", ""))
+            off_kind = re.sub(r"\s+", "", str(official["case_kind"]))
             if doc_kind and off_kind and doc_kind not in off_kind and off_kind not in doc_kind:
                 mismatches.append(("재판유형", citation.case_kind, off_kind))
         return mismatches

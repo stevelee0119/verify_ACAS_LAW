@@ -287,6 +287,20 @@ class AdversarialScanner:
 
     def _scan_unicode(self, doc: NormalizedDocument) -> List[Finding]:
         out: List[Finding] = []
+        hidden_marks = doc.structure.get("actual_text_zero_width") or {}
+        if hidden_marks:
+            listed = ", ".join(f"{k} {v}회" for k, v in hidden_marks.items())
+            features = {"deterministic_rule": True, "forensic_signal": 1, "unicode_kind": "ZERO_WIDTH",
+                        "layer": "actual_text", "code_points": hidden_marks, "injection_path": "ZERO_WIDTH"}
+            out.append(Finding.create(
+                type=FindingType.UNICODE_SMUGGLING, status=VerificationStatus.SUSPICIOUS, severity=Severity.MEDIUM,
+                evidence_grade=EvidenceGrade.A,
+                title=f"Unicode 은닉 신호: 폭 0 문자(zero-width) — {listed}",
+                detail=("PDF의 표시 대체 문자열(ActualText)에 화면에 보이지 않는 폭 0 문자가 들어 있다. 글자 사이에 넣어 "
+                        "지시문을 키워드 검사에서 숨기는 데 쓰인다. 본 문자열은 자료로만 취급된다."),
+                confidence=0.85, confidence_features=features, document_id=doc.document_id, engine=ENGINE_NAME,
+                meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION, forensic_level=ForensicLevel.NOTABLE,
+                tags=["ZERO_WIDTH"]))
         for layer_name, text in doc.raw_layers.items():
             if not text:
                 continue
@@ -312,7 +326,7 @@ class AdversarialScanner:
                         status=VerificationStatus.SUSPICIOUS,
                         severity=severity,
                         evidence_grade=EvidenceGrade.A,
-                        title=f"Unicode 은닉 신호: {signal.kind}",
+                        title=f"Unicode 은닉 신호: {signal.kind}" + (f" — {signal.detail}" if signal.kind == "ZERO_WIDTH" else ""),
                         detail=f"{layer_name} 레이어. {signal.detail}"
                         + (f" 복원된 문자열에 지시형 표현이 있다." if hidden_instruction else ""),
                         confidence=confidence_score(features),
