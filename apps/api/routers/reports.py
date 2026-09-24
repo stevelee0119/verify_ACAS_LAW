@@ -338,10 +338,31 @@ def _run_report_job(job_id: str, principal: Any) -> None:
         _principal.reset(token)
 
 
-def _job_response(session: Session, job: ReportJob) -> Dict[str, Any]:
+def _expire_if_stale(job: ReportJob) -> bool:
+    """살아 있음 기록이 멈춘 진행 중 작업을 실패로 닫는다. 닫았으면 True(커밋은 호출자가 한다)."""
     if job.state in _ACTIVE_JOB_STATES and job.updated_at and datetime.utcnow() - job.updated_at > _JOB_STALE_AFTER:
         job.state, job.finished_at = "FAILED", datetime.utcnow()
         job.error = "서버가 다시 시작되어 보고서 생성이 중단됐습니다. 다시 생성하세요."
+        return True
+    return False
+
+
+def expire_stale_jobs(session: Session, project_id: str) -> int:
+    """프로젝트의 중단된 보고서 작업을 실패로 닫는다.
+
+    서버 재시작·오류로 작업 스레드가 사라지면 작업은 RUNNING으로 남는다. 화면이 조회하지 않는 한
+    닫히지 않으므로, 이 작업을 '진행 중'으로 보는 기능(영구 삭제 등)이 끝없이 막히지 않게 먼저 닫는다.
+    """
+    jobs = session.execute(select(ReportJob).where(ReportJob.project_id == project_id,
+                                                   ReportJob.state.in_(_ACTIVE_JOB_STATES))).scalars().all()
+    expired = sum(_expire_if_stale(job) for job in jobs)
+    if expired:
+        session.flush()
+    return expired
+
+
+def _job_response(session: Session, job: ReportJob) -> Dict[str, Any]:
+    if _expire_if_stale(job):
         session.commit()
     elapsed_end = job.finished_at or datetime.utcnow()
     return {"job_id": job.id, "project_id": job.project_id, "run_id": job.run_id, "state": job.state,

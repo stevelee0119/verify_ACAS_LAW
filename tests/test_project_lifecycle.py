@@ -224,3 +224,30 @@ def test_only_project_administrators_can_purge(purge_case, user, status):
     with s.factory() as session:
         assert session.get(Project, "pa") is not None
     assert storage.exists(kept[0])
+
+
+@pytest.mark.parametrize("minutes_ago,blocked", [(10, False), (0, True)])
+def test_purge_is_blocked_only_by_a_live_report_job(purge_case, minutes_ago, blocked):
+    """서버 재시작·오류로 멈춘 보고서 작업(RUNNING으로 남음)이 영구 삭제를 끝없이 막지 않는다.
+
+    진행 기록이 끊긴 작업은 중단으로 닫고 삭제한다. 살아 있는 작업은 409로 막는다.
+    """
+    from apps.api.workspace import ReportJob
+    s, storage, kept, _ = purge_case
+    headers = s.headers("admin")
+    assert s.client.delete("/api/projects/pa", headers=headers).status_code == 204
+    stamp = datetime.utcnow() - timedelta(minutes=minutes_ago)
+    with s.factory() as session:
+        session.add(ReportJob(id="rjb-a", project_id="pa", run_id="run-a", created_by="admin", request={},
+                              state="RUNNING", stage="x", percent=5, created_at=stamp, updated_at=stamp))
+        session.commit()
+    response = s.client.delete("/api/projects/pa/purge", headers=headers)
+    if blocked:
+        assert response.status_code == 409 and "보고서를 만드는 중" in response.json()["detail"]
+        with s.factory() as session:
+            assert session.get(Project, "pa") is not None and session.get(ReportJob, "rjb-a").state == "RUNNING"
+    else:
+        assert response.status_code == 200, response.text
+        assert response.json()["rows"]["report_jobs"] == 1
+        with s.factory() as session:
+            assert session.get(Project, "pa") is None

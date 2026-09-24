@@ -50,6 +50,24 @@ def _is_white(color: Any) -> bool:
     return all(v >= WHITE_THRESHOLD for v in rgb)
 
 
+def _relative_luminance(rgb: Tuple[float, float, float]) -> float:
+    """WCAG 상대 휘도(0~1)."""
+    def channel(value: float) -> float:
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = (channel(max(0.0, min(1.0, v))) for v in rgb)
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
+
+
+def contrast_ratio(first: Tuple[float, float, float], second: Tuple[float, float, float]) -> float:
+    """WCAG 명도 대비비(1~21). 1.5 미만이면 사람이 사실상 읽을 수 없다."""
+    a, b = _relative_luminance(first), _relative_luminance(second)
+    return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+
+
+MIN_READABLE_CONTRAST = 1.5
+TRANSPARENT_ALPHA = 0.1
+
+
 def _is_dark(color: Any) -> bool:
     rgb = _color_to_rgb(color)
     if rgb is None:
@@ -157,14 +175,17 @@ class PdfParser(DocumentParser):
         # 전체에 한 번 해도 결과가 같다.
         signature_parts: List[str] = []
 
-        invisible: set = set()
-        covered: set = set()
-        if doc.structure.get("has_invisible_render_mode") or FILLED_SHAPE_RE.search(raw_bytes[:8_000_000]) \
-                or doc.structure.get("has_filled_shapes"):
+        facts: Dict[str, set] = {"invisible": set(), "covered": set(), "transparent": set(), "image_covered": set()}
+        head = raw_bytes[:8_000_000]
+        if doc.structure.get("has_invisible_render_mode") or FILLED_SHAPE_RE.search(head) \
+                or doc.structure.get("has_filled_shapes") or ALPHA_RE.search(head) or b"/Image" in head:
             try:
-                invisible, covered = _render_facts(path)
+                facts = _render_facts(path)
             except Exception as exc:  # pragma: no cover - 파서 방어
-                doc.parse_warnings.append(f"렌더모드·가림 도형 확인 실패: {exc}")
+                doc.parse_warnings.append(f"렌더모드·투명도·가림 확인 실패: {exc}")
+        invisible, covered = facts["invisible"], facts["covered"]
+        transparent, image_covered = facts["transparent"], facts["image_covered"]
+        contrast_checks: List[Tuple[int, Block, List[Dict[str, Any]]]] = []
         with pdfplumber.open(path) as pdf:
             doc.metadata.update({k: str(v) for k, v in (pdf.metadata or {}).items()})
             for index, page in enumerate(pdf.pages, start=1):
@@ -173,20 +194,27 @@ class PdfParser(DocumentParser):
                 lines = self._group_chars_to_lines(chars)
                 # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.
                 scan_like = _image_coverage(page) >= 0.5
+                # 흰색이 아닌 채움 도형 위의 글자는 글자색이 어두워도 배경과 대비를 봐야 한다(어두운 글자·어두운 상자).
+                colored_fills = [(float(r["x0"]), float(r["top"]), float(r["x1"]), float(r["bottom"]))
+                                 for r in (page.rects or []) if r.get("fill") and not _is_white(r.get("non_stroking_color"))]
                 for line in lines:
                     text = "".join(c["text"] for c in line).strip()
                     if not text:
                         continue
                     bbox = self._line_bbox(line)
                     hidden_reason = self._hidden_reason(line, page)
-                    if hidden_reason is None and (invisible or covered):
+                    if hidden_reason is None and (invisible or covered or transparent or image_covered):
                         keys = [(index, round(float(c["x0"]), 1), round(float(c["y0"]), 1))
                                 for c in line if c["text"].strip()]
                         threshold = max(1, 0.8 * len(keys))
                         if invisible and not scan_like and sum(k in invisible for k in keys) >= threshold:
                             hidden_reason = "INVISIBLE_RENDER_MODE"
+                        elif transparent and sum(k in transparent for k in keys) >= threshold:
+                            hidden_reason = "TRANSPARENT_FILL"          # 채움 투명도(ExtGState ca)가 0에 가까움
                         elif covered and sum(k in covered for k in keys) >= threshold:
                             hidden_reason = "COVERED_BY_SHAPE"
+                        elif image_covered and sum(k in image_covered for k in keys) >= threshold:
+                            hidden_reason = "COVERED_BY_IMAGE"
                     attributes = {
                         "font": line[0].get("fontname"),
                         "size": round(float(line[0].get("size", 0)), 2),
@@ -209,6 +237,9 @@ class PdfParser(DocumentParser):
                     p.blocks.append(block)
                     raw_parts.append(text)
                     signature_parts.append(_text_signature(text))
+                    if hidden_reason in (None, "WHITE_ON_WHITE") and _needs_contrast_check(line, colored_fills):
+                        # 글자색만으로는 알 수 없다. 실제 렌더링한 배경과의 대비비로 판단한다(추가지시 J4·§3-2).
+                        contrast_checks.append((index, block, line))
                     if hidden_reason:
                         hidden_parts.append(text)
                     else:
@@ -292,6 +323,12 @@ class PdfParser(DocumentParser):
                 # 모두 읽었으므로 놓아준다.
                 page.flush_cache()
                 chars = []
+
+        if contrast_checks:
+            try:
+                _apply_contrast(path, contrast_checks, rendered_parts, hidden_parts)
+            except Exception as exc:  # pragma: no cover - 파서 방어
+                doc.parse_warnings.append(f"글자 대비 확인 실패: {exc}")
 
         # annotation 텍스트를 별도 레이어 Block으로 추가
         for ann in doc.structure.get("annotations", []):
@@ -603,6 +640,8 @@ INVISIBLE_RENDER_MODE_RE = re.compile(rb"\b3\s+Tr\b")
 # 채움 도형 연산자(re f, re F, f*). 압축되지 않은 내용 스트림에서만 보이므로 _collect_pdf_structure의
 # 압축 해제 결과(has_filled_shapes)와 함께 쓴다.
 FILLED_SHAPE_RE = re.compile(rb"\bre\s+[fF]\*?\b")
+# 채움 투명도가 1이 아닌 그래픽 상태(ExtGState /ca 0.x)가 있으면 글자별 투명도를 확인한다.
+ALPHA_RE = re.compile(rb"/ca\s*(?:0(?:\.\d*)?|\.\d+)\b")
 
 
 def _extract_stream_text(raw: bytes, limit: int = 200000) -> str:
@@ -629,10 +668,88 @@ def _extract_stream_text(raw: bytes, limit: int = 200000) -> str:
     return "".join(out)
 
 
-def _render_facts(path: str) -> Tuple[set, set]:
+def _needs_contrast_check(line: List[Dict[str, Any]], colored_fills=()) -> bool:
+    """검은 글자가 아니거나(흰색·회색·색 글자) 색 있는 채움 도형 위에 있으면 실제 배경과의 대비를 본다.
+    흰 바탕의 검은 글자는 늘 읽히므로 렌더링하지 않는다."""
+    rgb = _line_color(line)
+    if rgb is None:
+        return False
+    if _relative_luminance(rgb) > 0.05:
+        return True
+    x0, x1 = min(float(c["x0"]) for c in line), max(float(c["x1"]) for c in line)
+    top, bottom = min(float(c["top"]) for c in line), max(float(c["bottom"]) for c in line)
+    return any(fx0 <= (x0 + x1) / 2 <= fx1 and ft <= (top + bottom) / 2 <= fb for fx0, ft, fx1, fb in colored_fills)
+
+
+def _line_color(line: List[Dict[str, Any]]) -> Optional[Tuple[float, float, float]]:
+    for char in line:
+        if char.get("text", "").strip():
+            return _color_to_rgb(char.get("non_stroking_color"))
+    return None
+
+
+def _background(image, box, scale: float) -> Optional[Tuple[float, float, float]]:
+    """글줄 영역에서 가장 많은 색(글자 획은 소수이므로 배경색)을 0~1 RGB로 돌려준다."""
+    from collections import Counter
+
+    x0, top, x1, bottom = (int(round(v * scale)) for v in box)
+    x0, top = max(0, x0), max(0, top)
+    x1, bottom = min(image.width, max(x0 + 1, x1)), min(image.height, max(top + 1, bottom))
+    if x1 <= x0 or bottom <= top:
+        return None
+    region = image.crop((x0, top, x1, bottom)).convert("RGB")
+    counts = Counter((r // 8, g // 8, b // 8) for r, g, b in region.getdata())
+    if not counts:
+        return None
+    (r, g, b), _ = counts.most_common(1)[0]
+    return ((r * 8 + 4) / 255.0, (g * 8 + 4) / 255.0, (b * 8 + 4) / 255.0)
+
+
+def _apply_contrast(path: str, checks, rendered_parts: List[str], hidden_parts: List[str]) -> None:
+    """글자색과 실제 렌더링한 배경의 명도 대비비로 보이는지 판단한다(추가지시 J4, v3 §3-2).
+
+    - 대비비가 1.5 미만이면 숨김(흰 글자·흰 배경이면 WHITE_ON_WHITE, 그 밖에는 LOW_CONTRAST).
+    - 흰 글자라도 어두운 배경(색 띠 위 제목 등) 위에 있으면 보이는 글자로 되돌린다.
+    필요한 쪽만 한 번씩 렌더링한다.
+    """
+    by_page: Dict[int, List] = {}
+    for page_number, block, line in checks:
+        by_page.setdefault(page_number, []).append((block, line))
+    for raster in render_pages(path, sorted(by_page), dpi=72):
+        for block, line in by_page.get(raster.page_number, []):
+            text_rgb = _line_color(line)
+            box = (min(float(c["x0"]) for c in line), min(float(c["top"]) for c in line),
+                   max(float(c["x1"]) for c in line), max(float(c["bottom"]) for c in line))
+            background = _background(raster.image, box, raster.scale)
+            if text_rgb is None or background is None:
+                continue
+            ratio = contrast_ratio(text_rgb, background)
+            block.attributes["contrast_ratio"] = round(ratio, 2)
+            was_hidden = not block.visible
+            if ratio < MIN_READABLE_CONTRAST:
+                white = _is_white(list(text_rgb)) and all(v >= WHITE_THRESHOLD for v in background)
+                reason = "WHITE_ON_WHITE" if white else f"LOW_CONTRAST({ratio:.2f}:1)"
+                block.attributes["hidden_reason"] = reason
+                block.visible, block.source_layer = False, "hidden_text"
+                if not was_hidden:
+                    _move(block.text, rendered_parts, hidden_parts)
+            elif was_hidden and str(block.attributes.get("hidden_reason")) == "WHITE_ON_WHITE":
+                block.attributes["hidden_reason"] = None
+                block.visible, block.source_layer = True, "visible_text"
+                _move(block.text, hidden_parts, rendered_parts)
+
+
+def _move(text: str, source: List[str], target: List[str]) -> None:
+    if text in source:
+        source.remove(text)
+    target.append(text)
+
+
+def _render_facts(path: str) -> Dict[str, set]:
     """글자마다 '보이지 않게 그려졌는지'와 '나중에 그린 흰 도형에 덮였는지'를 구한다.
 
-    반환: (렌더모드 3·7 글자 위치, 흰 채움 도형에 덮인 글자 위치). 위치는 (쪽, x0, y0) 반올림 값.
+    반환: {"invisible": 렌더모드 3·7 글자, "covered": 흰 채움 도형에 덮인 글자, "transparent": 채움 투명도
+    (ExtGState ca)가 0.1 이하인 글자, "image_covered": 나중에 그린 이미지에 덮인 글자}. 위치는 (쪽, x0, y0) 반올림 값.
     pdfplumber의 글자 정보에는 렌더모드와 그리기 순서가 없다. pdfminer가 글자·도형을 그리는 순서대로
     배치 목록에 넣는 성질을 이용해, 글자보다 뒤에 그린 흰 채움 도형이 글자 중심을 덮으면 가려진 것으로 본다.
     어두운 채움(검은 가림막)은 가림 처리(redaction) 점검이 따로 다룬다.
@@ -642,17 +759,26 @@ def _render_facts(path: str) -> Tuple[set, set]:
     from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
     from pdfminer.pdfpage import PDFPage
 
+    from pdfminer.psparser import literal_name
+    from pdfminer.pdftypes import resolve1
+
     invisible: set = set()
     covered: set = set()
+    transparent: set = set()
+    image_covered: set = set()
 
     class Device(PDFPageAggregator):
         page_number = 0
         mode = 0
+        alpha = 1.0
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
             self.chars: List[Tuple[int, Any]] = []
             self.shapes: List[Tuple[int, Tuple[float, float, float, float]]] = []
+            self.images: List[Tuple[int, Tuple[float, float, float, float]]] = []
+            # 그리기 순서. 이미지는 도형 묶음(figure) 안에 들어가므로 쪽 목록의 길이로는 순서를 알 수 없다.
+            self.seq = 0
 
         def render_string(self, textstate, seq, ncs, graphicstate):
             self.mode = getattr(textstate, "render", 0) or 0
@@ -664,28 +790,69 @@ def _render_facts(path: str) -> Tuple[set, set]:
             key = (self.page_number, round(item.x0, 1), round(item.y0, 1))
             if self.mode in (3, 7):
                 invisible.add(key)
-            self.chars.append((len(self.cur_item._objs), item))
+            elif self.mode in (0, 2, 4, 6) and self.alpha <= TRANSPARENT_ALPHA:
+                transparent.add(key)   # 채우는 글자인데 채움 투명도가 0에 가깝다
+            self.seq += 1
+            self.chars.append((self.seq, item))
             return advance
+
+        def render_image(self, name, stream):
+            super().render_image(name, stream)
+            items = self.cur_item._objs
+            if items:
+                obj = items[-1]
+                self.seq += 1
+                self.images.append((self.seq, (obj.x0, obj.y0, obj.x1, obj.y1)))
 
         def paint_path(self, gstate, stroke, fill, evenodd, path):
             before = len(self.cur_item._objs)
             super().paint_path(gstate, stroke, fill, evenodd, path)
             if fill and _is_white(getattr(gstate, "ncolor", None)):
-                for order, obj in enumerate(self.cur_item._objs[before:], start=before + 1):
-                    self.shapes.append((order, (obj.x0, obj.y0, obj.x1, obj.y1)))
+                for obj in self.cur_item._objs[before:]:
+                    self.seq += 1
+                    self.shapes.append((self.seq, (obj.x0, obj.y0, obj.x1, obj.y1)))
+
+    class Interpreter(PDFPageInterpreter):
+        """채움 투명도(ExtGState ca)를 그래픽 상태 저장(q)·복원(Q)과 함께 추적한다. pdfminer는 gs를 처리하지 않는다."""
+
+        def init_state(self, ctm):
+            super().init_state(ctm)
+            self._alpha_stack: List[float] = []
+
+        def do_q(self):
+            self._alpha_stack.append(self.device.alpha)
+            super().do_q()
+
+        def do_Q(self):
+            if self._alpha_stack:
+                self.device.alpha = self._alpha_stack.pop()
+            super().do_Q()
+
+        def do_gs(self, name):
+            try:
+                states = resolve1((self.resources or {}).get("ExtGState")) or {}
+                state = resolve1(states.get(literal_name(name))) if isinstance(states, dict) else None
+                if isinstance(state, dict) and "ca" in state:
+                    self.device.alpha = float(resolve1(state["ca"]))
+            except Exception:  # pragma: no cover - 손상된 자원 사전
+                pass
 
     manager = PDFResourceManager()
     device = Device(manager, laparams=LAParams())
-    interpreter = PDFPageInterpreter(manager, device)
+    interpreter = Interpreter(manager, device)
     with open(path, "rb") as handle:
         for number, page in enumerate(PDFPage.get_pages(handle), start=1):
-            device.page_number, device.chars, device.shapes = number, [], []
+            device.page_number, device.chars, device.shapes, device.images, device.seq = number, [], [], [], 0
+            device.alpha = 1.0
             interpreter.process_page(page)
             for order, item in device.chars:
                 cx, cy = (item.x0 + item.x1) / 2, (item.y0 + item.y1) / 2
+                key = (number, round(item.x0, 1), round(item.y0, 1))
                 if any(o > order and x0 <= cx <= x1 and y0 <= cy <= y1 for o, (x0, y0, x1, y1) in device.shapes):
-                    covered.add((number, round(item.x0, 1), round(item.y0, 1)))
-    return invisible, covered
+                    covered.add(key)
+                elif any(o > order and x0 <= cx <= x1 and y0 <= cy <= y1 for o, (x0, y0, x1, y1) in device.images):
+                    image_covered.add(key)   # 글자보다 나중에 그린 이미지가 글자를 덮었다
+    return {"invisible": invisible, "covered": covered, "transparent": transparent, "image_covered": image_covered}
 
 
 def _image_coverage(page: Any) -> float:

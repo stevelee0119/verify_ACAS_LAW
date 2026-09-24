@@ -73,11 +73,20 @@ function empty(parent, message) {
   parent.replaceChildren(node("p", message, "empty-small"));
 }
 
+// 알림은 popover(최상위 층)로 띄운다. 모달 대화상자가 열려 있으면 일반 요소는 대화상자 뒤에 가려져
+// 휴지통의 '영구 삭제' 실패 사유처럼 대화상자 안에서 난 오류가 보이지 않았다.
 function toast(message) {
-  $("toast").textContent = message;
-  $("toast").hidden = false;
+  const el = $("toast");
+  el.textContent = message;
+  el.hidden = false;
+  if (el.showPopover) {
+    try { if (el.matches(":popover-open")) el.hidePopover(); el.showPopover(); } catch (error) { /* 미지원 브라우저는 일반 표시 */ }
+  }
   clearTimeout(toast.timer);
-  toast.timer = setTimeout(() => $("toast").hidden = true, 6500);
+  toast.timer = setTimeout(() => {
+    el.hidden = true;
+    try { if (el.matches(":popover-open")) el.hidePopover(); } catch (error) { /* 무시 */ }
+  }, 6500);
 }
 async function api(path, options = {}) {
   const authVersion = operationsUI.authVersion?.() || 0;

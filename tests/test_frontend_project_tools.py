@@ -54,6 +54,9 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
                 route.fulfill(json=project)
         elif path.endswith("/purge"):
             assert method == "DELETE"
+            if not any(p.endswith("/purge") for _, p in requests[:-1]):   # 첫 시도는 서버가 거절한다
+                route.fulfill(status=409, json={"detail": "이 프로젝트의 보고서를 만드는 중입니다."})
+                return
             projects.pop(path.split("/")[-2])
             route.fulfill(json={"purged": True, "files_removed": 1, "file_errors": []})
         elif path.endswith("/restore"):
@@ -137,6 +140,12 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             assert not [p for m, p in requests if p.endswith("/purge")]
             second.get_by_role("button", name="영구 삭제").click()
             purge_dialog.get_by_role("button", name="확인", exact=True).click()
+            # 거절 사유는 항목 바로 아래와, 모달 위 최상위 층의 알림으로 보인다(모달 뒤에 가려지지 않는다).
+            expect(second.get_by_role("alert")).to_contain_text("영구 삭제하지 못했습니다: 이 프로젝트의 보고서를 만드는 중입니다.")
+            expect(second.get_by_role("button", name="영구 삭제")).to_be_enabled()
+            assert page.evaluate("document.getElementById('toast').matches(':popover-open')")
+            second.get_by_role("button", name="영구 삭제").click()
+            purge_dialog.get_by_role("button", name="확인", exact=True).click()
             expect(trash.locator(".project-trash-item")).to_have_count(0)
             expect(trash).to_contain_text("삭제된 프로젝트가 없습니다")
             trash.get_by_role("button", name="닫기", exact=True).click()
@@ -146,7 +155,7 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             assert [(m, p) for m, p in requests if m in {"POST", "DELETE"}
                     and p != "/api/verification-runs/run-alpha/session"] == [
                 ("DELETE", "/api/projects/alpha"), ("DELETE", "/api/projects/beta"), ("POST", "/api/projects/alpha/restore"),
-                ("DELETE", "/api/projects/beta/purge")]
+                ("DELETE", "/api/projects/beta/purge"), ("DELETE", "/api/projects/beta/purge")]
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors
         finally:

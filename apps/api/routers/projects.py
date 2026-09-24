@@ -239,10 +239,12 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
     project = require_project(session, project_id, "ADMIN", include_deleted=True)
     if project.deleted_at is None:
         raise HTTPException(409, "휴지통에 있는 프로젝트만 영구 삭제할 수 있습니다. 먼저 휴지통으로 이동하세요.")
+    from .reports import expire_stale_jobs  # 서버 재시작 등으로 멈춘 작업이 삭제를 막지 않게 먼저 닫는다
+    expire_stale_jobs(session, project_id)
     active_job = session.scalar(select(ReportJob.id).where(
         ReportJob.project_id == project_id, ReportJob.state.in_(("QUEUED", "RUNNING"))).limit(1))
     if active_job:
-        raise HTTPException(409, "이 프로젝트의 보고서를 만드는 중입니다. 생성이 끝난 뒤 다시 시도하세요.")
+        raise HTTPException(409, "이 프로젝트의 보고서를 만드는 중입니다. 생성이 끝난 뒤 다시 시도하세요. 서버 재시작 등으로 멈춘 작업은 진행 기록이 2분간 없으면 중단된 것으로 정리됩니다.")
     counts = purge_rows(session, project_id)
     session.commit()
     files = purge_files(project_id)

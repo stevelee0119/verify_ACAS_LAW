@@ -35,14 +35,17 @@ MAX_EXCERPT = 300
 PATH_LABELS = {
     "VISIBLE_TEXT": "보이는 본문", "WHITE_ON_WHITE": "흰 글자(배경과 같은 색)", "TINY_FONT": "아주 작은 글자",
     "OFF_PAGE": "페이지 밖 좌표", "INVISIBLE_RENDER_MODE": "보이지 않는 렌더모드(Tr 3)",
-    "COVERED_BY_SHAPE": "흰 도형으로 덮은 글자", "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
+    "COVERED_BY_SHAPE": "흰 도형으로 덮은 글자", "COVERED_BY_IMAGE": "이미지로 덮은 글자",
+    "TRANSPARENT_FILL": "투명 글자(채움 투명도 0)", "LOW_CONTRAST": "배경과 대비가 거의 없는 글자",
+    "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
     "METADATA": "문서 속성(메타데이터)", "ATTACHMENT": "첨부파일 내용", "RUNNING_HEAD": "머리글·바닥글", "OTHER_HIDDEN": "기타 숨김 레이어",
 }
 
 
 def _injection_path(block: Block) -> str:
     reason = str(block.attributes.get("hidden_reason") or "")
-    for key in ("WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE", "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE"):
+    for key in ("WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE", "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE",
+                "COVERED_BY_IMAGE", "TRANSPARENT_FILL", "LOW_CONTRAST"):
         if reason.startswith(key):
             return key
     if block.source_layer == "ocr_layer":
