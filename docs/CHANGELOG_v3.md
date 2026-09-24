@@ -62,7 +62,7 @@
 | 0.6.2 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
 | 0.6.3 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
 | 0.6.6 | 85.3 (FP-TRAP 0) | 81.9 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 94.4 (FP-TRAP 0) |
-| 0.6.8 | 85.3 (FP-TRAP 0) | 81.9 (FP-TRAP 0) | CI 측정 | CI 측정 |
+| 0.6.8 | 85.3 (FP-TRAP 0) | 81.9 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 94.4 (FP-TRAP 0) |
 
 ## 0.6.4
 
