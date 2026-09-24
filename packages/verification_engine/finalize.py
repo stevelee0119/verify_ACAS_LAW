@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from packages.common.enums import EvidenceGrade, VerificationStatus
+from packages.common.enums import EvidenceGrade, FindingType, VerificationStatus
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 
 
@@ -90,8 +90,32 @@ def fill_required_fields(findings: List[Finding], doc: Optional[NormalizedDocume
         features.setdefault("rule_id", f"{finding.engine or 'engine'}:{finding.type}")
 
 
+UNSETTLED = ("NOT_FOUND", "UNVERIFIED")
+
+
+def enforce_consistency(findings: List[Finding], statuses: Dict[str, str]) -> tuple:
+    """같은 인용에 서로 모순되는 판정 항목을 거른다(v3 D5). (남길 finding, 걸러낸 사유 목록)
+
+    - 불확실성 미고지(원문 미확보 상태의 확정 서술)는 기댄 인용 가운데 최종 판정이 NOT_FOUND·UNVERIFIED인
+      것이 하나라도 있을 때만 남긴다. 원문을 조회해 일치·불일치까지 판정한 인용에 붙으면 모순이다.
+    """
+    kept, issues = [], []
+    for finding in findings:
+        features = finding.confidence_features or {}
+        if finding.type == FindingType.UNCERTAINTY_NOT_DISCLOSED and features.get("citation_ids"):
+            known = {cid: statuses.get(cid) for cid in features["citation_ids"]}
+            if all(status is not None and status not in UNSETTLED for status in known.values()):
+                issues.append({"rule": "UNCERTAINTY_REQUIRES_UNVERIFIED", "finding_id": finding.finding_id,
+                               "citations": known})
+                continue
+        kept.append(finding)
+    return kept, issues
+
+
 def finalize_document_findings(findings: List[Finding], doc: Optional[NormalizedDocument],
-                               document_id: str) -> List[Finding]:
+                               document_id: str, statuses: Optional[Dict[str, str]] = None) -> List[Finding]:
     out = consolidate_citation_findings(findings)
+    if statuses:
+        out, _issues = enforce_consistency(out, statuses)
     fill_required_fields(out, doc, document_id)
     return out

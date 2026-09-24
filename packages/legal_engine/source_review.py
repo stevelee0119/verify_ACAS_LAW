@@ -13,6 +13,7 @@ from packages.common.schemas import Evidence, Finding
 from packages.source_adapters.legal_history import legal_date, select_provision, today_korea
 
 from .spec_mapping import relevance_review
+from .verification_labels import provision_label
 
 
 def date_context(as_of=None, incident_date=None, current_date=None):
@@ -119,6 +120,13 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
         # 기준일이 없으면 본문 대조를 마쳐도 PARTIALLY_VERIFIED로 두고, 본문 대조 완료는
         # component_summary의 content_confirmed로 따로 센다.
         verdict.status = VerificationStatus.VERIFIED
+    # v3 D4: 기준일이 없으면 현행 버전 기준 일치로 확인 완료하고 기준일 확인은 권고로만 둔다.
+    verdict.status, label, advisory = provision_label(verdict.levels, verdict.status, as_of)
+    verdict.review["verification_label"] = label
+    verdict.review["applicability"] = "APPLICABILITY_UNREVIEWED"
+    if advisory:
+        verdict.review.setdefault("advisories", []).append(advisory)
+        verdict.levels["temporal_basis"] = "CURRENT_VERSION"
     verdict.notes.append("시행 버전·본문 대조는 사건에 대한 법률 적용 결론이 아니다")
     return verdict
 

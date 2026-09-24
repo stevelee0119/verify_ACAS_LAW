@@ -123,7 +123,7 @@ def component_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """문서 단위 집계. '확인 0건'처럼 가장 약한 단계만 세지 않고 단계별로 센다."""
     summary = {"identity_confirmed": 0, "content_confirmed": 0, "temporal_pending": 0,
                "not_found_in_searched_scope": 0, "invalid_format": 0, "mismatch": 0, "lookup_unverified": 0,
-               "fully_verified": 0}
+               "fully_verified": 0, "verified": 0, "verified_citation": 0, "verified_provision": 0}
     for entry in entries:
         components = entry.get("components") or []
         statuses = {c["key"]: c["status"] for c in components}
@@ -147,6 +147,10 @@ def component_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             summary["lookup_unverified"] += 1
         if entry.get("status") == "VERIFIED":
             summary["fully_verified"] += 1
+        label = entry.get("verification_label")
+        if label in ("VERIFIED_CITATION", "VERIFIED_PROVISION"):
+            summary["verified"] += 1
+            summary[label.lower()] += 1
     return summary
 
 

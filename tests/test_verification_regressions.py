@@ -134,8 +134,9 @@ def test_statute_components_are_separate_and_missing_date_does_not_unverify_the_
         assert parts["text_match"] == "NOT_APPLICABLE"
         assert parts["temporal_applicability"] == "UNVERIFIED"
         assert parts["case_applicability"] == "REVIEW_NEEDED"
-        # 기준일이 없으므로 전체 상태는 PARTIALLY_VERIFIED이고, 본문 대조 완료는 content_confirmed로 센다.
-        assert verdict["identity_confirmed"] and verdict["status"] == "PARTIALLY_VERIFIED"
+        # v3 D4: 기준일이 없으면 현행 버전 기준 일치로 확인 완료(VERIFIED_PROVISION), 기준일 확인은 권고.
+        assert verdict["identity_confirmed"] and verdict["status"] == "VERIFIED"
+        assert verdict["verification_label"] == "VERIFIED_PROVISION"
     summary = result.data["component_summary"]
     assert summary["identity_confirmed"] == 2 and summary["temporal_pending"] == 2
     assert summary["content_confirmed"] == 2

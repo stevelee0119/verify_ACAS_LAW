@@ -93,9 +93,12 @@ def _verify(registry, text, **kwargs):
 
 def test_level1_2_verified_when_matching(registry):
     _, result = _verify(registry, "대법원 2099. 1. 15. 선고 2099도99999 판결")
-    assert result.data["verified_count"] == 0
+    # v3 D4: 존재·서지가 모두 맞으면(인용문 없음) 확인 완료(VERIFIED_CITATION), 사건 적용성은 별도
+    assert result.data["verified_count"] == 1
     assert result.data["verdicts"][0]["levels"]["level1"] == "VERIFIED"
-    assert result.data["verdicts"][0]["status"] == "PARTIALLY_VERIFIED"
+    assert result.data["verdicts"][0]["status"] == "VERIFIED"
+    assert result.data["verdicts"][0]["verification_label"] == "VERIFIED_CITATION"
+    assert result.data["verdicts"][0]["applicability"] == "APPLICABILITY_UNREVIEWED"
     assert not [f for f in result.findings if f.severity.rank >= Severity.MEDIUM.rank]
 
 
@@ -361,6 +364,9 @@ def test_a_case_confirmed_in_the_official_source_is_not_counted_as_unverified(re
     _, result = _verify(registry, "대법원 2099. 1. 15. 선고 2099도99999 판결 참조.")
     assert result.unverified_items, "취지·적용 검토 범위는 여전히 기록한다"
     assert all(item["scope"] == "PARTIAL" for item in result.unverified_items)
+    # v3 D4: 확인 완료 인용은 미검증이 아니라 사건 적용성 미검토 항목이다.
+    assert all(item["kind"] == "applicability" and item["verification_label"] == "VERIFIED_CITATION"
+               for item in result.unverified_items)
 
     gate = evaluate_gate([], unverified_items=result.unverified_items)
     assert not any("확인하지 못한 항목" in r for r in gate.review_reasons)

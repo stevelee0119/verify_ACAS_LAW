@@ -228,7 +228,11 @@ def test_missing_reference_date_keeps_temporal_unverified(adapter, monkeypatch):
     assert result.levels["temporal"] == "UNVERIFIED"
     assert result.review["dates"]["reference_date"] is None
     assert result.review["version"]["date_basis"] == "CURRENT_ONLY"
-    assert result.status != VerificationStatus.VERIFIED
+    # v3 D4: 기준일이 없으면 현행 버전 기준 일치로 확인 완료하고, 기준일 확인은 권고로만 남긴다.
+    assert result.status == VerificationStatus.VERIFIED
+    assert result.review["verification_label"] == "VERIFIED_PROVISION"
+    assert result.levels["temporal"] == "UNVERIFIED" and result.levels["temporal_basis"] == "CURRENT_VERSION"
+    assert any("기준일" in a for a in result.review["advisories"])
 
 
 @pytest.mark.parametrize("case", ["missing_article_date", "future_article_date", "partial", "enforcement_note", "transitional", "missing_supplement"])
@@ -464,7 +468,8 @@ def test_pipeline_keeps_each_issue_date_and_full_snapshots(adapter, monkeypatch,
     assert all(r["source_record_ids"] for r in reviews)
     assert len(document.source_records) == 9
     # 미확인 목록에는 VERIFIED가 아닌 검토만 오른다. 기준일·조문·본문 대조가 모두 확인된 검토는 빠진다(v2 R5).
-    assert {u["review_id"] for u in document.unverified_items} == {
+    # v3 D4: 확인 완료 인용은 미확인이 아니라 사건 적용성 항목(kind=applicability)으로만 남는다.
+    assert {u["review_id"] for u in document.unverified_items if u.get("kind") != "applicability"} == {
         r["review_id"] for r in reviews if r["verdicts"][0]["status"] != "VERIFIED"}
     run = VerificationRunResult("R", "P", JobState.PARTIAL_COMPLETED, "test", documents=[document])
     exported = json.loads(to_json(run))

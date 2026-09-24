@@ -138,10 +138,21 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     unverified = ([[i["target"] + (f" ({i['count']}건)" if i["count"] > 1 else ""), i["reason"]]
                    for i in grouped_unverified(run_result.unverified_items)] if summary else
                   [[item.get("raw_text") or item.get("document_id") or item.get("kind"), item.get("reason")]
-                   for item in run_result.unverified_items])
+                   for item in run_result.unverified_items if item.get("kind") != "applicability"])
     table(["대상", "사유"],
           unverified +
           [[s.get("name"), f"{s.get('status')} / {s.get('note', '')}"] for s in run_result.unavailable_sources], [2.5, 4.5])
+    # 공식 원문과 일치를 확인한 인용(v3 D4). 사건 적용성은 별도로 사람이 검토한다.
+    verified_rows = []
+    for d in run_result.documents:
+        for item in getattr(d, "unverified_items", None) or []:
+            if isinstance(item, dict) and item.get("kind") == "applicability":
+                verified_rows.append([getattr(d, "filename", "-"), item.get("raw_text") or "-", item.get("verification_label") or "-",
+                                      "사건 적용성 미검토" + ("; " + "; ".join(item.get("advisories") or [])
+                                                          if item.get("advisories") else "")])
+    if verified_rows:
+        doc.add_heading(f"확인 완료 인용 ({len(verified_rows)}건)", 1)
+        table(["문서", "인용", "판정", "비고"], verified_rows, [1.3, 2.7, 1.4, 1.6])
     doc.add_heading("AI 작성 분석 및 법률 주장 타당성 검토", 1)
     ai_rows = []
     for d in run_result.documents:

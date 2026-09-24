@@ -138,6 +138,8 @@ def grouped_unverified(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """같은 대상·같은 사유의 미확인 항목을 한 줄로 묶는다(건수 보존)."""
     rows: Dict[tuple, Dict[str, Any]] = {}
     for item in items:
+        if item.get("kind") == "applicability":
+            continue  # 확인 완료 인용(v3 D4)은 미확인 목록에 넣지 않는다
         target = " ".join(str(item.get("raw_text") or item.get("document_id") or "-").split())
         key = (item.get("kind", "-"), target, item.get("reason") or "-")
         rows.setdefault(key, {"kind": key[0], "target": target, "reason": key[2], "count": 0})["count"] += 1

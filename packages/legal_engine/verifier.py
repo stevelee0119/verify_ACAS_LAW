@@ -32,6 +32,7 @@ from packages.source_adapters import SourceRegistry
 from .components import citation_components, component_summary, identity_confirmed
 from .citation_format import code_court_family, court_family, format_violations
 from .opinion_attribution import attribute_claim, direction_conflict, split_opinions
+from .verification_labels import citation_label
 from .quote_diff import quote_changes, quote_diff_summary, render_quote_diff
 from .normalize import canonical_article, case_number_possible, same_case_number, split_case_number
 from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
@@ -174,6 +175,15 @@ class LegalVerifier:
                         "scope": "PARTIAL" if verdict.status == VerificationStatus.PARTIALLY_VERIFIED else "UNVERIFIED",
                     }
                 )
+            elif verdict.status == VerificationStatus.VERIFIED:
+                # 확인 완료 인용(v3 D4). 미검증이 아니다. 사건 적용성 검토만 사람 몫으로 남긴다.
+                result.unverified_items.append({
+                    "kind": "applicability", "citation_id": verdict.citation.citation_id,
+                    "type": str(verdict.citation.type), "raw_text": verdict.citation.raw_text,
+                    "verification_label": (verdict.review or {}).get("verification_label"),
+                    "applicability": "APPLICABILITY_UNREVIEWED", "status": "VERIFIED", "scope": "PARTIAL",
+                    "advisories": (verdict.review or {}).get("advisories", []),
+                    "reason": "공식 원문과 일치 확인 — 사건 적용성은 사람이 검토"})
         def components_of(v):
             return citation_components(str(v.citation.type), v.levels, article_cited=bool(v.citation.article))
 
@@ -197,6 +207,11 @@ class LegalVerifier:
                 "review": v.review,
                 "source_record_ids": [r.source_record_id for r in v.source_records],
                 "source_lookup": v.lookup,
+                # 확인 완료 라벨과 사건 적용성(v3 D4). 형식 위반 등 뒤 단계가 판정을 바꾸면 라벨을 지운다.
+                "verification_label": (v.review or {}).get("verification_label")
+                if v.status == VerificationStatus.VERIFIED else None,
+                "applicability": (v.review or {}).get("applicability") or "APPLICABILITY_UNREVIEWED",
+                "advisories": (v.review or {}).get("advisories", []),
             }
             for v in verdicts
         ]
@@ -458,8 +473,9 @@ class LegalVerifier:
         # Level 4·5는 LLM 담당. 공식 Source가 있어야만 의미 비교를 수행한다.
         verdict.levels.setdefault("level4", "PENDING_LLM")
         verdict.levels.setdefault("level5", "PENDING_LLM")
-        if verdict.status == VerificationStatus.VERIFIED:
-            verdict.status = VerificationStatus.PARTIALLY_VERIFIED
+        verdict.status, label = citation_label(verdict.levels, verdict.status, bool(citation.quoted_text))
+        verdict.review["verification_label"] = label
+        verdict.review["applicability"] = "APPLICABILITY_UNREVIEWED"
         verdict.notes.append("판례 존재·메타데이터 확인과 취지·사건 적용 가능성 검토는 별도이다")
         return verdict
 

@@ -137,6 +137,7 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
     advisory = [f for f in findings if f.type in MM4_ADVISORY_TYPES or f.advisory_only]
 
     citation_total = sum(len(d.citations) for d in result.documents)
+    unverified_only = [i for i in result.unverified_items if i.get("kind") != "applicability"]
     unverified_citations = sum(
         1 for item in result.unverified_items
         if item.get("kind") == "citation" and item.get("scope") != "PARTIAL"
@@ -230,12 +231,14 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 "risk": content_risk(adversarial),
             },
             "unverified_ratio": {
-                "unverified_items": len(result.unverified_items),
+                # 확인 완료 인용의 사건 적용성 항목(kind=applicability)은 미검증이 아니다(v3 D4).
+                "unverified_items": len(unverified_only),
+                "verified_citations": verified_citations,
                 "unavailable_sources": [s["name"] for s in result.unavailable_sources],
                 # 이번 실행의 검증에 실제로 영향을 준 출처만 따로 적는다.
                 "unavailable_sources_affecting": [s["name"] for s in result.unavailable_sources
                                                   if s.get("impact", "AFFECTS_VERIFICATION") != "NOT_NEEDED"],
-                "ratio": round(len(result.unverified_items) / citation_total, 3) if citation_total else None,
+                "ratio": round(len(unverified_only) / citation_total, 3) if citation_total else None,
                 "unreadable_documents": [d for d in unreadable if d],
                 "analyzed_documents": len(analyzed_documents),
                 "total_documents": len(result.documents),

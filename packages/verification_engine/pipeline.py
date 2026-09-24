@@ -572,8 +572,12 @@ class VerificationPipeline:
         #     결함이므로, 미검증 인용 목록을 함께 넘긴다.
         emit(JobState.VERIFYING, f"{document.filename} 표현·검토 누락 검사", base + span * 0.96)
         try:
-            unverified_ids = {item.get("citation_id") for item in result.unverified_items
-                              if item.get("kind") == "citation"}
+            # 불확실성 미고지는 최종 판정이 NOT_FOUND·UNVERIFIED인 인용에만 낸다(v3 D5). 원문을 조회해 불일치까지
+            # 판정한 인용에 "원문 미확보 상태에서 확정적으로 서술"을 함께 내면 서로 모순된다.
+            unverified_ids = {v.get("citation_id") for v in result.engine_data.get("legal_verdicts", [])
+                              if v.get("status") in ("NOT_FOUND", "UNVERIFIED")}
+            unverified_ids |= {item.get("citation_id") for item in result.unverified_items
+                               if item.get("kind") == "citation" and item.get("status") == "UNVERIFIED"}
             unverified_citations = [c for c in citations if c.citation_id in unverified_ids]
             # 인용 원문(raw_text)은 NBSP를 일반 공백으로 바꾼 읽기 본문에서 뽑았으므로 같은 기준으로 맞춘다.
             body = "\n".join(block.text for page in doc.pages for block in page.blocks
@@ -592,7 +596,8 @@ class VerificationPipeline:
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
-        result.findings = finalize_document_findings(result.findings, doc, document.document_id)
+        statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
+        result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
         return result
 

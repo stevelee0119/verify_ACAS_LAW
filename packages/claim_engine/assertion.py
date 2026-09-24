@@ -126,12 +126,12 @@ def uncertainty_findings(text: str, *, unverified_citations: Sequence[Citation] 
     """
     if not unverified_citations:
         return []
-    raw_fragments = [c.raw_text for c in unverified_citations if c.raw_text]
     out: List[Finding] = []
     for sentence, offset in _sentences(text):
         if not CERTAINTY_RE.search(sentence) or HEDGE_RE.search(sentence):
             continue
-        touching = [raw for raw in raw_fragments if raw and raw[:12] in sentence]
+        touching_citations = [c for c in unverified_citations if c.raw_text and c.raw_text[:12] in sentence]
+        touching = [c.raw_text for c in touching_citations]
         if not touching:
             continue
         out.append(Finding.create(
@@ -144,6 +144,8 @@ def uncertainty_findings(text: str, *, unverified_citations: Sequence[Citation] 
                     f"{touching[0][:60]}은(는) 공식 원문으로 확인되지 않았다. "
                     f"불확실성을 표시하거나 원문을 확보해야 한다."),
             confidence=0.75,
+            # 기댄 인용을 남긴다. 보고서 전 일관성 검사가 그 인용의 최종 판정과 대조한다(v3 D5).
+            confidence_features={"citation_ids": [c.citation_id for c in touching_citations]},
             document_id=document_id, page=page,
             span=(offset, offset + len(sentence)), engine=ENGINE_NAME,
             evidence=[Evidence.create(description=f"미검증 인용: {touching[0][:120]}",
