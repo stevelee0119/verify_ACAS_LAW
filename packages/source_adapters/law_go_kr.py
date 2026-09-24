@@ -82,6 +82,7 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
             attempts.append({"nb": case_number.strip()})   # 사건번호 지정 조회
 
         first: Optional[AdapterResponse] = None
+        first_skipped = 0
         tried: List[str] = []
         for extra in attempts:
             params = {"OC": self.api_key, "target": target, "type": "JSON", **extra}
@@ -99,11 +100,17 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                     break
                 return self._transport_unavailable(case_number, exc)
 
-            records = _normalize_case_payload(payload)
+            listed = _normalize_case_payload(payload)
             label = ",".join(f"{k}={v}" for k, v in extra.items() if k != "query")
             tried.append(label or "query")
-            matched = wanted is not None and any(
-                split_case_number(str(r.get("case_number") or "")) == wanted for r in records)
+            # 키워드 검색은 다른 사건도 돌려준다. 사건번호가 정확히 같은 기록만 채택하고, 나머지는
+            # 원 응답(payload)에만 남긴다. 첫 건을 결과로 기록하면 다른 사건이 이 인용의 출처로 남는다(R4).
+            if wanted is None:
+                records = listed
+            else:
+                records = [r for r in listed if split_case_number(str(r.get("case_number") or "")) == wanted]
+                skipped = len(listed) - len(records)
+            matched = wanted is not None and bool(records)
             result = AdapterResponse(
                 AdapterStatus.READY,
                 records,
@@ -120,14 +127,15 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
             if matched:
                 return result
             if first is None:
-                first = result
+                first, first_skipped = result, skipped
             # 사건번호가 아닌 키워드 조회(예: "손해배상")는 첫 응답으로 끝낸다.
             if wanted is None:
                 return result
 
         if first is not None and not first.message:
             first = AdapterResponse(first.status, first.records, first.source_record,
-                                    f"사건번호 일치 없음(조회 방식 시도: {' → '.join(tried)})")
+                                    f"사건번호 일치 없음(조회 결과 {first_skipped}건은 다른 사건이라 채택하지 않음, "
+                                    f"조회 방식 시도: {' → '.join(tried)})")
         return first if first is not None else self._unavailable(
             case_number, AdapterStatus.ERROR, "조회를 수행하지 못했다")
 

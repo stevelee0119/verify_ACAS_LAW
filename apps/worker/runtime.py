@@ -217,7 +217,7 @@ def execute(run_id, *, store=None):
                     raise ValueError("Original bytes do not match the run snapshot")
                 inputs.append(DocumentInput(document_id=item["document_id"], path=str(path),
                     filename=item["filename"], mime_type=item["mime_type"], sha256=item["sha256"],
-                    is_own_document=item.get("is_own_document")))
+                    is_own_document=item.get("is_own_document"), role=item.get("role")))
 
             class CheckpointPipeline(VerificationPipeline):
                 def _run_document(self, *args, **kwargs):

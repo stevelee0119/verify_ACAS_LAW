@@ -16,7 +16,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from packages.adversarial_engine import AdversarialScanner
 from packages.audit_engine import AuditChain
@@ -101,6 +101,8 @@ class DocumentInput:
     mime_type: str = ""
     sha256: str = ""
     is_own_document: Optional[bool] = None
+    # 사용자가 지정한 문서 역할. "SOURCE_TEXT" = 조항 대조에 쓸 원문 첨부(계약서·규정·법령 사본)
+    role: Optional[str] = None
 
 
 @dataclass
@@ -124,6 +126,7 @@ class DocumentResult:
     rag_indexable: bool = False
     warnings: List[str] = field(default_factory=list)
     engine_data: Dict[str, Any] = field(default_factory=dict)
+    role: Optional[str] = None
 
 
 @dataclass
@@ -312,7 +315,7 @@ class VerificationPipeline:
         if document.is_own_document is not None:
             from dataclasses import replace
             context = replace(context, counterparty_document=not document.is_own_document)
-        result = DocumentResult(document_id=document.document_id, filename=document.filename)
+        result = DocumentResult(document_id=document.document_id, filename=document.filename, role=document.role)
 
         # 1) PARSING
         emit(JobState.PARSING, f"{document.filename} 파싱", base + span * 0.05)
@@ -786,27 +789,39 @@ class VerificationPipeline:
         조항 색인이 잡히는 문서를 모두 원본 후보로 두고 교차 대조한다.
         참조한 문서 자신의 조항은 대조 대상에서 뺀다.
         """
+        from packages.common.enums import CitationType as _CitationType
+        from packages.document_engine.reading_text import build_reading_text
+        from packages.legal_engine.citation_extractor import extract_from_text
+        from packages.legal_engine.internal_citation import clause_source_eligible, source_pointers
+
         indices: Dict[str, Dict[str, Any]] = {}
-        bodies: Dict[str, str] = {}
+        pointers: Dict[str, List[str]] = {}
+        bodies: Dict[str, Tuple[str, List[Tuple[int, int]]]] = {}
         for document in result.documents:
             if document.quarantined or document.normalized is None:
                 continue
-            bodies[document.document_id] = "\n".join(
-                block.text for page in document.normalized.pages for block in page.blocks
-                if block.source_layer == "visible_text" and block.text
-            )
+            text = build_reading_text(document.normalized).text
+            # 법령·행정규칙 인용 안의 "제N조"는 첨부문서가 아니라 그 법령의 조문이다.
+            statute_spans = [c.span for c in extract_from_text(text)
+                             if c.span and c.type in (_CitationType.STATUTE, _CitationType.ADMIN_RULE)]
+            bodies[document.document_id] = (text, statute_spans)
+            if not clause_source_eligible(document.normalized, role=getattr(document, "role", None)):
+                continue
             index = build_clause_index(document.normalized)
             if len(index) >= 2:  # 조항이 하나뿐이면 색인으로 보지 않는다
                 indices[document.document_id] = index
+                pointers[document.document_id] = source_pointers(document.normalized, document.filename)
 
         findings: List[Finding] = []
-        for document_id, text in bodies.items():
+        for document_id, (text, statute_spans) in bodies.items():
             for source_id, index in indices.items():
                 if source_id == document_id or not text:
                     continue
                 label = next((d.filename for d in result.documents
                               if d.document_id == source_id), "첨부문서")
-                checks = [c for c in check_references(text, index) if c.matches_concept is False]
+                checks = [c for c in check_references(text, index, exclude_spans=statute_spans,
+                                                      pointers=pointers[source_id])
+                          if c.matches_concept is False]
                 findings.extend(internal_citation_findings(
                     checks, source_label=label, document_id=document_id))
         return findings

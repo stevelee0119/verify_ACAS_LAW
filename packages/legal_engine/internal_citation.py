@@ -68,27 +68,72 @@ class Clause:
                 "page": self.page}
 
 
+def _heading_position(text: str, start: int) -> bool:
+    """조항 표제는 줄(블록) 첫머리나 앞 문장이 끝난 바로 뒤에 온다.
+
+    문장 안의 "…군인사법 제57조 제1항에 따른"은 조항 표제가 아니다.
+    """
+    before = text[:start].rstrip()
+    return not before or before.endswith((".", "。", ":", "\n"))
+# 소송 서면·의견서는 다른 문서의 조항 원문이 아니다(R1). 계약·규정처럼 조항 구조를 가진 문서만 원본 후보다.
+NON_SOURCE_KINDS = {"COMPLAINT", "BRIEF", "ANSWER", "APPEAL", "OPINION_LETTER", "CRIMINAL_COMPLAINT", "REPORT"}
+# 참조가 첨부문서를 가리킨다고 볼 수 있는 말. 이 말이 참조 바로 앞에 있을 때만 첨부 조항과 대조한다.
+ATTACHMENT_POINTERS = ("첨부", "별첨", "위계약", "본계약", "같은계약", "동계약", "계약서", "약정서", "합의서",
+                       "협약서", "정관", "약관", "규약", "내규")
+SOURCE_ROLE = "SOURCE_TEXT"  # 사용자가 '원문 첨부'(계약서·규정·법령 사본)로 지정한 문서
+
+
 def build_clause_index(document: NormalizedDocument) -> Dict[str, Clause]:
-    """문서에서 조항 색인을 만든다. 표제가 없는 조항도 본문으로 담는다."""
+    """문서에서 조항 색인을 만든다. 줄 첫머리의 조항 표제만 조항으로 보고, 다음 표제까지를 본문으로 담는다."""
     index: Dict[str, Clause] = {}
+    current: Optional[Clause] = None
     for page in document.pages:
         for block in page.blocks:
+            if not block.visible or block.source_layer not in ("visible_text", "ocr_layer") \
+                    or block.block_type == "running_head":
+                continue
             text = block.text or ""
-            matches = list(CLAUSE_HEADING_RE.finditer(text))
-            for position, match in enumerate(matches):
+            headings = [m for m in CLAUSE_HEADING_RE.finditer(text) if _heading_position(text, m.start())]
+            if not headings:
+                if current is not None:
+                    current.body = f"{current.body} {text.strip()}".strip()
+                continue
+            if current is not None and headings[0].start() > 0:
+                current.body = f"{current.body} {text[:headings[0].start()].strip()}".strip()
+            for position, match in enumerate(headings):
+                end = headings[position + 1].start() if position + 1 < len(headings) else len(text)
                 key = clause_key(match.group("num"), match.group("sub"))
-                start = match.end()
-                end = matches[position + 1].start() if position + 1 < len(matches) else len(text)
-                body = text[start:end].strip()
-                title = (match.group("title") or "").strip()
+                current = Clause(key=key, title=(match.group("title") or "").strip(),
+                                 body=text[match.end():end].strip(), document_id=document.document_id,
+                                 page=block.page or page.page_number, block_id=block.block_id)
                 existing = index.get(key)
-                if existing is not None and len(existing.haystack) >= len(f"{title} {body}"):
-                    continue
-                index[key] = Clause(key=key, title=title, body=body,
-                                    document_id=document.document_id,
-                                    page=block.page or page.page_number,
-                                    block_id=block.block_id)
+                if existing is None or len(existing.haystack) < len(current.haystack):
+                    index[key] = current
     return index
+
+
+def clause_source_eligible(document: NormalizedDocument, *, role: Optional[str] = None) -> bool:
+    """이 문서를 다른 문서의 조항 참조를 대조할 '원문'으로 써도 되는가.
+
+    사용자가 원문 첨부로 지정했으면 쓴다. 지정이 없으면 소송 서면·의견서·보고서는 쓰지 않는다.
+    같은 사건의 다른 서면은 조항 원문이 아니며, 법령 원문은 공식 Source에서만 가져온다.
+    """
+    if role == SOURCE_ROLE:
+        return True
+    from packages.claim_engine.classification import document_kind
+    kind = document_kind(b.text for b in document.prose_blocks()[:8])
+    return kind not in NON_SOURCE_KINDS
+
+
+def source_pointers(document: NormalizedDocument, label: str = "") -> List[str]:
+    """참조 앞에 오면 이 원문을 가리킨다고 볼 수 있는 말(문서 제목·파일명 + 일반 첨부 표현)."""
+    pointers = list(ATTACHMENT_POINTERS)
+    first = next((b.text for b in document.prose_blocks() if (b.text or "").strip()), "")
+    for name in (first, re.sub(r"\.[A-Za-z0-9]+$", "", label or "")):
+        name = re.sub(r"\s+", "", name or "")
+        if 2 <= len(name) <= 30:
+            pointers.append(name)
+    return pointers
 
 
 def _concepts(text: str) -> List[str]:
@@ -136,10 +181,23 @@ class ReferenceCheck:
 
 
 def check_references(text: str, index: Dict[str, Clause], *,
-                     window: int = 40) -> List[ReferenceCheck]:
-    """본문의 조항 참조를 색인과 대조한다."""
+                     window: int = 40, exclude_spans: Sequence[Tuple[int, int]] = (),
+                     pointers: Optional[Sequence[str]] = None) -> List[ReferenceCheck]:
+    """본문의 조항 참조를 색인과 대조한다.
+
+    exclude_spans: 법령·행정규칙 인용 범위. "행정소송법 제27조"는 첨부문서가 아니라 법령을 가리키므로
+    첨부 조항과 대조하지 않는다(공식 Source로 검증한다).
+    pointers: 주어지면 참조 바로 앞(20자)에 그중 하나가 있을 때만 대조한다.
+    """
     checks: List[ReferenceCheck] = []
+    compact_pointers = [re.sub(r"\s+", "", p) for p in pointers or ()]
     for match in REFERENCE_RE.finditer(text):
+        if any(start <= match.start() < end for start, end in exclude_spans):
+            continue
+        if pointers is not None:
+            lead = re.sub(r"\s+", "", text[max(0, match.start() - 20):match.start()])
+            if not any(p and p in lead for p in compact_pointers):
+                continue
         key = clause_key(match.group("num"), match.group("sub"))
         start = max(0, match.start() - window)
         end = min(len(text), match.end() + window)

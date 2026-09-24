@@ -134,13 +134,16 @@ class NormalizedDocument:
         """화면에 표시되는 텍스트 블록만."""
         return [b for b in self.blocks if b.visible and b.source_layer == "visible_text"]
 
-    def body_blocks(self) -> List[Block]:
+    def body_blocks(self, *, include_running_heads: bool = False) -> List[Block]:
         """본문으로 취급할 블록.
 
         스캔 문서는 OCR 결과가 곧 본문이므로 ocr_layer를 포함한다.
         숨은 텍스트·메타데이터·주석은 적대적 콘텐츠로 별도 처리하므로 제외한다.
+        여러 쪽에 반복되는 머리글·바닥글(block_type=running_head)은 본문 문장이 아니므로
+        기본으로 뺀다. 문서 전체 성격(시험·예시 문서 고지 등)을 볼 때만 포함한다.
         """
-        return [b for b in self.blocks if b.visible and b.source_layer in BODY_LAYERS]
+        return [b for b in self.blocks if b.visible and b.source_layer in BODY_LAYERS
+                and (include_running_heads or b.block_type != "running_head")]
 
     def prose_blocks(self) -> List[Block]:
         """문장 단위 분석(주장·사건·개체명)에 쓸 블록.
@@ -149,7 +152,7 @@ class NormalizedDocument:
         그대로 주장 추출에 넣으면 "[ | 인용 판례 | 1 — | ] | 대법원 | ..." 같은
         파편이 주장으로 등록된다. 표는 계산 검증에서 행 단위로 따로 다룬다.
         """
-        return [b for b in self.body_blocks() if b.block_type != "table"]
+        return [b for b in self.body_blocks() if b.block_type not in ("table", "table_line")]
 
     @property
     def visible_text(self) -> str:

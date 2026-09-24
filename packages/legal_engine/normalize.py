@@ -7,7 +7,8 @@ from __future__ import annotations
 import re
 from typing import Optional
 
-CASE_NUMBER_RE = re.compile(r"(?P<year>(?:19|20)\d{2})\s*(?P<code>[가-힣]{1,3})\s*(?P<serial>\d{1,6})")
+# 1999년까지의 사건번호는 연도를 두 자리로 적는다(예: 94누4615). 네 자리 연도와 함께 받는다.
+CASE_NUMBER_RE = re.compile(r"(?<!\d)(?P<year>(?:19|20)\d{2}|\d{2})\s*(?P<code>[가-힣]{1,3})\s*(?P<serial>\d{1,6})")
 CONSTITUTIONAL_RE = re.compile(r"(?P<year>(?:19|20)\d{2})\s*(?P<code>헌[가-힣]{1,2})\s*(?P<serial>\d{1,4})")
 
 # 대표 사건부호 (대법원 재판예규 기준 주요 항목)
@@ -134,6 +135,10 @@ LAW_NAME_PREFIX_NOISE = [
 ]
 
 
+# 공백 없이 법령명에 붙어도 떼어 낼 수 있는 접속·부사어. 한 글자 접두("위", "구", "동")는
+# 법령명 첫 글자와 구별되지 않으므로(예: 위치정보법, 구강보건법, 동물보호법) 띄어 쓴 경우에만 뗀다.
+_GLUED_NOISE = {"또한", "그리고", "한편", "따라서", "아울러", "특히", "나아가"}
+
 # 법령명 앞 토큰이 조사로 끝나면 법령명이 아니다(예: "적용법조는 테스트법" -> "테스트법").
 JOSA_TAILS = set("는은이가을를의에로과와도만며고서")
 
@@ -151,28 +156,59 @@ def canonical_article(raw: str) -> str:
     return f"{base}의{int(m.group('sub'))}" if m.group("sub") else base
 
 
+# 법령명 안에서 앞말을 뒤 토큰에 잇는 말. "…에 관한 법률", "…의 처벌 등에 관한 특례법"
+LAW_NAME_LINKS = {"관한", "대한", "위한", "따른", "의한", "관하는", "및", "등", "또는"}
+# 법령명 안 토큰이 이 글자로 끝나면 뒤 토큰에 이어진다(공공기관의 / 정보공개에 / 자본시장과).
+LAW_NAME_JOINING_TAILS = set("의에과와")
+# 이 글자로 끝나는 토큰은 문장 성분(주어·목적어·부사어·어미)이다. 법령명은 여기서 끊는다.
+SENTENCE_TAILS = set("는은이가을를로서도만며고다면게해여니나요까야든데지")
+
+
+def law_name_suffix(raw: str) -> str:
+    """정규식이 법령명 앞 문장까지 함께 잡았을 때, 끝에서부터 법령명이 될 수 있는 토큰만 남긴다.
+
+    "에게 폭언을 하였다는 이유로 군인사법" → "군인사법",
+    "원고는 공공기관의 정보공개에 관한 법률" → "공공기관의 정보공개에 관한 법률".
+    """
+    tokens = re.sub(r"[「」『』]", " ", raw or "").split()
+    if not tokens:
+        return ""
+    kept = [tokens[-1]]
+    for token in reversed(tokens[:-1]):
+        if token in LAW_NAME_PREFIX_NOISE:
+            break
+        if token in LAW_NAME_LINKS or token[-1] in LAW_NAME_JOINING_TAILS:
+            kept.insert(0, token)
+            continue
+        if token[-1] in SENTENCE_TAILS or not re.fullmatch(r"[가-힣A-Za-z·]{2,}", token):
+            break
+        kept.insert(0, token)  # 조사가 붙지 않은 명사(개인정보 보호법의 '개인정보', 처벌 등에 관한의 '처벌')
+    while kept and (kept[0] in LAW_NAME_LINKS or kept[0][-1] in LAW_NAME_JOINING_TAILS) and len(kept) > 1 \
+            and not _joins_forward(kept):
+        kept.pop(0)
+    return " ".join(kept)
+
+
+def _joins_forward(tokens) -> bool:
+    """맨 앞 토큰이 뒤와 법령명 안에서 이어지는지(…의 …에 관한 …) 본다."""
+    return any(t in LAW_NAME_LINKS for t in tokens[1:])
+
+
 def canonical_law_name(raw: str) -> str:
-    """법령명 앞에 붙은 접속어·조사 토큰을 제거해 표준 법령명을 만든다."""
-    name = re.sub(r"[「」『』]", "", raw or "").strip()
+    """법령명 앞에 붙은 문장 조각·접속어를 떼고 표준 법령명을 만든다."""
+    name = law_name_suffix(raw) or re.sub(r"[「」『』]", "", raw or "").strip()
     changed = True
     while changed:
         changed = False
         tokens = name.split()
-        # 1) 앞 토큰이 조사로 끝나면 법령명이 아니다
-        if len(tokens) > 1 and tokens[0] and tokens[0][-1] in JOSA_TAILS:
-            name = " ".join(tokens[1:])
-            changed = True
-            continue
-        # 2) 알려진 접속·부사어 접두 제거
         for noise in LAW_NAME_PREFIX_NOISE:
             if tokens and tokens[0] == noise and len(tokens) > 1:
                 name = " ".join(tokens[1:])
                 changed = True
                 break
-            if not tokens and name.startswith(noise):
-                break
-            if name.startswith(noise) and len(name) > len(noise) + 1 and " " not in name:
-                name = name[len(noise) :].strip()
+            if name.startswith(noise) and len(name) > len(noise) + 1 and " " not in name \
+                    and noise in _GLUED_NOISE:
+                name = name[len(noise):].strip()
                 changed = True
                 break
     name = re.sub(r"\s+", " ", name).strip()

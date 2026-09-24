@@ -88,12 +88,14 @@ class Writer:
         self.c.setFillColorRGB(0, 0, 0)
 
     def invisible(self, text: str, x: float, y: float, size: float = 9) -> None:
-        """텍스트 렌더링 모드 3(보이지 않는 텍스트)."""
+        """텍스트 렌더링 모드 3(보이지 않는 텍스트). 렌더모드는 그래픽 상태에 남으므로 저장·복원으로 되돌린다."""
+        self.c.saveState()
         t = self.c.beginText(x, y)
         t.setFont(FONT, size)
         t.setTextRenderMode(3)
         t.textLine(text)
         self.c.drawText(t)
+        self.c.restoreState()
 
     def raw(self, text: str, x: float, y: float, size: float) -> None:
         self.c.setFont(FONT, size)

@@ -11,11 +11,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument
 
-from .normalize import canonical_case_number, canonical_date, canonical_law_name, split_case_number
+from packages.document_engine.reading_text import build_reading_text, ensure_running_heads, join_separator
+
+from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix,
+                        split_case_number)
 
 COURT_RE = r"(?:대법원|헌법재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
 DATE_RE = r"(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?"
-CASE_NO_RE = r"(?:19|20)\d{2}\s*[가-힣]{1,3}\s*\d{1,6}"
+# 1999년까지의 사건번호는 연도를 두 자리로 적는다(예: 94누4615).
+CASE_NO_RE = r"(?<!\d)(?:(?:19|20)\d{2}|\d{2})\s*[가-힣]{1,3}\s*\d{1,6}"
 KIND_RE = r"(?:전원합의체\s*)?(?:판결|결정|명령|선고|자)"
 
 # 대법원 2024. 1. 15. 선고 2023도12345 판결
@@ -35,13 +39,15 @@ CONST_RE = re.compile(
 )
 # 「형법」 제250조 제1항 제2호 / 형법 제250조
 LAW_RE = re.compile(
-    r"(?P<law>[「『]?[가-힣A-Za-z·\s]{2,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?)\s*"
+    r"(?P<law>[「『]?[가-힣A-Za-z· ]{1,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?)\s*"
     r"(?:부칙\s*)?"
     r"제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?"
     r"(?:\s*제\s*(?P<item>\d+)\s*호(?:\s*의\s*(?P<item_sub>\d+))?)?"
     r"(?:\s*(?P<subitem>[가-힣])\s*목)?"
 )
+# "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
+SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?$")
 # 행정규칙(훈령·예규·고시·지침). 법령 검증과 다른 경로로 검증한다.
 ADMIN_RULE_KINDS = ("훈령", "예규", "고시", "지침")
 _KIND = "|".join(ADMIN_RULE_KINDS)
@@ -277,12 +283,23 @@ def extract_from_text(
         consumed.append((start, end))
 
     # 4) 법령
+    previous_law: Optional[str] = None
     for m in LAW_RE.finditer(text):
         if overlaps(m.start(), m.end()):
             continue
-        law_name = canonical_law_name(m.group("law"))
+        raw_law = m.group("law")
+        same_law = SAME_LAW_RE.search(raw_law)
+        if same_law:
+            # "같은 법 제60조"는 앞서 인용한 법령을 가리킨다. 앞 법령이 없으면 식별할 수 없으므로 뺀다.
+            if previous_law is None:
+                continue
+            law_name, start = previous_law, m.start("law") + same_law.start()
+        else:
+            law_name = canonical_law_name(raw_law)
+            start = _law_name_start(m)
         if len(law_name) < 2:
             continue
+        previous_law = law_name
         if law_name.endswith(ADMIN_RULE_KINDS):
             # 이름이 훈령·예규·고시·지침으로 끝나면 법령이 아니라 행정규칙이다.
             kind = next(k for k in ADMIN_RULE_KINDS if law_name.endswith(k))
@@ -298,17 +315,17 @@ def extract_from_text(
         citations.append(
             Citation.create(
                 CitationType.STATUTE,
-                m.group(0).strip(),
+                text[start:m.end()].strip(),
                 document_id=document_id,
                 block_id=block_id,
                 page=page,
-                span=(m.start(), m.end()),
+                span=(start, m.end()),
                 law_name=law_name,
                 article=article,
                 paragraph=m.group("paragraph"),
                 item=(f"{m.group('item')}의{m.group('item_sub')}" if m.group("item_sub") else m.group("item")),
                 quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, m.start() - 100) : m.end() + 150],
+                context=text[max(0, start - 100) : m.end() + 150],
             )
         )
         consumed.append((m.start(), m.end()))
@@ -352,7 +369,79 @@ def extract_from_text(
         )
         consumed.append((m.start(), m.end()))
 
+    bind_quotes(text, citations)
     return citations
+
+
+def _law_name_start(m: "re.Match") -> int:
+    """법령명 앞에 붙어 잡힌 문장 조각을 뺀 법령명의 시작 위치."""
+    raw = m.group("law")
+    kept = law_name_suffix(raw).split()
+    tokens = list(re.finditer(r"[^\s「」『』]+", raw))
+    if not kept or len(kept) > len(tokens):
+        return m.start("law")
+    start = tokens[-len(kept)].start()
+    if start > 0 and raw[start - 1] in "「『":
+        start -= 1
+    return m.start("law") + start
+
+
+# --- 직접 인용문 결합 --------------------------------------------------------------
+QUOTE_SPAN_RE = re.compile(r"[“\"]([^”\"\n]{10,600})[”\"]")
+# 문장 끝: "…다." "…함." "…판결)." 줄바꿈(문단). 날짜의 마침표("2003. 5.")는 끝이 아니다.
+_SENTENCE_END_RE = re.compile(r"(?<=[다음함임됨])\.(?=\s|$)|\)\.(?=\s|$)|\n")
+_CASE_TYPES = (CitationType.CASE, CitationType.CONSTITUTIONAL, CitationType.INTERPRETATION,
+               CitationType.ADMIN_APPEAL)
+
+
+def _sentences(text: str) -> List[Tuple[int, int]]:
+    """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
+    masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
+    bounds, start = [], 0
+    for end in _SENTENCE_END_RE.finditer(masked):
+        bounds.append((start, end.end()))
+        start = end.end()
+    if start < len(text):
+        bounds.append((start, len(text)))
+    return bounds
+
+
+def bind_quotes(text: str, citations: List[Citation]) -> None:
+    """직접 인용문을 그 출처 인용 하나에만 결합한다.
+
+    1) 같은 문장 안에서 인용문 바로 뒤의 괄호 출처 → 판례·결정을 법령보다 우선
+    2) 괄호 출처가 없으면 인용문 뒤 같은 문장의 첫 판례·결정
+    3) 그래도 없으면 인용문 앞 같은 문장의 가장 가까운 인용("…제27조는 "…"라고 규정")
+    같은 문장에 결합할 출처가 없으면 결합하지 않는다. 거리만 보고 가까운 인용에 붙이지 않는다.
+    """
+    for citation in citations:
+        citation.quoted_text = None
+    located = [c for c in citations if c.span]
+    if not located:
+        return
+    for s_start, s_end in _sentences(text):
+        for quote in QUOTE_SPAN_RE.finditer(text, s_start, s_end):
+            inside = [c for c in located if s_start <= c.span[0] < s_end]
+            after = sorted((c for c in inside if c.span[0] >= quote.end()), key=lambda c: c.span[0])
+            before = sorted((c for c in inside if c.span[1] <= quote.start()), key=lambda c: -c.span[1])
+            target = None
+            paren = re.match(r"[^(（]{0,40}?[(（]", text[quote.end():s_end])
+            if paren:
+                open_at = quote.end() + paren.end()
+                close = text.find(")", open_at, s_end)
+                close = close if close != -1 else s_end
+                in_paren = [c for c in after if open_at <= c.span[0] < close]
+                target = next((c for c in in_paren if c.type in _CASE_TYPES), in_paren[0] if in_paren else None)
+            if target is None:
+                target = next((c for c in after if c.type in _CASE_TYPES), None)
+            if target is None and before:
+                target = before[0]
+            if target is None:
+                continue
+            if target.quoted_text is None:
+                target.quoted_text = quote.group(1)
+            else:
+                target.attributes.setdefault("additional_quotes", []).append(quote.group(1))
 
 
 def _identity(citation: Citation) -> Tuple[Any, ...]:
@@ -370,68 +459,56 @@ def _identity(citation: Citation) -> Tuple[Any, ...]:
     )
 
 
-def _joined_pages(doc: NormalizedDocument) -> List[Tuple[str, List[Tuple[int, Any]]]]:
-    """페이지별로 줄 블록을 이어 붙인 텍스트와, 각 블록의 시작 위치를 만든다."""
-    pages: Dict[Any, List[Any]] = {}
-    for block in doc.body_blocks():
-        pages.setdefault(block.page, []).append(block)
-
-    out: List[Tuple[str, List[Tuple[int, Any]]]] = []
-    for blocks in pages.values():
-        parts: List[str] = []
-        offsets: List[Tuple[int, Any]] = []
-        cursor = 0
-        for block in blocks:
-            text = block.text.strip()
-            if not text:
-                continue
-            offsets.append((cursor, block))
-            parts.append(text)
-            cursor += len(text) + 1  # 이어 붙일 때 넣는 공백 한 칸
-        if parts:
-            out.append((" ".join(parts), offsets))
-    return out
-
-
-def _owner_block(offsets: List[Tuple[int, Any]], index: int) -> Any:
-    """이어 붙인 텍스트의 위치가 어느 블록에서 시작하는지 찾는다."""
-    owner = offsets[0][1] if offsets else None
-    for start, block in offsets:
-        if start > index:
-            break
-        owner = block
-    return owner
+def _cell_text(cell: str) -> str:
+    """표 칸 안 줄바꿈을 한국어 줄바꿈 규칙으로 잇는다("선\n고 2018두47215" → "선고 2018두47215")."""
+    lines = [line.strip() for line in str(cell or "").splitlines() if line.strip()]
+    text = ""
+    for line in lines:
+        text = (text + join_separator(text, line) + line) if text else line
+    return text.replace("\n", " ")
 
 
 def extract_citations(doc: NormalizedDocument) -> List[Citation]:
-    """본문(표시 텍스트·스캔본 OCR)에서 인용을 추출한다. 숨은 레이어는 적대적 콘텐츠로 별도 처리한다."""
+    """본문(표시 텍스트·스캔본 OCR)에서 인용을 추출한다. 숨은 레이어는 적대적 콘텐츠로 별도 처리한다.
+
+    줄 블록을 한 번에 이어 붙인 본문(머리글·바닥글 제외, 한국어 줄바꿈 결합)에서 한 번만 추출한다.
+    줄 단위와 쪽 단위로 두 번 훑으면 같은 인용이 범위만 달리해 두 번 잡히고(R11), 줄 단위로는
+    두 줄에 걸친 법원·선고일이 잘린다(R3). 위치는 인용이 시작하는 블록 기준으로 되돌린다.
+    표는 칸 단위로 따로 추출한다(칸 좌표가 인용 위치다).
+    """
+    ensure_running_heads(doc)
+    reading = build_reading_text(doc)
     out: List[Citation] = []
     seen: set = set()
-    for block in doc.body_blocks():
-        for citation in extract_from_text(
-            block.text, document_id=doc.document_id, block_id=block.block_id, page=block.page
-        ):
-            key = (_identity(citation), block.block_id, citation.span)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(citation)
+    for citation in extract_from_text(reading.text, document_id=doc.document_id):
+        if citation.span:
+            block, offset = reading.locate(citation.span[0])
+            if block is not None:
+                citation.block_id, citation.page = block.block_id, block.page
+                citation.attributes["reading_span"] = list(citation.span)
+                citation.span = (offset, offset + citation.span[1] - citation.span[0])
+        key = (_identity(citation), citation.block_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(citation)
 
-    # 줄바꿈으로 잘린 인용을 위해 페이지 단위로 이어 붙여 한 번 더 훑는다.
-    # PDF의 블록은 시각적 '줄'이므로 "홍길동, 『현대 계약법과 알고리즘 / 책임론』, 법문사, 2024"처럼
-    # 인용이 두 줄에 걸치면 블록 단위 검사로는 영원히 잡히지 않는다.
-    for joined, offsets in _joined_pages(doc):
-        for citation in extract_from_text(joined, document_id=doc.document_id, block_id=None, page=None):
-            owner = _owner_block(offsets, citation.span[0] if citation.span else 0)
-            if owner is not None:
-                start = next(start for start, block in offsets if block.block_id == owner.block_id)
-                citation.block_id = owner.block_id
-                citation.page = owner.page
-                if citation.span:
-                    citation.span = (citation.span[0] - start, citation.span[1] - start)
-            key = (_identity(citation), citation.block_id, citation.span)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(citation)
+    for block in doc.body_blocks():
+        if block.block_type != "table":
+            continue
+        rows = (block.attributes or {}).get("cells") or [line.split(" | ") for line in block.text.splitlines()]
+        for r_index, row in enumerate(rows):
+            for c_index, cell in enumerate(row):
+                text = _cell_text(cell)
+                if len(text) < 6:
+                    continue
+                for citation in extract_from_text(text, document_id=doc.document_id,
+                                                  block_id=block.block_id, page=block.page):
+                    citation.attributes["table_cell"] = {"table_ref": (block.attributes or {}).get("table_ref"),
+                                                         "row": r_index, "column": c_index}
+                    key = (_identity(citation), block.block_id, r_index)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(citation)
     return out

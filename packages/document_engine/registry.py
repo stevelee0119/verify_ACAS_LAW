@@ -11,6 +11,7 @@ from .base import DocumentParser, ParserError
 from .docx_parser import DocxParser
 from .hwp_parser import HwpParser, HwpxParser
 from .pdf_parser import PdfParser
+from .reading_text import ensure_running_heads
 from .simple_parsers import ImageParser, SpreadsheetParser, TextParser
 
 PARSERS: List[DocumentParser] = [
@@ -67,7 +68,10 @@ def parse_document(path: str, *, document_id: str, filename: str, mime_type: str
         doc.structure["unsupported_format"] = True
         return doc
     try:
-        return parser.parse(path, document_id=document_id, filename=filename, mime_type=mime, sha256=sha256)
+        doc = parser.parse(path, document_id=document_id, filename=filename, mime_type=mime, sha256=sha256)
+        # 여러 쪽에 반복되는 머리글·바닥글은 본문 분석에서 뺀다(block_type=running_head).
+        ensure_running_heads(doc)
+        return doc
     except Exception as exc:
         doc = NormalizedDocument(
             document_id=document_id,

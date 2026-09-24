@@ -38,7 +38,10 @@ def test_many_citations_and_three_documents_finish_during_source_outage(monkeypa
         [module.DocumentInput(identifier, "synthetic.txt", doc.filename) for identifier, doc in documents.items()],
         progress=lambda *event: events.append(event))
     assert result.state == JobState.PARTIAL_COMPLETED and not result.errors
-    assert len(requests) == 9  # Two bounded batches, then one deferred recovery probe.
+    # 판례 문서: 두 번의 제한된 묶음 + 보류 후 회복 확인 1회 = 9.
+    # 두 번째 문서의 "민법 제390조" 조회 3회(문서마다 조회 한도를 따로 둔다). 두 글자 법령명(민법·형법·헌법)이
+    # 예전 정규식에서 추출되지 않아 이 조회가 빠져 있었다.
+    assert len(requests) == 12
     assert len(result.documents) == 3
     assert len(result.documents[0].citations) == 46
     assert all(verdict["status"] == "UNVERIFIED" for verdict in result.documents[0].engine_data["legal_verdicts"])

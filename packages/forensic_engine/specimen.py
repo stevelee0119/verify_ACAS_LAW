@@ -120,7 +120,8 @@ def _search_units(doc: NormalizedDocument) -> List[Tuple[str, Any]]:
     """
     units: List[Tuple[str, Any]] = []
     pages: Dict[Any, List[Any]] = {}
-    for block in doc.body_blocks():
+    # 시험·예시 문서 고지는 바닥글에 있는 경우가 많다. 문서 성격 판단이므로 머리글·바닥글도 본다.
+    for block in doc.body_blocks(include_running_heads=True):
         units.append((compact(block.text), block))
         pages.setdefault(block.page, []).append(block)
     for blocks in pages.values():

@@ -140,18 +140,41 @@ class PdfParser(DocumentParser):
         # 전체에 한 번 해도 결과가 같다.
         signature_parts: List[str] = []
 
+        invisible: set = set()
+        covered: set = set()
+        if doc.structure.get("has_invisible_render_mode") or FILLED_SHAPE_RE.search(raw_bytes[:8_000_000]) \
+                or doc.structure.get("has_filled_shapes"):
+            try:
+                invisible, covered = _render_facts(path)
+            except Exception as exc:  # pragma: no cover - 파서 방어
+                doc.parse_warnings.append(f"렌더모드·가림 도형 확인 실패: {exc}")
         with pdfplumber.open(path) as pdf:
             doc.metadata.update({k: str(v) for k, v in (pdf.metadata or {}).items()})
             for index, page in enumerate(pdf.pages, start=1):
                 p = Page(page_number=index, width=float(page.width), height=float(page.height))
                 chars = page.chars or []
                 lines = self._group_chars_to_lines(chars)
+                # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.
+                scan_like = _image_coverage(page) >= 0.5
                 for line in lines:
                     text = "".join(c["text"] for c in line).strip()
                     if not text:
                         continue
                     bbox = self._line_bbox(line)
                     hidden_reason = self._hidden_reason(line, page)
+                    if hidden_reason is None and (invisible or covered):
+                        keys = [(index, round(float(c["x0"]), 1), round(float(c["y0"]), 1))
+                                for c in line if c["text"].strip()]
+                        threshold = max(1, 0.8 * len(keys))
+                        if invisible and not scan_like and sum(k in invisible for k in keys) >= threshold:
+                            hidden_reason = "INVISIBLE_RENDER_MODE"
+                        elif covered and sum(k in covered for k in keys) >= threshold:
+                            hidden_reason = "COVERED_BY_SHAPE"
+                    attributes = {
+                        "font": line[0].get("fontname"),
+                        "size": round(float(line[0].get("size", 0)), 2),
+                        "hidden_reason": hidden_reason,
+                    }
                     block = Block(
                         block_id=new_id("B"),
                         text=text,
@@ -160,11 +183,7 @@ class PdfParser(DocumentParser):
                         source_layer="hidden_text" if hidden_reason else "visible_text",
                         block_type="paragraph",
                         visible=not hidden_reason,
-                        attributes={
-                            "font": line[0].get("fontname"),
-                            "size": round(float(line[0].get("size", 0)), 2),
-                            "hidden_reason": hidden_reason,
-                        },
+                        attributes=attributes,
                     )
                     p.blocks.append(block)
                     raw_parts.append(text)
@@ -211,6 +230,12 @@ class PdfParser(DocumentParser):
                             )
                             continue
                         structure["representation"] = "TABLE_BLOCK"
+                        # 표 영역 안의 줄 블록은 여러 칸의 글자가 한 줄에 섞여 있다("…선는 재량권 남용…").
+                        # 문장 분석·인용 추출은 칸 구조가 살아 있는 표 블록으로 하고, 줄은 표의 줄로 표시한다.
+                        structure["line_block_ids"] = _link_lines_to_table(p.blocks, table_bbox, table_ref)
+                        for block in p.blocks:
+                            if block.block_id in structure["line_block_ids"] and block.visible:
+                                block.block_type = "table_line"
                         doc.structure.setdefault("tables", []).append(structure)
                         blk = Block(
                             block_id=new_id("B"),
@@ -501,6 +526,7 @@ class PdfParser(DocumentParser):
 
         doc.structure["embedded_stream_text"] = _extract_stream_text(raw)
         doc.structure["has_invisible_render_mode"] = _has_invisible_render_mode(raw)
+        doc.structure["has_filled_shapes"] = _has_filled_shapes(raw)
 
 
 def _decode_stream(chunk: bytes, filters: str) -> bytes:
@@ -540,6 +566,9 @@ def _decode_stream(chunk: bytes, filters: str) -> bytes:
 
 
 INVISIBLE_RENDER_MODE_RE = re.compile(rb"\b3\s+Tr\b")
+# 채움 도형 연산자(re f, re F, f*). 압축되지 않은 내용 스트림에서만 보이므로 _collect_pdf_structure의
+# 압축 해제 결과(has_filled_shapes)와 함께 쓴다.
+FILLED_SHAPE_RE = re.compile(rb"\bre\s+[fF]\*?\b")
 
 
 def _extract_stream_text(raw: bytes, limit: int = 200000) -> str:
@@ -564,6 +593,81 @@ def _extract_stream_text(raw: bytes, limit: int = 200000) -> str:
         if sum(len(s) for s in out) > limit:
             break
     return "".join(out)
+
+
+def _render_facts(path: str) -> Tuple[set, set]:
+    """글자마다 '보이지 않게 그려졌는지'와 '나중에 그린 흰 도형에 덮였는지'를 구한다.
+
+    반환: (렌더모드 3·7 글자 위치, 흰 채움 도형에 덮인 글자 위치). 위치는 (쪽, x0, y0) 반올림 값.
+    pdfplumber의 글자 정보에는 렌더모드와 그리기 순서가 없다. pdfminer가 글자·도형을 그리는 순서대로
+    배치 목록에 넣는 성질을 이용해, 글자보다 뒤에 그린 흰 채움 도형이 글자 중심을 덮으면 가려진 것으로 본다.
+    어두운 채움(검은 가림막)은 가림 처리(redaction) 점검이 따로 다룬다.
+    """
+    from pdfminer.converter import PDFPageAggregator
+    from pdfminer.layout import LAParams
+    from pdfminer.pdfinterp import PDFPageInterpreter, PDFResourceManager
+    from pdfminer.pdfpage import PDFPage
+
+    invisible: set = set()
+    covered: set = set()
+
+    class Device(PDFPageAggregator):
+        page_number = 0
+        mode = 0
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.chars: List[Tuple[int, Any]] = []
+            self.shapes: List[Tuple[int, Tuple[float, float, float, float]]] = []
+
+        def render_string(self, textstate, seq, ncs, graphicstate):
+            self.mode = getattr(textstate, "render", 0) or 0
+            return super().render_string(textstate, seq, ncs, graphicstate)
+
+        def render_char(self, *args, **kwargs):
+            advance = super().render_char(*args, **kwargs)
+            item = self.cur_item._objs[-1]
+            key = (self.page_number, round(item.x0, 1), round(item.y0, 1))
+            if self.mode in (3, 7):
+                invisible.add(key)
+            self.chars.append((len(self.cur_item._objs), item))
+            return advance
+
+        def paint_path(self, gstate, stroke, fill, evenodd, path):
+            before = len(self.cur_item._objs)
+            super().paint_path(gstate, stroke, fill, evenodd, path)
+            if fill and _is_white(getattr(gstate, "ncolor", None)):
+                for order, obj in enumerate(self.cur_item._objs[before:], start=before + 1):
+                    self.shapes.append((order, (obj.x0, obj.y0, obj.x1, obj.y1)))
+
+    manager = PDFResourceManager()
+    device = Device(manager, laparams=LAParams())
+    interpreter = PDFPageInterpreter(manager, device)
+    with open(path, "rb") as handle:
+        for number, page in enumerate(PDFPage.get_pages(handle), start=1):
+            device.page_number, device.chars, device.shapes = number, [], []
+            interpreter.process_page(page)
+            for order, item in device.chars:
+                cx, cy = (item.x0 + item.x1) / 2, (item.y0 + item.y1) / 2
+                if any(o > order and x0 <= cx <= x1 and y0 <= cy <= y1 for o, (x0, y0, x1, y1) in device.shapes):
+                    covered.add((number, round(item.x0, 1), round(item.y0, 1)))
+    return invisible, covered
+
+
+def _image_coverage(page: Any) -> float:
+    area = float(page.width) * float(page.height) or 1.0
+    covered = sum(max(0.0, float(i["x1"]) - float(i["x0"])) * max(0.0, float(i["bottom"]) - float(i["top"]))
+                  for i in (page.images or []))
+    return min(1.0, covered / area)
+
+
+def _has_filled_shapes(raw: bytes) -> bool:
+    """내용 스트림에 채움 사각형이 있는지(압축 해제 후). 가림 도형 점검을 할지 정하는 데만 쓴다."""
+    for m in re.finditer(rb"stream\r?\n(.*?)endstream", raw[:8_000_000], re.S):
+        header = raw[max(0, m.start() - 400) : m.start()]
+        if FILLED_SHAPE_RE.search(_decode_stream(m.group(1), header.decode("latin-1", "ignore"))):
+            return True
+    return False
 
 
 def _has_invisible_render_mode(raw: bytes) -> bool:
