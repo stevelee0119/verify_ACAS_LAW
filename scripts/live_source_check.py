@@ -382,7 +382,7 @@ async def check_model_catalog(include: bool) -> List[CheckResult]:
     out: List[CheckResult] = []
     async with httpx.AsyncClient(timeout=30) as client:
         for name, headers_of, pattern in (
-            ("openai", lambda key: {"Authorization": f"Bearer {key}"}, r"gpt-6|luna|gpt-5|gpt-4\.1"),
+            ("openai", lambda key: {"Authorization": f"Bearer {key}"}, r"gpt-6|luna|gpt-5\.6"),
             ("anthropic", lambda key: {"x-api-key": key, "anthropic-version": "2023-06-01"}, r"opus|sonnet"),
         ):
             provider = providers.get(name)
