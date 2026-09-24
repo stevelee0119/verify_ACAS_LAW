@@ -106,5 +106,13 @@
       "헬스체크에 DB 연결 상태 추가, DB 연결 불가·저장 공간 부족을 '데이터베이스 사용 불가'(503)로 안내",
       "README 버전별 변경표 자동 갱신(푸시 시 CI가 갱신)"
     ]
+  },
+  {
+    "version": "0.7.1",
+    "date": "2026-09-25",
+    "changes": [
+      "v4 P0 구현 감사: 합성 문서를 실제 파이프라인에 넣어 항목별 호출·finding·보고서·요약 점수 반영을 확인하는 감사표(docs/IMPLEMENTATION_AUDIT.md)와 생성 스크립트(scripts/implementation_audit.py)",
+      "검증 JSON에 실행 매니페스트(run_manifest): 엔진별 실행 여부·입력 건수·finding 수·소요 시간·건너뛴 사유"
+    ]
   }
 ]

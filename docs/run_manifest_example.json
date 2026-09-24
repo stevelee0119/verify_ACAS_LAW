@@ -1,0 +1,1081 @@
+{
+  "schema": 1,
+  "engines": {
+    "parsing": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 5,
+      "findings": 0,
+      "seconds": 1.756,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "TextParser"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "TextParser"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "TextParser"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.712,
+          "note": "PdfParser"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 1.044,
+          "note": "PdfParser"
+        }
+      ]
+    },
+    "ocr": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 4,
+      "inputs": 1,
+      "findings": 0,
+      "seconds": 0.0,
+      "skip_reasons": [
+        "쪽 단위 문서가 아님",
+        "모든 쪽에 텍스트 레이어가 있어 OCR 불필요"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "쪽 단위 문서가 아님"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "쪽 단위 문서가 아님"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "쪽 단위 문서가 아님"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "모든 쪽에 텍스트 레이어가 있어 OCR 불필요"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "adversarial_scan": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 71,
+      "findings": 7,
+      "seconds": 0.019,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 38,
+          "findings": 1,
+          "seconds": 0.007,
+          "note": "visible_text"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 7,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "visible_text"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 9,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "visible_text"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 14,
+          "findings": 6,
+          "seconds": 0.009,
+          "note": "annotation,hidden_text,visible_text"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 3,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "ocr_layer"
+        }
+      ]
+    },
+    "forensic_scan": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 8,
+      "seconds": 0.003,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 6,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 2,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "redaction_check": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.0,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "citation_extraction": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 59,
+      "findings": 0,
+      "seconds": 0.008,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 38,
+          "findings": 0,
+          "seconds": 0.007,
+          "note": "인용 9건"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 7,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "인용 0건"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 9,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "인용 0건"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 2,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "인용 0건"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 3,
+          "findings": 0,
+          "seconds": 0.0,
+          "note": "인용 1건"
+        }
+      ]
+    },
+    "citation_verification": {
+      "executed": true,
+      "runs": 2,
+      "skipped_runs": 3,
+      "inputs": 10,
+      "findings": 13,
+      "seconds": 0.044,
+      "skip_reasons": [
+        "인용이 없음"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 9,
+          "findings": 11,
+          "seconds": 0.043
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "인용이 없음"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "인용이 없음"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "인용이 없음"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 2,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "citation_format_check": {
+      "executed": true,
+      "runs": 2,
+      "skipped_runs": 3,
+      "inputs": 8,
+      "findings": 4,
+      "seconds": 0.0,
+      "skip_reasons": [
+        "판례·결정 인용이 없음"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 7,
+          "findings": 3,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "판례·결정 인용이 없음"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "판례·결정 인용이 없음"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "판례·결정 인용이 없음"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 1,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "semantic_review": {
+      "executed": false,
+      "runs": 0,
+      "skipped_runs": 5,
+      "inputs": 3,
+      "findings": 0,
+      "seconds": 0.005,
+      "skip_reasons": [
+        "AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.)",
+        "공식 원문으로 확인된 판례 인용이 없음"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 3,
+          "findings": 0,
+          "seconds": 0.005,
+          "skipped": "AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.)"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "공식 원문으로 확인된 판례 인용이 없음"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "공식 원문으로 확인된 판례 인용이 없음"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "공식 원문으로 확인된 판례 인용이 없음"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "공식 원문으로 확인된 판례 인용이 없음"
+        }
+      ]
+    },
+    "claim_entity_event_extraction": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 59,
+      "findings": 0,
+      "seconds": 0.015,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 38,
+          "findings": 0,
+          "seconds": 0.011,
+          "note": "주장 31·개체 12·사건 13"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 7,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "주장 5·개체 0·사건 3"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 9,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "주장 4·개체 2·사건 2"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 2,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "주장 2·개체 1·사건 1"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 3,
+          "findings": 0,
+          "seconds": 0.001,
+          "note": "주장 2·개체 2·사건 1"
+        }
+      ]
+    },
+    "attachment_evidence": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 4,
+      "findings": 3,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 4,
+          "findings": 3,
+          "seconds": 0.002
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "arithmetic": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 2,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 2,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "period_recalculation": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.0,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "timeline": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 20,
+      "findings": 0,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 13,
+          "findings": 0,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 3,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 2,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "legal_rules": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.003,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.002
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "evidence_consistency": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 3,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 3,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "claim_review": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 44,
+      "findings": 2,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 31,
+          "findings": 2,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 5,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 4,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 2,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 2,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "argument_validity": {
+      "executed": true,
+      "runs": 2,
+      "skipped_runs": 3,
+      "inputs": 10,
+      "findings": 6,
+      "seconds": 0.002,
+      "skip_reasons": [
+        "허위·미확인 판례에 기댄 주장이 없음"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 9,
+          "findings": 5,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "허위·미확인 판례에 기댄 주장이 없음"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "허위·미확인 판례에 기댄 주장이 없음"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "허위·미확인 판례에 기댄 주장이 없음"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 1,
+          "findings": 1,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "authorship": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.002
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "ai_detection": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 2,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 1,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 0,
+          "findings": 1,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "assertions_omissions": {
+      "executed": true,
+      "runs": 5,
+      "skipped_runs": 0,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.001
+        },
+        {
+          "document_id": "doc2",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc3",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc4",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        },
+        {
+          "document_id": "doc5",
+          "inputs": null,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "model_fact_reconcile": {
+      "executed": false,
+      "runs": 0,
+      "skipped_runs": 5,
+      "inputs": 0,
+      "findings": 0,
+      "seconds": 0.0,
+      "skip_reasons": [
+        "AI 모델의 사실 모순 지적이 없음"
+      ],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "AI 모델의 사실 모순 지적이 없음"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "AI 모델의 사실 모순 지적이 없음"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "AI 모델의 사실 모순 지적이 없음"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "AI 모델의 사실 모순 지적이 없음"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 0,
+          "findings": 0,
+          "seconds": 0.0,
+          "skipped": "AI 모델의 사실 모순 지적이 없음"
+        }
+      ]
+    },
+    "claim_contradiction": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 42,
+      "findings": 0,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 42,
+          "findings": 0,
+          "seconds": 0.001
+        }
+      ]
+    },
+    "cross_document_events": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 19,
+      "findings": 0,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 19,
+          "findings": 0,
+          "seconds": 0.001
+        }
+      ]
+    },
+    "internal_citation": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 4,
+      "findings": 0,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 4,
+          "findings": 0,
+          "seconds": 0.002
+        }
+      ]
+    },
+    "cross_document_copies": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 4,
+      "findings": 0,
+      "seconds": 0.0,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 4,
+          "findings": 0,
+          "seconds": 0.0
+        }
+      ]
+    },
+    "fact_store": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 4,
+      "findings": 3,
+      "seconds": 0.001,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 4,
+          "findings": 3,
+          "seconds": 0.001
+        }
+      ]
+    }
+  },
+  "not_executed": [
+    "semantic_review",
+    "model_fact_reconcile"
+  ],
+  "note": "findings는 각 단계가 결과 목록에 더한 건수(병합·중복 제거 전)다. executed=false는 그 엔진이 어떤 문서에서도 실행되지 않았다는 뜻이고, 사유는 skip_reasons에 있다."
+}

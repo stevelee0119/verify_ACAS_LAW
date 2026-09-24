@@ -59,6 +59,8 @@ def to_payload(run_result: Any, *, reveal_sealed: bool = False) -> dict:
         "unverified_items": run_result.unverified_items,
         "errors": run_result.errors,
         "input_snapshot": getattr(run_result, "input_snapshot", {}),
+        # 엔진별 실행 여부·입력·finding 수·시간·건너뛴 사유(v4 P0). '0건'이 '실행했는데 없음'인지 가른다.
+        "run_manifest": getattr(run_result, "run_manifest", {}) or {},
         "documents": [
             {
                 "document_id": d.document_id,

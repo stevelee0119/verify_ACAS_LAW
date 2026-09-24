@@ -78,6 +78,7 @@ class _RunView:
         self.errors = run.errors or []
         self.input_snapshot = run.input_snapshot or {}
         self.model_executions = (run.result_json or {}).get("model_executions", [])
+        self.run_manifest = (run.result_json or {}).get("run_manifest", {})
         self.documents = documents
         self.project_findings = [f for f in findings if not f.document_id]
         self._findings = findings

@@ -1,0 +1,64 @@
+"""합성 문서를 실제 검증 파이프라인에 넣어 결과·JSON·docx·요약 점수를 얻는다(v4 P0)."""
+from __future__ import annotations
+
+import hashlib
+import os
+import tempfile
+from pathlib import Path
+from typing import Any, Dict
+
+from . import synthetic_docs as S
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def run_synthetic(workdir: Path | None = None) -> Dict[str, Any]:
+    workdir = Path(workdir or tempfile.mkdtemp(prefix="lv-audit-"))
+    os.environ.setdefault("LV_DATA_DIR", str(workdir / "data"))
+    os.environ.setdefault("LV_DATABASE_URL", f"sqlite:///{workdir}/audit.db")
+    os.environ.setdefault("LV_STORAGE_ROOT", str(workdir / "storage"))
+    os.environ.setdefault("LV_PSEUDONYM_SECRET", "audit-secret")
+    os.environ["LV_ALLOW_NETWORK"] = "0"
+
+    from packages.pii_engine import PseudonymStore
+    from packages.source_adapters import SourceRegistry
+    from packages.source_adapters.local_mirror import LocalLegalMirror
+    from packages.verification_engine import pipeline as module
+    from packages.verification_engine.pipeline import DocumentInput, ProjectContext, VerificationPipeline
+
+    mirror = LocalLegalMirror(S.write_mirror(workdir / "mirror"))
+    registry = SourceRegistry()
+    registry.mirror = mirror
+    registry.legal[0].mirror = mirror
+    module.PseudonymStore = lambda project_id: PseudonymStore(project_id, root=workdir / "vault")
+
+    texts = S.write_texts(workdir / "docs")
+    pdf = S.write_injection_pdf(workdir / "docs" / "행정_의견서.pdf")
+    scan = S.write_scanned_pdf(workdir / "docs" / "형사_스캔서면.pdf")
+    inputs = [DocumentInput(f"doc{i}", str(path), path.name,
+                            "application/pdf" if path.suffix == ".pdf" else "text/plain", _sha(path))
+              for i, path in enumerate([*texts.values(), pdf, scan], start=1)]
+    pipeline = VerificationPipeline(registry=registry)
+    result = pipeline.run("audit-run", ProjectContext("audit-project"), inputs)
+
+    from packages.report_engine.docx_report import build_report_docx
+    from packages.report_engine.exporters import to_payload
+    payload = to_payload(result)
+    docx_text = ""
+    try:
+        from io import BytesIO
+
+        from docx import Document
+        data = build_report_docx(result)
+        document = Document(BytesIO(data))
+        parts = [p.text for p in document.paragraphs]
+        for table in document.tables:
+            for row in table.rows:
+                parts.extend(cell.text for cell in row.cells)
+        docx_text = "\n".join(parts)
+    except Exception as exc:  # 보고서 생성 실패도 감사 결과로 남긴다
+        docx_text = f"<docx 생성 실패: {type(exc).__name__}: {exc}>"
+    names = {d.document_id: d.filename for d in inputs}
+    return {"result": result, "payload": payload, "docx_text": docx_text, "names": names, "workdir": workdir}

@@ -77,6 +77,7 @@ from .ai_document_detector import create_ai_detector_findings, detect_ai_documen
 from .finalize import finalize_document_findings
 from packages.document_engine.reading_text import SPACE_MAP
 from .authorship import analyze_authorship, authorship_findings
+from .manifest import RunManifest
 from .scoring import aggregate_scores
 
 ENGINE_NAME = "verification_engine"
@@ -150,6 +151,7 @@ class VerificationRunResult:
     unavailable_sources: List[Dict[str, Any]] = field(default_factory=list)
     unverified_items: List[Dict[str, Any]] = field(default_factory=list)
     model_executions: List[Dict[str, Any]] = field(default_factory=list)
+    run_manifest: Dict[str, Any] = field(default_factory=dict)
     started_at: datetime = field(default_factory=datetime.utcnow)
     finished_at: Optional[datetime] = None
     errors: List[str] = field(default_factory=list)
@@ -249,13 +251,14 @@ class VerificationPipeline:
         )
         store = PseudonymStore(project_id=context.project_id)
         pii = PIIEngine(store)
+        manifest = RunManifest()
 
         total = max(1, len(documents))
         for index, document in enumerate(documents):
             base = 0.85 * index / total
             try:
                 document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
-                                                     source_run_id=run_id, run_inputs=documents)
+                                                     source_run_id=run_id, run_inputs=documents, manifest=manifest)
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
                 result.errors.append(f"{document.filename}: {exc}")
@@ -267,7 +270,7 @@ class VerificationPipeline:
 
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------
         emit(JobState.CROSS_CHECKING, "문서간 교차검증", 0.85)
-        result.project_findings.extend(self._cross_check(result))
+        result.project_findings.extend(self._cross_check(result, manifest))
         self.audit.record(
             AuditEventType.VERIFICATION,
             {"run_id": run_id, "stage": "CROSS_CHECKING", "document_count": len(documents)},
@@ -281,6 +284,7 @@ class VerificationPipeline:
         result.model_executions = [execution for d in result.documents
                                    for execution in d.engine_data.get("model_executions", [])]
         result.scores = aggregate_scores(result)
+        result.run_manifest = manifest.to_dict()
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )
@@ -319,7 +323,9 @@ class VerificationPipeline:
         *,
         source_run_id: Optional[str] = None,
         run_inputs: Optional[List[DocumentInput]] = None,
+        manifest: Optional[RunManifest] = None,
     ) -> DocumentResult:
+        manifest = manifest or RunManifest()
         if document.is_own_document is not None:
             from dataclasses import replace
             context = replace(context, counterparty_document=not document.is_own_document)
@@ -327,20 +333,32 @@ class VerificationPipeline:
 
         # 1) PARSING
         emit(JobState.PARSING, f"{document.filename} 파싱", base + span * 0.05)
-        doc = parse_document(
-            document.path,
-            document_id=document.document_id,
-            filename=document.filename,
-            mime_type=document.mime_type,
-            sha256=document.sha256,
-        )
+        with manifest.stage("parsing", result.findings, document_id=document.document_id) as stage:
+            doc = parse_document(
+                document.path,
+                document_id=document.document_id,
+                filename=document.filename,
+                mime_type=document.mime_type,
+                sha256=document.sha256,
+            )
+            stage.inputs = len(doc.pages)
+            stage.note = doc.parser_name
         result.normalized = doc
         result.warnings.extend(doc.parse_warnings)
         result.engine_data["page_coverage"] = doc.structure.get("page_coverage", [])
         result.unverified_items.extend({"kind": "page", "document_id": doc.document_id, **item}
             for item in doc.structure.get("page_coverage", []) if item["status"] in ("UNVERIFIED", "OCR_LOW_QUALITY"))
         # 쪽별 OCR 품질 미달(추가지시 G2). 읽은 글자로 검사는 하지만 그 쪽에 결함이 없다고 결론 내리지 않는다.
-        low_pages = [item for item in doc.structure.get("page_coverage", []) if item["status"] == "OCR_LOW_QUALITY"]
+        coverage = doc.structure.get("page_coverage", [])
+        low_pages = [item for item in coverage if item["status"] == "OCR_LOW_QUALITY"]
+        ocr_pages = [item for item in coverage if str(item.get("status", "")).startswith("OCR_")]
+        missing_pages = [item for item in coverage if item["status"] == "UNVERIFIED"]
+        with manifest.stage("ocr", result.findings, inputs=len(ocr_pages), document_id=document.document_id) as stage:
+            if not ocr_pages:
+                stage.skip_reason = ("글자를 읽지 못한 쪽이 있으나 OCR을 수행하지 못함" if missing_pages
+                                     else "모든 쪽에 텍스트 레이어가 있어 OCR 불필요" if coverage
+                                     else "쪽 단위 문서가 아님")
+            stage.note = f"저품질 {len(low_pages)}쪽" if low_pages else None
         if low_pages:
             pages = ", ".join(str(item["page"]) for item in low_pages[:20])
             reasons = "; ".join(f"{item['page']}면 " + ", ".join((item.get("ocr_quality") or {}).get("reasons") or [])
@@ -408,8 +426,11 @@ class VerificationPipeline:
 
         # 2) ADVERSARIAL_SCANNING — 반드시 모든 LLM 호출보다 먼저
         emit(JobState.ADVERSARIAL_SCANNING, f"{document.filename} 적대적 콘텐츠 검사", base + span * 0.2)
-        adversarial = self.adversarial.scan(doc)
-        result.findings.extend(adversarial.findings)
+        with manifest.stage("adversarial_scan", result.findings, inputs=len([b for p in doc.pages for b in p.blocks]),
+                            document_id=document.document_id) as stage:
+            adversarial = self.adversarial.scan(doc)
+            result.findings.extend(adversarial.findings)
+            stage.note = ",".join(adversarial.data.get("scanned_layers", []) or []) or None
         result.engine_data["adversarial"] = adversarial.data
         self.audit.record(
             AuditEventType.ADVERSARIAL_SCAN,
@@ -432,8 +453,9 @@ class VerificationPipeline:
             advisory=AdvisoryContext(requested_issues=context.requested_issues or None),
             source_path=document.path,
         )
-        forensic = self.forensic.scan(doc, forensic_context)
-        result.findings.extend(forensic.findings)
+        with manifest.stage("forensic_scan", result.findings, document_id=document.document_id):
+            forensic = self.forensic.scan(doc, forensic_context)
+            result.findings.extend(forensic.findings)
         result.engine_data["forensic"] = {k: v for k, v in forensic.data.items() if k != "llm_safe_summary"}
         result.engine_data["forensic_llm_safe"] = forensic.data.get("llm_safe_summary", [])
 
@@ -467,20 +489,42 @@ class VerificationPipeline:
         # 비식별화 산출물에도 마스킹 실패 검사를 반복 적용한다(제7-A.2장)
         from packages.forensic_engine.redaction import scan_redaction
 
-        result.findings.extend(scan_redaction(doc))
+        with manifest.stage("redaction_check", result.findings, document_id=document.document_id):
+            result.findings.extend(scan_redaction(doc))
 
         # 6) VERIFYING — 인용 검증(결정론 우선)
         emit(JobState.VERIFYING, f"{document.filename} 인용 항목 추출", base + span * 0.55)
-        citations = extract_citations(doc)
-        result.citations = [c.to_dict() for c in citations]
-        self._legal_reviews(result, citations, context, progress=lambda done, total: emit(
-            JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
-            base + span * (0.55 + 0.20 * done / max(1, total))))
+        with manifest.stage("citation_extraction", [], document_id=document.document_id) as stage:
+            citations = extract_citations(doc)
+            result.citations = [c.to_dict() for c in citations]
+            stage.inputs = len(doc.body_blocks())
+            stage.note = f"인용 {len(citations)}건"
+        with manifest.stage("citation_verification", result.findings, inputs=len(citations),
+                            document_id=document.document_id) as stage:
+            if not citations:
+                stage.skip_reason = "인용이 없음"
+            self._legal_reviews(result, citations, context, progress=lambda done, total: emit(
+                JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
+                base + span * (0.55 + 0.20 * done / max(1, total))))
+        # 형식 검사(날짜·법원–사건부호·연도)는 인용 검증 안에서 DB 조회와 무관하게 실행된다. 따로 센다.
+        with manifest.stage("citation_format_check", [], document_id=document.document_id,
+                            inputs=sum(1 for c in citations if c.type in (CitationType.CASE, CitationType.CONSTITUTIONAL))) as stage:
+            stage.findings = sum(1 for v in result.engine_data.get("legal_verdicts", [])
+                                 if (v.get("review") or {}).get("format_violations"))
+            if not stage.inputs:
+                stage.skip_reason = "판례·결정 인용이 없음"
         self._attach_reference_dates(result, doc, context)
         emit(JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토", base + span * 0.75)
-        self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
-            JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
-            base + span * (0.75 + 0.05 * done / max(1, total))))
+        with manifest.stage("semantic_review", result.findings, document_id=document.document_id) as stage:
+            self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
+                JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
+                base + span * (0.75 + 0.05 * done / max(1, total))))
+            reviews = result.engine_data.get("semantic_reviews", [])
+            stage.inputs = len(reviews)
+            if not reviews:
+                stage.skip_reason = "공식 원문으로 확인된 판례 인용이 없음"
+            elif not any(r.get("model_executed") for r in reviews):
+                stage.skip_reason = sorted({r.get("reason", "") for r in reviews})[0] or "AI 검토를 수행하지 않음"
         # 출처 조회 기록은 한 문서에 수천 건이 나온다. 건수는 줄이지 않되
         # 한 번에 잇는다. 건마다 트랜잭션을 열면 그 쓰기가 DB 쓰기 잠금을
         # 독차지해 임차 갱신이 밀리고, 작업이 정상 실행 중에 회수된다.
@@ -494,15 +538,20 @@ class VerificationPipeline:
 
         # 7) Claim / Entity / Event / 계산 검증
         emit(JobState.VERIFYING, f"{document.filename} 주장·사건·금액 분석", base + span * 0.81)
-        claims = extract_claims(doc, citations, project_id=context.project_id, source_run_id=source_run_id)
-        entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
-                                    project_id=context.project_id)
-        events = extract_events(doc, project_id=context.project_id, source_run_id=source_run_id)
+        with manifest.stage("claim_entity_event_extraction", [], document_id=document.document_id) as stage:
+            claims = extract_claims(doc, citations, project_id=context.project_id, source_run_id=source_run_id)
+            entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
+                                        project_id=context.project_id)
+            events = extract_events(doc, project_id=context.project_id, source_run_id=source_run_id)
+            stage.inputs = len(doc.body_blocks())
+            stage.note = f"주장 {len(claims)}·개체 {len(entities)}·사건 {len(events)}"
         # 문서가 근거로 든 첨부·증거를 입력 파일과 대조하고, 관련 주장에 그 상태를 붙인다.
         uploads = [{"document_id": d.document_id, "filename": d.filename, "sha256": d.sha256}
                    for d in (run_inputs or [document])]
-        attachments = analyze_attachments(doc, uploads, claims)
-        result.findings.extend(attachments.pop("findings"))
+        with manifest.stage("attachment_evidence", result.findings, document_id=document.document_id) as stage:
+            attachments = analyze_attachments(doc, uploads, claims)
+            result.findings.extend(attachments.pop("findings"))
+            stage.inputs = len(attachments.get("items", []))
         result.engine_data["attachments"] = attachments
         result.engine_data["tables"] = [
             {k: v for k, v in table.items() if k != "cells"} | {"parsed": bool(table.get("cells"))}
@@ -511,23 +560,31 @@ class VerificationPipeline:
         result.claims = [c.to_dict() for c in claims]
         result.entities = [e.to_dict() for e in entities]
         result.events = [e.to_dict() for e in events]
-        result.findings.extend(self.calculation.verify_document(doc))
+        with manifest.stage("arithmetic", result.findings, document_id=document.document_id):
+            result.findings.extend(self.calculation.verify_document(doc))
         # 날짜 구간 일수·기간 경과 만료일 재계산(추가지시 G5)
-        try:
-            result.findings.extend(check_periods(doc))
-        except Exception as exc:  # pragma: no cover - 방어
-            result.warnings.append(f"기간 재계산 경고: {exc}")
-        result.findings.extend(analyze_timeline(events))
+        with manifest.stage("period_recalculation", result.findings, document_id=document.document_id) as stage:
+            try:
+                result.findings.extend(check_periods(doc))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"기간 재계산 경고: {exc}")
+        with manifest.stage("timeline", result.findings, inputs=len(events), document_id=document.document_id):
+            result.findings.extend(analyze_timeline(events))
         # 법리 규칙 검토: 공식 원문 근거로 청구취지·주장의 형태를 점검한다(v2 Phase 6).
-        try:
-            result.findings.extend(review_legal_rules(doc))
-        except Exception as exc:  # pragma: no cover - 방어
-            result.warnings.append(f"법리 규칙 검토 경고: {exc}")
+        with manifest.stage("legal_rules", result.findings, document_id=document.document_id) as stage:
+            try:
+                result.findings.extend(review_legal_rules(doc))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"법리 규칙 검토 경고: {exc}")
         # 증거 정합성: 호증 목록의 작성일·결번·인적사항, 진술서 형식(v2 R9)
-        try:
-            result.findings.extend(check_evidence_consistency(doc))
-        except Exception as exc:  # pragma: no cover - 방어
-            result.warnings.append(f"증거 정합성 점검 경고: {exc}")
+        with manifest.stage("evidence_consistency", result.findings, document_id=document.document_id) as stage:
+            try:
+                result.findings.extend(check_evidence_consistency(doc))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"증거 정합성 점검 경고: {exc}")
 
         # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다.
         mask_for_models = (None if context.external_ai_policy == ExternalAIPolicy.ORIGINAL
@@ -535,105 +592,127 @@ class VerificationPipeline:
 
         # 법리 주장 검토: 주장 유형 분류 → 근거 조회 → 판단(추가지시 G4). 조문 요건 대조에는 위에서 조회한
         # 공식 조문 원문을, 위헌 주장에는 헌재 결정 이력을 쓴다. 기존 규칙이 이미 판정한 문장은 다시 보지 않는다.
-        try:
-            judged = [str((f.confidence_features or {}).get("claim") or "") for f in result.findings
-                      if f.engine == "legal_engine.legal_rules"]
-            result.findings.extend(review_claims(
-                doc, lookup=getattr(self.registry.law, "constitutional_history", None),
-                provisions=provision_texts(result.engine_data.get("legal_verdicts", []), citations),
-                skip_sentences=judged))
-        except Exception as exc:  # pragma: no cover - 방어
-            result.warnings.append(f"법리 주장 검토 경고: {exc}")
+        with manifest.stage("claim_review", result.findings, inputs=len(claims), document_id=document.document_id) as stage:
+            try:
+                judged = [str((f.confidence_features or {}).get("claim") or "") for f in result.findings
+                          if f.engine == "legal_engine.legal_rules"]
+                result.findings.extend(review_claims(
+                    doc, lookup=getattr(self.registry.law, "constitutional_history", None),
+                    provisions=provision_texts(result.engine_data.get("legal_verdicts", []), citations),
+                    skip_sentences=judged))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"법리 주장 검토 경고: {exc}")
 
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
         emit(JobState.VERIFYING, f"{document.filename} 법률 주장 타당성 검토", base + span * 0.85)
-        try:
-            arg_validity = asyncio.run(
-                verify_argument_validity(
-                    doc,
-                    citations,
-                    result.engine_data.get("legal_verdicts", []),
-                    claims,
-                    router=self.router,
-                    external_ai_policy=context.external_ai_policy,
-                    mask=mask_for_models,
-                )
-            )
-            result.findings.extend(arg_validity.findings)
-            result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
-            result.argument_validity_summary = arg_validity.overall_validity_summary
-            result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
-            result.engine_data["argument_validity_summary"] = result.argument_validity_summary
-        except Exception as e:
-            result.warnings.append(f"법률 주장 타당성 검토 경고: {e}")
+        with manifest.stage("argument_validity", result.findings, inputs=len(citations), document_id=document.document_id) as stage:
+            try:
+              arg_validity = asyncio.run(
+                  verify_argument_validity(
+                      doc,
+                      citations,
+                      result.engine_data.get("legal_verdicts", []),
+                      claims,
+                      router=self.router,
+                      external_ai_policy=context.external_ai_policy,
+                      mask=mask_for_models,
+                  )
+              )
+              result.findings.extend(arg_validity.findings)
+              result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
+              result.argument_validity_summary = arg_validity.overall_validity_summary
+              result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
+              result.engine_data["argument_validity_summary"] = result.argument_validity_summary
+              if not arg_validity.rows:
+                  stage.skip_reason = "허위·미확인 판례에 기댄 주장이 없음"
+            except Exception as e:
+              stage.error = type(e).__name__
+              result.warnings.append(f"법률 주장 타당성 검토 경고: {e}")
 
         # 9) 작성자 분석 및 AI 문서 전체 생성 여부 심층 판별
         emit(JobState.VERIFYING, f"{document.filename} 작성 이력 분석", base + span * 0.9)
-        assessment = analyze_authorship(doc)
-        result.authorship = assessment.to_dict()
-        result.findings.extend(authorship_findings(doc, assessment))
+        with manifest.stage("authorship", result.findings, document_id=document.document_id):
+            assessment = analyze_authorship(doc)
+            result.authorship = assessment.to_dict()
+            result.findings.extend(authorship_findings(doc, assessment))
 
         # 메타데이터 AI 힌트 여부
         metadata_hint = bool(assessment.signals.get("provenance_metadata")) or any(
             f.type == FindingType.METADATA_ANOMALY for f in result.findings
         )
         emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
-        try:
-            ai_detector_res = asyncio.run(
-                detect_ai_document(
-                    doc,
-                    result.findings,
-                    router=self.router,
-                    external_ai_policy=context.external_ai_policy,
-                    metadata_indications=metadata_hint,
-                    mask=mask_for_models,
-                    # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
-                    exclude_texts=[str((f.confidence_features or {}).get("observed_text") or "")
-                                   for f in result.findings
-                                   if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only],
-                    exclude_block_ids=[block_id for f in result.findings
-                                       if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only
-                                       for block_id in ((f.confidence_features or {}).get("block_ids")
-                                                        or ([f.block_id] if f.block_id else []))],
-                )
-            )
-            result.ai_detector_result = ai_detector_res.to_dict()
-            result.engine_data["ai_detector_result"] = result.ai_detector_result
-            result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
-        except Exception as e:
-            result.warnings.append(f"AI 문서 생성 판별 경고: {e}")
+        with manifest.stage("ai_detection", result.findings, document_id=document.document_id) as stage:
+            try:
+              ai_detector_res = asyncio.run(
+                  detect_ai_document(
+                      doc,
+                      result.findings,
+                      router=self.router,
+                      external_ai_policy=context.external_ai_policy,
+                      metadata_indications=metadata_hint,
+                      mask=mask_for_models,
+                      # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
+                      exclude_texts=[str((f.confidence_features or {}).get("observed_text") or "")
+                                     for f in result.findings
+                                     if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only],
+                      exclude_block_ids=[block_id for f in result.findings
+                                         if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only
+                                         for block_id in ((f.confidence_features or {}).get("block_ids")
+                                                          or ([f.block_id] if f.block_id else []))],
+                  )
+              )
+              result.ai_detector_result = ai_detector_res.to_dict()
+              result.engine_data["ai_detector_result"] = result.ai_detector_result
+              result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
+              opinions = (result.ai_detector_result or {}).get("model_opinions") or []
+              stage.inputs = len(opinions)
+              if not any(o.get("available", True) for o in opinions if isinstance(o, dict)) and opinions:
+                  stage.note = "AI 모델 의견 없음(규칙 기반 신호만)"
+            except Exception as e:
+              stage.error = type(e).__name__
+              result.warnings.append(f"AI 문서 생성 판별 경고: {e}")
 
         # 10) 명세 v1.0 제1.2장: 초안 흔적, 불확실성 미고지, 과잉 일반화, 출처 위계
         #     확신 표현 자체는 결함이 아니다. 원문을 확보하지 못한 채 그렇게 쓴 것이
         #     결함이므로, 미검증 인용 목록을 함께 넘긴다.
         emit(JobState.VERIFYING, f"{document.filename} 표현·검토 누락 검사", base + span * 0.96)
-        try:
-            # 불확실성 미고지는 최종 판정이 NOT_FOUND·UNVERIFIED인 인용에만 낸다(v3 D5). 원문을 조회해 불일치까지
-            # 판정한 인용에 "원문 미확보 상태에서 확정적으로 서술"을 함께 내면 서로 모순된다.
-            unverified_ids = {v.get("citation_id") for v in result.engine_data.get("legal_verdicts", [])
-                              if v.get("status") in ("NOT_FOUND", "UNVERIFIED")}
-            unverified_ids |= {item.get("citation_id") for item in result.unverified_items
-                               if item.get("kind") == "citation" and item.get("status") == "UNVERIFIED"}
-            unverified_citations = [c for c in citations if c.citation_id in unverified_ids]
-            # 인용 원문(raw_text)은 NBSP를 일반 공백으로 바꾼 읽기 본문에서 뽑았으므로 같은 기준으로 맞춘다.
-            body = "\n".join(block.text for page in doc.pages for block in page.blocks
-                              if block.source_layer == "visible_text" and block.text).translate(SPACE_MAP)
-            result.findings.extend(analyze_assertions(
-                body, citations=citations, unverified_citations=unverified_citations,
-                document_id=doc.document_id,
-            ))
-            # 제7.2장 누락 탐지. 결론을 확정하지 않고 누락 후보만 제시한다.
-            reports = analyze_omissions(body)
-            result.engine_data["omission_reports"] = [r.to_dict() for r in reports]
-            result.findings.extend(omission_findings(reports, document_id=doc.document_id))
-        except Exception as e:
-            result.warnings.append(f"표현·초안흔적 검사 경고: {e}")
+        with manifest.stage("assertions_omissions", result.findings, document_id=document.document_id) as stage:
+            try:
+              # 불확실성 미고지는 최종 판정이 NOT_FOUND·UNVERIFIED인 인용에만 낸다(v3 D5). 원문을 조회해 불일치까지
+              # 판정한 인용에 "원문 미확보 상태에서 확정적으로 서술"을 함께 내면 서로 모순된다.
+              unverified_ids = {v.get("citation_id") for v in result.engine_data.get("legal_verdicts", [])
+                                if v.get("status") in ("NOT_FOUND", "UNVERIFIED")}
+              unverified_ids |= {item.get("citation_id") for item in result.unverified_items
+                                 if item.get("kind") == "citation" and item.get("status") == "UNVERIFIED"}
+              unverified_citations = [c for c in citations if c.citation_id in unverified_ids]
+              # 인용 원문(raw_text)은 NBSP를 일반 공백으로 바꾼 읽기 본문에서 뽑았으므로 같은 기준으로 맞춘다.
+              body = "\n".join(block.text for page in doc.pages for block in page.blocks
+                                if block.source_layer == "visible_text" and block.text).translate(SPACE_MAP)
+              result.findings.extend(analyze_assertions(
+                  body, citations=citations, unverified_citations=unverified_citations,
+                  document_id=doc.document_id,
+              ))
+              # 제7.2장 누락 탐지. 결론을 확정하지 않고 누락 후보만 제시한다.
+              reports = analyze_omissions(body)
+              result.engine_data["omission_reports"] = [r.to_dict() for r in reports]
+              result.findings.extend(omission_findings(reports, document_id=doc.document_id))
+            except Exception as e:
+              stage.error = type(e).__name__
+              result.warnings.append(f"표현·초안흔적 검사 경고: {e}")
 
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
         # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
-        result.findings = reconcile_model_fact_remarks(result.findings)
+        with manifest.stage("model_fact_reconcile", [], document_id=document.document_id) as stage:
+            remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
+            stage.inputs = len(remarks)
+            result.findings = reconcile_model_fact_remarks(result.findings)
+            stage.findings = sum(1 for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK
+                                 and f.status == VerificationStatus.CONTRADICTED)
+            if not remarks:
+                stage.skip_reason = "AI 모델의 사실 모순 지적이 없음"
         statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
         result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
@@ -816,7 +895,7 @@ class VerificationPipeline:
             progress(len(verdicts), len(verdicts))
 
     # -- 프로젝트 단위 ----------------------------------------------------
-    def _cross_check(self, result: VerificationRunResult) -> List[Finding]:
+    def _cross_check(self, result: VerificationRunResult, manifest: Optional[RunManifest] = None) -> List[Finding]:
         from dataclasses import fields
         import json
 
@@ -831,13 +910,25 @@ class VerificationPipeline:
                 events_by_document[document.document_id] = events
             claims.extend(Claim(**{key: value for key, value in raw.items() if key in claim_fields})
                           for raw in document.claims)
-        candidates = claim_contradictions(claims, project_id=result.project_id)
-        candidates.extend(cross_document_contradictions(events_by_document))
-        candidates.extend(self._internal_citation_check(result))
+        manifest = manifest or RunManifest()
         readable = [d.normalized for d in result.documents if not d.quarantined and d.normalized is not None]
-        candidates.extend(cross_document_copies(readable))
-        # 사건 단위 사실 저장소: 신체 부위 좌·우, 사고일, 청구금액의 문서 간 불일치(추가지시 G5)
-        candidates.extend(cross_document_facts(readable))
+        candidates: List[Finding] = []
+        with manifest.stage("claim_contradiction", candidates, inputs=len(claims)):
+            candidates.extend(claim_contradictions(claims, project_id=result.project_id))
+        with manifest.stage("cross_document_events", candidates,
+                            inputs=sum(len(v) for v in events_by_document.values())) as stage:
+            if len(events_by_document) < 2:
+                stage.skip_reason = "사건(날짜)을 추출한 문서가 2건 미만"
+            candidates.extend(cross_document_contradictions(events_by_document))
+        with manifest.stage("internal_citation", candidates, inputs=len(readable)):
+            candidates.extend(self._internal_citation_check(result))
+        with manifest.stage("cross_document_copies", candidates, inputs=len(readable)) as stage:
+            if len(readable) < 2:
+                stage.skip_reason = "읽을 수 있는 문서가 2건 미만"
+            candidates.extend(cross_document_copies(readable))
+        # 사건 단위 사실 저장소: 문서 간·문서 안 섹션 간 사실 불일치(추가지시 G5, v4 P1)
+        with manifest.stage("fact_store", candidates, inputs=len(readable)) as stage:
+            candidates.extend(cross_document_facts(readable))
         findings, seen = [], set()
         for finding in candidates:
             features = finding.confidence_features
