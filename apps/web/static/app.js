@@ -402,6 +402,9 @@ function authorshipVerdict(verdict) {
 function modelOpinions(opinions, failures, failureModels = {}) {
   const box = node("div", null, "model-opinions");
   box.append(node("h4", `모델별 판정 (${opinions.length}개 응답${failures.length ? ` · ${failures.length}개 불참` : ""})`));
+  // 넓은 화면에서는 모델 블록을 가로로 나란히 둔다.
+  const grid = node("div", null, "model-opinions-list");
+  box.append(grid);
   for (const o of opinions) {
     const [verdictLabel, badgeClass] = authorshipVerdict(o.verdict);
     const block = node("div", null, "model-opinion");
@@ -413,16 +416,76 @@ function modelOpinions(opinions, failures, failureModels = {}) {
     for (const r of o.reasons || []) list.append(node("li", r));
     if (!(o.reasons || []).length) list.append(node("li", "설명 없음", "muted"));
     block.append(list);
-    box.append(block);
+    grid.append(block);
   }
   for (const [provider, why] of failures) {
     const block = node("div", null, "model-opinion model-opinion-failed");
     const head = node("div", null, "model-opinion-head");
     head.append(node("strong", modelTitle(provider, failureModels[provider])), node("span", "응답 없음", "badge INFO"));
     block.append(head, node("p", why, "muted"));
-    box.append(block);
+    grid.append(block);
   }
   return box;
+}
+
+const LAYER_NAMES = {visible_text: "본문", ocr_layer: "OCR 인식 글자", hidden_text: "숨김 글자", metadata: "문서 속성(메타데이터)",
+                     annotation: "주석", comment: "메모", form_field: "입력란", image_alt: "이미지 설명"};
+const RISK_NAMES = {CRITICAL: "매우 높음", HIGH: "높음", MEDIUM: "보통", LOW: "낮음", NONE: "없음"};
+const INJECTION_CHECKS = ["본문·숨김 글자의 지시형 문구(AI에게 판단을 바꾸라는 명령)", "문서 속성(메타데이터)의 지시문",
+  "보이지 않는 유니코드 문자", "Base64 등으로 감춘 문자열", "화면 글자와 내부 글자 층의 불일치", "이미지·OCR 층의 지시문"];
+
+// 프롬프트 인젝션 판정 근거: 무엇을 검사했고, 무엇이 나왔고, 왜 그 결론인지 문서별로 보인다.
+function injectionCard(docs, hasQuarantine) {
+  const card = node("div", null, "summary-card summary-card-wide");
+  card.append(node("h3", "프롬프트 인젝션 속임수 검증"));
+  if (!state.run || !docs.length) {
+    card.append(node("p", state.run ? "검증 완료 후 결과를 표시합니다." : "미실행", "muted"));
+    return card;
+  }
+  card.append(hasQuarantine
+    ? node("p", "경고: AI 판단을 왜곡하려는 지시문이 탐지되어 해당 문서를 격리(QUARANTINED)했습니다. 격리된 문서는 AI 검토에 쓰지 않습니다.", "danger-text")
+    : node("p", "정상: 문서를 왜곡하려는 악의적 프롬프트 인젝션이 발견되지 않았습니다.", "safe-text"));
+  const basis = node("div", null, "injection-basis");
+  basis.append(node("h4", "판정 근거"));
+  basis.append(node("p", `검사 항목: ${INJECTION_CHECKS.join(" · ")}. 격리 기준: 기계 지시문 중 심각도 높음 이상이 1건이라도 있으면 격리합니다.`, "muted"));
+  for (const d of docs) {
+    const adversarial = d.engine_data?.adversarial || {};
+    const found = (d.findings || []).filter(f => f.engine === "adversarial_engine");
+    const block = node("div", null, "injection-doc");
+    const layers = (adversarial.scanned_layers || []).map(l => LAYER_NAMES[l] || l).join(", ") || "기록 없음";
+    block.append(node("strong", d.filename || "문서"),
+      node("p", `검사한 층: ${layers} · 탐지 후보 ${found.length}건 · 위험도 ${RISK_NAMES[adversarial.adversarial_risk] || adversarial.adversarial_risk || "기록 없음"} · ${d.quarantined ? "격리됨" : "격리 안 함"}`));
+    if (found.length) {
+      const list = node("ul", null, "reason-list");
+      for (const f of found) {
+        const where = f.page ? `${f.page}면 · ` : "";
+        list.append(node("li", `${where}${friendlyText(f.title || label(f.type))} (심각도 ${f.severity}) — ${friendlyText(f.detail || "")}`));
+      }
+      block.append(list);
+    } else {
+      block.append(node("p", "위 항목 어디에서도 지시형 문구나 감춘 문자열이 발견되지 않았습니다.", "muted"));
+    }
+    basis.append(block);
+  }
+  card.append(basis);
+  return card;
+}
+
+function renderHallucinationSummary(rows) {
+  const summary = $("hallucinationSummary");
+  if (!summary) return;
+  if (!state.run) { summary.textContent = "미실행"; summary.className = "muted"; return; }
+  if (!rows.length) {
+    summary.textContent = "공식 소스에서 확인되지 않는 판례가 발견되지 않았습니다.";
+    summary.className = "safe-text";
+    return;
+  }
+  const count = basis => rows.filter(r => (r.basis || "UNCONFIRMED") === basis).length;
+  const parts = [["성립할 수 없는 사건번호", count("FABRICATION_SUSPECTED")], ["인용 내용 불일치", count("CONTENT_MISMATCH")],
+                 ["공식 DB 미확인", count("UNCONFIRMED")]].filter(([, n]) => n).map(([name, n]) => `${name} ${n}건`);
+  summary.textContent = `공식 법원 DB에서 확인되지 않는 판례와 이를 전제로 한 주장이 총 ${rows.length}건입니다(${parts.join(", ")}). ` +
+    "공식 DB 미확인은 부존재를 뜻하지 않으므로 아래 표의 근거와 대응 방안을 함께 확인하세요.";
+  summary.className = "warning-text";
 }
 
 function filteredDocuments() {
@@ -884,7 +947,8 @@ function renderAIVerification() {
   }
 
   // AI 종합 요약 카드 렌더링
-  const card1 = node("div", null, "summary-card");
+  // 설명이 길어 가로 전체 폭을 쓴다(좁은 화면에서는 그대로 세로로 쌓인다).
+  const card1 = node("div", null, "summary-card summary-card-wide");
   card1.append(node("h3", "문서 AI 생성 여부 진단"));
   if (detectorResults.length > 0) {
     for (const res of detectorResults) {
@@ -912,25 +976,9 @@ function renderAIVerification() {
     card1.append(node("p", state.run ? "검증 완료 후 분석 결과를 표시합니다." : "검증을 시작하면 AI 작성 여부를 진단합니다.", "muted"));
   }
 
-  const card2 = node("div", null, "summary-card");
-  card2.append(node("h3", "허위 판례(할루시네이션) 발견"));
-  if (allRows.length > 0) {
-    card2.append(
-      node("p", `공식 법원 DB에서 확인되지 않는 판례 및 이를 전제로 한 주장이 총 ${allRows.length}건 발견되었습니다.`, "warning-text")
-    );
-  } else {
-    card2.append(node("p", state.run ? "공식 소스에서 확인되지 않는 허위 판례가 발견되지 않았습니다." : "미실행", "safe-text"));
-  }
-
-  const card3 = node("div", null, "summary-card");
-  card3.append(node("h3", "프롬프트 인젝션 속임수 검증"));
-  if (hasQuarantine) {
-    card3.append(node("p", "경고: 프롬프트 인젝션 등 AI 판단 왜곡 시도가 탐지되어 격리(QUARANTINED)되었습니다.", "danger-text"));
-  } else {
-    card3.append(node("p", state.run ? "정상: 문서를 왜곡하려는 악의적 프롬프트 인젝션이 발견되지 않았습니다." : "미실행", "safe-text"));
-  }
-
-  cardsContainer.append(card1, card2, card3);
+  // 허위 판례는 별도 카드로 두지 않고 아래 세부 대조표의 머리에 요약한다(중복 방지).
+  renderHallucinationSummary(allRows);
+  cardsContainer.append(card1, injectionCard(docs, hasQuarantine));
 
   // 테이블 렌더링
   if (allRows.length === 0) {

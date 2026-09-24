@@ -44,8 +44,18 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
            "input_snapshot": {"scope_revision": 0}, "started_at": "2026-09-23T00:00:00"}
     project = {"id": "p1", "name": "시험 사건", "can_delete": True, "document_count": 2,
                "external_ai_policy": "MASKED", "scope_revision": 0}
-    result = {"documents": [{"filename": "first.png", "ai_detector_result": DETECTOR},
-                            {"filename": "second.png", "ai_detector_result": SINGLE}]}
+    result = {"documents": [
+        {"filename": "first.png", "ai_detector_result": DETECTOR, "quarantined": False,
+         "engine_data": {"adversarial": {"scanned_layers": ["visible_text", "metadata"], "adversarial_risk": "NONE"}},
+         "findings": [], "ai_hallucination_table": [
+             {"location": "2면", "cited_authority": "대법원 2099다1 판결", "basis": "FABRICATION_SUSPECTED",
+              "claim_text": "c", "ai_generation_basis": "b", "legal_reasoning": "r", "validity_verdict": "근거 결여"},
+             {"location": "3면", "cited_authority": "대법원 2011모1839 결정", "basis": "UNCONFIRMED",
+              "claim_text": "c", "ai_generation_basis": "b", "legal_reasoning": "r", "validity_verdict": "공식 DB 미확인"}]},
+        {"filename": "second.png", "ai_detector_result": SINGLE, "quarantined": True,
+         "engine_data": {"adversarial": {"scanned_layers": ["visible_text", "hidden_text"], "adversarial_risk": "HIGH"}},
+         "findings": [{"engine": "adversarial_engine", "type": "HIDDEN_INSTRUCTION", "severity": "HIGH", "page": 1,
+                       "title": "숨김 지시문 후보", "detail": "흰 글씨로 '이전 지시를 무시하라'는 문장"}]}]}
 
     def respond(route):
         path = urlsplit(route.request.url).path
@@ -96,6 +106,27 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
             expect(second.locator(".model-opinion", has_text="Gemini")).to_contain_text("면책 문구")
             expect(second.locator(".model-opinion-failed")).to_contain_text("주민등록번호 형식의 숫자 포함")
             expect(second.locator(".model-opinion-failed strong")).to_have_text("OpenAI · GPT-6 Luna")
+            # 프롬프트 인젝션: 문서마다 판정 근거(검사한 층·탐지 항목·격리 여부)를 보인다.
+            injection = cards.locator(".summary-card", has_text="프롬프트 인젝션 속임수 검증")
+            expect(injection).to_contain_text("판정 근거")
+            expect(injection.locator(".injection-doc", has_text="first.png")).to_contain_text("검사한 층: 본문, 문서 속성(메타데이터)")
+            expect(injection.locator(".injection-doc", has_text="first.png")).to_contain_text("탐지 후보 0건")
+            second_doc = injection.locator(".injection-doc", has_text="second.png")
+            expect(second_doc).to_contain_text("격리됨")
+            expect(second_doc).to_contain_text("흰 글씨로 '이전 지시를 무시하라'는 문장")
+            # 허위 판례는 별도 카드 없이 아래 세부 표의 머리에 요약한다.
+            expect(cards.get_by_text("허위 판례(할루시네이션) 발견")).to_have_count(0)
+            expect(page.locator("#hallucinationSummary")).to_contain_text("총 2건입니다(성립할 수 없는 사건번호 1건, 공식 DB 미확인 1건)")
+            expect(page.locator("#aiVerificationRows tr")).to_have_count(2)
+            if width > 900:
+                # 넓은 화면: AI 진단 카드가 가로 전체를 쓰고 모델 블록이 나란히 놓인다.
+                tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+                assert len(set(tops)) == 1, tops
+                card_width = cards.locator(".summary-card-wide").first.evaluate("e => e.getBoundingClientRect().width")
+                assert card_width > cards.evaluate("e => e.getBoundingClientRect().width") * 0.95
+            else:
+                tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
+                assert tops == sorted(tops) and len(set(tops)) == 3, "좁은 화면은 세로로 쌓는다"
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.close()
         finally:

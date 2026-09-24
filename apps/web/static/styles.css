@@ -1075,6 +1075,16 @@ table {
 .summary-card { background: #f8faf9; border: 1px solid var(--line); border-radius: 6px; padding: 16px; }
 .summary-card h3 { font-size: 15px; margin: 0 0 10px; color: #1e3a34; font-weight: 700; }
 .summary-card .card-item { margin-bottom: 8px; font-size: 14px; }
+.summary-card-wide { grid-column: 1 / -1; }
+.model-opinions-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+.injection-basis { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.injection-basis h4 { margin: 0 0 6px; font-size: 14px; color: #1e3a34; }
+.injection-basis > p { font-size: 13px; line-height: 1.6; margin: 0 0 10px; }
+.injection-doc { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin-bottom: 10px; font-size: 14px; }
+.injection-doc p { margin: 4px 0 0; line-height: 1.6; }
+.hallucination-section { margin: 4px 0 12px; }
+.hallucination-section h3 { font-size: 16px; margin: 0 0 6px; color: #1e3a34; }
+.hallucination-section p { margin: 0; font-size: 14px; line-height: 1.6; }
 .model-opinions { margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }
 .model-opinions h4 { margin: 0 0 8px; font-size: 14px; color: #1e3a34; }
 .model-opinion { border-left: 3px solid var(--line); padding: 4px 0 4px 12px; margin-bottom: 10px; }
@@ -1170,3 +1180,5 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 
 /* 인증 실패 사유. 고정 문구만으로는 원인을 알 수 없어 서버 안내를 함께 보인다. */
 .notice-reason { display: block; margin-top: 0.4rem; font-size: 0.92em; opacity: 0.85; line-height: 1.5; }
+.hallucination-section .warning-text { color: #b84e1b; font-weight: 600; }
+.hallucination-section .safe-text { color: #1f6b52; }
