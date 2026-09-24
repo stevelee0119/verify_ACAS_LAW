@@ -180,3 +180,60 @@ def test_continuation_sentence_inherits_the_previous_citation():
 def test_general_constitutional_right_is_not_an_exception_basis(text):
     [finding] = _review(text)
     assert finding.confidence_features["claim_type"] == "LITIGATION_REQUIREMENT_EXCLUSION"
+
+
+# --- 근거 원문과 헌재 결정 이력 조회 --------------------------------------------------------
+def test_bases_carry_official_text_except_the_uncollected_statute():
+    """판정 근거는 공식 원문 수집(scripts/fetch_official_sources.py)에서 옮긴 원문을 싣는다."""
+    from packages.legal_engine.legal_rules import load_rules
+    sources = load_rules()["sources"]
+    for name in ("대한민국헌법 제111조", "민법 제393조", "민법 제394조", "민법 제763조", "민법 제764조",
+                 "형사소송법 제246조", "행정소송법 제18조", "행정소송법 제12조", "민법 제162조",
+                 "헌법재판소 1991. 4. 1. 89헌마160 결정"):
+        assert sources[name]["text"] and sources[name]["url"].startswith("https://www.law.go.kr/"), name
+    # 헌법재판소법은 동명 법령 식별이 모호해 원문을 수집하지 못했다. 이름만 싣고 미수록을 밝힌다.
+    [finding] = _review("헌법 제29조 제2항은 명백히 위헌이다.", lookup=None)
+    notes = [e.excerpt for e in finding.evidence if "헌법재판소법" in e.description]
+    assert notes and all("수록하지 않았다" in n for n in notes)
+
+
+class _Response:
+    def __init__(self, payload, status=200):
+        self.payload, self.status_code = payload, status
+
+    def json(self):
+        return self.payload
+
+
+def test_constitutional_history_reads_the_order_from_the_full_text(monkeypatch):
+    """응답 모양은 공식 원문 수집에서 확인한 헌재결정례 목록·전문 키를 따른다(내용은 합성)."""
+    from packages.common.enums import AdapterStatus
+    from packages.source_adapters.law_go_kr import LawGoKrAdapter
+
+    adapter = LawGoKrAdapter()
+    monkeypatch.setattr(adapter, "status", lambda: AdapterStatus.READY)
+    listing = {"DetcSearch": {"totalCnt": "3", "Detc": [
+        {"사건번호": "2090헌바1", "사건명": "가상세무특례법 제3조 위헌소원", "종국일자": "20900101", "헌재결정례일련번호": "1"},
+        {"사건번호": "2091헌바2", "사건명": "가상세무특례법 제30조 위헌소원", "종국일자": "20910101", "헌재결정례일련번호": "2"},
+        {"사건번호": "2092헌마3", "사건명": "다른법 제3조 위헌확인", "종국일자": "20920101", "헌재결정례일련번호": "3"}]}}
+    detail = {"DetcService": {"사건번호": "2090헌바1", "사건명": "가상세무특례법 제3조 위헌소원", "헌재결정례일련번호": "1",
+                              "전문": "【주 문】<br/>가상세무특례법 제3조는 헌법에 위반되지 아니한다.<br/>【이 유】 …"}}
+
+    def fake_get(url, params=None, **kwargs):
+        return _Response(detail if params.get("ID") else listing)
+
+    monkeypatch.setattr(adapter, "_http_get", fake_get)
+    history = adapter.constitutional_history("가상세무특례법", "3")
+    assert history["status"] == "READY"
+    assert [(d["case_number"], d["result"]) for d in history["decisions"]] == [("2090헌바1", "합헌")]
+
+
+def test_constitutional_history_reports_failure_instead_of_absence(monkeypatch):
+    from packages.common.enums import AdapterStatus
+    from packages.source_adapters.law_go_kr import LawGoKrAdapter
+
+    adapter = LawGoKrAdapter()
+    monkeypatch.setattr(adapter, "status", lambda: AdapterStatus.READY)
+    monkeypatch.setattr(adapter, "_http_get", lambda *a, **k: _Response({}, status=500))
+    history = adapter.constitutional_history("가상세무특례법", "3")
+    assert history["status"] == "ERROR" and "decisions" not in history

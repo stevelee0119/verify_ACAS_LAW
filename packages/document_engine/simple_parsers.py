@@ -234,6 +234,16 @@ class ImageParser(DocumentParser):
                 )
             )
         doc.pages.append(page)
+        if ocr.available:
+            # 쪽별 OCR 품질(추가지시 G2). 품질이 낮으면 이 쪽에서 '결함 없음'을 결론 내리지 않는다.
+            from .ocr import page_quality
+
+            quality = page_quality(ocr_lines)
+            doc.structure["page_coverage"] = [{
+                "page": 1, "status": "OCR_LOW_QUALITY" if quality["low_quality"] else (
+                    "OCR_EXTRACTED" if ocr_lines else "UNVERIFIED"),
+                "reason": "OCR_LOW_QUALITY" if quality["low_quality"] else ("" if ocr_lines else "OCR_NO_TEXT"),
+                "ocr_quality": quality}]
         ocr_text = "\n".join(line.text for line in ocr_lines)
         doc.raw_layers["ocr_layer"] = ocr_text
         doc.raw_layers["rendered_text"] = ocr_text

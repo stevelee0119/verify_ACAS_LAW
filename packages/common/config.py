@@ -83,7 +83,7 @@ class ProviderConfig:
 @dataclass
 class Settings:
     app_name: str = "ACASia_LAW"
-    version: str = "0.6.6"
+    version: str = "0.6.7"
     database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
@@ -115,6 +115,10 @@ class Settings:
     ocr_dpi: int = field(default_factory=lambda: int(os.getenv("LV_OCR_DPI", "200")))
     ocr_min_confidence: float = field(default_factory=lambda: float(os.getenv("LV_OCR_MIN_CONFIDENCE", "0.55")))
     ocr_max_pages: int = field(default_factory=lambda: int(os.getenv("LV_OCR_MAX_PAGES", "20")))
+    # 쪽별 OCR 품질(추가지시 G2): 평균 신뢰도와 한글 비율이 이 값에 못 미치면 OCR_LOW_QUALITY
+    ocr_quality_min_confidence: float = field(
+        default_factory=lambda: float(os.getenv("LV_OCR_QUALITY_MIN_CONFIDENCE", "0.70")))
+    ocr_min_hangul_ratio: float = field(default_factory=lambda: float(os.getenv("LV_OCR_MIN_HANGUL_RATIO", "0.5")))
     ocr_timeout_seconds: float = field(default_factory=lambda: float(os.getenv("LV_OCR_TIMEOUT_SECONDS", "30")))
     independent_ocr_pages: int = field(default_factory=lambda: int(os.getenv("LV_INDEPENDENT_OCR_PAGES", "3")))
     independent_ocr_mode: str = field(default_factory=lambda: os.getenv("LV_INDEPENDENT_OCR", "auto"))

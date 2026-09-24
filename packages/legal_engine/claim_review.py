@@ -184,9 +184,10 @@ def _unconstitutionality(sentence: str, lookup: Optional[HistoryLookup]) -> Opti
         label = targets[0].group(0) if targets else "헌법 조항"
         return ClaimMatch(
             "UNCONSTITUTIONALITY", sentence, 0, "헌법 조항 자체를 위헌이라고 주장(심판 대상 아님)", "B", "CONTRADICTED",
-            [_source("헌법재판소법 제41조"), _source("헌법재판소법 제68조"), _source("대한민국헌법 제111조")],
-            f"'{label}'은 헌법 규정이다. 위헌법률심판(헌법재판소법 제41조 제1항)과 헌법소원(같은 법 제68조 제2항)의 "
-            "대상은 '법률'이므로, 헌법 조항 자체는 위헌 여부 심판의 대상이 아니다.", {"target": label})
+            [_source("대한민국헌법 제111조"), _source("헌법재판소법 제41조"), _source("헌법재판소법 제68조")],
+            f"'{label}'은 헌법 규정이다. 헌법재판소가 관장하는 위헌 심판은 '법률의 위헌여부 심판'(대한민국헌법 제111조 "
+            "제1항 제1호)과 '법률이 정하는 헌법소원'(같은 항 제5호)이므로, 헌법 조항 자체는 위헌 여부 심판의 대상이 "
+            "아니다.", {"target": label})
     statute_targets = [m for m in targets if not _is_constitution(m.group("law"))]
     if not statute_targets or not CERTAIN_RE.search(sentence):
         return None
@@ -258,9 +259,10 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
     if in_relief and APOLOGY_RELIEF_RE.search(sentence):
         return ClaimMatch(
             "NO_BASIS_REMEDY", sentence, 0, "사죄광고·사과문 게재 강제 청구(사람 확인)", "C", "SUSPICIOUS",
-            [_source("민법 제764조")],
-            "명예훼손의 구제로 '명예회복에 적당한 처분'(민법 제764조)을 구할 수 있으나, 사죄를 강제하는 형태의 청구는 "
-            "양심의 자유와 관련해 허용 범위가 문제된다. 청구 형태가 허용되는지 사람이 확인해야 한다.",
+            [_source("민법 제764조"), _source("헌법재판소 1991. 4. 1. 89헌마160 결정")],
+            "명예훼손의 구제로 '명예회복에 적당한 처분'(민법 제764조)을 구할 수 있으나, 헌법재판소는 이 조항이 "
+            "사죄광고를 포함하는 취지라면 헌법에 위반된다고 결정했다(헌법재판소 1991. 4. 1. 89헌마160). 청구 형태가 "
+            "허용되는지 사람이 확인해야 한다.",
             {"remedy": "사죄광고"})
     return None
 

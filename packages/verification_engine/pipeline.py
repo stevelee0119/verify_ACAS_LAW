@@ -338,7 +338,23 @@ class VerificationPipeline:
         result.warnings.extend(doc.parse_warnings)
         result.engine_data["page_coverage"] = doc.structure.get("page_coverage", [])
         result.unverified_items.extend({"kind": "page", "document_id": doc.document_id, **item}
-            for item in doc.structure.get("page_coverage", []) if item["status"] == "UNVERIFIED")
+            for item in doc.structure.get("page_coverage", []) if item["status"] in ("UNVERIFIED", "OCR_LOW_QUALITY"))
+        # 쪽별 OCR 품질 미달(추가지시 G2). 읽은 글자로 검사는 하지만 그 쪽에 결함이 없다고 결론 내리지 않는다.
+        low_pages = [item for item in doc.structure.get("page_coverage", []) if item["status"] == "OCR_LOW_QUALITY"]
+        if low_pages:
+            pages = ", ".join(str(item["page"]) for item in low_pages[:20])
+            reasons = "; ".join(f"{item['page']}면 " + ", ".join((item.get("ocr_quality") or {}).get("reasons") or [])
+                                for item in low_pages[:5])
+            result.findings.append(Finding.create(
+                type=FindingType.OCR_LOW_QUALITY, status=VerificationStatus.UNVERIFIED, severity=Severity.MEDIUM,
+                evidence_grade=EvidenceGrade.U,
+                title=f"OCR 품질이 낮아 내용을 확정할 수 없는 쪽: {pages}면",
+                detail=(f"스캔 쪽의 OCR 결과가 기준에 못 미친다({reasons}). 읽은 글자로 날짜·사건번호·인용 검사를 "
+                        "했지만, 이 쪽에 대한 '결함 없음'은 결론이 아니라 '확인하지 못함'이다. 원본 대조나 더 선명한 "
+                        "스캔으로 다시 검증해야 한다."),
+                confidence=0.9, confidence_features={"pages": [item["page"] for item in low_pages],
+                                                     "ocr_quality": {str(i["page"]): i.get("ocr_quality") for i in low_pages}},
+                document_id=doc.document_id, engine=ENGINE_NAME, tags=["UNVERIFIED", "OCR_QUALITY"]))
         self.audit.record(
             AuditEventType.OCR if doc.structure.get("scanned_pdf") else AuditEventType.UPLOAD,
             {"document_id": doc.document_id, "parser": doc.parser_name, "sha256": doc.sha256,

@@ -24,6 +24,63 @@ def is_noise(text: str) -> bool:
     return len(MEANINGFUL_RE.findall(text)) < MIN_MEANINGFUL_CHARS
 
 
+SINGLE_SYLLABLE_RE = re.compile(r"^[가-힣]$")
+
+
+def normalize_ocr_spacing(text: str) -> str:
+    """한글 OCR이 음절마다 띄어 읽은 부분을 붙인다('헌 법 재판소' → '헌법 재판소', '2020 헌 마 1127' → '2020 헌마 1127').
+
+    한 글자짜리 한글 어절이 둘 이상 이어지면 한 어절로 합친다. 두 글자 이상 어절 사이의 띄어쓰기는 그대로 둔다.
+    OCR 층에만 쓴다(원래 띄어 쓴 한 글자 어절이 붙을 수 있으나, 인용·날짜 추출이 깨지는 것보다 낫다).
+    """
+    tokens = text.split(" ")
+    out: List[str] = []
+    run: List[str] = []
+    for token in tokens + [""]:
+        if SINGLE_SYLLABLE_RE.match(token):
+            run.append(token)
+            continue
+        if run:
+            out.append("".join(run) if len(run) >= 2 else run[0])
+            run = []
+        if token:
+            out.append(token)
+    return " ".join(out)
+
+
+HANGUL_RE = re.compile(r"[가-힣]")
+LATIN_RE = re.compile(r"[A-Za-z]")
+MIN_LETTERS_FOR_RATIO = 20
+
+
+def page_quality(lines, *, lang: Optional[str] = None, min_confidence: Optional[float] = None,
+                 min_hangul_ratio: Optional[float] = None) -> dict:
+    """한 쪽의 OCR 품질(추가지시 G2).
+
+    - confidence: 인식한 라인의 평균 신뢰도(0~1).
+    - hangul_ratio: 글자(한글+로마자) 가운데 한글 비율. 한국어 모델로 읽었는데 한글이 거의 없으면
+      "의 xj ot AOO"처럼 한글이 깨져 로마자로 읽힌 것이다. 글자가 적으면 비율을 판단하지 않는다.
+    둘 중 하나라도 기준에 못 미치면 low_quality=True. 그 쪽에서 '결함 없음'을 결론 내리지 않는다.
+    """
+    settings = get_settings()
+    lang = lang or settings.ocr_lang
+    min_confidence = settings.ocr_quality_min_confidence if min_confidence is None else min_confidence
+    min_hangul_ratio = settings.ocr_min_hangul_ratio if min_hangul_ratio is None else min_hangul_ratio
+    texts = [line for line in lines if (line.text or "").strip() and not is_noise(line.text)]
+    joined = " ".join(line.text for line in texts)
+    hangul, latin = len(HANGUL_RE.findall(joined)), len(LATIN_RE.findall(joined))
+    confidence = sum(line.confidence for line in texts) / len(texts) if texts else 0.0
+    ratio = hangul / (hangul + latin) if hangul + latin else None
+    reasons = []
+    if texts and confidence < min_confidence:
+        reasons.append(f"평균 신뢰도 {confidence:.2f} < {min_confidence:.2f}")
+    if "kor" in lang and ratio is not None and hangul + latin >= MIN_LETTERS_FOR_RATIO and ratio < min_hangul_ratio:
+        reasons.append(f"한글 비율 {ratio:.2f} < {min_hangul_ratio:.2f}")
+    return {"lines": len(texts), "confidence": round(confidence, 3),
+            "hangul_ratio": None if ratio is None else round(ratio, 3),
+            "low_quality": bool(reasons), "reasons": reasons}
+
+
 @dataclass
 class OCRLine:
     text: str
@@ -121,7 +178,7 @@ class TesseractOCRAdapter(OCRAdapter):
 
         lines: List[OCRLine] = []
         for indices in grouped.values():
-            text = " ".join(str(data["text"][i]).strip() for i in indices).strip()
+            text = normalize_ocr_spacing(" ".join(str(data["text"][i]).strip() for i in indices).strip())
             if not text or is_noise(text):
                 continue
             confidences = [float(data["conf"][i]) for i in indices if str(data["conf"][i]) not in ("-1",)]

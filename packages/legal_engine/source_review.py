@@ -149,12 +149,14 @@ def _compare_asserted_content(verdict, provision):
     verdict.status = VerificationStatus.CONTRADICTED
     exact_version = verdict.levels.get("temporal") == "VERIFIED"
     pairs = "; ".join(f"문서 {m['claimed']} / 조문 {m['official']}" for m in outcome["mismatches"])
+    # '같은 조 제2항'처럼 앞 인용을 가리킨 표현은 푼 이름으로 적는다(추가지시 G3).
+    compared = compared_label(citation)
     ids = [r.source_record_id for r in verdict.source_records]
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.CONTRADICTED,
         severity=Severity.HIGH, evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
-        title=f"조문 본문과 수치가 다르다: {citation.raw_text} ({pairs})",
-        detail=("문서가 이 조문의 내용으로 적은 기간·비율이 조회한 시행 버전의 조문 본문과 다르다. "
+        title=f"조문 본문과 수치가 다르다: {compared} ({pairs})",
+        detail=(f"비교 대상 조문: {compared}. 문서가 이 조문의 내용으로 적은 기간·비율이 조회한 시행 버전의 조문 본문과 다르다. "
                 + ("" if exact_version else "기준일이 없어 현행(조회) 버전과 비교했다. 사건 당시 시행 버전이 다르면 "
                    "결론이 달라질 수 있으므로 시행 버전을 확인해야 한다.")),
         document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
@@ -454,3 +456,11 @@ def verify_admin_rule_source(verifier, citation):
         verdict.status = VerificationStatus.PARTIALLY_VERIFIED
     verdict.notes.append("행정규칙의 존재·조항 확인은 법적 구속력이나 사건 적용 결론이 아니다")
     return verdict
+
+
+def compared_label(citation) -> str:
+    """판정 근거에 적을 비교 대상 조문 이름. 앞 인용을 가리킨 표현은 푼 이름과 원문 표기를 함께 적는다."""
+    resolved = (citation.attributes or {}).get("resolved_label")
+    if resolved:
+        return f"{resolved}('{citation.raw_text}')"
+    return citation.raw_text

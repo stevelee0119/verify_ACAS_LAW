@@ -18,7 +18,7 @@ from packages.common.config import get_settings
 
 from .base import DocumentParser, ParserError
 from .line_tables import rebuild_line_tables
-from .ocr import get_ocr_adapter
+from .ocr import get_ocr_adapter, page_quality
 from .rasterize import render_pages
 
 HIDDEN_MIN_FONT_SIZE = 3.5
@@ -421,6 +421,7 @@ class PdfParser(DocumentParser):
         body_parts = []
         for raster in render_pages(path, target_pages, dpi=settings.ocr_dpi):
             lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale)
+            quality = page_quality(lines)
             # 신뢰도 미달 라인은 버린다. 남은 것이 없으면 그 면은 인식 실패로 취급한다.
             kept = [line for line in lines if line.confidence >= settings.ocr_min_confidence]
             if not kept:
@@ -445,6 +446,11 @@ class PdfParser(DocumentParser):
                             attributes={"ocr_confidence": round(line.confidence, 3), "ocr_engine": adapter.name},
                         )
                     )
+            if raster.page_number in missing_pages:
+                coverage[raster.page_number]["ocr_quality"] = quality
+                if quality["low_quality"]:
+                    # 읽은 글자로 검사는 계속하되, 이 쪽에서 '결함 없음'을 결론 내리지 못하게 따로 표시한다(G2).
+                    coverage[raster.page_number].update(status="OCR_LOW_QUALITY", reason="OCR_LOW_QUALITY")
 
         doc.structure["body_extraction_failed"] = not has_visible_text and not body_parts
         for item in coverage.values():

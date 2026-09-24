@@ -17,8 +17,16 @@ from packages.document_engine.reading_text import (QUOTE_SPAN_RE, build_reading_
 from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix,
                         split_case_number)
 
-COURT_RE = r"(?:대법원|헌법재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
+# 스캔 OCR은 '헌법 재판소'처럼 법원명을 띄어 읽기도 한다(추가지시 G2). 법원명 안의 공백은 표준화 때 없앤다.
+COURT_RE = r"(?:대법원|헌법\s?재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
 COURT_ALIASES = {"헌재": "헌법재판소"}  # 약칭은 조회·호환성 검사에 쓰는 공식 명칭으로 바꾼다
+
+
+def _court_name(raw: str) -> str:
+    name = raw.strip()
+    if re.fullmatch(r"헌법\s+재판소", name):
+        name = "헌법재판소"
+    return COURT_ALIASES.get(name, name)
 DATE_RE = r"(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?"
 # 1999년까지의 사건번호는 연도를 두 자리로 적는다(예: 94누4615).
 CASE_NO_RE = r"(?<!\d)(?:(?:19|20)\d{2}|\d{2})\s*[가-힣]{1,3}\s*\d{1,6}"
@@ -38,8 +46,8 @@ FULL_CASE_RE = re.compile(
 BARE_CASE_RE = re.compile(rf"(?P<case_no>{CASE_NO_RE})\s*(?P<kind>판결|결정|명령)")
 # 헌재 2020. 3. 26. 2018헌바123
 CONST_RE = re.compile(
-    rf"(?P<court>헌법재판소|헌재)\s*(?P<date>{DATE_RE})?\s*"
-    rf"(?P<case_no>(?:19|20)\d{{2}}\s*헌[가-힣]{{1,2}}\s*\d{{1,4}})\s*(?P<kind>결정|전원재판부)?"
+    rf"(?P<court>헌법\s?재판소|헌재)\s*(?P<date>{DATE_RE})?\s*"
+    rf"(?P<case_no>(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*\d{{1,4}})\s*(?P<kind>결정|전원재판부)?"
 )
 # 「형법」 제250조 제1항 제2호 / 형법 제250조
 LAW_RE = re.compile(
@@ -52,6 +60,13 @@ LAW_RE = re.compile(
 )
 # "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
 SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?$")
+# 앞 인용의 조를 가리키는 표현(추가지시 G3): "같은 조 제2항", "동조 제2항", "위 조항", 그리고 조 없이 쓴 "제2항".
+SAME_ARTICLE_REF_RE = re.compile(
+    # '같은 조건'·'위조한'·'동조하였다'는 조 인용이 아니다. 조(항) 뒤가 공백·문장부호·조사일 때만 잡는다.
+    r"(?P<ref>(?:같은|동|위)\s*조(?:항)?|동조(?:항)?)(?=\s|[,.)」』]|은|는|이|가|의|에|을|를|도|$)"
+    r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?")
+BARE_PARAGRAPH_REF_RE = re.compile(r"(?<![\d조])(?<!조\s)제\s*(?P<paragraph>\d+)\s*항(?:\s*제\s*(?P<item>\d+)\s*호)?")
+REFERENCE_WINDOW = 300  # 앞 인용과 이 거리 안에 있을 때만 결합한다(문단을 건너 결합하지 않는다)
 # 행정규칙(훈령·예규·고시·지침). 법령 검증과 다른 경로로 검증한다.
 ADMIN_RULE_KINDS = ("훈령", "예규", "고시", "지침")
 _KIND = "|".join(ADMIN_RULE_KINDS)
@@ -232,7 +247,7 @@ def extract_from_text(
                 block_id=block_id,
                 page=page,
                 span=(m.start(), m.end()),
-                court=COURT_ALIASES.get(m.group("court").strip(), m.group("court").strip()),
+                court=_court_name(m.group("court")),
                 decision_date=canonical_date(m.group("date")),
                 case_number=re.sub(r"\s+", "", case_no),
                 canonical_case_number=canonical_case_number(case_no),
@@ -345,6 +360,11 @@ def extract_from_text(
         )
         consumed.append((m.start(), m.end()))
 
+    # 4-2) 앞 인용의 조를 가리키는 표현을 그 조의 인용으로 푼다(추가지시 G3). 뒤따르는 수치가 가장 가까운
+    #      항·호 인용에 결합되도록, 가리킨 항을 별도 인용으로 둔다.
+    _resolve_article_references(text, citations, consumed, overlaps, document_id=document_id,
+                                block_id=block_id, page=page)
+
     # 5) 학술자료
     for m in ACADEMIC_RE.finditer(text):
         if overlaps(m.start(), m.end()):
@@ -390,6 +410,34 @@ def extract_from_text(
 
 
 _STATUTE_TYPES = (CitationType.STATUTE,)
+
+
+def _resolve_article_references(text, citations, consumed, overlaps, *, document_id, block_id, page) -> None:
+    references = []
+    for pattern in (SAME_ARTICLE_REF_RE, BARE_PARAGRAPH_REF_RE):
+        references += [m for m in pattern.finditer(text) if not overlaps(m.start(), m.end())]
+    for m in sorted(references, key=lambda r: r.start()):
+        if overlaps(m.start(), m.end()):
+            continue
+        statutes = [c for c in citations if c.type in _STATUTE_TYPES and c.span and c.span[1] <= m.start()
+                    and m.start() - c.span[1] <= REFERENCE_WINDOW]
+        if not statutes:
+            continue
+        base = max(statutes, key=lambda c: c.span[1])
+        bare = m.re is BARE_PARAGRAPH_REF_RE
+        paragraph = m.group("paragraph") or (None if bare else base.paragraph)
+        if bare and not paragraph:
+            continue
+        item = m.group("item") or (None if (bare or m.group("paragraph")) else base.item)
+        label = f"{base.law_name} 제{base.article}조" + (f" 제{paragraph}항" if paragraph else "") + (f" 제{item}호" if item else "")
+        citation = Citation.create(
+            CitationType.STATUTE, m.group(0).strip(), document_id=document_id, block_id=block_id, page=page,
+            span=(m.start(), m.end()), law_name=base.law_name, article=base.article, paragraph=paragraph, item=item,
+            quoted_text=_quote_near(text, m.end()), context=text[max(0, m.start() - 100):m.end() + 150])
+        citation.attributes.update({"resolved_label": label, "reference_to": base.raw_text,
+                                    "reference_kind": "BARE_PARAGRAPH" if bare else "SAME_ARTICLE"})
+        citations.append(citation)
+        consumed.append((m.start(), m.end()))
 
 
 def attach_claim_text(text: str, citations: List[Citation]) -> None:
