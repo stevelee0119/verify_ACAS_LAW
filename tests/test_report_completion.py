@@ -591,5 +591,8 @@ def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_ca
     assert "[평가] 근거 결여" in basis and "공식 DB에서 확인되지 않음" in basis
     widths = [c.width for c in table.rows[0].cells]
     assert widths[3] == max(widths)
-    text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, report, "pdf"))).pages)
-    assert "[평가] 근거 결여" in text and "주장 평가" in text
+    # 칸 안 줄바꿈 위치와 가운뎃점 글리프(·/・)는 설치된 글꼴에 따라 달라지므로 공백·가운뎃점을 빼고 비교한다.
+    text = "".join("".join((p.extract_text() or "").split())
+                   for p in PdfReader(io.BytesIO(download(case, report, "pdf"))).pages)
+    text = text.replace("·", "").replace("・", "")
+    assert "평가]근거결여" in text and "인용오류미확인근거및주장평가" in text
