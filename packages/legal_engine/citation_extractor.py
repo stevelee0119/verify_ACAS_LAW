@@ -47,8 +47,26 @@ BARE_CASE_RE = re.compile(rf"(?P<case_no>{CASE_NO_RE})\s*(?P<kind>판결|결정|
 # 헌재 2020. 3. 26. 2018헌바123
 CONST_RE = re.compile(
     rf"(?P<court>헌법\s?재판소|헌재)\s*(?P<date>{DATE_RE})?\s*"
-    rf"(?P<case_no>(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*\d{{1,4}})\s*(?P<kind>결정|전원재판부)?"
+    # 일련번호 자릿수를 제한하면 뒷자리가 잘린 다른 사건번호가 된다(2018헌바 90044 → 2018헌바9004). 숫자 경계까지 읽는다.
+    rf"(?P<case_no>(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*\d{{1,6}}(?!\d))"
+    # 병합 표기: 2004헌마554·566(병합), 2011헌바379 등(병합), 2004헌마554, 2004헌마566(병합)
+    rf"(?P<merged>(?:\s*[·ㆍ,]\s*(?:(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*)?\d{{1,6}}(?!\d))*\s*(?:등\s*)?\(\s*병합\s*\))?"
+    rf"\s*(?P<kind>결정|전원재판부)?"
 )
+
+
+def _merged_attributes(main: str, merged: str) -> dict:
+    """병합 표기의 다른 사건번호. 조회·판정은 대표 사건번호로 하고, 병합 사건은 기록으로 남긴다."""
+    if not merged or "병합" not in merged:
+        return {}
+    head = re.match(r"((?:19|20)\d{2})\s*(헌\s*[가-힣]{1,2})", main)
+    numbers = []
+    for part in re.findall(r"(?:(?:19|20)\d{2}\s*헌\s*[가-힣]{1,2}\s*)?\d{1,6}", merged):
+        part = re.sub(r"\s+", "", part)
+        numbers.append(part if not part.isdigit() or not head else f"{head.group(1)}{re.sub(chr(32), '', head.group(2))}{part}")
+    return {"merged_case_numbers": numbers, "merged_notation": True}
+
+
 # 「형법」 제250조 제1항 제2호 / 형법 제250조
 LAW_RE = re.compile(
     r"(?P<law>[「『]?[가-힣A-Za-z· ]{1,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?)\s*"
@@ -227,6 +245,7 @@ def extract_from_text(
                 case_kind=m.group("kind") or "결정",
                 quoted_text=_quote_near(text, m.end()),
                 context=text[max(0, m.start() - 120) : m.end() + 120],
+                attributes=_merged_attributes(m.group("case_no"), m.group("merged")),
             )
         )
         consumed.append((m.start(), m.end()))

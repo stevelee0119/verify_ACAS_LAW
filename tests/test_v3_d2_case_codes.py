@@ -116,3 +116,55 @@ def test_verifier_requeries_the_court_the_code_points_to(monkeypatch):
     [finding] = [f for f in result.findings if f.confidence_features.get("rule_id") == "FMT.COURT_CODE_MISMATCH"]
     assert str(finding.evidence_grade) == "A"
     assert "법원–부호 불일치" in finding.title
+
+
+# --- v4 P2: 헌법재판소 + 법원 사건부호, 판정 이름, 5자리 일련번호·병합 표기 --------------------------
+import pytest as _pytest
+
+
+@_pytest.mark.parametrize("text,code", [
+    ("헌법재판소 2019. 4. 11. 2018다90044 결정", "다"),          # 민사 상고 부호(표에 없어도 헌재 규칙만으로 판단)
+    ("헌법재판소 2021. 3. 25. 2020도12345 결정", "도"),          # 형사
+    ("헌법재판소 2022. 6. 30. 2021두5678 결정", "두"),           # 행정 상고
+    ("헌법재판소 2020. 9. 24. 2019므1234 결정", "므"),           # 가사 상고
+    ("헌법재판소 2018. 5. 31. 2017구합56789 결정", "구합"),       # 행정 1심
+])
+def test_constitutional_court_with_ordinary_court_code_is_mismatch(text, code):
+    from packages.legal_engine.citation_extractor import extract_from_text
+    from packages.legal_engine.citation_format import format_violations
+    [citation] = extract_from_text(text)
+    [violation] = [v for v in format_violations(citation) if v["kind"] == "COURT_CODE"]
+    assert violation["rule_id"] == "FMT.COURT_CODE_MISMATCH" and f"'{code}'" in violation["reason"]
+    assert "헌법재판소 사건부호" in violation["reason"]
+
+
+def test_constitutional_code_with_constitutional_court_is_not_flagged():
+    from packages.legal_engine.citation_extractor import extract_from_text
+    from packages.legal_engine.citation_format import format_violations
+    [citation] = extract_from_text("헌법재판소 2016. 3. 31. 2014헌마457 결정")
+    assert not [v for v in format_violations(citation) if v["kind"] == "COURT_CODE"]
+
+
+def test_court_code_mismatch_is_labelled_with_its_own_code():
+    from packages.legal_engine.citation_extractor import extract_from_text
+    from packages.legal_engine.verifier import LegalVerifier
+    [citation] = extract_from_text("대법원 2019. 3. 14. 선고 2018구합51234 판결")
+
+    class Law:
+        def search_case(self, query, court=None):
+            return SimpleNamespace(status="UNAVAILABLE", records=[], source_record=None, message="", found=False)
+    result = LegalVerifier(SimpleNamespace(law=Law())).verify_citations([citation], current_date="2026-09-25")
+    [finding] = [f for f in result.findings if f.confidence_features.get("rule_id") == "FMT.COURT_CODE_MISMATCH"]
+    assert finding.confidence_features["defect_code"] == "COURT_CODE_MISMATCH" and "(COURT_CODE_MISMATCH)" in finding.title
+
+
+@_pytest.mark.parametrize("text,number,merged", [
+    ("헌법재판소 2019. 4. 11. 2018헌바 90044 결정", "2018헌바90044", None),
+    ("헌법재판소 2004. 10. 21. 2004헌마554·566(병합) 결정", "2004헌마554", ["2004헌마566"]),
+    ("서울중앙지방법원 2021. 5. 7. 선고 2020노 4521 판결", "2020노4521", None),
+])
+def test_case_numbers_keep_every_digit_and_merged_notation(text, number, merged):
+    from packages.legal_engine.citation_extractor import extract_from_text
+    [citation] = extract_from_text(text)
+    assert citation.case_number == number
+    assert citation.attributes.get("merged_case_numbers") == merged

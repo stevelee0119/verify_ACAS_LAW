@@ -1009,6 +1009,11 @@ class LegalVerifier:
         # 제목은 위반 유형별로(날짜 불가능 / 법원–부호 불일치 / 연도 역전) 적는다.
         labels = list(dict.fromkeys(FORMAT_RULE_LABELS.get(v["rule_id"], "형식 위반") for v in violations))
         features["defect_summary"] = "·".join(labels)
+        # 법원–사건부호 불일치는 지시서의 판정 이름(COURT_CODE_MISMATCH)으로 표시한다(v4 P2).
+        court_code = any(v.get("kind") == "COURT_CODE" for v in violations)
+        label_code = "COURT_CODE_MISMATCH" if court_code else "INVALID_FORMAT"
+        features["verdict_label"] = label_code
+        features["defect_code"] = label_code
         actual = next((v["actual_court"] for v in violations if v.get("actual_court")), None)
         if actual:
             features["actual_court"] = actual
@@ -1016,7 +1021,7 @@ class LegalVerifier:
             type=FindingType.CASE_CITATION_ERROR if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
             else FindingType.LAW_CITATION_ERROR,
             status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH, evidence_grade=EvidenceGrade.A,
-            title=f"{'·'.join(labels)}(INVALID_FORMAT): {citation.raw_text}"
+            title=f"{'·'.join(labels)}({label_code}): {citation.raw_text}"
                   + (f" — 법원 표시 오류(실제: {actual} 판결)" if actual else ""),
             detail=(f"{reasons}. 공식 DB 수록 여부와 무관하게 이 표기대로의 재판·문서는 존재할 수 없다. "
                     "오기인지 원문(판결문·회신문) 확인이 필요하다."),

@@ -66,6 +66,17 @@ def _court_code_violations(citation: Any, code: str, year: int,
     source = table.get("source") or {}
     written = court_family(citation.court or "")
     inferred = code_court_family(code)
+    constitutional = table.get("constitutional_codes") or {}
+    if written == "헌법재판소" and constitutional and code not in constitutional:
+        # 헌법재판소 사건은 「헌법재판소 사건의 접수에 관한 규칙」 제8조 제3항의 부호(헌가·헌나·…)만 쓴다. 민사·형사 일반 부호가
+        # 사건부호표에 없더라도(unknown) 헌법재판소 표시와 '헌' 부호가 아닌 조합은 이 규칙만으로 성립할 수 없다.
+        basis = table.get("constitutional_source") or {}
+        return [_with_actual_court({
+            "rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{citation.court} {code}",
+            "kind": "COURT_CODE", "inferred_court": inferred or "법원(헌법재판소 외)",
+            "reason": (f"헌법재판소 사건부호는 {'·'.join(constitutional)}뿐이다(근거: {basis.get('title', '헌법재판소 사건부호표')}). "
+                       f"'{code}'는 헌법재판소 사건부호가 아니므로 문서의 '{citation.court}' 표시와 맞지 않는다"),
+            "source_url": basis.get("url")}, official_record, lambda actual: court_family(actual) != "헌법재판소")]
     if not written or not inferred or written == inferred:
         return []
     entry = (table.get("codes") or {}).get(code) or {}
@@ -83,12 +94,17 @@ def _court_code_violations(citation: Any, code: str, year: int,
     violation = {"rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{citation.court} {code}",
                  "kind": "COURT_CODE", "inferred_court": inferred, "reason": reason,
                  "source_url": source.get("url")}
+    return [_with_actual_court(violation, official_record, lambda actual: court_family(actual) == inferred)]
+
+
+def _with_actual_court(violation: Dict[str, Any], official_record: Optional[Dict[str, Any]], matches) -> Dict[str, Any]:
+    """부호가 가리키는 법원의 DB로 다시 찾은 기록이 있으면 '법원 표시 오류(실제: ○○ 판결)'로 알린다."""
     actual = (official_record or {}).get("court")
-    if actual and court_family(actual) == inferred:
+    if actual and matches(actual):
         kind = (official_record or {}).get("case_kind") or "판결"
         violation["actual_court"] = actual
         violation["reason"] += f". 법원 표시 오류(실제: {actual} {kind.replace('전원합의체 ', '')})"
-    return [violation]
+    return violation
 
 
 def _decision(citation: Any) -> tuple:

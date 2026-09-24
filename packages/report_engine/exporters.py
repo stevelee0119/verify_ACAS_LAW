@@ -24,7 +24,8 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
         data = finding.to_dict(reveal_sealed=reveal_sealed)
         row = {key: data.get(key) for key in FINDING_COLUMNS}
         # 명세 제1.2장의 코드명. 이 시스템의 이름과 다른 경우에만 값이 달라진다.
-        row["spec_code"] = spec_code(finding.type)
+        # 같은 판정 유형 안의 세부 결함(예: COURT_CODE_MISMATCH, CROSS_DOC_INCONSISTENCY)은 그 이름을 우선한다.
+        row["spec_code"] = (getattr(finding, "confidence_features", None) or {}).get("defect_code") or spec_code(finding.type)
         row["sources"] = ";".join(data.get("sources") or [])
         rows.append(row)
     return rows

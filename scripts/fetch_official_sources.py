@@ -88,6 +88,45 @@ def download_text(url):
                if len(response.content) <= 64 * 1024 else {})}
 
 
+# 대법원 「사건구분안내」(사건부호표). 국가법령정보가 주는 예규 별표 파일에는 민사·형사 일반 사건부호가 빠져 있어
+# 법원 누리집의 공식 안내 표를 따로 받아 로그에 남긴다(규칙표 반영은 사람이 원문과 대조한 뒤).
+SCOURT_CODE_PAGES = ["https://www.scourt.go.kr/portal/information/event/guide/index.html",
+                     "https://seoul.scourt.go.kr/common/util/sagubun_all.jsp",
+                     "https://slgodung.scourt.go.kr/common/util/sagubun_all.jsp"]
+
+
+def html_tables(html: str):
+    """HTML의 표를 [[칸 글자, …], …]로. 태그·공백만 걷어낸다."""
+    import html as _html
+
+    tables = []
+    for table in re.findall(r"<table.*?</table>", html, flags=re.S | re.I):
+        rows = []
+        for row in re.findall(r"<tr.*?</tr>", table, flags=re.S | re.I):
+            cells = [_html.unescape(re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", cell))).strip()
+                     for cell in re.findall(r"<t[hd][^>]*>(.*?)</t[hd]>", row, flags=re.S | re.I)]
+            if any(cells):
+                rows.append(cells)
+        if rows:
+            tables.append(rows)
+    return tables
+
+
+def fetch_scourt_codes(sink):
+    import httpx
+
+    for url in SCOURT_CODE_PAGES:
+        try:
+            response = httpx.get(url, timeout=30, follow_redirects=True,
+                                 headers={"User-Agent": "Mozilla/5.0 (official-source audit)"})
+            text = response.text
+            emit({"kind": "scourt_case_codes", "url": url, "status": response.status_code,
+                  "tables": html_tables(text)[:20], "text_sample": re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))[:4000]},
+                 sink)
+        except Exception as exc:  # 한 쪽의 실패가 나머지 수집을 막지 않게 한다
+            emit({"kind": "scourt_case_codes", "url": url, "error": f"{type(exc).__name__}: {exc}"}, sink)
+
+
 def _opinion_counts(record):
     from packages.legal_engine.opinion_attribution import split_opinions
 
@@ -103,6 +142,7 @@ def main() -> int:
     parser.add_argument("--out")
     args = parser.parse_args()
     sink = open(args.out, "w", encoding="utf-8") if args.out else None
+    fetch_scourt_codes(sink)
     adapter = LawGoKrAdapter()
     if not adapter.api_key:
         print("LV_LAW_GO_KR_OC가 없어 실행하지 않았다", file=sys.stderr)
