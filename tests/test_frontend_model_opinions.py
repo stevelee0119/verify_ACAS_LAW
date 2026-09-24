@@ -20,7 +20,7 @@ DETECTOR = {
                 "[openai] 띄어쓰기가 부자연스러움", "[gemini] 면책 문구가 전형적임", "[gemini] 예시 목적의 합성 텍스트"],
     "signals": {"llm_agreement": "DISAGREE", "llm_failures": {},
                 "llm_opinions": [
-                    {"provider": "anthropic", "model": "claude-sonnet-5", "verdict": "UNCERTAIN", "score": 0.4,
+                    {"provider": "anthropic", "model": "claude-opus-5-5", "verdict": "UNCERTAIN", "score": 0.4,
                      "reasons": ["표준 임대차계약서 양식임", "챗봇 상투구 없음"]},
                     {"provider": "openai", "model": "gpt-4.1", "verdict": "AI_PARTIAL_GENERATION", "score": 0.72,
                      "reasons": ["띄어쓰기가 부자연스러움"]},
@@ -30,7 +30,8 @@ DETECTOR = {
 SINGLE = {"verdict": "UNCERTAIN", "score": 0.3, "used_llm": True, "reasons": ["[gemini] 면책 문구"],
           "signals": {"llm_opinions": [{"provider": "gemini", "model": "m", "verdict": "AI_FULL_GENERATION_LIKELY",
                                         "score": 0.95, "reasons": ["면책 문구"]}],
-                      "llm_failures": {"openai": "응답이 출력 보안 검사에서 격리됨(주민등록번호 형식의 숫자 포함)"}}}
+                      "llm_failures": {"openai": "응답이 출력 보안 검사에서 격리됨(주민등록번호 형식의 숫자 포함)"},
+                      "llm_failure_models": {"openai": "gpt-6-luna"}}}
 
 
 @pytest.mark.parametrize("width,height", [(1440, 1400), (390, 2400)])
@@ -85,12 +86,16 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
                     expect(block.get_by_text(reason, exact=True)).to_be_visible()
             expect(first.locator(".model-opinion", has_text="Gemini")).to_contain_text("AI 임의 전체 작성 유력")
             expect(first.locator(".model-opinion", has_text="OpenAI")).to_contain_text("일부 AI 작성")
+            # 모델별 판정에 공급자와 모델명을 함께 적는다.
+            expect(first.locator(".model-opinion-head strong")).to_have_text(
+                ["Anthropic · Claude Opus 5.5", "OpenAI · GPT-4.1", "Gemini · Gemini 3.8 Flash"])
             # 모델 설명은 모델 블록에만 한 번 나온다(요약 목록에 중복하지 않는다).
             expect(first.get_by_text("띄어쓰기가 부자연스러움")).to_have_count(1)
             expect(first).to_contain_text("과반이 지지하는 판단을 택함")
             second = cards.locator(".card-item").nth(1)
             expect(second.locator(".model-opinion", has_text="Gemini")).to_contain_text("면책 문구")
             expect(second.locator(".model-opinion-failed")).to_contain_text("주민등록번호 형식의 숫자 포함")
+            expect(second.locator(".model-opinion-failed strong")).to_have_text("OpenAI · GPT-6 Luna")
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             page.close()
         finally:

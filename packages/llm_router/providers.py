@@ -137,6 +137,9 @@ class NullProvider(LLMProvider):
 class OpenAIProvider(LLMProvider):
     name = "openai"
 
+    # 모델별로 거절당한 파라미터를 기억한다(매 호출 400을 한 번씩 맞지 않도록).
+    _quirks: Dict[str, set] = {}
+
     async def generate(self, request: LLMRequest) -> LLMResponse:
         if not self.available:
             return LLMResponse(False, provider=self.name, error="API Key 없음 또는 비활성")
@@ -144,25 +147,43 @@ class OpenAIProvider(LLMProvider):
 
         import httpx
 
-        payload: Dict[str, Any] = {
-            "model": self.config.model,
-            "messages": [
-                {"role": "system", "content": request.system},
-                {"role": "user", "content": request.user},
-            ],
-            "temperature": request.temperature,
-            "max_tokens": request.max_tokens,
-        }
-        if request.schema:
-            payload["response_format"] = {"type": "json_object"}
+        # 최신 모델은 max_tokens 대신 max_completion_tokens를 요구하거나 temperature를
+        # 받지 않는다. 모델 목록을 코드에 새기지 않고, 거절당하면 모델별로 기억해 다시 보낸다.
+        quirks = self._quirks.setdefault(self.config.model, set())
+
+        def body() -> Dict[str, Any]:
+            payload: Dict[str, Any] = {
+                "model": self.config.model,
+                "messages": [
+                    {"role": "system", "content": request.system},
+                    {"role": "user", "content": request.user},
+                ],
+            }
+            payload["max_completion_tokens" if "completion_tokens" in quirks else "max_tokens"] = request.max_tokens
+            if "no_temperature" not in quirks:
+                payload["temperature"] = request.temperature
+            if request.schema:
+                payload["response_format"] = {"type": "json_object"}
+            return payload
+
         started = time.time()
         try:
             async with httpx.AsyncClient(timeout=self._timeout()) as client:
-                response = await client.post(
-                    f"{self.config.base_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.config.api_key}"},
-                    json=payload,
-                )
+                for _ in range(3):
+                    response = await client.post(
+                        f"{self.config.base_url}/chat/completions",
+                        headers={"Authorization": f"Bearer {self.config.api_key}"},
+                        json=body(),
+                    )
+                    if response.status_code != 400:
+                        break
+                    message = response.text.lower()
+                    if "max_tokens" in message and "completion_tokens" not in quirks:
+                        quirks.add("completion_tokens")
+                    elif "temperature" in message and "no_temperature" not in quirks:
+                        quirks.add("no_temperature")
+                    else:
+                        break
             if response.status_code >= 400:
                 return LLMResponse(False, provider=self.name, model=self.config.model,
                                    error=f"HTTP {response.status_code}: {response.text[:200]}")

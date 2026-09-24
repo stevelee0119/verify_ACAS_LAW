@@ -559,3 +559,47 @@ def test_a_resident_number_copied_from_the_document_is_masked_not_quarantined():
     assert result.used and result.executions[0].ok
     assert result.parsed["reasons"] == ["임차인 [주민등록번호 가림] 기재"]
     assert result.executions[0].quarantine_reasons == ["PII_REDACTED"]
+
+
+def test_openai_adapts_when_a_new_model_rejects_parameters(monkeypatch):
+    """최신 모델(gpt-6-luna 등)은 max_tokens·temperature를 거절할 수 있다. 거절되면 형식을 바꿔 다시 보낸다."""
+    import asyncio
+
+    import httpx
+
+    from packages.common import config
+    from packages.common.config import ProviderConfig
+    from packages.llm_router.providers import LLMRequest, OpenAIProvider
+
+    sent = []
+
+    class _Client:
+        def __init__(self, *a, **kw): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, *, headers=None, json=None):
+            sent.append(dict(json))
+            if "max_tokens" in json:
+                return httpx.Response(400, json={"error": {"message": "Unsupported parameter: 'max_tokens'. Use 'max_completion_tokens' instead."}})
+            if "temperature" in json:
+                return httpx.Response(400, json={"error": {"message": "Unsupported value: 'temperature' does not support 0.1."}})
+            return httpx.Response(200, json={"choices": [{"message": {"content": "{}"}, "finish_reason": "stop"}],
+                                             "usage": {"prompt_tokens": 1, "completion_tokens": 1}})
+
+    monkeypatch.setenv("OPENAI_API_KEY", "k")
+    monkeypatch.setenv("LV_ALLOW_NETWORK", "1")
+    config.reset_settings()
+    monkeypatch.setattr(httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(OpenAIProvider, "_quirks", {})
+    try:
+        provider = OpenAIProvider(ProviderConfig(name="openai", enabled=True, api_key_env="OPENAI_API_KEY",
+                                                 model="gpt-6-luna", base_url="https://x", kind="cloud"))
+        result = asyncio.run(provider.generate(LLMRequest(system="s", user="u", temperature=0.1)))
+        assert result.ok, result.error
+        assert len(sent) == 3 and "max_completion_tokens" in sent[-1] and "temperature" not in sent[-1]
+        sent.clear()
+        assert asyncio.run(provider.generate(LLMRequest(system="s", user="u"))).ok
+        assert len(sent) == 1, "두 번째 호출부터는 처음부터 맞는 형식으로 보낸다"
+    finally:
+        monkeypatch.undo()
+        config.reset_settings()

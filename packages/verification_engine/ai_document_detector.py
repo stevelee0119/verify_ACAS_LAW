@@ -272,6 +272,9 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     from packages.llm_router.router import failure_summary
 
     failures = failure_summary(answers)
+    # 응답하지 못한 모델도 어떤 모델이었는지 남긴다.
+    failure_models = {e.provider: getattr(e, "model", "") for a in answers if not getattr(a, "used", False)
+                      for e in getattr(a, "executions", [])[-1:] if getattr(e, "provider", "")}
     failed_text = ", ".join(f"{name}({why})" for name, why in sorted(failures.items()))
 
     opinions = []
@@ -295,6 +298,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         if failed_text:
             rule_res.reasons.append(f"AI 교차검토를 수행하지 못해 규칙 기반 결과만 사용함 — 응답하지 못한 모델: {failed_text}")
             rule_res.signals["llm_failures"] = failures
+            rule_res.signals["llm_failure_models"] = failure_models
         return rule_res
 
     ranks = sorted(_VERDICT_RANK[o["verdict"]] for o in opinions)
@@ -355,6 +359,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                                    "score": round(o["score"], 3), "reasons": o["reasons"]} for o in opinions],
                  "llm_agreement": agreement,
                  "llm_failures": failures,
+                 "llm_failure_models": failure_models,
                  "rule_score": rule_res.score},
         used_llm=True,
     )

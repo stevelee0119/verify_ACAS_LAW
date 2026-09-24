@@ -373,6 +373,23 @@ function renderGateReasons(gate) {
 
 const PROVIDER_NAMES = {openai: "OpenAI", anthropic: "Anthropic", gemini: "Gemini"};
 
+// 모델 ID를 사람이 읽는 이름으로. 보고서(model_opinions.py)와 같은 규칙이다. 모르는 형식은 ID 그대로.
+function modelDisplayName(model) {
+  const id = String(model || "");
+  let m = id.match(/^claude-(opus|sonnet|haiku)-(\d+)(?:-(\d))?(?:-\d{8})?$/);
+  if (m) return `Claude ${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2]}${m[3] ? "." + m[3] : ""}`;
+  m = id.match(/^gemini-([\d.]+)-(flash|pro)(-lite)?(-preview)?$/);
+  if (m) return `Gemini ${m[1]} ${m[2][0].toUpperCase()}${m[2].slice(1)}${m[3] ? " Lite" : ""}${m[4] ? " Preview" : ""}`;
+  m = id.match(/^gpt-([\d.]+)(?:-([a-z]+))?$/);
+  if (m) return `GPT-${m[1]}${m[2] ? " " + m[2][0].toUpperCase() + m[2].slice(1) : ""}`;
+  return id;
+}
+
+function modelTitle(provider, model) {
+  const head = PROVIDER_NAMES[provider] || provider;
+  return model ? `${head} · ${modelDisplayName(model)}` : head;
+}
+
 function authorshipVerdict(verdict) {
   return {
     AI_FULL_GENERATION_LIKELY: ["AI 임의 전체 작성 유력", "badge CRITICAL"],
@@ -382,14 +399,14 @@ function authorshipVerdict(verdict) {
 }
 
 // 교차검증에 참여한 모델마다 결론·점수·설명을 모두 보인다. 응답하지 못한 모델은 사유와 함께 둔다.
-function modelOpinions(opinions, failures) {
+function modelOpinions(opinions, failures, failureModels = {}) {
   const box = node("div", null, "model-opinions");
   box.append(node("h4", `모델별 판정 (${opinions.length}개 응답${failures.length ? ` · ${failures.length}개 불참` : ""})`));
   for (const o of opinions) {
     const [verdictLabel, badgeClass] = authorshipVerdict(o.verdict);
     const block = node("div", null, "model-opinion");
     const head = node("div", null, "model-opinion-head");
-    head.append(node("strong", PROVIDER_NAMES[o.provider] || o.provider), node("span", verdictLabel, badgeClass),
+    head.append(node("strong", modelTitle(o.provider, o.model)), node("span", verdictLabel, badgeClass),
                 node("small", `점수 ${Math.round((o.score || 0) * 100)}%${o.model ? ` · ${o.model}` : ""}`, "muted"));
     block.append(head);
     const list = node("ul", null, "reason-list");
@@ -401,7 +418,7 @@ function modelOpinions(opinions, failures) {
   for (const [provider, why] of failures) {
     const block = node("div", null, "model-opinion model-opinion-failed");
     const head = node("div", null, "model-opinion-head");
-    head.append(node("strong", PROVIDER_NAMES[provider] || provider), node("span", "응답 없음", "badge INFO"));
+    head.append(node("strong", modelTitle(provider, failureModels[provider])), node("span", "응답 없음", "badge INFO"));
     block.append(head, node("p", why, "muted"));
     box.append(block);
   }
@@ -888,7 +905,7 @@ function renderAIVerification() {
         for (const r of summary) reasonList.append(node("li", r));
         item.append(reasonList);
       }
-      if (opinions.length || failures.length) item.append(modelOpinions(opinions, failures));
+      if (opinions.length || failures.length) item.append(modelOpinions(opinions, failures, res.signals?.llm_failure_models || {}));
       card1.append(item);
     }
   } else {
