@@ -19,9 +19,15 @@ from packages.source_adapters.transport import source_lookup_session  # noqa: E4
 
 ADMIN_RULES = ["사건별 부호문자의 부여에 관한 예규"]
 STATUTES = [("행정소송법", ["4", "13", "20"]), ("군인사법", ["51의2", "57", "60"]), ("국가배상법", ["2"]),
-            ("국가공무원법", ["83"]), ("행정기본법", [])]
+            ("국가공무원법", ["83"]), ("행정기본법", []),
+            # 헌법재판소 사건부호(헌가·헌바·헌마 등)의 근거. "*"는 전체 조문을 남긴다.
+            ("헌법재판소 사건의 접수에 관한 규칙", ["*"])]
 CASES = ["95다38677", "94누4615", "2006두16274", "2006두20631", "2012두26401", "2021두62148"]
 MAX_TEXT = 12000
+# 헌재결정례(target=detc) 조회 방식 점검용(G1). 널리 알려진 실존 결정만 둔다. 결과로 실존을 다시 확인한다.
+DETC_PROBES = ["2004헌마554", "2016헌나1", "2004헌나1", "2017헌바127", "2008헌가23", "2011헌바379",
+               "2009헌바17", "2013헌다1", "2015헌마236", "96헌가2", "89헌마82"]
+STATUTES_EXTRA = [("민사소송법", ["422", "442", "449"]), ("형사소송법", ["371", "441"])]
 
 
 def emit(record, sink):
@@ -75,6 +81,16 @@ def download_text(url):
                if len(response.content) <= 64 * 1024 else {})}
 
 
+def _opinion_counts(record):
+    from packages.legal_engine.opinion_attribution import split_opinions
+
+    counts = {}
+    for key in ("full_text", "summary"):
+        parts = split_opinions(record.get(key) or "")
+        counts[key] = {kind: (len(v) if isinstance(v, list) else len(v)) for kind, v in parts.items()}
+    return counts
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out")
@@ -104,7 +120,18 @@ def main() -> int:
                 for link in sorted(set(re.findall(r"/LSW/flDownload\.do\?flSeq=\d+", text))):
                     emit({"kind": "attachment", "rule_id": identifier, "url": "https://www.law.go.kr" + link,
                           **download_text("https://www.law.go.kr" + link)}, sink)
-        for law_name, articles in STATUTES:
+        for number in DETC_PROBES:
+            for extra in ({"query": number}, {"query": number, "search": 2}, {"nb": number}):
+                status, payload = raw_get(adapter, SEARCH_URL, {"target": "detc", "display": 20, **extra})
+                container = payload.get("DetcSearch") or payload.get("detcSearch") or {} if isinstance(payload, dict) else {}
+                rows = next((container.get(k) for k in ("detc", "Detc") if container.get(k) is not None), [])
+                rows = rows if isinstance(rows, list) else [rows]
+                emit({"kind": "detc_probe", "case_number": number, "params": extra, "status": status,
+                      "top_keys": list(payload)[:5] if isinstance(payload, dict) else str(type(payload)),
+                      "container_keys": list(container)[:12] if isinstance(container, dict) else None,
+                      "total": container.get("totalCnt") if isinstance(container, dict) else None,
+                      "first_rows": mask_oc([{k: r.get(k) for k in list(r)[:8]} for r in rows[:3] if isinstance(r, dict)])}, sink)
+        for law_name, articles in STATUTES + STATUTES_EXTRA:
             try:
                 response = adapter.resolve_statute(law_name)
             except Exception as exc:
@@ -112,6 +139,8 @@ def main() -> int:
                 continue
             record = response.records[0] if response.records else {}
             texts = {}
+            if articles == ["*"]:
+                articles = [str(r.get("number")) for r in record.get("provisions") or [] if r.get("number")]
             for article in articles:
                 from packages.source_adapters.legal_history import select_provision
                 provision = select_provision(record, article, None, None, None) if record else {}
@@ -137,7 +166,10 @@ def main() -> int:
                   "court": record.get("court"), "decision_date": record.get("decision_date"),
                   "case_name": record.get("case_name"), "case_kind": record.get("case_kind"),
                   "holding": (record.get("holding") or "")[:3000], "summary": (record.get("summary") or "")[:3000],
-                  "source_id": record.get("source_id")}, sink)
+                  "source_id": record.get("source_id"),
+                  # 의견 구간 분리(v3 D3)가 실제 판결 전문 형식에서 동작하는지 확인하는 값
+                  "full_text_length": len(record.get("full_text") or ""),
+                  "opinion_sections": _opinion_counts(record)}, sink)
     if sink:
         sink.close()
     return 0

@@ -203,7 +203,7 @@ def test_case_not_found_distinguishes_searched_scope_from_impossible_number():
     titles = {f.confidence_features["case_number"]: f for f in result.findings}
     assert titles["2019다22222"].title.startswith("조회 범위 내에서 찾지 못한")
     assert titles["2019다22222"].confidence_features["absence_scope"] == "SEARCHED_SCOPE_ONLY"
-    assert titles[future].title.startswith("성립할 수 없는 사건번호 형식")
+    assert titles[future].title.startswith("연도 불가능(미래 접수연도)(INVALID_FORMAT)")
     assert result.data["component_summary"]["invalid_format"] == 1
     assert result.data["component_summary"]["not_found_in_searched_scope"] == 1
 

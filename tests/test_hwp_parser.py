@@ -103,3 +103,30 @@ def test_truncated_compressed_stream_still_fails_with_diagnostics(monkeypatch):
     mock_ole(monkeypatch, {"BodyText/Section0": raw_deflate(record("본문" * 50))[:-6]})
     with pytest.raises(ParserError, match="Section0"):
         hwp._extract_hwp_text(b"synthetic")
+
+
+def _rec(tag, payload, level=0):
+    return struct.pack("<I", tag | (level << 10) | (len(payload) << 20)) + payload
+
+
+def _cell(col, row, text):
+    header = struct.pack("<hIHHHHH", 1, 0, 0, col, row, 1, 1)
+    return _rec(0x48, header, level=2) + _rec(0x43, text.encode("utf-16-le"), level=3)
+
+
+def test_tables_are_rebuilt_cell_by_cell(monkeypatch):
+    # 표는 셀 단위로 읽는다. 셀 글자를 이어 붙이면 "징계처분서2026. 4. 28.피고"처럼 칸 경계가 사라진다.
+    body = (_rec(0x43, "머리글".encode("utf-16-le"), level=0)
+            + _rec(0x4D, struct.pack("<IHH", 0, 2, 2), level=1)
+            + _cell(0, 0, "행정1심사건") + _cell(1, 0, "구합") + _cell(0, 1, "행정상고사건") + _cell(1, 1, "두")
+            + _rec(0x43, "표 뒤 문단".encode("utf-16-le"), level=0))
+    mock_ole(monkeypatch, {"BodyText/Section0": raw_deflate(body)})
+    [table] = hwp._extract_hwp_tables(b"synthetic")
+    assert table == [["행정1심사건", "구합"], ["행정상고사건", "두"]]
+
+
+def test_empty_cells_keep_their_position(monkeypatch):
+    header = struct.pack("<hIHHHHH", 1, 0, 0, 1, 0, 1, 1)
+    body = (_rec(0x4D, struct.pack("<IHH", 0, 1, 2), level=1) + _rec(0x48, header, level=2))
+    mock_ole(monkeypatch, {"BodyText/Section0": raw_deflate(body)})
+    assert hwp._extract_hwp_tables(b"synthetic") == [[["", ""]]]

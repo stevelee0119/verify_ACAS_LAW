@@ -18,18 +18,77 @@ from packages.common.enums import CitationType
 
 from .normalize import split_case_number
 
-CASE_CODES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "case_codes.json"
+CASE_CODES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "case_codes.yaml"
 DATED_TYPES = (CitationType.CASE, CitationType.CONSTITUTIONAL, CitationType.INTERPRETATION,
                CitationType.ADMIN_APPEAL, CitationType.ADMIN_RULE)
 
 
 @lru_cache(maxsize=1)
 def case_code_table() -> Dict[str, Any]:
-    """공식 재판예규에서 옮긴 사건부호표. 파일이 없으면 빈 표(법원–부호 호환은 판단하지 않는다)."""
+    """공식 재판예규 별표에서 옮긴 사건부호표(scripts/build_case_codes.py). 파일이 없으면 빈 표(판단하지 않음)."""
     try:
-        return json.loads(CASE_CODES_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        import yaml
+
+        return yaml.safe_load(CASE_CODES_PATH.read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError, ImportError):
         return {}
+
+
+LEVEL_FAMILY = {"SUPREME": "대법원", "FIRST": "하급법원", "APPELLATE": "하급법원"}
+
+
+def court_family(court: str) -> Optional[str]:
+    """문서에 적힌 법원 → 대법원 / 헌법재판소 / 하급법원. 알 수 없으면 None."""
+    name = (court or "").replace(" ", "")
+    if not name:
+        return None
+    if "대법원" in name:
+        return "대법원"
+    if "헌법재판소" in name:
+        return "헌법재판소"
+    if name.endswith("법원") or "법원" in name or name.endswith("지원"):
+        return "하급법원"
+    return None
+
+
+def code_court_family(code: str) -> Optional[str]:
+    """사건부호가 가리키는 법원 종류. 표에 없거나 여러 법원에 쓰이는 부호는 None(unknown)."""
+    table = case_code_table()
+    if code in (table.get("constitutional_codes") or {}):
+        return "헌법재판소"
+    entry = (table.get("codes") or {}).get(code)
+    return LEVEL_FAMILY.get((entry or {}).get("level")) if entry else None
+
+
+def _court_code_violations(citation: Any, code: str, year: int,
+                           official_record: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    table = case_code_table()
+    source = table.get("source") or {}
+    written = court_family(citation.court or "")
+    inferred = code_court_family(code)
+    if not written or not inferred or written == inferred:
+        return []
+    entry = (table.get("codes") or {}).get(code) or {}
+    meaning = entry.get("case_type") or (table.get("constitutional_codes") or {}).get(code) or ""
+    until = entry.get("supreme_court_until_year")
+    if until and written == "대법원":
+        if year <= int(until) or year <= int(entry.get("supreme_court_unknown_until_year") or until):
+            return []  # 그 시기 대법원도 이 부호를 썼거나, 경계 연도라 판단하지 않는다
+        return [{"rule_id": "FMT.CODE_OUT_OF_PERIOD", "field": "case_number", "value": f"{year}{code}",
+                 "kind": "COURT_CODE", "inferred_court": inferred,
+                 "reason": f"대법원 사건부호로 '{code}'는 {until}년까지 접수된 사건에만 쓰였다"
+                           f"(현행 예규상 '{code}'는 {meaning})", "source_url": source.get("url")}]
+    reason = (f"사건부호 '{code}'는 {meaning or inferred + ' 사건'} 부호로 {inferred} 사건에 붙는다. "
+              f"문서는 {citation.court}로 적었다(근거: {source.get('title', '사건부호표')})")
+    violation = {"rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{citation.court} {code}",
+                 "kind": "COURT_CODE", "inferred_court": inferred, "reason": reason,
+                 "source_url": source.get("url")}
+    actual = (official_record or {}).get("court")
+    if actual and court_family(actual) == inferred:
+        kind = (official_record or {}).get("case_kind") or "판결"
+        violation["actual_court"] = actual
+        violation["reason"] += f". 법원 표시 오류(실제: {actual} {kind.replace('전원합의체 ', '')})"
+    return [violation]
 
 
 def _decision(citation: Any) -> tuple:
@@ -62,10 +121,10 @@ def format_violations(citation: Any, *, today: Optional[date] = None,
         return out
     decided, written, impossible = _decision(citation)
     if impossible:
-        out.append({"rule_id": "FMT.DATE_NOT_ON_CALENDAR", "field": "date", "value": written,
+        out.append({"rule_id": "FMT.DATE_NOT_ON_CALENDAR", "kind": "DATE", "field": "date", "value": written,
                     "reason": f"'{written}'은(는) 달력에 없는 날짜다"})
     elif decided and decided > today and not confirmed:
-        out.append({"rule_id": "FMT.FUTURE_DATE", "field": "date", "value": written,
+        out.append({"rule_id": "FMT.FUTURE_DATE", "kind": "DATE", "field": "date", "value": written,
                     "reason": f"'{written}'은(는) 아직 오지 않은 날짜다"})
     if citation.type not in (CitationType.CASE, CitationType.CONSTITUTIONAL):
         return out
@@ -75,29 +134,10 @@ def format_violations(citation: Any, *, today: Optional[date] = None,
     year, code, _serial = parts
     full_year = int(year) if len(year) == 4 else 1900 + int(year)
     if full_year > today.year and not confirmed:
-        out.append({"rule_id": "FMT.FUTURE_CASE_YEAR", "field": "case_number", "value": year,
+        out.append({"rule_id": "FMT.FUTURE_CASE_YEAR", "kind": "YEAR", "field": "case_number", "value": year,
                     "reason": f"사건번호의 접수연도({full_year})가 아직 오지 않았다"})
     if decided and decided.year < full_year and not confirmed:
-        out.append({"rule_id": "FMT.DECIDED_BEFORE_FILED", "field": "date", "value": written,
+        out.append({"rule_id": "FMT.DECIDED_BEFORE_FILED", "kind": "YEAR", "field": "date", "value": written,
                     "reason": f"선고연도({decided.year})가 사건번호의 접수연도({full_year})보다 앞선다"})
-    table = case_code_table()
-    entry = (table.get("codes") or {}).get(code)
-    court = (citation.court or "").replace(" ", "")
-    if entry and court:
-        levels = entry.get("courts") or []
-        allowed = any(level in court for level in levels)
-        if levels and not allowed and _court_level_known(court, table):
-            out.append({"rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{court} {code}",
-                        "reason": f"사건부호 '{code}'({entry.get('meaning')})는 {', '.join(levels)} 사건에 붙는다"
-                                  f"(근거: {table.get('source', {}).get('title')})",
-                        "source_url": table.get("source", {}).get("url")})
-        until = entry.get("supreme_court_until_year")
-        if until and "대법원" in court and full_year > int(until):
-            out.append({"rule_id": "FMT.CODE_OUT_OF_PERIOD", "field": "case_number", "value": f"{year}{code}",
-                        "reason": f"대법원 사건부호 '{code}'는 {until}년까지 접수된 사건에만 쓰였다"})
+    out += _court_code_violations(citation, code, full_year, official_record)
     return out
-
-
-def _court_level_known(court: str, table: Dict[str, Any]) -> bool:
-    """법원 명칭이 표가 아는 법원 종류인지. 모르는 법원명(군사법원 등 표에 없는 것)은 판단하지 않는다."""
-    return any(name in court for name in table.get("court_names") or [])

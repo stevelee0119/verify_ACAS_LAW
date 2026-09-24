@@ -216,6 +216,73 @@ def _extract_hwp_text(raw: bytes, notes: Optional[List[str]] = None) -> List[str
     https://tech.hancom.com/python-hwp-parsing-2/
     Preview text and embedded binary data are not substitutes for the body.
     """
+    results: List[str] = []
+    for data in _section_streams(raw, notes):
+        results.extend(_section_text(data))
+    return results
+
+
+def _extract_hwp_tables(raw: bytes, notes: Optional[List[str]] = None) -> List[List[List[str]]]:
+    """표를 셀 단위로 복원한다(행 목록, 각 행은 열 순서의 셀 글자). 셀 글자를 이어 붙이지 않는다."""
+    tables: List[List[List[str]]] = []
+    for data in _section_streams(raw, notes):
+        tables.extend(_section_tables(data))
+    return tables
+
+
+def _records(data: bytes):
+    cursor = count = 0
+    while cursor < len(data):
+        count += 1
+        if count > MAX_HWP_RECORDS or len(data) - cursor < 4:
+            raise ParserError("HWP 레코드 수 초과 또는 잘린 헤더")
+        header = struct.unpack_from("<I", data, cursor)[0]
+        tag, level, size = header & 0x3FF, (header >> 10) & 0x3FF, header >> 20
+        cursor += 4
+        if size == 0xFFF:
+            if len(data) - cursor < 4:
+                raise ParserError("HWP 확장 길이 헤더가 잘렸습니다")
+            size = struct.unpack_from("<I", data, cursor)[0]
+            cursor += 4
+        if size > len(data) - cursor:
+            raise ParserError("HWP 레코드 본문이 잘렸습니다")
+        yield tag, level, data[cursor:cursor + size]
+        cursor += size
+
+
+HWPTAG_TABLE, HWPTAG_LIST_HEADER, HWPTAG_PARA_TEXT = 0x4D, 0x48, 0x43
+
+
+def _section_tables(data: bytes) -> List[List[List[str]]]:
+    """HWPTAG_TABLE(행·열 수) 뒤의 셀 머리(HWPTAG_LIST_HEADER: 열·행 주소)마다 그 아래 문단 글자를 모은다."""
+    tables: List[List[List[str]]] = []
+    grid: Optional[List[List[str]]] = None
+    table_level = cell_level = -1
+    cell = None
+    for tag, level, body in _records(data):
+        if grid is not None and level < table_level:  # 표 제어보다 바깥 수준의 레코드가 나오면 표가 끝났다
+            tables.append(grid)
+            grid, cell = None, None
+        if tag == HWPTAG_TABLE and len(body) >= 8 and grid is None:
+            rows, cols = struct.unpack_from("<HH", body, 4)
+            if 0 < rows <= 2000 and 0 < cols <= 100:
+                grid = [["" for _ in range(cols)] for _ in range(rows)]
+                table_level = level
+        elif tag == HWPTAG_LIST_HEADER and grid is not None and len(body) >= 12 and level in (table_level, table_level + 1):
+            col, row = struct.unpack_from("<HH", body, 8)
+            cell = (row, col) if row < len(grid) and col < len(grid[0]) else None
+            cell_level = level
+        elif tag == HWPTAG_PARA_TEXT and grid is not None and cell is not None and level > cell_level:
+            text = _paragraph_text(body)
+            if text:
+                row, col = cell
+                grid[row][col] = f"{grid[row][col]} {text}".strip() if grid[row][col] else text
+    if grid is not None:
+        tables.append(grid)
+    return tables
+
+
+def _section_streams(raw: bytes, notes: Optional[List[str]] = None) -> List[bytes]:
     import olefile
 
     with olefile.OleFileIO(io.BytesIO(raw)) as ole:
@@ -232,7 +299,7 @@ def _extract_hwp_text(raw: bytes, notes: Optional[List[str]] = None) -> List[str
         sections.sort(key=lambda path: int(path[1][7:]))
         if not sections or len(sections) > MAX_HWP_SECTIONS:
             raise ParserError("HWP 본문 구역이 없거나 구역 수 한도를 초과했습니다")
-        results, body_size = [], 0
+        streams, body_size = [], 0
         for section in sections:
             if ole.get_size(section) > MAX_HWP_SECTION_BYTES:
                 raise ParserError("HWP 본문 스트림 크기 한도 초과")
@@ -249,5 +316,5 @@ def _extract_hwp_text(raw: bytes, notes: Optional[List[str]] = None) -> List[str
             body_size += len(data)
             if body_size > MAX_HWP_BODY_BYTES:
                 raise ParserError("HWP 전체 본문 크기 한도 초과")
-            results.extend(_section_text(data))
-        return results
+            streams.append(data)
+        return streams

@@ -1,0 +1,415 @@
+source:
+  title: 사건별 부호문자의 부여에 관한 예규(재일 2003-1) [별표]
+  version: 재판예규 제1812호, 2022. 7. 29. 시행
+  admrul_id: '2200000102523'
+  url: https://www.law.go.kr/행정규칙/사건별부호문자의부여에관한예규
+  files:
+  - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145616549
+    sha256: b171df1dd317528dc981d0e0dfae4bebfb8ed15c5258a68432440e7cd1577e4a
+  - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145616551
+    sha256: c90a70d43220df966f378981ca205c15860ff4747ecdb659cb27819212bb8576
+coverage_note: 국가법령정보센터가 제공하는 별표 파일 2개에 실린 부호만 담았다. 민사·형사 일반 사건부호(별표 첫 부분)는 제공 파일에
+  없어 표에 넣지 않았다(unknown).
+codes:
+  초사:
+    case_type: 사회봉사허가청구사건, 사회봉사허가취소청구사건
+    level: ANY
+  초기:
+    case_type: 기타형사신청사건
+    level: ANY
+  감고:
+    case_type: 치료감호1심사건
+    level: FIRST
+  감노:
+    case_type: 치료감호항소사건
+    level: APPELLATE
+  감도:
+    case_type: 치료감호상고사건
+    level: SUPREME
+  감로:
+    case_type: 치료감호항고사건
+    level: APPELLATE
+  감모:
+    case_type: 치료감호재항고사건
+    level: SUPREME
+  감오:
+    case_type: 치료감호비상상고사건
+    level: SUPREME
+  감토:
+    case_type: 치료감호공조사건
+    level: ANY
+  감초:
+    case_type: 치료감호신청사건
+    level: ANY
+  전고:
+    case_type: 부착명령1심사건
+    level: FIRST
+  전노:
+    case_type: 부착명령항소사건
+    level: APPELLATE
+  전도:
+    case_type: 부착명령상고사건
+    level: SUPREME
+  전오:
+    case_type: 부착명령비상상고사건
+    level: SUPREME
+  전초:
+    case_type: 부착명령신청사건
+    level: ANY
+  전로:
+    case_type: 부착명령항고사건
+    level: APPELLATE
+  전모:
+    case_type: 부착명령재항고사건
+    level: SUPREME
+  보고:
+    case_type: 보호관찰명령1심사건
+    level: FIRST
+  보노:
+    case_type: 보호관찰명령항소사건
+    level: APPELLATE
+  보도:
+    case_type: 보호관찰명령상고사건
+    level: SUPREME
+  보오:
+    case_type: 보호관찰명령비상상고사건
+    level: SUPREME
+  보초:
+    case_type: 보호관찰명령신청사건
+    level: ANY
+  보로:
+    case_type: 보호관찰명령항고사건
+    level: APPELLATE
+  보모:
+    case_type: 보호관찰명령재항고사건
+    level: SUPREME
+  치고:
+    case_type: 치료명령1심사건
+    level: FIRST
+  치노:
+    case_type: 치료명령항소사건
+    level: APPELLATE
+  치도:
+    case_type: 치료명령상고사건
+    level: SUPREME
+  치오:
+    case_type: 치료명령비상상고사건
+    level: SUPREME
+  치초:
+    case_type: 치료명령신청(치료기간연장, 준수사항 추가·변경·삭제청구, 치료명령집행면제)사건
+    level: ANY
+  초치:
+    case_type: 성폭력수형자치료명령1심사건
+    level: FIRST
+  치로:
+    case_type: 치료명령항고사건
+    level: APPELLATE
+  치모:
+    case_type: 치료명령재항고사건
+    level: SUPREME
+  동고:
+    case_type: 아동·청소년보호1심사건
+    level: FIRST
+  동노:
+    case_type: 아동·청소년보호항소사건
+    level: APPELLATE
+  동도:
+    case_type: 아동·청소년보호상고사건
+    level: SUPREME
+  동오:
+    case_type: 아동·청소년보호비상상고사건
+    level: SUPREME
+  동초:
+    case_type: 아동·청소년보호신청사건
+    level: ANY
+  푸:
+    case_type: 소년보호사건
+    level: ANY
+  크:
+    case_type: 소년보호항고사건
+    level: APPELLATE
+  트:
+    case_type: 소년보호재항고사건
+    level: SUPREME
+  푸초:
+    case_type: 소년보호신청사건
+    level: ANY
+  푸집:
+    case_type: 소년보호집행감독사건
+    level: ANY
+  버:
+    case_type: 가정보호사건
+    level: ANY
+  서:
+    case_type: 가정보호항고사건
+    level: APPELLATE
+  어:
+    case_type: 가정보호재항고사건
+    level: SUPREME
+  저:
+    case_type: 가정보호신청사건
+    level: ANY
+  버집:
+    case_type: 가정보호집행감독사건
+    level: ANY
+  처:
+    case_type: 피해자보호명령사건
+    level: ANY
+  커:
+    case_type: 피해자보호명령항고사건
+    level: APPELLATE
+  터:
+    case_type: 피해자보호명령재항고사건
+    level: SUPREME
+  처집:
+    case_type: 피해자보호명령집행감독사건
+    level: ANY
+  동버:
+    case_type: 아동보호사건
+    level: ANY
+  동서:
+    case_type: 아동보호항고사건
+    level: APPELLATE
+  동어:
+    case_type: 아동보호재항고사건
+    level: SUPREME
+  동저:
+    case_type: 아동보호신청사건
+    level: ANY
+  동버집:
+    case_type: 아동보호집행감독사건
+    level: ANY
+  동처:
+    case_type: 피해아동보호명령사건
+    level: ANY
+  동커:
+    case_type: 피해아동보호명령항고사건
+    level: APPELLATE
+  동터:
+    case_type: 피해아동보호명령재항고사건
+    level: SUPREME
+  동처집:
+    case_type: 피해아동보호명령집행감독사건
+    level: ANY
+  성:
+    case_type: 성매매관련보호사건
+    level: ANY
+  성로:
+    case_type: 성매매관련보호항고사건
+    level: APPELLATE
+  성모:
+    case_type: 성매매관련보호재항고사건
+    level: SUPREME
+  성초:
+    case_type: 성매매관련보호신청사건
+    level: ANY
+  인:
+    case_type: 인신보호사건
+    level: ANY
+  인라:
+    case_type: 인신보호항고사건
+    level: APPELLATE
+  인마:
+    case_type: 인신보호재항고사건
+    level: SUPREME
+  인카:
+    case_type: 인신보호신청사건
+    level: ANY
+  정고:
+    case_type: 법정질서위반감치등사건
+    level: ANY
+  정기:
+    case_type: 기타감치신청사건
+    level: ANY
+  정로:
+    case_type: 법정질서위반감치등항고사건
+    level: APPELLATE
+  정모:
+    case_type: 법정질서위반감치등특별항고사건
+    level: SUPREME
+  드합:
+    case_type: 가사1심합의사건
+    level: FIRST
+  드단:
+    case_type: 가사1심단독사건
+    level: FIRST
+  르:
+    case_type: 가사항소사건
+    level: APPELLATE
+  므:
+    case_type: 가사상고사건
+    level: SUPREME
+  브:
+    case_type: 가사항고사건
+    level: APPELLATE
+  스:
+    case_type: 가사재항고사건
+    level: SUPREME
+  으:
+    case_type: 가사특별항고사건
+    level: SUPREME
+  너:
+    case_type: 가사조정사건
+    level: ANY
+  츠:
+    case_type: 가사공조사건
+    level: ANY
+  즈합:
+    case_type: 가사가압류,가처분등 합의사건
+    level: ANY
+  즈단:
+    case_type: 가사가압류,가처분등 단독사건
+    level: ANY
+  즈기:
+    case_type: 기타가사신청사건
+    level: ANY
+  느합:
+    case_type: 가사비송합의사건
+    level: FIRST
+  느단:
+    case_type: 가사비송단독사건
+    level: FIRST
+  후개:
+    case_type: 후견개시사건
+    level: ANY
+  후감:
+    case_type: 기본 후견감독사건
+    level: ANY
+  후기:
+    case_type: 기타후견사건
+    level: ANY
+  호명:
+    case_type: 개명사건
+    level: ANY
+  호기:
+    case_type: 가족관계등록(제적)비송사건
+    level: ANY
+  호협:
+    case_type: 협의이혼의사확인 신청사건
+    level: ANY
+  구합:
+    case_type: 행정1심사건
+    level: FIRST
+  구단:
+    case_type: 행정1심재정단독사건
+    level: FIRST
+  누:
+    case_type: 행정항소사건
+    level: APPELLATE
+    supreme_court_until_year: 1998
+    supreme_court_unknown_until_year: 1999
+    supreme_court_basis: 공식 판례 DB에 대법원이 '누' 부호로 선고한 사건이 있다(대법원 1995. 7. 11. 선고 94누4615
+      전원합의체 판결, https://www.law.go.kr/판례/(94누4615)). 현행 예규 별표의 '누'는 행정항소사건이고 제6조는
+      고등법원 1심 행정사건에도 '누'를 쓴다. 대법원 '누'의 마지막 사용 연도는 공식 자료로 확인하지 못해, 2000년 이후 접수 연도만
+      사용 기간 밖으로 보고 1998~1999년은 판단하지 않는다.
+    human_review: true
+  두:
+    case_type: 행정상고사건
+    level: SUPREME
+  루:
+    case_type: 행정항고사건
+    level: APPELLATE
+  무:
+    case_type: 행정재항고사건
+    level: SUPREME
+  부:
+    case_type: 행정특별항고사건
+    level: SUPREME
+  사:
+    case_type: 행정준항고사건
+    level: ANY
+  아:
+    case_type: 행정신청사건
+    level: ANY
+  허:
+    case_type: 특허1심사건
+    level: FIRST
+  후:
+    case_type: 특허상고사건
+    level: SUPREME
+  흐:
+    case_type: 특허재항고사건
+    level: SUPREME
+  히:
+    case_type: 특허특별(준)항고사건
+    level: ANY
+  카허:
+    case_type: 특허신청사건
+    level: ANY
+  수:
+    case_type: 선거소송사건
+    level: ANY
+  우:
+    case_type: 선거상고사건
+    level: SUPREME
+  수흐:
+    case_type: 선거항고(재항고, 준항고, 특별항고)사건
+    level: ANY
+  주:
+    case_type: 선거신청사건
+    level: ANY
+  추:
+    case_type: 특수소송사건
+    level: ANY
+  쿠:
+    case_type: 특수신청사건
+    level: ANY
+  정드:
+    case_type: 의무불이행자감치등사건
+    level: ANY
+  정브:
+    case_type: 의무불이행자감치등항고사건
+    level: APPELLATE
+  정스:
+    case_type: 의무불이행자감치등재항고사건
+    level: SUPREME
+  정과:
+    case_type: 과태료체납자감치사건
+    level: ANY
+  정러:
+    case_type: 과태료체납자감치항고사건
+    level: APPELLATE
+  정머:
+    case_type: 과태료체납자감치재항고사건
+    level: SUPREME
+  정국:
+    case_type: 국세체납자감치사건
+    level: ANY
+  정루:
+    case_type: 국세체납자감치항고사건
+    level: APPELLATE
+  정무:
+    case_type: 국세체납자감치재항고사건
+    level: SUPREME
+  정관:
+    case_type: 관세체납자감치사건
+    level: ANY
+  정르:
+    case_type: 관세체납자감치항고사건
+    level: APPELLATE
+  정므:
+    case_type: 관세체납자감치재항고사건
+    level: SUPREME
+  정지:
+    case_type: 지방세체납자감치사건
+    level: ANY
+  정리:
+    case_type: 지방세체납자감치항고사건
+    level: APPELLATE
+  정미:
+    case_type: 지방세체납자감치재항고사건
+    level: SUPREME
+constitutional_codes: {}
+overrides:
+  누:
+    supreme_court_until_year: 1998
+    supreme_court_unknown_until_year: 1999
+    supreme_court_basis: 공식 판례 DB에 대법원이 '누' 부호로 선고한 사건이 있다(대법원 1995. 7. 11. 선고 94누4615
+      전원합의체 판결, https://www.law.go.kr/판례/(94누4615)). 현행 예규 별표의 '누'는 행정항소사건이고 제6조는
+      고등법원 1심 행정사건에도 '누'를 쓴다. 대법원 '누'의 마지막 사용 연도는 공식 자료로 확인하지 못해, 2000년 이후 접수 연도만
+      사용 기간 밖으로 보고 1998~1999년은 판단하지 않는다.
+    human_review: true
+level_basis:
+  SUPREME: 상고·재항고·특별항고·비상상고 사건은 대법원 관할(민사소송법 제422조·제442조·제449조, 형사소송법 제371조·제441조)
+    — 공식 원문 수집으로 확인 예정
+  note: 항소·항고·1심 사건은 대법원·헌법재판소가 아닌 법원(하급법원) 사건으로만 본다. 고등법원·지방법원 구분은 하지 않는다(unknown).

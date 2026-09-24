@@ -25,7 +25,7 @@ KIND_RE = r"(?:전원합의체\s*)?(?:판결|결정|명령|선고|자)"
 
 # 대법원 2024. 1. 15. 선고 2023도12345 판결
 FULL_CASE_RE = re.compile(
-    rf"(?P<court>{COURT_RE})(?:\s*(?:은|는|도|이|가|의))?\s*"
+    rf"(?P<court>{COURT_RE})(?:\s*(?P<particle>은|는|도|이|가|의))?\s*"
     rf"(?P<date>{DATE_RE})\s*"
     rf"(?:선고|자)?\s*"
     rf"(?P<case_no>{CASE_NO_RE})"
@@ -224,7 +224,9 @@ def extract_from_text(
         citations.append(
             Citation.create(
                 CitationType.CASE,
-                m.group(0).strip(),
+                # 법원명 뒤 조사("헌법재판소는")는 인용 표기가 아니다
+                (f"{m.group('court').strip()} {text[m.start('date'):m.end()].strip()}" if m.group("particle")
+                 else m.group(0).strip()),
                 document_id=document_id,
                 block_id=block_id,
                 page=page,

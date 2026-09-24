@@ -30,10 +30,10 @@ from packages.common.textutil import contains_fuzzy, normalize_quote, similarity
 from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
-from .citation_format import format_violations
+from .citation_format import code_court_family, court_family, format_violations
 from .opinion_attribution import attribute_claim, direction_conflict, split_opinions
 from .quote_diff import quote_changes, quote_diff_summary, render_quote_diff
-from .normalize import canonical_article, case_number_possible, same_case_number
+from .normalize import canonical_article, case_number_possible, same_case_number, split_case_number
 from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
 from packages.source_adapters.legal_history import legal_date
@@ -42,6 +42,11 @@ from packages.source_adapters.transport import source_lookup_trace, source_recov
 ENGINE_NAME = "legal_engine"
 
 QUOTE_EXACT_THRESHOLD = 0.98
+FORMAT_RULE_LABELS = {
+    "FMT.DATE_NOT_ON_CALENDAR": "날짜 불가능", "FMT.FUTURE_DATE": "날짜 불가능(미래 날짜)",
+    "FMT.FUTURE_CASE_YEAR": "연도 불가능(미래 접수연도)", "FMT.DECIDED_BEFORE_FILED": "연도 역전",
+    "FMT.COURT_CODE_MISMATCH": "법원–부호 불일치", "FMT.CODE_OUT_OF_PERIOD": "법원–부호 불일치(사용 기간 밖)",
+}
 QUOTE_FUZZY_THRESHOLD = 0.88
 
 
@@ -244,6 +249,22 @@ class LegalVerifier:
                 verdict.notes.append(
                     f"조회 결과 {len(response.records)}건 중 사건번호가 일치하는 기록이 없다"
                 )
+
+        if official is None:
+            # 부호가 가리키는 법원이 문서의 법원과 다르면 그 법원의 DB로 다시 찾는다(v3 D2).
+            code_parts = split_case_number(case_number)
+            inferred = code_court_family(code_parts[1]) if code_parts else None
+            if inferred and court_family(citation.court or "") not in (None, inferred):
+                alt = self.registry.law.search_case(
+                    case_number, court=inferred if inferred in ("대법원", "헌법재판소") else None)
+                if alt.source_record:
+                    verdict.source_records.append(alt.source_record)
+                if alt.status == AdapterStatus.READY:
+                    official = self._match_official(citation, alt.records)
+                    if official is not None:
+                        verdict.notes.append(f"사건부호가 가리키는 법원({inferred})의 DB에서 확인: "
+                                             f"법원 표시 오류(실제: {official.get('court')})")
+                        verdict.review["actual_court"] = official.get("court")
 
         if official is None:
             verdict.levels["level1"] = "NOT_FOUND"
@@ -941,13 +962,18 @@ class LegalVerifier:
                     "case_number": citation.canonical_case_number or citation.case_number,
                     "rule_id": violations[0]["rule_id"], "violations": violations}
         reasons = "; ".join(v["reason"] for v in violations)
+        # 제목은 위반 유형별로(날짜 불가능 / 법원–부호 불일치 / 연도 역전) 적는다.
+        labels = list(dict.fromkeys(FORMAT_RULE_LABELS.get(v["rule_id"], "형식 위반") for v in violations))
+        features["defect_summary"] = "·".join(labels)
+        actual = next((v["actual_court"] for v in violations if v.get("actual_court")), None)
+        if actual:
+            features["actual_court"] = actual
         return Finding.create(
             type=FindingType.CASE_CITATION_ERROR if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
             else FindingType.LAW_CITATION_ERROR,
             status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH, evidence_grade=EvidenceGrade.A,
-            title=f"성립할 수 없는 사건번호 형식의 판례 인용(INVALID_FORMAT): {citation.raw_text}"
-            if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
-            else f"형식상 성립할 수 없는 인용(INVALID_FORMAT): {citation.raw_text}",
+            title=f"{'·'.join(labels)}(INVALID_FORMAT): {citation.raw_text}"
+                  + (f" — 법원 표시 오류(실제: {actual} 판결)" if actual else ""),
             detail=(f"{reasons}. 공식 DB 수록 여부와 무관하게 이 표기대로의 재판·문서는 존재할 수 없다. "
                     "오기인지 원문(판결문·회신문) 확인이 필요하다."),
             confidence=0.97, confidence_features=features,
