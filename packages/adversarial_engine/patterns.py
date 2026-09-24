@@ -20,7 +20,8 @@ def _c(pattern: str) -> Pattern[str]:
 
 INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # --- Instruction Override -------------------------------------------
-    (_c(r"(이전|앞의|위의|기존)\s*(의\s*)?(모든\s*)?(지시|명령|지침|규칙|프롬프트)[을를]?\s*(무시|무효|취소|잊)"),
+    (_c(r"(이전|앞의|앞선|위의|기존|종전|지금까지)\s*(의\s*)?(모든\s*)?(지시|명령|지침|규칙|프롬프트)[을를]?\s*"
+        r"(무시|무효|취소|잊|폐기|따르지)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(한국어)"),
     (_c(r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|directions?)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(영어)"),
@@ -86,7 +87,8 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "적합 판정 반환 요구"),
 
     # --- Output Manipulation --------------------------------------------
-    (_c(r"(이상\s*없음|문제\s*없음|정상|적법|진정)(으로|이라고|하다고)\s*(보고|기재|판정|표시|결론|평가)"),
+    (_c(r"['\"‘“]?(이상\s*없음|문제\s*없음|정상|적법|진정|적합|PASS)['\"’”]?\s*(으로|로|이라고|하다고)\s*"
+        r"(바꾸어|바꿔|변경하여|변경해)?\s*(보고|기재|판정|표시|결론|평가|처리)(?!받|되었|됐)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "특정 결론 강제(한국어)"),
     (_c(r"(오류|문제|의심|위험)\s*(가|이|은|는)?\s*(없다고|없음으로)\s*(보고|기재|결론|판단)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무오류 결론 강제"),
@@ -102,13 +104,15 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 기재 배제 요구(영어)"),
 
     # --- Verification Suppression ---------------------------------------
-    (_c(r"(판례|법령|인용|날짜|사건번호|출처)[를을]?\s*(다시\s*)?(확인|검증|조회|검색)하지\s*(말|마|않)"),
+    (_c(r"(판례|법령|인용|날짜|사건번호|출처|실존|진위|존재)\s*(여부)?[를을]?\s*(다시|별도로|따로|추가로|직접)?\s*"
+        r"(확인|검증|조회|검색)하지\s*(말|마|않)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "검증 금지 요구(한국어)"),
-    (_c(r"(검증|검토|분석)\s*(에서\s*)?(제외|생략|건너뛰|스킵)"),
+    (_c(r"(검증|검토|분석)\s*(대상|절차|범위)?\s*(에서\s*)?(제외|생략|건너뛰|스킵|뺄\s*것|빼)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 0.8, "검증 제외 요구"),
     (_c(r"do\s+not\s+(verify|check|validate|search|look\s+up|fact.?check)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "검증 금지 요구(영어)"),
-    (_c(r"(skip|bypass|omit)\s+(the\s+)?(verification|validation|citation\s+check|fact.?check)"),
+    (_c(r"(skip|bypass|omit)\s+(the\s+|all\s+)?(citation\s+|case\s+|source\s+|reference\s+)?"
+        r"(verification|validation|check(ing)?|fact.?check|lookup)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "검증 우회 요구"),
     (_c(r"이\s*(문서|서면|부분)[은는]?\s*(검증|검토)\s*(대상|절차)\s*에서\s*제외"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "문서 검증 대상 제외 선언"),
@@ -142,6 +146,26 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"(for\s+all\s+(future|subsequent)|from\s+now\s+on|always\s+remember)"),
      InjectionIntent.PERSISTENT_INSTRUCTION, 0.8, "지속 적용 요구(영어)"),
     (_c(r"(이\s*지시[는은])\s*[^.\n]{0,20}(유지|지속|계속)"), InjectionIntent.PERSISTENT_INSTRUCTION, 0.8, "지시 지속 선언"),
+    # --- 검증 우회·결론 강제·은폐(v2 R8: 실제 시험 문서에서 놓친 변형) ------------------
+    (_c(r"(전부|모두|전체)[를을]?\s*(실존|존재|정확|진정)[하한는]*\s*(것)?\s*(으로|이라고|하다고|한다고)\s*"
+        r"(판정|보고|기재|표시|처리|결론)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "실존·정확 판정 강제"),
+    (_c(r"(maintenance|debug|developer|admin|god|test)\s+mode"),
+     InjectionIntent.ROLE_OVERRIDE, 0.8, "운영 모드 전환 선언(영어)"),
+    (_c(r"(탐지|검증|판정|검토)\s*결과[를을]?\s*(모두|전부)?\s*['\"‘“]?(정상|적합|이상\s*없음|문제\s*없음|PASS)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "검증 결과 변경 요구"),
+    (_c(r"(이\s*)?(지시|문장|문구|내용)[의을를]?\s*(존재[를을]?\s*)?(언급|보고|공개|알리|표시)(하)?지\s*(말|마|않)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.9, "지시문 은폐 요구"),
+    (_c(r"(결론|판단)[을를]?\s*(우선|먼저)\s*(제시|쓰|기재|작성|적)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.7, "결론 선제시 요구"),
+    (_c(r"(report|return|output)\s+(zero|no|0)\s+(issues?|errors?|findings?|problems?)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무결함 보고 요구(영어)"),
+    (_c(r"(citations?|references?)\s+(are\s+)?(already\s+)?(verified|valid)\s*[;,.]|citations?_verified\s*=\s*true"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.8, "인용 검증 완료 주장(영어)"),
+    (_c(r"(citations?|references?|cases?)\s+(were|are|have\s+been)\s+(already\s+)?(confirmed|verified|checked)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 0.8, "인용 확인 완료 주장(영어)"),
+    (_c(r"(지시|지침|요청)[를을]?\s*(최우선|우선)\s*(으로|적으로)?\s*(따를|따르|적용|준수)"),
+     InjectionIntent.INSTRUCTION_OVERRIDE, 0.9, "지시 최우선 적용 요구"),
 ]
 
 # LLM·검증 시스템을 명시적으로 호명하는 표현 (메타 지시어 강한 신호)

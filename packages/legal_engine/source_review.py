@@ -108,8 +108,53 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
                       provision["text"])
         elif level != "VERIFIED":
             verdict.notes.append("직접 인용문은 해당 조항호목 원문 대조가 더 필요하다")
+    else:
+        _compare_asserted_content(verdict, provision)
+    if (verdict.levels["content"] in ("VERIFIED", "NOT_ASSERTED") and verdict.levels["temporal"] == "VERIFIED"
+            and verdict.status != VerificationStatus.CONTRADICTED):
+        # 법령·조문 존재, 문서가 주장한 내용(또는 주장 없음), 기준일 시행 버전까지 확인했다.
+        # 기준일이 없으면 본문 대조를 마쳐도 PARTIALLY_VERIFIED로 두고, 본문 대조 완료는
+        # component_summary의 content_confirmed로 따로 센다.
+        verdict.status = VerificationStatus.VERIFIED
     verdict.notes.append("시행 버전·본문 대조는 사건에 대한 법률 적용 결론이 아니다")
     return verdict
+
+
+def _compare_asserted_content(verdict, provision):
+    """직접 인용문이 없을 때, 문서가 조문에 대해 풀어 쓴 주장(claim_text)을 조문 본문과 대조한다(v2 R5)."""
+    from .provision_content import compare_claim_to_provision
+
+    citation = verdict.citation
+    claim = (citation.attributes or {}).get("claim_text")
+    outcome = compare_claim_to_provision(
+        claim, provision.get("text") or "",
+        numbers_only=(citation.attributes or {}).get("claim_mode") == "PARENTHETICAL_BASIS")
+    verdict.review["content_comparison"] = {**outcome, "claim_text": claim}
+    status = outcome["status"]
+    verdict.levels["content"] = status
+    if status != "CONTRADICTED":
+        return
+    verdict.status = VerificationStatus.CONTRADICTED
+    exact_version = verdict.levels.get("temporal") == "VERIFIED"
+    pairs = "; ".join(f"문서 {m['claimed']} / 조문 {m['official']}" for m in outcome["mismatches"])
+    ids = [r.source_record_id for r in verdict.source_records]
+    verdict.findings.append(Finding.create(
+        type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.CONTRADICTED,
+        severity=Severity.HIGH, evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
+        title=f"조문 본문과 수치가 다르다: {citation.raw_text} ({pairs})",
+        detail=("문서가 이 조문의 내용으로 적은 기간·비율이 조회한 시행 버전의 조문 본문과 다르다. "
+                + ("" if exact_version else "기준일이 없어 현행(조회) 버전과 비교했다. 사건 당시 시행 버전이 다르면 "
+                   "결론이 달라질 수 있으므로 시행 버전을 확인해야 한다.")),
+        document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+        engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "SOURCE_TEXT", "NUMERIC_MISMATCH"],
+        confidence_features={"numeric_mismatches": outcome["mismatches"], "claim_text": claim,
+                             "compared_version": (verdict.review.get("version") or {}).get("version_id")},
+        evidence=[Evidence.create(description="조회한 공식 버전의 조문 본문", grade=EvidenceGrade.A,
+                                  excerpt=(provision.get("text") or "")[:400], source_record_ids=ids),
+                  Evidence.create(description="문서의 주장", grade=EvidenceGrade.B,
+                                  document_id=citation.document_id, block_id=citation.block_id,
+                                  excerpt=claim or "")],
+    ))
 
 
 def _article_absent(verdict, official, provision, as_of):

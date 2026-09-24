@@ -130,12 +130,15 @@ def test_statute_components_are_separate_and_missing_date_does_not_unverify_the_
     for verdict in result.data["verdicts"]:
         parts = components(verdict)
         assert parts["law_existence"] == parts["article_existence"] == parts["version"] == "CONFIRMED"
-        assert parts["text_match"] == "TEXT_AVAILABLE"
+        # 문서가 조문 내용을 주장하지 않은 인용은 대조할 주장이 없다(v2 R5: 본문 대조를 마친 인용은 VERIFIED).
+        assert parts["text_match"] == "NOT_APPLICABLE"
         assert parts["temporal_applicability"] == "UNVERIFIED"
         assert parts["case_applicability"] == "REVIEW_NEEDED"
+        # 기준일이 없으므로 전체 상태는 PARTIALLY_VERIFIED이고, 본문 대조 완료는 content_confirmed로 센다.
         assert verdict["identity_confirmed"] and verdict["status"] == "PARTIALLY_VERIFIED"
     summary = result.data["component_summary"]
     assert summary["identity_confirmed"] == 2 and summary["temporal_pending"] == 2
+    assert summary["content_confirmed"] == 2
     assert summary["not_found_in_searched_scope"] == 0 and summary["lookup_unverified"] == 0
     assert not [f for f in result.findings if f.status in (VerificationStatus.NOT_FOUND, VerificationStatus.CONTRADICTED)]
 

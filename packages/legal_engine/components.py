@@ -48,6 +48,7 @@ DECISION_COMPONENTS = [
 _MEANING = {
     "VERIFIED": ("CONFIRMED", "공식 원문으로 확인"),
     "AVAILABLE": ("TEXT_AVAILABLE", "공식 본문 확보(인용문 없음)"),
+    "NOT_ASSERTED": ("NOT_APPLICABLE", "문서가 조문 내용을 주장하지 않음(근거 표시만)"),
     "PARTIALLY_VERIFIED": ("PARTIAL", "일부 일치"),
     "TRUNCATED": ("PARTIAL", "원문 일부만 인용"),
     "CONTRADICTED": ("MISMATCH", "공식 원문과 불일치"),
@@ -120,8 +121,9 @@ def identity_confirmed(citation_type: str, components: List[Dict[str, Any]]) -> 
 
 def component_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
     """문서 단위 집계. '확인 0건'처럼 가장 약한 단계만 세지 않고 단계별로 센다."""
-    summary = {"identity_confirmed": 0, "temporal_pending": 0, "not_found_in_searched_scope": 0,
-               "invalid_format": 0, "mismatch": 0, "lookup_unverified": 0, "fully_verified": 0}
+    summary = {"identity_confirmed": 0, "content_confirmed": 0, "temporal_pending": 0,
+               "not_found_in_searched_scope": 0, "invalid_format": 0, "mismatch": 0, "lookup_unverified": 0,
+               "fully_verified": 0}
     for entry in entries:
         components = entry.get("components") or []
         statuses = {c["key"]: c["status"] for c in components}
@@ -129,6 +131,12 @@ def component_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             summary["identity_confirmed"] += 1
             if statuses.get("temporal_applicability") not in (None, "CONFIRMED"):
                 summary["temporal_pending"] += 1
+            # 인용 대상과, 문서가 그 대상에 대해 주장한 내용(인용문·조문 내용)까지 공식 원문으로 확인한 수.
+            # 시간적 적용(기준일)만 남은 인용이 '미확인'으로 읽히지 않게 따로 센다(v2 R5).
+            content = statuses.get("text_match") or statuses.get("quote_match") or statuses.get("quote")
+            if content in ("CONFIRMED", "NOT_APPLICABLE") and not any(
+                    c["status"] == "MISMATCH" for c in components):
+                summary["content_confirmed"] += 1
         if any(c["status"] == "INVALID_FORMAT" for c in components):
             summary["invalid_format"] += 1
         elif any(c["status"].startswith("NOT_FOUND") for c in components):

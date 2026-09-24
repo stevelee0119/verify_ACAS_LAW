@@ -15,7 +15,7 @@ from __future__ import annotations
 import bisect
 import re
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from packages.common.schemas import Block, NormalizedDocument
 
@@ -163,15 +163,33 @@ class ReadingText:
         return [s.block for s in self.segments if s.end > start and s.start < end]
 
 
+def _right_edges(blocks: List[Block], pages: Dict[int, Any]) -> Dict[int, float]:
+    """쪽마다 본문 오른쪽 끝. 양쪽 맞춤 줄들이 함께 끝나는 x 좌표(2줄 이상 반복)를 쓰고, 없으면 최댓값을 쓴다.
+
+    튀는 줄 하나(페이지 밖으로 나간 줄 등)에 끌려가지 않게 하고, 짧은 줄만 있는 쪽을 '꽉 찬 줄'로 읽지
+    않도록 쪽 너비의 80%보다 작게 잡지 않는다.
+    """
+    by_page: Dict[int, List[float]] = {}
+    for block in blocks:
+        if block.bbox is not None:
+            by_page.setdefault(block.page, []).append(round(block.bbox.x1))
+    edges: Dict[int, float] = {}
+    for number, values in by_page.items():
+        repeated = [v for v in set(values) if sum(abs(v - w) <= 2 for w in values) >= 2]
+        edge = float(max(repeated) if repeated else max(values))
+        page = pages.get(number)
+        if page is not None and page.width:
+            edge = max(edge, 0.8 * page.width)
+        edges[number] = edge
+    return edges
+
+
 def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]] = None) -> ReadingText:
     """본문 블록(표·머리글 제외)을 읽는 순서대로 이어 하나의 본문으로 만든다."""
     chosen = list(blocks) if blocks is not None else [
         b for b in doc.body_blocks() if b.block_type not in ("table", "table_line", RUNNING_HEAD)]
     pages = {p.page_number: p for p in doc.pages}
-    right_edges: Dict[int, float] = {}
-    for block in chosen:
-        if block.bbox is not None:
-            right_edges[block.page] = max(right_edges.get(block.page, 0.0), block.bbox.x1)
+    right_edges = _right_edges(chosen, pages)
     parts: List[str] = []
     segments: List[Segment] = []
     cursor = 0
@@ -192,3 +210,21 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
         cursor += len(text)
         previous = block
     return ReadingText("".join(parts), segments)
+
+
+# --- 문장 경계 --------------------------------------------------------------------
+QUOTE_SPAN_RE = re.compile(r"[“\"]([^”\"\n]{10,600})[”\"]")
+# 문장 끝: "…다." "…함." "…판결)." 줄바꿈(문단). 날짜의 마침표("2003. 5.")는 끝이 아니다.
+SENTENCE_END_RE = re.compile(r"(?<=[다음함임됨])\.(?=\s|$)|\)\.(?=\s|$)|[!?](?=\s|$)|\n")
+
+
+def sentence_bounds(text: str) -> List[Tuple[int, int]]:
+    """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
+    masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
+    bounds, start = [], 0
+    for end in SENTENCE_END_RE.finditer(masked):
+        bounds.append((start, end.end()))
+        start = end.end()
+    if start < len(text):
+        bounds.append((start, len(text)))
+    return bounds

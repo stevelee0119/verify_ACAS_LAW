@@ -60,7 +60,7 @@ jobs:
       - name: 점수를 Job Summary에 기록
         if: always()
         run: |
-          for f in reports-ci/eval_*.md; do sed -n '1,40p' "$f"; echo; done | tee -a "$GITHUB_STEP_SUMMARY"
+          for f in reports-ci/eval_*.md; do cat "$f"; echo; done | tee -a "$GITHUB_STEP_SUMMARY"
       - name: 평가 결과 업로드
         if: always()
         uses: actions/upload-artifact@v4

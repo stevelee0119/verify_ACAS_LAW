@@ -17,6 +17,7 @@ from packages.common.schemas import BBox, Block, NormalizedDocument, Page, new_i
 from packages.common.config import get_settings
 
 from .base import DocumentParser, ParserError
+from .line_tables import rebuild_line_tables
 from .ocr import get_ocr_adapter
 from .rasterize import render_pages
 
@@ -82,6 +83,22 @@ def _inside(bbox, area, margin: float = 2.0) -> bool:
     x0, top, x1, bottom = (bbox.as_tuple() if hasattr(bbox, "as_tuple") else bbox)
     ax0, atop, ax1, abottom = area
     return x0 >= ax0 - margin and x1 <= ax1 + margin and top >= atop - margin and bottom <= abottom + margin
+
+
+def _column_segments(line: List[Dict[str, Any]]) -> List[List[Any]]:
+    """글자 사이 간격이 글자 크기의 1.5배를 넘는 곳에서 줄을 칸으로 나눈다. [[x0, x1, text], ...]"""
+    segments: List[List[Any]] = []
+    previous = None
+    for char in line:
+        size = float(char.get("size", 10) or 10)
+        x0, x1 = float(char.get("x0", 0)), float(char.get("x1", 0))
+        if previous is None or x0 - previous > 1.5 * size:
+            segments.append([x0, x1, char.get("text", "")])
+        else:
+            segments[-1][1] = x1
+            segments[-1][2] += char.get("text", "")
+        previous = x1
+    return [[round(a, 1), round(b, 1), t.strip()] for a, b, t in segments if t.strip()]
 
 
 def _link_lines_to_table(blocks, table_bbox, table_ref) -> List[str]:
@@ -175,6 +192,10 @@ class PdfParser(DocumentParser):
                         "size": round(float(line[0].get("size", 0)), 2),
                         "hidden_reason": hidden_reason,
                     }
+                    segments = _column_segments(line)
+                    if len(segments) > 1:
+                        # 칸 사이가 크게 벌어진 줄은 괘선 없는 표의 한 줄일 수 있다(표 복원에 쓴다).
+                        attributes["segments"] = segments
                     block = Block(
                         block_id=new_id("B"),
                         text=text,
@@ -247,6 +268,9 @@ class PdfParser(DocumentParser):
                             attributes={"table_index": t_index, "cells": rows, "table_ref": table_ref},
                         )
                         p.blocks.append(blk)
+                    if not tables:
+                        # 괘선 없는 표는 pdfplumber가 찾지 못한다. 줄의 칸 좌표로 복원한다.
+                        rebuild_line_tables(doc, p)
                 except Exception as exc:  # pragma: no cover - 파서 방어
                     doc.parse_warnings.append(f"page {index} table extraction failed: {exc}")
 
@@ -501,6 +525,7 @@ class PdfParser(DocumentParser):
                 names = reader.trailer["/Root"].get("/Names", {})
                 if names and "/EmbeddedFiles" in names:
                     doc.structure["has_embedded_files"] = True
+                    doc.structure["embedded_files"] = _embedded_files(reader)
             except Exception:
                 pass
 
@@ -659,6 +684,34 @@ def _image_coverage(page: Any) -> float:
     covered = sum(max(0.0, float(i["x1"]) - float(i["x0"])) * max(0.0, float(i["bottom"]) - float(i["top"]))
                   for i in (page.images or []))
     return min(1.0, covered / area)
+
+
+MAX_EMBEDDED_FILES = 20
+MAX_EMBEDDED_BYTES = 2_000_000
+MAX_EMBEDDED_TEXT = 20_000
+
+
+def _embedded_files(reader: Any) -> List[Dict[str, Any]]:
+    """첨부파일의 이름·크기·해시와, 글자 파일이면 내용 일부를 남긴다. 첨부 안의 지시문도 검사 대상이다."""
+    import hashlib
+
+    out: List[Dict[str, Any]] = []
+    for name, contents in list((reader.attachments or {}).items())[:MAX_EMBEDDED_FILES]:
+        for data in contents[:1]:
+            entry: Dict[str, Any] = {"name": str(name), "size": len(data),
+                                     "sha256": hashlib.sha256(data).hexdigest(), "is_text": False}
+            if len(data) <= MAX_EMBEDDED_BYTES:
+                for encoding in ("utf-8", "utf-16", "cp949"):
+                    try:
+                        text = data.decode(encoding)
+                    except UnicodeDecodeError:
+                        continue
+                    printable = sum(ch.isprintable() or ch in "\r\n\t" for ch in text[:5000])
+                    if text and printable / min(len(text), 5000) >= 0.95:
+                        entry.update(is_text=True, encoding=encoding, text=text[:MAX_EMBEDDED_TEXT])
+                        break
+            out.append(entry)
+    return out
 
 
 def _has_filled_shapes(raw: bytes) -> bool:

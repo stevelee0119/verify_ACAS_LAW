@@ -4,7 +4,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
@@ -17,7 +17,8 @@ from packages.common.enums import (
     Severity,
     VerificationStatus,
 )
-from packages.common.schemas import Block, EngineResult, Evidence, Finding, NormalizedDocument
+from packages.common.schemas import BODY_LAYERS, BBox, Block, EngineResult, Evidence, Finding, NormalizedDocument
+from packages.document_engine.reading_text import build_reading_text, join_separator, sentence_bounds
 
 from .classifier import Classification, classify, severity_for
 from .cross_layer import compare_layers
@@ -27,6 +28,82 @@ from .unicode_scan import scan_unicode
 ENGINE_NAME = "adversarial_engine"
 
 MAX_EXCERPT = 300
+
+
+# 지시문이 숨겨진 경로. 경로마다 따로 보고해야 한 경로만 막고 끝내지 않는다.
+PATH_LABELS = {
+    "VISIBLE_TEXT": "보이는 본문", "WHITE_ON_WHITE": "흰 글자(배경과 같은 색)", "TINY_FONT": "아주 작은 글자",
+    "OFF_PAGE": "페이지 밖 좌표", "INVISIBLE_RENDER_MODE": "보이지 않는 렌더모드(Tr 3)",
+    "COVERED_BY_SHAPE": "흰 도형으로 덮은 글자", "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
+    "METADATA": "문서 속성(메타데이터)", "ATTACHMENT": "첨부파일 내용", "RUNNING_HEAD": "머리글·바닥글", "OTHER_HIDDEN": "기타 숨김 레이어",
+}
+
+
+def _injection_path(block: Block) -> str:
+    reason = str(block.attributes.get("hidden_reason") or "")
+    for key in ("WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE", "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE"):
+        if reason.startswith(key):
+            return key
+    if block.source_layer == "ocr_layer":
+        return "OCR_LAYER"
+    if block.block_type == "comment" or block.source_layer == "annotation":
+        return "ANNOTATION"
+    if block.block_type == "running_head":
+        return "RUNNING_HEAD"
+    if block.visible and block.source_layer == "visible_text":
+        return "VISIBLE_TEXT"
+    return "OTHER_HIDDEN"
+
+
+def _union_bbox(blocks: List[Block]) -> Optional[BBox]:
+    boxes = [b.bbox for b in blocks if b.bbox is not None]
+    if not boxes:
+        return None
+    return BBox(min(b.x0 for b in boxes), min(b.y0 for b in boxes), max(b.x1 for b in boxes), max(b.y1 for b in boxes))
+
+
+def _passages(doc: NormalizedDocument) -> List[Tuple[str, List[Block]]]:
+    """검사 단위. 한 지시문이 여러 줄에 걸쳐도 한 번에 읽는다.
+
+    - 보이는 본문(머리글·바닥글, 표의 줄 포함)은 읽기 본문의 문장 단위
+    - 숨은 레이어는 같은 쪽·같은 숨김 경로로 이어진 줄 묶음 단위
+    - 표 블록·주석 등 나머지는 블록 단위
+    """
+    out: List[Tuple[str, List[Block]]] = []
+    run: List[Block] = []
+
+    def flush() -> None:
+        if run:
+            text = ""
+            for block in run:
+                piece = block.text.strip()
+                text = (text + join_separator(text, piece) + piece) if text else piece
+            out.append((text, list(run)))
+            run.clear()
+
+    visible: List[Block] = []
+    for block in doc.blocks:
+        if not (block.text or "").strip():
+            continue
+        if block.visible and block.source_layer in BODY_LAYERS and block.block_type != "table":
+            flush()
+            visible.append(block)
+            continue
+        if block.visible or block.block_type in ("table", "comment"):
+            flush()
+            out.append((block.text, [block]))
+            continue
+        key = (block.page, block.source_layer, block.attributes.get("hidden_reason"))
+        if run and key != (run[-1].page, run[-1].source_layer, run[-1].attributes.get("hidden_reason")):
+            flush()
+        run.append(block)
+    flush()
+    reading = build_reading_text(doc, visible)
+    for start, end in sentence_bounds(reading.text):
+        text = reading.text[start:end].strip()
+        if text:
+            out.append((text, reading.blocks_between(start, end) or [reading.locate(start)[0]]))
+    return out
 
 
 def _excerpt(text: str) -> str:
@@ -47,6 +124,7 @@ class AdversarialScanner:
         findings.extend(self._scan_encoding(doc))
         findings.extend(self._scan_cross_layer(doc))
         findings.extend(self._scan_multimodal(doc))
+        findings.extend(self._scan_attachments(doc))
 
         result.findings = findings
         result.data["adversarial_risk"] = self.risk_level(findings)
@@ -57,11 +135,10 @@ class AdversarialScanner:
     # -- 레이어별 검사 ----------------------------------------------------
     def _scan_blocks(self, doc: NormalizedDocument) -> List[Finding]:
         out: List[Finding] = []
-        for block in doc.blocks:
-            if not block.text.strip():
-                continue
+        for text, blocks in _passages(doc):
+            block = blocks[0]
             classification = classify(
-                block.text,
+                text,
                 source_layer=block.source_layer,
                 visible=block.visible,
                 hidden_reason=block.attributes.get("hidden_reason"),
@@ -73,14 +150,18 @@ class AdversarialScanner:
             descriptive = bool(classification.features.get("descriptive_mention"))
             finding_type = self._finding_type_for_block(block, classification)
             severity = severity_for(classification, in_ocr_layer=in_ocr)
+            bbox = _union_bbox(blocks)
             features = {
                 "deterministic_rule": True,
                 "cross_layer_mismatch": not block.visible,
                 "forensic_signal": classification.features.get("corroborating_signals", 0),
                 **classification.features,
                 # 원문(OCR 포함)과 위치를 그대로 남긴다. 요약 발췌만으로는 판단을 되짚을 수 없다.
-                "observed_text": block.text[:2000],
-                "bbox": block.bbox.as_tuple() if block.bbox else None,
+                "observed_text": text[:2000],
+                "block_ids": [b.block_id for b in blocks],
+                "hidden_reason": block.attributes.get("hidden_reason"),
+                "injection_path": _injection_path(block),
+                "bbox": bbox.as_tuple() if bbox else None,
             }
             out.append(
                 Finding.create(
@@ -89,7 +170,7 @@ class AdversarialScanner:
                     severity=severity,
                     evidence_grade=EvidenceGrade.A if not block.visible else EvidenceGrade.C,
                     title=("지시문을 주제로 설명·언급하는 문구 (명령 아님)" if descriptive
-                           else self._title_for(finding_type, classification)),
+                           else self._title_for(finding_type, classification, block)),
                     detail=self._detail_for(block, classification),
                     advisory_only=descriptive,
                     confidence=confidence_score(features),
@@ -97,12 +178,12 @@ class AdversarialScanner:
                     document_id=doc.document_id,
                     block_id=block.block_id,
                     page=block.page,
-                    bbox=block.bbox,
+                    bbox=bbox,
                     engine=ENGINE_NAME,
                     meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
                     adversarial_class=classification.label,
                     forensic_level=self._forensic_level(classification),
-                    tags=[str(i) for i in classification.intents],
+                    tags=[str(i) for i in classification.intents] + [_injection_path(block)],
                     evidence=[
                         Evidence.create(
                             description=f"{block.source_layer} 레이어에서 관찰된 지시형 문자열",
@@ -110,7 +191,7 @@ class AdversarialScanner:
                             document_id=doc.document_id,
                             block_id=block.block_id,
                             page=block.page,
-                            excerpt=_excerpt(block.text),
+                            excerpt=_excerpt(text),
                         )
                     ],
                 )
@@ -133,9 +214,10 @@ class AdversarialScanner:
         return FindingType.META_INSTRUCTION
 
     @staticmethod
-    def _title_for(finding_type: FindingType, classification: Classification) -> str:
+    def _title_for(finding_type: FindingType, classification: Classification, block: Optional[Block] = None) -> str:
         intents = ", ".join(str(i) for i in classification.intents) or "UNSPECIFIED"
-        return f"{finding_type} 후보: {intents}"
+        path = PATH_LABELS.get(_injection_path(block)) if block is not None else None
+        return f"{finding_type} 후보: {intents}" + (f" — 경로: {path}" if path else "")
 
     @staticmethod
     def _detail_for(block: Block, classification: Classification) -> str:
@@ -442,6 +524,35 @@ class AdversarialScanner:
         return out
 
     # -- 종합 --------------------------------------------------------------
+    def _scan_attachments(self, doc: NormalizedDocument) -> List[Finding]:
+        """첨부파일(글자 파일) 내용의 지시문. 본문에 보이지 않으므로 숨은 레이어로 본다."""
+        out: List[Finding] = []
+        for entry in doc.structure.get("embedded_files") or []:
+            text = entry.get("text") or ""
+            if not text.strip():
+                continue
+            classification = classify(text, source_layer="attachment", visible=False, block_type="attachment")
+            if classification.label == AdversarialClass.BENIGN_CONTENT:
+                continue
+            features = {"deterministic_rule": True, "cross_layer_mismatch": True, **classification.features,
+                        "observed_text": text[:2000], "attachment_name": entry.get("name"),
+                        "attachment_sha256": entry.get("sha256"), "injection_path": "ATTACHMENT"}
+            out.append(Finding.create(
+                type=FindingType.HIDDEN_INSTRUCTION, status=VerificationStatus.SUSPICIOUS,
+                severity=severity_for(classification), evidence_grade=EvidenceGrade.A,
+                title=f"첨부파일 '{entry.get('name')}' 안에 지시형 문자열이 있다 — 경로: 첨부파일 내용",
+                detail=("본문에 보이지 않는 첨부파일 내용에서 지시형 문자열이 관찰되었다. "
+                        f"분류={classification.label}. 본 문자열은 자료로만 취급되며 시스템 지침이나 Tool 권한을 변경하지 않는다."),
+                confidence=confidence_score(features), confidence_features=features,
+                document_id=doc.document_id, engine=ENGINE_NAME,
+                meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
+                adversarial_class=classification.label, forensic_level=self._forensic_level(classification),
+                tags=[str(i) for i in classification.intents] + ["ATTACHMENT"],
+                evidence=[Evidence.create(description=f"첨부파일 {entry.get('name')} 내용", grade=EvidenceGrade.A,
+                                          document_id=doc.document_id, excerpt=_excerpt(text))],
+            ))
+        return out
+
     @staticmethod
     def risk_level(findings: List[Finding]) -> str:
         """제19.1장 Adversarial Manipulation Risk."""

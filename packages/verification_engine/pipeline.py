@@ -63,6 +63,8 @@ from packages.source_adapters import SourceRegistry
 from packages.source_adapters.transport import prepare_source_document, source_lookup_session
 
 from packages.claim_engine.assertion import analyze_assertions
+from packages.claim_engine.evidence_consistency import check_document as check_evidence_consistency
+from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
@@ -489,6 +491,11 @@ class VerificationPipeline:
         result.events = [e.to_dict() for e in events]
         result.findings.extend(self.calculation.verify_document(doc))
         result.findings.extend(analyze_timeline(events))
+        # 증거 정합성: 호증 목록의 작성일·결번·인적사항, 진술서 형식(v2 R9)
+        try:
+            result.findings.extend(check_evidence_consistency(doc))
+        except Exception as exc:  # pragma: no cover - 방어
+            result.warnings.append(f"증거 정합성 점검 경고: {exc}")
 
         # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다.
         mask_for_models = (None if context.external_ai_policy == ExternalAIPolicy.ORIGINAL
@@ -540,6 +547,10 @@ class VerificationPipeline:
                     exclude_texts=[str((f.confidence_features or {}).get("observed_text") or "")
                                    for f in result.findings
                                    if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only],
+                    exclude_block_ids=[block_id for f in result.findings
+                                       if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only
+                                       for block_id in ((f.confidence_features or {}).get("block_ids")
+                                                        or ([f.block_id] if f.block_id else []))],
                 )
             )
             result.ai_detector_result = ai_detector_res.to_dict()
@@ -769,6 +780,8 @@ class VerificationPipeline:
         candidates = claim_contradictions(claims, project_id=result.project_id)
         candidates.extend(cross_document_contradictions(events_by_document))
         candidates.extend(self._internal_citation_check(result))
+        candidates.extend(cross_document_copies(
+            [d.normalized for d in result.documents if not d.quarantined and d.normalized is not None]))
         findings, seen = [], set()
         for finding in candidates:
             features = finding.confidence_features

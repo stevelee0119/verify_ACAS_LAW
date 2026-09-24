@@ -200,7 +200,10 @@ def test_canonical_sanitized_snapshot_is_reproducible_and_detached(adapter, monk
 def test_exact_article_paragraph_item_subitem_text(adapter, monkeypatch):
     install_law(monkeypatch, adapter)
     result = verifier(adapter).verify_statute(statute(), as_of="2020-01-01", incident_date="2019-08-01")
-    assert result.status == VerificationStatus.PARTIALLY_VERIFIED
+    # 기준일 시행 버전과 조문을 확인했고 문서가 조문 내용을 따로 주장하지 않았다: 본문 대조까지 끝났다(v2 R5).
+    # 사건 적용(applicability)은 VERIFIED와 별개로 사람 검토로 남는다.
+    assert result.status == VerificationStatus.VERIFIED
+    assert result.levels["content"] == "NOT_ASSERTED"
     assert result.levels["temporal"] == "VERIFIED", (result.review, result.notes)
     assert result.review["provision"]["path"] == {"article": "10의2", "paragraph": "1", "item": "1", "subitem": "가"}
     assert result.review["provision"]["text"] == "원문에서 정확히 확인하는 첫 번째 조건이다."
@@ -460,7 +463,9 @@ def test_pipeline_keeps_each_issue_date_and_full_snapshots(adapter, monkeypatch,
     assert all(r["incident_date"] == "2020-01-01" for r in reviews)
     assert all(r["source_record_ids"] for r in reviews)
     assert len(document.source_records) == 9
-    assert {u["review_id"] for u in document.unverified_items} == {r["review_id"] for r in reviews}
+    # 미확인 목록에는 VERIFIED가 아닌 검토만 오른다. 기준일·조문·본문 대조가 모두 확인된 검토는 빠진다(v2 R5).
+    assert {u["review_id"] for u in document.unverified_items} == {
+        r["review_id"] for r in reviews if r["verdicts"][0]["status"] != "VERIFIED"}
     run = VerificationRunResult("R", "P", JobState.PARTIAL_COMPLETED, "test", documents=[document])
     exported = json.loads(to_json(run))
     persisted = exported["documents"][0]["source_records"]

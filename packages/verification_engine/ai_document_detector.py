@@ -153,6 +153,7 @@ async def detect_ai_document(
     metadata_indications: bool = False,
     mask: Optional[Callable[[str], str]] = None,
     exclude_texts: Optional[List[str]] = None,
+    exclude_block_ids: Optional[List[str]] = None,
 ) -> AIDetectorResult:
     """문서의 AI 전체/부분 생성 여부를 종합 분석하여 판정한다.
 
@@ -185,6 +186,18 @@ async def detect_ai_document(
     # 넘기면 모델이 그것을 AI 작성의 근거로 삼아 같은 사실이 두 번 계산된다.
     hide = mask or (lambda value: value)
     excluded = 0
+    if exclude_block_ids:
+        # 여러 줄에 걸친 지시문은 문장 단위로 탐지되므로 줄 문자열 치환으로는 일부가 남는다. 블록째 뺀다.
+        dropped = set(exclude_block_ids)
+        kept = []
+        for block in doc.body_blocks():
+            if block.block_id in dropped:
+                if not kept or kept[-1] != "[문서 내 지시문 — 작성 주체 판단에서 제외]":
+                    kept.append("[문서 내 지시문 — 작성 주체 판단에서 제외]")
+                    excluded += 1
+            else:
+                kept.append(block.text)
+        text = "\n".join(kept)
     for fragment in sorted({t.strip() for t in (exclude_texts or []) if t and len(t.strip()) >= 8}, key=len, reverse=True):
         if fragment in text:
             text = text.replace(fragment, "[문서 내 지시문 — 작성 주체 판단에서 제외]")

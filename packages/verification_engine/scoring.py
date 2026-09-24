@@ -36,12 +36,21 @@ EVIDENCE_TYPES = {
     FindingType.EVIDENCE_REFERENCE_MISSING,
     FindingType.HASH_FORMAT_INVALID,
     FindingType.HASH_MISMATCH,
+    FindingType.EVIDENCE_DATE_INVALID,
+    FindingType.EVIDENCE_NUMBERING_GAP,
+    FindingType.EVIDENCE_LIST_MISMATCH,
+    FindingType.EVIDENCE_FORM_DEFECT,
+    FindingType.EVIDENCE_PURPOSE_MISMATCH,
+    FindingType.STATEMENT_BEYOND_PERCEPTION,
 }
 CONSISTENCY_TYPES = {
     FindingType.FACT_CONTRADICTION,
     FindingType.CROSS_DOCUMENT_CONTRADICTION,
     FindingType.TIMELINE_CONTRADICTION,
     FindingType.ARITHMETIC_MISMATCH,
+    FindingType.EVIDENCE_TIMELINE_INVERSION,
+    FindingType.EVIDENCE_PERSON_INCONSISTENT,
+    FindingType.CROSS_DOC_COPY,
 }
 AUTHENTICITY_TYPES = {
     FindingType.SPECIMEN_DOCUMENT_DECLARED,
@@ -65,6 +74,16 @@ def _risk_from(findings: List[Any]) -> str:
     if findings:
         return "LOW"
     return "NONE"
+
+
+def unified_authorship(document: Any) -> Dict[str, Any]:
+    """문서 하나의 AI 작성 판단. 교차판정 결과를 우선하고 문체 통계는 보조 신호로 붙인다."""
+    detector = document.ai_detector_result or {}
+    stylometry = (document.authorship or {}).get("verdict")
+    verdict = detector.get("verdict") or stylometry or "UNCERTAIN"
+    return {"document_id": document.document_id, "verdict": verdict,
+            "basis": "AI_DETECTOR" if detector.get("verdict") else "STYLOMETRY",
+            "score": detector.get("score"), "stylometry_signal": stylometry}
 
 
 def _sum_components(documents: List[Any]) -> Dict[str, int]:
@@ -126,7 +145,10 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
         int((d.engine_data.get("legal") or {}).get("verified_count", 0)) for d in result.documents
     )
 
-    authorship_verdicts = [d.authorship.get("verdict") for d in result.documents if d.authorship]
+    # AI 작성 판단은 문서마다 하나로 낸다(v2 R10). 규칙·모델 교차판정(ai_detector_result)이 있으면 그것이
+    # 판정이고, 문체 통계(authorship)는 보조 신호로만 붙인다. 두 값을 따로 내보내면 축은 '판단 보류'인데
+    # 문서 결과는 'AI 작성 유력'처럼 서로 모순되게 읽힌다.
+    authorship_verdicts = [unified_authorship(d) for d in result.documents if d.authorship or d.ai_detector_result]
 
     # 본문을 읽지 못한 문서. 내용 기반 축은 "위험 없음"이 아니라 "판정 불가"이다.
     # 이 구분이 없으면, 검증해서 깨끗한 문서와 아무것도 못 읽은 문서가 같은 보고서를 낳는다.
@@ -164,8 +186,10 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
         "advisory_total": len(advisory),
         "axes": {
             "ai_authorship": {
-                "verdicts": authorship_verdicts,
-                "note": "확정판정이 아니며 사용자 판단이 필요하다.",
+                "verdicts": [v["verdict"] for v in authorship_verdicts],
+                "documents": authorship_verdicts,
+                "note": "확정판정이 아니며 사용자 판단이 필요하다. 문서별 판정은 규칙·모델 교차판정 하나로 내고 "
+                        "문체 통계는 보조 신호로만 표시한다.",
             },
             "legal_citation_accuracy": {
                 "citation_total": citation_total,
@@ -176,6 +200,8 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 # 시간적 적용만 남은 수를 따로 센다. '확인 0건'이 '아무것도 못 찾음'으로
                 # 읽히지 않게 한다.
                 "components": _sum_components(result.documents),
+                # 인용 대상과 문서가 주장한 내용까지 공식 원문으로 확인한 수(기준일 확인은 별도).
+                "content_confirmed": _sum_components(result.documents).get("content_confirmed", 0),
                 "issue_count": len(legal),
                 "risk": content_risk(legal),
                 "note": "verified는 사건 적용을 뺀 모든 단계가 확인된 인용 수이고, "
@@ -185,9 +211,12 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                                                  [f for f in findings if f.type in EVIDENCE_TYPES], content_risk),
             "internal_consistency": {
                 "cross_document_issues": sum(
-                    1 for f in findings if f.type == FindingType.CROSS_DOCUMENT_CONTRADICTION
+                    1 for f in findings if f.type in (FindingType.CROSS_DOCUMENT_CONTRADICTION,
+                                                      FindingType.CROSS_DOC_COPY,
+                                                      FindingType.EVIDENCE_PERSON_INCONSISTENT)
                 ),
-                "timeline_issues": sum(1 for f in findings if f.type == FindingType.TIMELINE_CONTRADICTION),
+                "timeline_issues": sum(1 for f in findings if f.type in (FindingType.TIMELINE_CONTRADICTION,
+                                                                         FindingType.EVIDENCE_TIMELINE_INVERSION)),
                 "arithmetic_issues": sum(1 for f in findings if f.type == FindingType.ARITHMETIC_MISMATCH),
             },
             "authenticity_risk": {"issue_count": len(authenticity), "risk": content_risk(authenticity)},

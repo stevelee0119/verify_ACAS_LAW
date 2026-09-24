@@ -11,7 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument
 
-from packages.document_engine.reading_text import build_reading_text, ensure_running_heads, join_separator
+from packages.document_engine.reading_text import (QUOTE_SPAN_RE, build_reading_text, ensure_running_heads,
+                                                    join_separator, sentence_bounds)
 
 from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix,
                         split_case_number)
@@ -370,7 +371,39 @@ def extract_from_text(
         consumed.append((m.start(), m.end()))
 
     bind_quotes(text, citations)
+    attach_claim_text(text, citations)
     return citations
+
+
+_STATUTE_TYPES = (CitationType.STATUTE,)
+
+
+def attach_claim_text(text: str, citations: List[Citation]) -> None:
+    """법령 인용마다 문서가 그 조문에 대해 주장한 부분(같은 문장)을 attributes["claim_text"]에 남긴다.
+
+    - 괄호 안의 근거 표시("…정직 2개월(군인사법 제57조 제1항 참조)")는 괄호 앞 절이 주장이다.
+    - 그 밖에는 인용 뒤부터 같은 문장의 다음 인용 또는 문장 끝까지가 주장이다.
+    본문 대조(provision_content)가 이 부분만 조문 본문과 비교한다.
+    """
+    located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
+    if not located:
+        return
+    for s_start, s_end in _sentences(text):
+        inside = [c for c in located if s_start <= c.span[0] < s_end]
+        for position, citation in enumerate(inside):
+            if citation.type not in _STATUTE_TYPES:
+                continue
+            start, end = citation.span
+            before = text[s_start:start]
+            opened = before.rfind("(")
+            if opened > before.rfind(")"):
+                clause_start = max(before.rfind(",", 0, opened), before.rfind("，", 0, opened)) + 1
+                claim = before[clause_start:opened]
+                citation.attributes["claim_mode"] = "PARENTHETICAL_BASIS"
+            else:
+                stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
+                claim = text[end:stop]
+            citation.attributes["claim_text"] = " ".join(claim.split())[:400]
 
 
 def _law_name_start(m: "re.Match") -> int:
@@ -387,23 +420,9 @@ def _law_name_start(m: "re.Match") -> int:
 
 
 # --- 직접 인용문 결합 --------------------------------------------------------------
-QUOTE_SPAN_RE = re.compile(r"[“\"]([^”\"\n]{10,600})[”\"]")
-# 문장 끝: "…다." "…함." "…판결)." 줄바꿈(문단). 날짜의 마침표("2003. 5.")는 끝이 아니다.
-_SENTENCE_END_RE = re.compile(r"(?<=[다음함임됨])\.(?=\s|$)|\)\.(?=\s|$)|\n")
+_sentences = sentence_bounds
 _CASE_TYPES = (CitationType.CASE, CitationType.CONSTITUTIONAL, CitationType.INTERPRETATION,
                CitationType.ADMIN_APPEAL)
-
-
-def _sentences(text: str) -> List[Tuple[int, int]]:
-    """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
-    masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
-    bounds, start = [], 0
-    for end in _SENTENCE_END_RE.finditer(masked):
-        bounds.append((start, end.end()))
-        start = end.end()
-    if start < len(text):
-        bounds.append((start, len(text)))
-    return bounds
 
 
 def bind_quotes(text: str, citations: List[Citation]) -> None:
