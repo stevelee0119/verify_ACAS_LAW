@@ -60,7 +60,7 @@
 | 0.6.0 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
 | 0.6.1 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
 | 0.6.2 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
-| 0.6.3 | 측정 중 | 측정 중 | 측정 중 | 측정 중 |
+| 0.6.3 | 85.3 (FP-TRAP 0) | 75.0 (FP-TRAP 0) | 98.2 (FP-TRAP 0) | 87.0 (FP-TRAP 0) |
 
 ## 0.6.4
 
