@@ -68,6 +68,7 @@ from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.claim_engine.fact_checks import check_periods
 from packages.claim_engine.fact_store import cross_document_facts
 from packages.legal_engine.legal_rules import review_legal_rules
+from packages.legal_engine.claim_review import provision_texts, review_claims
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
@@ -515,6 +516,18 @@ class VerificationPipeline:
         # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다.
         mask_for_models = (None if context.external_ai_policy == ExternalAIPolicy.ORIGINAL
                            else (lambda text: pii.mask_text(text).masked_text))
+
+        # 법리 주장 검토: 주장 유형 분류 → 근거 조회 → 판단(추가지시 G4). 조문 요건 대조에는 위에서 조회한
+        # 공식 조문 원문을, 위헌 주장에는 헌재 결정 이력을 쓴다. 기존 규칙이 이미 판정한 문장은 다시 보지 않는다.
+        try:
+            judged = [str((f.confidence_features or {}).get("claim") or "") for f in result.findings
+                      if f.engine == "legal_engine.legal_rules"]
+            result.findings.extend(review_claims(
+                doc, lookup=getattr(self.registry.law, "constitutional_history", None),
+                provisions=provision_texts(result.engine_data.get("legal_verdicts", []), citations),
+                skip_sentences=judged))
+        except Exception as exc:  # pragma: no cover - 방어
+            result.warnings.append(f"법리 주장 검토 경고: {exc}")
 
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
         emit(JobState.VERIFYING, f"{document.filename} 법률 주장 타당성 검토", base + span * 0.85)

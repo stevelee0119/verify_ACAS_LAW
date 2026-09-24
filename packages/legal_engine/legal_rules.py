@@ -111,6 +111,9 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                 continue
             if rule.get("requires_no_citation") and CITATION_HINT_RE.search(unit):
                 continue
+            # 법이 정한 예외를 근거로 든 문장은 규칙이 겨냥한 무리한 주장이 아니다(추가지시 G4 오탐 방지).
+            if rule.get("unless") and re.search(rule["unless"], unit):
+                continue
             key = (rule["rule_id"], unit[:80])
             if key in seen:
                 continue

@@ -228,6 +228,43 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
             return self._unavailable(label, AdapterStatus.ERROR,
                                      f"판례 전문 응답을 정리하지 못함({type(exc).__name__})")
 
+    def constitutional_history(self, law_name: str, article: str, *, max_details: int = 5) -> Dict[str, Any]:
+        """법률 조항에 대한 헌법재판소 결정 이력(추가지시 G4 위헌 주장 대조).
+
+        헌재결정례를 '법률명 제N조'로 검색해 사건명에 그 법률과 조항이 함께 있는 결정만 고르고, 결정 전문의
+        주문에서 결과(합헌·위헌·헌법불합치·한정위헌·한정합헌·각하)를 읽는다. 조회 실패·형식 이상은 결과를
+        비워 두고 status로 알린다(부존재로 단정하지 않는다).
+        """
+        status = self.status()
+        if status != AdapterStatus.READY:
+            return {"status": str(status), "message": "국가법령정보 OC가 없거나 네트워크가 비활성이다"}
+        query = f"{law_name} 제{article}조"
+        try:
+            response = self._http_get(SEARCH_URL, params={"OC": self.api_key, "target": "detc", "type": "JSON",
+                                                          "query": query, "display": 100})
+            if response.status_code >= 400:
+                return {"status": "ERROR", "message": f"헌재결정례 조항 검색 HTTP {response.status_code}"}
+            payload = response.json()
+        except Exception as exc:  # 네트워크·파싱 오류는 판정을 막지 않고 '확인 불가'로 남긴다
+            return {"status": "ERROR", "message": f"헌재결정례 조항 검색 실패({type(exc).__name__})"}
+        if not _case_payload_shape_ok(payload):
+            return {"status": "ERROR", "message": "헌재결정례 응답 형식이 예상과 다름"}
+        rows = _normalize_case_payload(payload)
+        compact = lambda value: re.sub(r"\s+", "", str(value or ""))
+        wanted_law, wanted_article = compact(law_name), f"제{compact(article)}조"
+        matched = [r for r in rows if wanted_law in compact(r.get("case_name"))
+                   and wanted_article in compact(r.get("case_name"))]
+        decisions = []
+        for row in matched[:max_details]:
+            detail = self.fetch_case(row, constitutional=True)
+            record = detail.records[0] if detail.records else {}
+            decisions.append({"case_number": row.get("case_number"), "decision_date": row.get("decision_date"),
+                              "case_name": row.get("case_name"), "result": decision_result(record),
+                              "url": detail.source_record.url if detail.source_record else "",
+                              "summary": str(record.get("summary") or record.get("holding") or "")[:400]})
+        return {"status": "READY", "decisions": decisions, "query": query,
+                "message": f"헌재결정례 '{query}' 검색 {_total_count(payload, len(rows))}건 중 조항 일치 {len(matched)}건"}
+
     def fetch_articles(self, law: Dict[str, Any]) -> Optional[List[str]]:
         """법령 본문을 조회해 수록된 조문 번호 목록을 만든다.
 
@@ -421,3 +458,28 @@ def _canon_date(value: str) -> Optional[str]:
     if len(digits) == 8:
         return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}"
     return value or None
+
+
+# 헌재 결정 주문의 결과 문구. 긴 문구부터 본다('헌법에 합치되지 아니한다'가 '위반'보다 먼저).
+_RESULT_PATTERNS = [
+    ("헌법불합치", r"헌법에\s*합치되지\s*아니한다"),
+    ("한정위헌", r"(?:해석하는|적용하는)\s*한[^.]{0,20}헌법에\s*위반된다"),
+    ("한정합헌", r"(?:해석하는|적용하는)\s*한[^.]{0,20}헌법에\s*위반되지\s*아니한다"),
+    ("합헌", r"헌법에\s*위반되지\s*아니한다"),
+    ("위헌", r"헌법에\s*위반된다"),
+    ("각하", r"(?:심판\s*청구|청구|제청)(?:를|을)?\s*(?:모두\s*)?각하한다"),
+]
+
+
+def decision_result(record: Dict[str, Any]) -> Optional[str]:
+    """결정 전문 기록에서 주문의 결과를 읽는다. 주문을 찾지 못하면 None(추측하지 않는다)."""
+    raw = record.get("raw") or {}
+    order = _first(raw, "주문") if isinstance(raw, dict) else None
+    text = re.sub(r"<[^>]+>", " ", str(order or record.get("full_text") or ""))
+    if not order:
+        head = re.search(r"주\s*문(.{0,600})", text, re.S)
+        text = head.group(1) if head else ""
+    for label, pattern in _RESULT_PATTERNS:
+        if re.search(pattern, text):
+            return label
+    return None

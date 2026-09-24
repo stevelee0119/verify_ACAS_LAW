@@ -27,7 +27,14 @@ MAX_TEXT = 12000
 # 헌재결정례(target=detc) 조회 방식 점검용(G1). 널리 알려진 실존 결정만 둔다. 결과로 실존을 다시 확인한다.
 DETC_PROBES = ["2004헌마554", "2016헌나1", "2004헌나1", "2017헌바127", "2008헌가23", "2011헌바379",
                "2009헌바17", "2013헌다1", "2015헌마236", "96헌가2", "89헌마82"]
-STATUTES_EXTRA = [("민사소송법", ["422", "442", "449"]), ("형사소송법", ["371", "441"]), ("법원조직법", ["14"])]
+STATUTES_EXTRA = [("민사소송법", ["422", "442", "449"]), ("형사소송법", ["246", "371", "441"]), ("법원조직법", ["14"]),
+                  # 추가지시 G4(주장 유형별 근거): 위헌심판 대상, 소송요건, 손해배상 유형의 법률 근거
+                  ("대한민국헌법", ["111"]), ("헌법재판소법", ["41", "45", "68"]), ("행정소송법", ["18", "19", "12"]),
+                  ("민법", ["162", "166", "393", "394", "750", "751", "763", "764", "766"]), ("국가배상법", ["8", "9"]),
+                  ("제조물 책임법", ["3"])]
+# 추가지시 G4: 조항별 헌재 결정 이력 조회 방식 점검. 검색어는 법률 조항, 결과 행과 상세의 키를 기록한다.
+DETC_PROVISION_PROBES = ["국가배상법 제2조", "군인사법 제57조", "행정소송법 제20조"]
+DETC_DETAIL_PROBES = ["95헌바3", "94헌바20", "2008헌가23", "89헌마160"]
 
 
 def emit(record, sink):
@@ -145,6 +152,33 @@ def main() -> int:
                 found.append(False)
                 emit({"kind": "detc_regression", "case_number": number, "found": False, "error": str(exc)}, sink)
         emit({"kind": "detc_regression_summary", "found": sum(found), "total": len(found)}, sink)
+        for query in DETC_PROVISION_PROBES:
+            for extra in ({"query": query}, {"query": query, "search": 2}):
+                status, payload = raw_get(adapter, SEARCH_URL, {"target": "detc", "display": 20, **extra})
+                container = payload.get("DetcSearch") or {} if isinstance(payload, dict) else {}
+                rows = container.get("Detc") or container.get("detc") or [] if isinstance(container, dict) else []
+                rows = rows if isinstance(rows, list) else [rows]
+                emit({"kind": "detc_provision_probe", "query": query, "params": extra, "status": status,
+                      "total": container.get("totalCnt") if isinstance(container, dict) else None,
+                      "rows": mask_oc([{k: r.get(k) for k in ("사건번호", "사건명", "종국일자", "헌재결정례일련번호")}
+                                       for r in rows[:20] if isinstance(r, dict)])}, sink)
+        for number in DETC_DETAIL_PROBES:
+            status, payload = raw_get(adapter, SEARCH_URL, {"target": "detc", "nb": number, "display": 5})
+            container = payload.get("DetcSearch") or {} if isinstance(payload, dict) else {}
+            rows = container.get("Detc") or container.get("detc") or [] if isinstance(container, dict) else []
+            rows = rows if isinstance(rows, list) else [rows]
+            row = next((r for r in rows if isinstance(r, dict) and r.get("사건번호") == number), None)
+            if not row:
+                emit({"kind": "detc_detail", "case_number": number, "found": False, "status": status}, sink)
+                continue
+            status, detail = raw_get(adapter, SERVICE_URL, {"target": "detc", "ID": row.get("헌재결정례일련번호")})
+            body = detail.get("DetcService") if isinstance(detail, dict) else None
+            body = body if isinstance(body, dict) else (detail if isinstance(detail, dict) else {})
+            emit({"kind": "detc_detail", "case_number": number, "found": True, "status": status,
+                  "keys": list(body)[:40], "case_name": row.get("사건명"), "decision_date": row.get("종국일자"),
+                  "fields": mask_oc({k: (str(v)[:1500] if v is not None else None) for k, v in body.items()
+                                     if k not in ("전문",)}),
+                  "full_text_head": str(body.get("전문") or "")[:1500]}, sink)
         for law_name, articles in STATUTES + STATUTES_EXTRA:
             try:
                 response = adapter.resolve_statute(law_name)
