@@ -1,0 +1,70 @@
+name: 테스트셋 평가
+
+# 저장된 API Key로 공식 DB·외부 모델을 함께 써서 평가 하네스를 실행한다.
+# 실행 방법
+#  1) Actions 탭 → "테스트셋 평가" → Run workflow (기본 브랜치에 파일이 있어야 버튼이 보인다)
+#  2) 커밋 메시지에 [run-eval] 을 넣어 push
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "claude/**"]
+
+concurrency:
+  group: eval-testset-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  evaluate:
+    name: 본 테스트셋·홀드아웃 평가
+    if: >-
+      github.event.repository.fork == false &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[run-eval]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
+      LV_KCI_KEY: ${{ secrets.LV_KCI_KEY }}
+      LV_CROSSREF_MAILTO: ${{ secrets.LV_CROSSREF_MAILTO }}
+      LV_SEMANTIC_SCHOLAR_KEY: ${{ secrets.LV_SEMANTIC_SCHOLAR_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LV_OPENAI_MODEL: ${{ vars.LV_OPENAI_MODEL }}
+      LV_ANTHROPIC_MODEL: ${{ vars.LV_ANTHROPIC_MODEL }}
+      LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
+      LV_ALLOW_NETWORK: "1"
+      LV_HTTP_TIMEOUT: "20"
+      LV_DATA_DIR: ${{ github.workspace }}/.eval-data
+      LV_PSEUDONYM_SECRET: ${{ secrets.LV_PSEUDONYM_SECRET || 'actions-eval-only' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: 의존성 설치
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 본 테스트셋 평가
+        run: python scripts/eval_testset.py --out reports-ci --save-result reports-ci/result_main.json
+      - name: 홀드아웃 평가
+        run: |
+          if [ -f tests/fixtures/holdout/ground_truth.json ]; then
+            python scripts/eval_testset.py --testset tests/fixtures/holdout --out reports-ci \
+              --save-result reports-ci/result_holdout.json
+          fi
+      - name: 점수를 Job Summary에 기록
+        if: always()
+        run: |
+          for f in reports-ci/eval_*.md; do sed -n '1,40p' "$f"; echo; done | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: 평가 결과 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-reports
+          path: reports-ci/
+          retention-days: 14

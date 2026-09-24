@@ -251,6 +251,7 @@ def main() -> int:
     else:
         result = run_pipeline(testset)
         if args.save_result:
+            Path(args.save_result).parent.mkdir(parents=True, exist_ok=True)
             Path(args.save_result).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")
     db = bool(os.getenv("LV_LAW_GO_KR_OC")) and os.getenv("LV_ALLOW_NETWORK", "1") != "0"
     report = score(result, testset, db_available=db)
