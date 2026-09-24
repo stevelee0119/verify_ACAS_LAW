@@ -250,8 +250,10 @@ class LegalVerifier:
             return verdict
 
         official = self._match_official(citation, response.records)
-        if official is None:
-            # 재검색: 선고일+사건번호, 법원+사건번호 (제9.3장)
+        code_parts = split_case_number(case_number)
+        constitutional_code = bool(code_parts and code_parts[1].startswith("헌"))
+        if official is None and not constitutional_code:
+            # 재검색: 선고일+사건번호, 법원+사건번호 (제9.3장). 헌재결정례는 사건번호 지정 조회가 이미 정확하다.
             retry = self._retry_search(citation)
             if retry is not None:
                 response, retried_query = retry
@@ -267,7 +269,6 @@ class LegalVerifier:
 
         if official is None:
             # 부호가 가리키는 법원이 문서의 법원과 다르면 그 법원의 DB로 다시 찾는다(v3 D2).
-            code_parts = split_case_number(case_number)
             inferred = code_court_family(code_parts[1]) if code_parts else None
             if inferred and court_family(citation.court or "") not in (None, inferred):
                 alt = self.registry.law.search_case(
@@ -280,6 +281,17 @@ class LegalVerifier:
                         verdict.notes.append(f"사건부호가 가리키는 법원({inferred})의 DB에서 확인: "
                                              f"법원 표시 오류(실제: {official.get('court')})")
                         verdict.review["actual_court"] = official.get("court")
+
+        if official is None and constitutional_code and format_valid:
+            # 헌재결정례 조회에서 확인하지 못한 결정은 NOT_FOUND가 아니라 UNVERIFIED다(추가지시 G1·J1).
+            # 어떤 DB를 어떤 방식으로 몇 건 조회했는지를 판정 근거에 남긴다.
+            reason = (f"헌재결정례 DB(detc)에서 사건번호가 일치하는 결정을 확인하지 못했다 — "
+                      f"{response.message or '조회 결과 없음'}. 조회 실패는 부존재 판단이 아니다.")
+            verdict.levels["level1"] = "UNVERIFIED"
+            verdict.status = VerificationStatus.UNVERIFIED
+            verdict.notes.append(reason)
+            verdict.findings.append(self._unverified_finding(citation, reason, response.source_record))
+            return verdict
 
         if official is None:
             verdict.levels["level1"] = "NOT_FOUND"

@@ -191,7 +191,7 @@ def test_case_lookup_tries_a_second_query_shape_before_giving_up(mock_law_api, m
     monkeypatch.setattr(adapter, "_http_get", spy)
 
     adapter.search_case("2099도99999")           # 존재하지 않는 사건
-    shapes = [tuple(sorted(k for k in p if k not in ("OC", "target", "type"))) for p in seen]
+    shapes = [tuple(sorted(k for k in p if k not in ("OC", "target", "type", "display", "page"))) for p in seen]
     assert ("query", "search") in shapes, shapes
     assert ("nb",) in shapes, "사건번호 지정 조회를 시도해야 한다"
 

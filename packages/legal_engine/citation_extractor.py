@@ -18,6 +18,7 @@ from .normalize import (canonical_case_number, canonical_date, canonical_law_nam
                         split_case_number)
 
 COURT_RE = r"(?:대법원|헌법재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
+COURT_ALIASES = {"헌재": "헌법재판소"}  # 약칭은 조회·호환성 검사에 쓰는 공식 명칭으로 바꾼다
 DATE_RE = r"(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?"
 # 1999년까지의 사건번호는 연도를 두 자리로 적는다(예: 94누4615).
 CASE_NO_RE = r"(?<!\d)(?:(?:19|20)\d{2}|\d{2})\s*[가-힣]{1,3}\s*\d{1,6}"
@@ -231,7 +232,7 @@ def extract_from_text(
                 block_id=block_id,
                 page=page,
                 span=(m.start(), m.end()),
-                court=m.group("court").strip(),
+                court=COURT_ALIASES.get(m.group("court").strip(), m.group("court").strip()),
                 decision_date=canonical_date(m.group("date")),
                 case_number=re.sub(r"\s+", "", case_no),
                 canonical_case_number=canonical_case_number(case_no),

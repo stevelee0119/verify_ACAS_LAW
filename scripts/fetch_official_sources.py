@@ -27,7 +27,7 @@ MAX_TEXT = 12000
 # 헌재결정례(target=detc) 조회 방식 점검용(G1). 널리 알려진 실존 결정만 둔다. 결과로 실존을 다시 확인한다.
 DETC_PROBES = ["2004헌마554", "2016헌나1", "2004헌나1", "2017헌바127", "2008헌가23", "2011헌바379",
                "2009헌바17", "2013헌다1", "2015헌마236", "96헌가2", "89헌마82"]
-STATUTES_EXTRA = [("민사소송법", ["422", "442", "449"]), ("형사소송법", ["371", "441"])]
+STATUTES_EXTRA = [("민사소송법", ["422", "442", "449"]), ("형사소송법", ["371", "441"]), ("법원조직법", ["14"])]
 
 
 def emit(record, sink):
@@ -131,6 +131,20 @@ def main() -> int:
                       "container_keys": list(container)[:12] if isinstance(container, dict) else None,
                       "total": container.get("totalCnt") if isinstance(container, dict) else None,
                       "first_rows": mask_oc([{k: r.get(k) for k in list(r)[:8]} for r in rows[:3] if isinstance(r, dict)])}, sink)
+        # 실제 조회 경로(adapter.search_case)로 실존 헌재 결정을 모두 확인하는지 회귀 점검(추가지시 G1)
+        found = []
+        for number in DETC_PROBES:
+            try:
+                response = adapter.search_case(number, court="헌법재판소")
+                ok = bool(response.records) and response.records[0].get("case_number") == number
+                found.append(ok)
+                emit({"kind": "detc_regression", "case_number": number, "found": ok,
+                      "decision_date": (response.records[0].get("decision_date") if response.records else None),
+                      "message": response.message}, sink)
+            except Exception as exc:
+                found.append(False)
+                emit({"kind": "detc_regression", "case_number": number, "found": False, "error": str(exc)}, sink)
+        emit({"kind": "detc_regression_summary", "found": sum(found), "total": len(found)}, sink)
         for law_name, articles in STATUTES + STATUTES_EXTRA:
             try:
                 response = adapter.resolve_statute(law_name)
