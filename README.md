@@ -375,7 +375,7 @@ Internal Database URL을 그대로 붙여넣어도 된다.
   규칙 개발에 쓰지 않고 과적합 점검에만 쓴다.
 - Actions "테스트셋 평가"(커밋 메시지 `[run-eval]`): 저장된 키로 공식 DB·외부 모델을 함께 써서 본 테스트셋과 홀드아웃을 평가한다.
 - Actions "공식 원문 수집"(`[fetch-sources]`): 규칙표의 근거 원문(재판예규·조문·판결요지)을 국가법령정보 API에서 받아 남긴다.
-- 기록: `docs/CHANGELOG_v2.md`, 구조: `docs/ARCHITECTURE_MAP.md`.
+- 기록: `docs/CHANGELOG_v2.md`, 최종 보고(점수·남은 미탐·unknown·사람 판단 항목): `docs/V2_FINAL_REPORT.md`, 구조: `docs/ARCHITECTURE_MAP.md`.
 
 ## 구현 범위와 한계
 
