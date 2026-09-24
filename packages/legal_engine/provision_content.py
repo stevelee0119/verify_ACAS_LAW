@@ -67,7 +67,21 @@ def _terms(text: str) -> List[str]:
     return out
 
 
-def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, numbers_only: bool = False) -> Dict[str, Any]:
+CLAUSE_SPLIT_RE = re.compile(r"(?<=다\.)\s*|;\s*|\n+|(?=[①-⑳])|(?=\s\d{1,2}\.\s)")
+
+
+def _scoped_body(body: str, subject: Optional[str]) -> str:
+    """주어가 등장하는 조문 구절만 남긴다. 한 조문에 여러 대상의 수치가 섞여 있을 때(예: 정직·감봉의 감액
+    비율) 다른 대상의 수치와 비교하지 않기 위해서다. 주어가 없거나 조문에 없으면 조문 전체를 쓴다."""
+    if not subject:
+        return body
+    clauses = [c for c in CLAUSE_SPLIT_RE.split(body) if c and c.strip()]
+    scoped = [c for c in clauses if subject in c.replace(" ", "")]
+    return " ".join(scoped) if scoped and len(scoped) < len(clauses) else body
+
+
+def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, numbers_only: bool = False,
+                               subject: Optional[str] = None) -> Dict[str, Any]:
     """문서의 주장(claim)과 조문 본문을 비교한다.
 
     numbers_only: 괄호 안 근거 표시처럼 앞 절이 조문 내용이 아니라 사안에 대한 결론일 수 있을 때는
@@ -81,8 +95,9 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
         return {"status": "UNVERIFIED", "reason": "조문 본문 없음"}
     claimed_fractions = _fractions(claim)
     claimed_periods = _claimed_periods(claim)
-    body_fractions = set(_fractions(body))
-    body_periods = set(_all_periods(body))
+    scoped = _scoped_body(body, subject)
+    body_fractions = set(_fractions(scoped)) or set(_fractions(body))
+    body_periods = set(_all_periods(scoped)) or set(_all_periods(body))
     mismatches: List[Dict[str, str]] = []
     matched: List[str] = []
     for fraction in claimed_fractions:

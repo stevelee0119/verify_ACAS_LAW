@@ -65,6 +65,7 @@ from packages.source_adapters.transport import prepare_source_document, source_l
 from packages.claim_engine.assertion import analyze_assertions
 from packages.claim_engine.evidence_consistency import check_document as check_evidence_consistency
 from packages.claim_engine.evidence_consistency import cross_document_copies
+from packages.legal_engine.legal_rules import review_legal_rules
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
@@ -492,6 +493,11 @@ class VerificationPipeline:
         result.events = [e.to_dict() for e in events]
         result.findings.extend(self.calculation.verify_document(doc))
         result.findings.extend(analyze_timeline(events))
+        # 법리 규칙 검토: 공식 원문 근거로 청구취지·주장의 형태를 점검한다(v2 Phase 6).
+        try:
+            result.findings.extend(review_legal_rules(doc))
+        except Exception as exc:  # pragma: no cover - 방어
+            result.warnings.append(f"법리 규칙 검토 경고: {exc}")
         # 증거 정합성: 호증 목록의 작성일·결번·인적사항, 진술서 형식(v2 R9)
         try:
             result.findings.extend(check_evidence_consistency(doc))

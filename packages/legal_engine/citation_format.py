@@ -2,7 +2,7 @@
 
 보수성 원칙: DB에 없다는 이유만으로 '부존재'라고 하지 않는다. 대신 형식상 존재할 수 없는 표기는 DB와
 무관하게 INVALID_FORMAT(A)으로 확정한다. 여기서 보는 것은 달력·연도 산술처럼 누구나 확인할 수 있는 사실과,
-공식 재판예규로 확인한 사건부호표(data/legal_rules/case_codes.json)에 적힌 것뿐이다. 표에 없거나 근거가
+공식 재판예규로 확인한 사건부호표(config/legal_rules/case_codes.json)에 적힌 것뿐이다. 표에 없거나 근거가
 불확실한 조합은 판단하지 않는다(unknown).
 """
 from __future__ import annotations
@@ -18,7 +18,7 @@ from packages.common.enums import CitationType
 
 from .normalize import split_case_number
 
-CASE_CODES_PATH = Path(__file__).resolve().parents[2] / "data" / "legal_rules" / "case_codes.json"
+CASE_CODES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "case_codes.json"
 DATED_TYPES = (CitationType.CASE, CitationType.CONSTITUTIONAL, CitationType.INTERPRETATION,
                CitationType.ADMIN_APPEAL, CitationType.ADMIN_RULE)
 

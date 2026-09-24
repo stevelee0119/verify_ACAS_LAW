@@ -29,6 +29,9 @@ _USED_FIELDS = {
 }
 
 
+EXACT_LAW_NOT_FOUND = "EXACT_LAW_NOT_FOUND:"
+
+
 class OfficialLegalMixin:
     """Bounded pagination, immutable snapshots, and exact source identities."""
 
@@ -122,8 +125,14 @@ class OfficialLegalMixin:
                                   query=law_name, nw="1,2,3", sort="efasc")
         if not listed.ok or not listed.complete:
             return listed
-        named = [r for r in _normalize_law_payload({"LawSearch": {"law": listed.records}})
-                 if _same_law_name(law_name, r.get("law_name"))]
+        normalized = _normalize_law_payload({"LawSearch": {"law": listed.records}})
+        named = [r for r in normalized if _same_law_name(law_name, r.get("law_name"))]
+        if not named:
+            # 목록 조회는 성공했으나 같은 이름의 법령이 없다. '조회 범위 내 미발견'이지 조회 실패가 아니다.
+            candidates = list(dict.fromkeys(str(r.get("law_name")) for r in normalized if r.get("law_name")))[:5]
+            return AdapterResponse(AdapterStatus.READY, [], listed.source_record,
+                                   EXACT_LAW_NOT_FOUND + json.dumps(candidates, ensure_ascii=False),
+                                   listed.source_records, True)
         identities = {str(r.get("law_id") or "").lstrip("0") for r in named}
         if len(identities) != 1 or "" in identities:
             return AdapterResponse(AdapterStatus.ERROR, [], listed.source_record,
@@ -146,7 +155,7 @@ class OfficialLegalMixin:
         if not current or not when or when > current:
             return self._unavailable(law_name, AdapterStatus.ERROR, "Invalid or future reference date")
         history = self.search_law_history(law_name)
-        if not history.ok or not history.complete:
+        if not history.ok or not history.complete or history.message.startswith(EXACT_LAW_NOT_FOUND):
             return history
         try:
             selected = select_version(history.records, when)

@@ -61,7 +61,7 @@
 | FMT.DATE_NOT_ON_CALENDAR | 선고·결정·회신일이 달력에 없음(윤년 반영). 판례·헌재·해석례·재결례·공문 날짜 모두 |
 | FMT.FUTURE_DATE / FUTURE_CASE_YEAR | 아직 오지 않은 날짜·접수연도(공식 기록이 그 사건번호를 확인한 경우 제외) |
 | FMT.DECIDED_BEFORE_FILED | 선고연도가 사건번호 접수연도보다 앞섬 |
-| FMT.COURT_CODE_MISMATCH / CODE_OUT_OF_PERIOD | 법원–사건부호 호환. 공식 재판예규 원문을 받아 `data/legal_rules/case_codes.json`을 만든 뒤에만 판단한다. 원문 확보 전에는 판단하지 않는다(unknown) |
+| FMT.COURT_CODE_MISMATCH / CODE_OUT_OF_PERIOD | 법원–사건부호 호환. 공식 재판예규 원문을 받아 `config/legal_rules/case_codes.json`을 만든 뒤에만 판단한다. 원문 확보 전에는 판단하지 않는다(unknown) |
 
 인용 추출 보강: "헌법재판소는 2018. 3. 22. …" 같은 조사 뒤 날짜, "○○실 2025. 4. 31.자 유권해석"의 기관·날짜,
 비식별 저자명(김○○)의 학술 인용. 공식 원문 수집은 `scripts/fetch_official_sources.py`(Actions "공식 원문 수집")로 한다.
@@ -77,3 +77,32 @@
 | 단계 | 본 테스트셋(오프라인) | 홀드아웃(오프라인) |
 |---|---|---|
 | Phase 1·2·8(일부) | 55.8 (오탐 0, 중복 0) | 56.9 (오탐 0) |
+
+## Phase 3 법령 식별 (NOT_FOUND_LAW)
+
+법령 목록 조회는 성공했으나 같은 이름의 법령이 없으면 조회 실패(UNVERIFIED)가 아니라 NOT_FOUND_LAW(B, 조회 범위 내 미발견,
+부존재 확정 아님)로 판정하고 목록이 돌려준 비슷한 이름을 후보로 싣는다(`official_legal.search_law_history`,
+`source_review._law_absent`). 조문 부존재는 기존 NOT_FOUND_ARTICLE(A, 조회한 시행 버전 전체 조문 기준)을 쓴다.
+법령명 사전 추출·"같은 법" 해석·조사 분리는 3-1 R7에서 반영했다.
+
+## Phase 4 원문 대조 고도화
+
+| 항목 | 수정 |
+|---|---|
+| 인용문 의미 변형(MODIFIED_QUOTE) | `quote_diff.py`: 원문과 유사도 0.85 이상이어도 정도 부사·부정·양태·수량이 빠지거나 더해지면 A등급 불일치. 비교 창 끝의 차이는 인용 범위 차이로 보고 제외 |
+| 주어별 수치 대조 | 한 조문에 대상별 수치가 섞인 경우(군인사법 제57조 제1항: 정직 3분의 2, 감봉 3분의 1) 문장 주어("정직은")가 나오는 구절의 수치와만 비교 |
+| 사건명 대조 | "2006두20631 징계처분취소 판결"처럼 사건번호와 판결 사이 사건명을 추출해 공식 사건명과 비교(포함 관계면 일치) |
+
+## Phase 6 법리 검토 모듈
+
+`config/legal_rules/rules.json`(근거 원문·URL·시행 버전 포함)과 `legal_engine/legal_rules.py`. 근거는 국가법령정보 API로
+받은 원문이다(`scripts/fetch_official_sources.py`, 수집일 2026-09-24): 행정소송법 제4조·제13조·제20조(MST 285913),
+군인사법 제51조의2(MST 283197), 국가배상법 제2조(MST 268079), 국가공무원법 제83조(MST 286457), 대법원 95다38677·94누4615
+전원합의체 판결요지. 규칙: 형사처벌 청구, 의무이행 청구, 개인 피고, 경과실 개인 배상책임, 군인 전심절차 불요, 조문에 없는
+제소기간 예외, '언제나' 당연무효, 형사절차 중 징계 금지, 근거 없는 전칭 판례 경향, 예비적 취소청구 부재. 산출은 claim·rule_id·
+verdict·basis·confidence이며, 사람 판단이 필요한 규칙은 human_review로 표시한다.
+시험: `tests/test_v2_phase34_law_quote.py`, `tests/test_v2_phase6_legal_rules.py`.
+
+| 단계 | 본 테스트셋(오프라인) | 홀드아웃(오프라인) |
+|---|---|---|
+| Phase 3·4·6 | 74.6 (오탐 0, 중복 0) | 70.4 (오탐 0) |

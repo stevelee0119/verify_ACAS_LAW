@@ -28,7 +28,9 @@ FULL_CASE_RE = re.compile(
     rf"(?P<court>{COURT_RE})(?:\s*(?:은|는|도|이|가|의))?\s*"
     rf"(?P<date>{DATE_RE})\s*"
     rf"(?:선고|자)?\s*"
-    rf"(?P<case_no>{CASE_NO_RE})\s*"
+    rf"(?P<case_no>{CASE_NO_RE})"
+    # 사건번호와 판결 사이의 사건명("2006두20631 징계처분취소 판결"). 판결·결정이 바로 뒤따를 때만 잡는다.
+    rf"(?:\s*(?!전원합의체)(?P<case_name>[가-힣·()]{{2,24}}?)(?=\s*(?:전원합의체\s*)?(?:판결|결정)))?\s*"
     rf"(?P<kind>{KIND_RE})?"
 )
 # 법원명 없이 "2023도12345 판결"
@@ -235,6 +237,8 @@ def extract_from_text(
                 context=text[max(0, m.start() - 120) : m.end() + 200],
             )
         )
+        if m.group("case_name"):
+            citations[-1].attributes["case_name"] = m.group("case_name")
         consumed.append((m.start(), m.end()))
 
     # 3) 법원명 없는 판례 인용
@@ -409,6 +413,12 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
             else:
                 stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
                 claim = text[end:stop]
+                # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
+                lead = re.sub(r"^[\s\d가-하.)(]*[.)]\s*", "", text[s_start:start]).split()
+                if lead:
+                    subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
+                    if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):
+                        citation.attributes["claim_subject"] = subject
             citation.attributes["claim_text"] = " ".join(claim.split())[:400]
 
 

@@ -1,13 +1,14 @@
 """규칙표·법리 규칙의 근거가 될 공식 원문을 국가법령정보 공동활용 API에서 받아 출력한다.
 
 코드에 법률 사실(사건부호의 심급, 조문 내용)을 추측으로 넣지 않기 위해, 이 스크립트가 출력한 공식 원문만
-data/legal_rules/의 근거로 쓴다. 인증키(LV_LAW_GO_KR_OC)와 네트워크가 있는 환경(GitHub Actions)에서 실행한다.
+config/legal_rules/의 근거로 쓴다. 인증키(LV_LAW_GO_KR_OC)와 네트워크가 있는 환경(GitHub Actions)에서 실행한다.
 출력은 JSON 한 줄씩(대상·조회 URL·본문)이며 --out을 주면 파일로도 저장한다.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -41,6 +42,35 @@ def raw_get(adapter, url, params):
         return response.status_code, {"text": response.text[:MAX_TEXT]}
 
 
+def download_text(url):
+    """별표 파일(HWP·PDF 등)을 받아 저장소 파서로 글자를 뽑는다."""
+    import hashlib
+    import tempfile
+
+    import httpx
+
+    from packages.document_engine import parse_document
+
+    try:
+        response = httpx.get(url, timeout=30, follow_redirects=True)
+    except Exception as exc:
+        return {"error": f"{type(exc).__name__}: {exc}"}
+    name = response.headers.get("content-disposition", "")
+    match = re.search(r"filename\*?=(?:UTF-8'')?\"?([^\";]+)", name)
+    filename = match.group(1) if match else "attachment.bin"
+    suffix = Path(filename).suffix or ".bin"
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as handle:
+        handle.write(response.content)
+    doc = parse_document(handle.name, document_id="attachment", filename=filename,
+                         mime_type=response.headers.get("content-type", ""),
+                         sha256=hashlib.sha256(response.content).hexdigest())
+    text = "\n".join(b.text for b in doc.blocks if b.text)
+    tables = [t.get("cells") for t in doc.structure.get("tables") or []]
+    return {"status": response.status_code, "filename": filename, "content_type": response.headers.get("content-type"),
+            "size": len(response.content), "text": text[:60000], "tables": json.dumps(tables, ensure_ascii=False)[:60000],
+            "warnings": doc.parse_warnings[:5]}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--out")
@@ -62,6 +92,9 @@ def main() -> int:
                 text = json.dumps(mask_oc(detail), ensure_ascii=False)
                 emit({"kind": "admrul_detail", "id": identifier, "name": row.get("행정규칙명"), "status": status,
                       "url": f"{SERVICE_URL}?target=admrul&ID={identifier}", "payload_text": text[:60000]}, sink)
+                for link in sorted(set(re.findall(r"/LSW/flDownload\.do\?flSeq=\d+", text))):
+                    emit({"kind": "attachment", "rule_id": identifier, "url": "https://www.law.go.kr" + link,
+                          **download_text("https://www.law.go.kr" + link)}, sink)
         for law_name, articles in STATUTES:
             try:
                 response = adapter.resolve_statute(law_name)

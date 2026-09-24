@@ -12,6 +12,7 @@ Level 1~3은 결정론적으로 수행한다. Level 4~5는 LLM이 담당하되
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -30,6 +31,7 @@ from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
 from .citation_format import format_violations
+from .quote_diff import quote_changes
 from .normalize import canonical_article, case_number_possible, same_case_number
 from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
@@ -406,6 +408,12 @@ class LegalVerifier:
                 )
             elif level3 == "TRUNCATED":
                 verdict.notes.append("인용문이 원문의 일부만 포함한다. 인용 절단 여부는 MM-4 참고신호로 전달된다.")
+            if level3 in ("VERIFIED", "PARTIALLY_VERIFIED", "TRUNCATED") and official.get("full_text"):
+                modified = quote_changes(citation.quoted_text, official_text)
+                if modified:
+                    verdict.levels["level3"] = "CONTRADICTED"
+                    verdict.status = VerificationStatus.CONTRADICTED
+                    verdict.findings.append(self._modified_quote_finding(citation, modified, official_text, verdict))
 
         # Level 4·5는 LLM 담당. 공식 Source가 있어야만 의미 비교를 수행한다.
         verdict.levels.setdefault("level4", "PENDING_LLM")
@@ -462,6 +470,12 @@ class LegalVerifier:
         if citation.decision_date and official.get("decision_date"):
             if citation.decision_date != official["decision_date"]:
                 mismatches.append(("선고일", citation.decision_date, str(official["decision_date"])))
+        doc_name = (citation.attributes or {}).get("case_name")
+        if doc_name and official.get("case_name"):
+            left = re.sub(r"[\s()·]", "", doc_name)
+            right = re.sub(r"[\s()·]", "", str(official["case_name"]))
+            if left and right and left not in right and right not in left:
+                mismatches.append(("사건명", doc_name, str(official["case_name"])))
         if citation.case_kind and official.get("case_kind"):
             doc_kind = citation.case_kind.replace("선고", "").strip()
             off_kind = str(official["case_kind"]).strip()
@@ -794,6 +808,30 @@ class LegalVerifier:
         return verdict
 
     # -- 공통 -------------------------------------------------------------
+    @staticmethod
+    def _modified_quote_finding(citation: Citation, modified: Dict[str, Any], official_text: str,
+                                verdict: "CitationVerdict") -> Finding:
+        described = "; ".join(f"{c['label']} '{c['text']}' {c['side']}" for c in modified["changes"])
+        features = {"deterministic_rule": True, "official_source_match": True, "quote_mismatch": True,
+                    "verdict_label": "MODIFIED_QUOTE", "quote_similarity": modified["similarity"],
+                    "quote_changes": modified["changes"], "rule_id": "QUOTE.MEANINGFUL_CHANGE"}
+        return Finding.create(
+            type=FindingType.CASE_QUOTE_MISMATCH, status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH,
+            evidence_grade=EvidenceGrade.A,
+            title=f"직접 인용문이 원문과 다르게 바뀌었다(MODIFIED_QUOTE): {citation.raw_text} — {described}",
+            detail=(f"인용문과 공식 원문의 유사도는 {modified['similarity']:.2f}로 높지만, 판시의 의미를 바꾸는 "
+                    f"말이 달라졌다({described}). 따옴표로 표시한 직접 인용은 원문과 같아야 한다."),
+            confidence=0.9, confidence_features=features,
+            document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+            engine=ENGINE_NAME, source_record_ids=[r.source_record_id for r in verdict.source_records],
+            tags=["LEGAL", "CASE", "QUOTE", "MODIFIED_QUOTE"],
+            evidence=[Evidence.create(description="문서의 인용문", grade=EvidenceGrade.A,
+                                      document_id=citation.document_id, block_id=citation.block_id,
+                                      excerpt=citation.quoted_text[:300], supports=False),
+                      Evidence.create(description="공식 원문(판시사항·판결요지·전문)", grade=EvidenceGrade.A,
+                                      excerpt=official_text[:300])],
+        )
+
     @staticmethod
     def _invalid_format_finding(citation: Citation, violations: List[Dict[str, Any]],
                                 verdict: "CitationVerdict") -> Finding:
