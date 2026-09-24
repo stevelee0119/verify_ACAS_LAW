@@ -51,3 +51,29 @@
 | 문서 종류별 문구 | 예시 문서 고지 finding의 "실제 계약서로 취급" 고정 문구를 문서 제목 줄에서 판별한 종류(소장·준비서면·답변서 등)로 바꾼다 |
 
 시험: `tests/test_v2_phase1_verdicts.py`.
+
+## Phase 2 서지 형식 검사
+
+`legal_engine/citation_format.py`가 DB 조회와 무관하게 성립할 수 없는 표기를 INVALID_FORMAT(A)으로 확정한다.
+
+| 규칙 | 내용 |
+|---|---|
+| FMT.DATE_NOT_ON_CALENDAR | 선고·결정·회신일이 달력에 없음(윤년 반영). 판례·헌재·해석례·재결례·공문 날짜 모두 |
+| FMT.FUTURE_DATE / FUTURE_CASE_YEAR | 아직 오지 않은 날짜·접수연도(공식 기록이 그 사건번호를 확인한 경우 제외) |
+| FMT.DECIDED_BEFORE_FILED | 선고연도가 사건번호 접수연도보다 앞섬 |
+| FMT.COURT_CODE_MISMATCH / CODE_OUT_OF_PERIOD | 법원–사건부호 호환. 공식 재판예규 원문을 받아 `data/legal_rules/case_codes.json`을 만든 뒤에만 판단한다. 원문 확보 전에는 판단하지 않는다(unknown) |
+
+인용 추출 보강: "헌법재판소는 2018. 3. 22. …" 같은 조사 뒤 날짜, "○○실 2025. 4. 31.자 유권해석"의 기관·날짜,
+비식별 저자명(김○○)의 학술 인용. 공식 원문 수집은 `scripts/fetch_official_sources.py`(Actions "공식 원문 수집")로 한다.
+시험: `tests/test_v2_phase2_format.py`.
+
+## Phase 8 (일부) AI 응답 잔재 신호
+
+`verification_engine/ai_residue.py`: 대화형 응답 서두, AI 면책·안내문, 지식 기준일 언급, 마크다운 잔재, 챗봇식
+요약 도입구는 객관적 흔적(SUSPICIOUS, B)으로, 상투 표현(3종 이상)·영문 병기는 문체 신호(UNVERIFIED, C)로 범주마다
+하나씩 근거 문구와 함께 '참고용, 확정 불가'로 낸다. 읽기 본문에서 찾으므로 줄바꿈으로 갈린 문구도 잡는다.
+시험: `tests/test_v2_phase8_residue.py`.
+
+| 단계 | 본 테스트셋(오프라인) | 홀드아웃(오프라인) |
+|---|---|---|
+| Phase 1·2·8(일부) | 55.8 (오탐 0, 중복 0) | 56.9 (오탐 0) |

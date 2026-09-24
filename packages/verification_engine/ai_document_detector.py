@@ -26,16 +26,13 @@ from packages.common.textutil import sentences
 from packages.llm_router import LLMRouter
 from packages.llm_router.providers import LLMRequest
 
+from packages.document_engine.reading_text import build_reading_text
+
+from .ai_residue import scan_residue
+
 ENGINE_NAME = "verification_engine.ai_document_detector"
 
-# AI 챗봇이 생성한 한국어 법률 서면에서 빈번하게 관찰되는 상투적 패턴
-CHATBOT_CLICHE_PATTERNS = [
-    (re.compile(r"(도움이\s*되었기를\s*바랍니다|추가적인\s*질문이\s*있으시면|언제든\s*문의해\s*주십시오)", re.IGNORECASE), "챗봇 응답 잔재 상투구"),
-    (re.compile(r"(AI\s*(어시스턴트|모델|언어모델)|인공지능으로서)", re.IGNORECASE), "AI 자기 정체성 언급 잔재"),
-    (re.compile(r"(다음과\s*같은\s*(점|측면|이유|법리)(?:들)?이\s*있습니다)", re.IGNORECASE), "기계적 나열 도입구"),
-    (re.compile(r"(요약하자면|종합하자면|결론적으로\s*말씀드리면)", re.IGNORECASE), "전형적 요약 상투구"),
-    (re.compile(r"(법률적\s*조언이\s*아니며|전문\s*변호사와\s*상담하시기\s*바랍니다)", re.IGNORECASE), "AI 법률 면책 고지 잔재"),
-]
+# AI 응답 잔재 규칙은 ai_residue.RESIDUE_RULES에 있다.
 
 
 @dataclass
@@ -77,23 +74,21 @@ def _rule_based_ai_detection(
         score += 0.35
         reasons.append("문서 메타데이터(Producer/Creator 등)에 AI 생성 도구(ChatGPT/Claude/Gemini 등) 표기가 확인됨")
 
-    # 2. 챗봇 상투구 잔재 탐지
-    cliche_hits = 0
-    for pat, desc in CHATBOT_CLICHE_PATTERNS:
-        for m in pat.finditer(text):
-            cliche_hits += 1
-            start = max(0, m.start() - 30)
-            end = min(len(text), m.end() + 30)
-            snippet = text[start:end].strip()
-            suspicious_excerpts.append({
-                "type": "chatbot_cliche",
-                "pattern": desc,
-                "snippet": snippet,
-                "reason": f"AI 챗봇 전형적 관용구 잔재 발견: '{m.group(0)}'",
-            })
+    # 2. AI 응답 잔재(ai_residue): 대화형 서두·면책 안내·지식 기준일·마크다운은 객관적 흔적,
+    #    상투 표현·영문 병기는 문체 신호로만 센다.
+    # 줄바꿈으로 갈린 문구("드리겠습 / 니다")를 잇기 위해 읽기 본문에서 찾는다.
+    residues = scan_residue(build_reading_text(doc).text)
+    signals["residues"] = [{"category": r.category, "label": r.label, "objective": r.objective,
+                            "matches": r.matches} for r in residues]
+    cliche_hits = sum(len(r.matches) for r in residues if r.objective)
+    style_hits = sum(1 for r in residues if not r.objective)
     if cliche_hits > 0:
-        score += min(0.40, cliche_hits * 0.20)
-        reasons.append(f"AI 챗봇의 전형적인 관용구/면책/대화형 잔재 문구가 {cliche_hits}건 발견됨")
+        score += min(0.60, 0.20 * cliche_hits)
+        reasons.append("AI 챗봇의 전형적인 관용구·면책·대화형 응답 잔재(" + ", ".join(
+            r.label for r in residues if r.objective) + f")가 {cliche_hits}건 발견됨")
+    if style_hits:
+        score += 0.05 * style_hits
+        signals["style_signals"] = [r.label for r in residues if not r.objective]
 
     # 3. 판례 인용 오류는 작성 주체의 근거로 쓰지 않는다.
     #
@@ -481,6 +476,31 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
                 tags=["AUTHORSHIP", "AI_DETECTION"],
             )
         )
+
+    # AI 응답 잔재: 범주마다 하나씩, 발견한 문구를 그대로 싣는다(참고용, 확정 불가).
+    for residue in result.signals.get("residues") or []:
+        sample = residue["matches"][0]
+        findings.append(Finding.create(
+            type=FindingType.AI_AUTHORSHIP_LIKELY,
+            # 잔재 문구가 문서에 있다는 것은 관찰된 사실(의심 신호)이다. 문체 신호는 약하므로 미확인으로 둔다.
+            status=VerificationStatus.SUSPICIOUS if residue["objective"] else VerificationStatus.UNVERIFIED,
+            severity=Severity.LOW if residue["objective"] else Severity.INFO,
+            evidence_grade=EvidenceGrade.B if residue["objective"] else EvidenceGrade.C,
+            advisory_only=True,
+            title=f"AI 응답 잔재 신호: {residue['label']} — '{sample[:60]}' (참고용, 확정 불가)",
+            detail=("발견 문구: " + " / ".join(f"'{m[:80]}'" for m in residue["matches"]) + ". "
+                    + ("서면 작성 관행에 없는 AI 답변 표지다. " if residue["objective"] else
+                       "사람도 쓰는 표현이므로 문체 신호로만 표시한다. ")
+                    + "이 신호만으로 AI 작성이나 사람 작성을 단정하지 않는다."),
+            confidence=0.6 if residue["objective"] else 0.3,
+            confidence_features={**features, "residue_category": residue["category"],
+                                 "rule_id": f"AIGEN.{residue['category']}", "objective": residue["objective"]},
+            document_id=doc.document_id, engine=ENGINE_NAME,
+            tags=["AUTHORSHIP", "AI_RESIDUE", residue["category"]],
+            evidence=[Evidence.create(description=f"{residue['label']} 발췌", grade=EvidenceGrade.C,
+                                      document_id=doc.document_id, excerpt=" / ".join(residue["matches"])[:300],
+                                      supports=False)],
+        ))
 
     # 개별 의심 문단: 작성 주체에 관한 참고 신호다. 내용의 오류(환각)와 섞지 않는다.
     for exc in result.suspicious_excerpts[:4]:

@@ -29,6 +29,7 @@ from packages.common.textutil import contains_fuzzy, normalize_quote, similarity
 from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
+from .citation_format import format_violations
 from .normalize import canonical_article, case_number_possible, same_case_number
 from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
@@ -82,6 +83,18 @@ class LegalVerifier:
             else:
                 verdict = CitationVerdict(citation, VerificationStatus.SKIPPED)
                 verdict.notes.append("이 인용 유형의 공식 원문 검증 어댑터는 아직 지원하지 않습니다")
+            # 형식상 성립할 수 없는 표기는 DB 조회 결과와 무관하게 확정한다(v2 Phase 2).
+            violations = format_violations(citation, official_record=verdict.official_record)
+            if violations:
+                # 번호 형식만 본 이전 판단(B등급)은 이 확정 판정(A등급)에 흡수한다.
+                verdict.findings = [f for f in verdict.findings
+                                    if (f.confidence_features or {}).get("absence_scope") != "FORMAT_ONLY"]
+                verdict.findings.append(self._invalid_format_finding(citation, violations, verdict))
+                verdict.levels["format"] = "INVALID"
+                if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
+                    verdict.levels["number_format"] = "IMPOSSIBLE"
+                verdict.status = VerificationStatus.CONTRADICTED
+                verdict.review = {**(verdict.review or {}), "format_violations": violations}
             return verdict
 
         pending = []
@@ -781,6 +794,34 @@ class LegalVerifier:
         return verdict
 
     # -- 공통 -------------------------------------------------------------
+    @staticmethod
+    def _invalid_format_finding(citation: Citation, violations: List[Dict[str, Any]],
+                                verdict: "CitationVerdict") -> Finding:
+        lookup = "UNAVAILABLE" if not verdict.official_record and verdict.levels.get("level1") in (None, "UNVERIFIED") \
+            else "PERFORMED"
+        features = {"deterministic_rule": True, "format_violation": True, "number_format_valid": False,
+                    "verdict_label": "INVALID_FORMAT", "absence_scope": "FORMAT_ONLY", "official_lookup": lookup,
+                    "case_number": citation.canonical_case_number or citation.case_number,
+                    "rule_id": violations[0]["rule_id"], "violations": violations}
+        reasons = "; ".join(v["reason"] for v in violations)
+        return Finding.create(
+            type=FindingType.CASE_CITATION_ERROR if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
+            else FindingType.LAW_CITATION_ERROR,
+            status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH, evidence_grade=EvidenceGrade.A,
+            title=f"성립할 수 없는 사건번호 형식의 판례 인용(INVALID_FORMAT): {citation.raw_text}"
+            if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
+            else f"형식상 성립할 수 없는 인용(INVALID_FORMAT): {citation.raw_text}",
+            detail=(f"{reasons}. 공식 DB 수록 여부와 무관하게 이 표기대로의 재판·문서는 존재할 수 없다. "
+                    "오기인지 원문(판결문·회신문) 확인이 필요하다."),
+            confidence=0.97, confidence_features=features,
+            document_id=citation.document_id, block_id=citation.block_id, page=citation.page,
+            span=citation.span, engine=ENGINE_NAME,
+            source_record_ids=[r.source_record_id for r in verdict.source_records], tags=["LEGAL", "FORMAT"],
+            evidence=[Evidence.create(description="문서의 인용 표기", grade=EvidenceGrade.A,
+                                      document_id=citation.document_id, block_id=citation.block_id,
+                                      excerpt=citation.raw_text)],
+        )
+
     @staticmethod
     def _impossible_number_finding(citation: Citation, case_number: str, verdict: "CitationVerdict") -> Finding:
         features = {"deterministic_rule": True, "case_number": case_number, "number_format_valid": False,

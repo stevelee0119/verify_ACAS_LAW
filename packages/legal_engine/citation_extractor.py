@@ -25,7 +25,7 @@ KIND_RE = r"(?:전원합의체\s*)?(?:판결|결정|명령|선고|자)"
 
 # 대법원 2024. 1. 15. 선고 2023도12345 판결
 FULL_CASE_RE = re.compile(
-    rf"(?P<court>{COURT_RE})\s*"
+    rf"(?P<court>{COURT_RE})(?:\s*(?:은|는|도|이|가|의))?\s*"
     rf"(?P<date>{DATE_RE})\s*"
     rf"(?:선고|자)?\s*"
     rf"(?P<case_no>{CASE_NO_RE})\s*"
@@ -121,6 +121,11 @@ INTERPRETATION_RE = re.compile(
     r"(?P<authority>법제처|법무부|국방부|행정안전부)?\s*(?:법령해석|유권해석)\s*(?:례)?\s*"
     r"(?P<no>\d{2}\s*-\s*\d{4}(?!\d))?"
 )
+# "국방부 법무관리관실 2025. 4. 31.자 유권해석", "○○부 2024. 3. 2. 질의회신"
+DATED_INTERPRETATION_RE = re.compile(
+    rf"(?P<authority>[가-힣]{{2,12}}(?:\s*[가-힣]{{2,12}})?(?:부|처|청|원|실|관|국|과|위원회))\s*"
+    rf"(?P<date>{DATE_RE})\s*자?\s*(?:유권해석|법령해석|질의\s*회신|회신|해석)(?P<no>)"
+)
 INTERPRETATION_FULL_RE = re.compile(
     rf"(?P<authority>법제처)\s*(?:(?P<date>{DATE_RE})\s*)?(?:회신\s*)?"
     r"(?P<no>\d{2}\s*-\s*\d{4})(?!\d)\s*(?:해석례|법령해석례)?"
@@ -138,7 +143,7 @@ DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
 # 단행본 인용(예: 홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)이
 # 전혀 추출되지 않았다. 단행본은 권·호가 없으므로 그 부분도 선택으로 둔다.
 ACADEMIC_RE = re.compile(
-    r"(?P<authors>[가-힣]{2,4}(?:\s*[·,]\s*[가-힣]{2,4})*)\s*,\s*"
+    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3})*)\s*,\s*"
     r"(?:[「『\"“](?P<title>[^」』\"”]{5,120})[」』\"”])\s*,\s*"
     r"(?P<journal>[가-힣A-Za-z\s]{2,40}?)\s*"
     r"(?:제?\s*(?P<volume>\d+)\s*권)?\s*(?:제?\s*(?P<issue>\d+)\s*호)?\s*[,(]?\s*"
@@ -168,6 +173,7 @@ def extract_from_text(
 
     for pattern, kind in (
         (INTERPRETATION_FULL_RE, CitationType.INTERPRETATION),
+        (DATED_INTERPRETATION_RE, CitationType.INTERPRETATION),
         (INTERPRETATION_RE, CitationType.INTERPRETATION),
         (ADMIN_APPEAL_RE, CitationType.ADMIN_APPEAL),
     ):

@@ -136,7 +136,10 @@ def test_impossible_case_number_is_reported_even_when_lookup_is_unavailable(regi
     _, result = _verify(registry, "대법원 2099. 3. 3. 선고 2099도88888 판결")
     findings = [f for f in result.findings if f.document_id == "D1"]
     assert [f.title.startswith("성립할 수 없는 사건번호 형식") for f in findings] == [True]
-    assert findings[0].status == VerificationStatus.SUSPICIOUS
+    # v2 Phase 2: 아직 오지 않은 접수연도·선고일은 DB와 무관하게 확정 판정(INVALID_FORMAT, A등급)이다.
+    assert findings[0].status == VerificationStatus.CONTRADICTED
+    assert findings[0].evidence_grade == EvidenceGrade.A
+    assert findings[0].confidence_features["verdict_label"] == "INVALID_FORMAT"
     assert findings[0].confidence_features["official_lookup"] == "UNAVAILABLE"
 
 

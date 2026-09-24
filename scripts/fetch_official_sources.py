@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from packages.source_adapters.law_go_kr import SERVICE_URL, SEARCH_URL, LawGoKrAdapter, mask_oc  # noqa: E402
 from packages.source_adapters.transport import source_lookup_session  # noqa: E402
 
-ADMIN_RULES = ["사건별 부호문자의 부여에 관한 예규"]
+ADMIN_RULES = ["사건별 부호문자의 부여에 관한 예규", "부호문자"]
 STATUTES = [("행정소송법", ["4", "13", "20"]), ("군인사법", ["51의2", "57", "60"]), ("국가배상법", ["2"]),
             ("국가공무원법", ["83"]), ("행정기본법", [])]
 CASES = ["95다38677", "94누4615", "2006두16274", "2006두20631", "2012두26401", "2021두62148"]
@@ -31,7 +31,10 @@ def emit(record, sink):
 
 
 def raw_get(adapter, url, params):
-    response = adapter._http_get(url, params={"OC": adapter.api_key, "type": "JSON", **params})
+    try:
+        response = adapter._http_get(url, params={"OC": adapter.api_key, "type": "JSON", **params})
+    except Exception as exc:  # 한 요청의 실패가 나머지 수집을 막지 않게 한다
+        return None, {"error": f"{type(exc).__name__}: {exc}"}
     try:
         return response.status_code, response.json()
     except ValueError:
@@ -51,7 +54,7 @@ def main() -> int:
         for name in ADMIN_RULES:
             status, listing = raw_get(adapter, SEARCH_URL, {"target": "admrul", "query": name})
             emit({"kind": "admrul_list", "query": name, "status": status, "payload": mask_oc(listing)}, sink)
-            rows = (listing.get("AdmRulSearch") or {}).get("admrul") or []
+            rows = (listing.get("AdmRulSearch") or {}).get("admrul") or [] if isinstance(listing, dict) else []
             rows = rows if isinstance(rows, list) else [rows]
             for row in rows[:3]:
                 identifier = row.get("행정규칙일련번호")
@@ -60,7 +63,11 @@ def main() -> int:
                 emit({"kind": "admrul_detail", "id": identifier, "name": row.get("행정규칙명"), "status": status,
                       "url": f"{SERVICE_URL}?target=admrul&ID={identifier}", "payload_text": text[:60000]}, sink)
         for law_name, articles in STATUTES:
-            response = adapter.resolve_statute(law_name)
+            try:
+                response = adapter.resolve_statute(law_name)
+            except Exception as exc:
+                emit({"kind": "statute", "law": law_name, "error": str(exc)}, sink)
+                continue
             record = response.records[0] if response.records else {}
             texts = {}
             for article in articles:
@@ -72,11 +79,18 @@ def main() -> int:
                   "article_count": len(record.get("articles") or []), "articles": texts,
                   "url": f"{SERVICE_URL}?target=law&MST={record.get('version_id')}"}, sink)
         for number in CASES:
-            response = adapter.search_case(number)
+            try:
+                response = adapter.search_case(number)
+            except Exception as exc:
+                emit({"kind": "case", "case_number": number, "error": str(exc)}, sink)
+                continue
             record = response.records[0] if response.records else {}
             if record and not record.get("full_text"):
-                detail = adapter.fetch_case(record)
-                record = {**record, **(detail.records[0] if detail.records else {})}
+                try:
+                    detail = adapter.fetch_case(record)
+                    record = {**record, **(detail.records[0] if detail.records else {})}
+                except Exception as exc:
+                    record = {**record, "detail_error": str(exc)}
             emit({"kind": "case", "case_number": number, "status": str(response.status),
                   "court": record.get("court"), "decision_date": record.get("decision_date"),
                   "case_name": record.get("case_name"), "case_kind": record.get("case_kind"),

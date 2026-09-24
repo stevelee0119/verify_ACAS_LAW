@@ -20,12 +20,12 @@ def verifier(tmp_path):
 
 
 def citations():
-    return extract_from_text("대법원 2099. 1. 15. 선고 2099도99999 판결")
+    return extract_from_text("대법원 2023. 1. 15. 선고 2023도99999 판결")
 
 
 def official(request):
     return httpx.Response(200, json={"PrecSearch": {"prec": [{
-        "사건번호": "2099도99999", "법원명": "대법원", "선고일자": "20990115",
+        "사건번호": "2023도99999", "법원명": "대법원", "선고일자": "20230115",
         "판례일련번호": "synthetic", "판례내용": "Synthetic official text for a transport test only.",
     }]}})
 
@@ -99,7 +99,7 @@ def test_empty_success_is_not_retried_as_a_timeout(tmp_path, monkeypatch):
 
 def test_timeout_in_fallback_search_is_not_reported_as_absent_case(tmp_path, monkeypatch):
     def handler(request):
-        if request.url.params["query"] == "2099도99999":
+        if request.url.params["query"] == "2023도99999":
             return httpx.Response(200, json={"PrecSearch": {"prec": []}})
         raise httpx.ReadTimeout("test")
     install_mock(monkeypatch, handler)
@@ -131,14 +131,14 @@ def test_deferred_detail_lookup_reuses_successful_search(tmp_path, monkeypatch):
         if request.url.path.endswith("lawSearch.do"):
             searches.append(request)
             return httpx.Response(200, json={"PrecSearch": {"prec": [{
-                "사건번호": "2099도99999", "법원명": "대법원", "선고일자": "20990115",
+                "사건번호": "2023도99999", "법원명": "대법원", "선고일자": "20230115",
                 "판례일련번호": "synthetic",
             }]}})
         details.append(request)
         if len(details) <= 3:
             raise httpx.ReadTimeout("test")
         return httpx.Response(200, json={"PrecService": {
-            "사건번호": "2099도99999", "판례내용": "Synthetic full judgment for tests only.",
+            "사건번호": "2023도99999", "판례내용": "Synthetic full judgment for tests only.",
         }})
     install_mock(monkeypatch, handler)
     with transport.source_lookup_session(120, retry_backoff=0):
