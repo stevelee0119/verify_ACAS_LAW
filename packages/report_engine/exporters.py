@@ -229,12 +229,28 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     append(issues, columns)
     for row in snapshot.get("matrix", {}).get("issues", []):
         append(issues, [row.get(c) for c in columns])
-    technical = workbook.create_sheet("기술부록")
-    append(technical, ["JSON path", "part", "value"])
-    appendix = json.loads(json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed), ensure_ascii=False, default=str))
-    for path, value in json_lines(compact_claim_rows(appendix)):
-        for part, offset in enumerate(range(0, max(1, len(value)), 29000), start=1):
-            append(technical, [path, part, value[offset:offset + 29000]])
+    from .summary import FULL_RECORD_NOTE, SUMMARY, detail_level, evidence_summary
+
+    if detail_level(run_result) == SUMMARY:
+        # 요약본: 수행하지 못한 단계와 실패한 조회는 빠짐없이, 성공한 조회는 건수로 싣는다.
+        evidence = evidence_summary(run_result)
+        basis = workbook.create_sheet("검증근거")
+        append(basis, ["구분", "대상", "상태", "내용"])
+        for stage in evidence["unavailable_stages"]:
+            append(basis, ["수행하지 못한 단계", stage["path"], "UNAVAILABLE", stage["stage"]])
+        for count in evidence["source_counts"]:
+            append(basis, ["출처 조회 건수", count["adapter"], count["status"], count["count"]])
+        for problem in evidence["problem_sources"]:
+            append(basis, ["성공하지 못한 조회", problem["adapter"], problem["status"],
+                           f"{problem.get('query') or ''} {problem.get('url') or ''} {problem.get('note') or ''}".strip()])
+        append(basis, ["전체 기술 기록", "검증 상세(JSON)", "", FULL_RECORD_NOTE])
+    else:
+        technical = workbook.create_sheet("기술부록")
+        append(technical, ["JSON path", "part", "value"])
+        appendix = json.loads(json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed), ensure_ascii=False, default=str))
+        for path, value in json_lines(compact_claim_rows(appendix)):
+            for part, offset in enumerate(range(0, max(1, len(value)), 29000), start=1):
+                append(technical, [path, part, value[offset:offset + 29000]])
 
     for worksheet in workbook.worksheets:
         worksheet.freeze_panes = "A2"

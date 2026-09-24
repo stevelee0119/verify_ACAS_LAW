@@ -176,6 +176,9 @@ class ReportRequest(BaseModel):
     formats: List[str] = Field(default_factory=lambda: ["pdf", "xlsx", "csv", "json", "manifest"])
     include_sealed: bool = False
     audience: Literal["INTERNAL", "SHAREABLE"] = "INTERNAL"
+    # SUMMARY: 판단에 필요한 내용만 싣고 전체 기술 기록은 검증 상세(JSON)에 보존한다.
+    # FULL: 전체 기술 기록을 PDF·Word·Excel에도 싣는다(인용이 많으면 수천 쪽이 된다).
+    detail_level: Literal["SUMMARY", "FULL"] = "SUMMARY"
 
     @field_validator("audience", mode="before")
     @classmethod

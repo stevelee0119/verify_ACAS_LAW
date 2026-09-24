@@ -56,15 +56,19 @@ const reportWorkbench = (() => {
     const choices=node("fieldset",null,"full report-formats");choices.append(node("legend","보고서 형식"));
     for(const [key,title] of Object.entries(formats))choices.append(workflowUI.field(key,title,true,"checkbox"));
     const view=progressView();
+    // 요약본은 판단에 필요한 내용만 싣는다. 전체 기술 기록을 PDF에 실으면 인용이 많은 사건에서
+    // 수천 쪽이 되므로, 그 기록은 검증 상세(JSON)로 함께 만들어 보존한다.
+    const depth=workflowUI.field("detail_level","보고서 분량","SUMMARY","text",
+      {SUMMARY:"요약본 (권장) — 전체 기술 기록은 검증 상세(JSON)로 함께 생성",FULL:"전체 기술 기록 포함 — 매우 길어질 수 있음"});
     const editor=workflowUI.modal("검토 보고서 초안",[
-      workflowUI.field("audience","보고서 용도","INTERNAL","text",{INTERNAL:"내부 검토용",SHAREABLE:"공유용 (내부 메모 제외)"}), choices, view.box
+      workflowUI.field("audience","보고서 용도","INTERNAL","text",{INTERNAL:"내부 검토용",SHAREABLE:"공유용 (내부 메모 제외)"}), depth, choices, view.box
     ],async(values,form)=>{
       const selected=Object.keys(formats).filter(key=>form.elements[key].checked);
       if(!selected.length)throw new Error("보고서 형식을 하나 이상 선택하세요.");
       const inputs=[...form.querySelectorAll("select, input")];
       inputs.forEach(input=>{input.disabled=true;});
       try{
-        const job=await api(`/projects/${pid}/report-jobs`,{method:"POST",body:{run_id:run.id,formats:selected,audience:values.audience,include_sealed:false}});
+        const job=await api(`/projects/${pid}/report-jobs`,{method:"POST",body:{run_id:run.id,formats:selected,audience:values.audience,detail_level:values.detail_level,include_sealed:false}});
         watching.add(job.job_id);
         try{
           const done=await follow(job,view,()=>editor.dialog.isConnected);

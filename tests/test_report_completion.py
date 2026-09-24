@@ -310,7 +310,8 @@ def test_formula_injection_and_long_results_are_preserved(report_case):
     assert csv_rows[0]["title"].startswith("'") and csv_rows[0]["detail"].startswith("'")
     assert csv_rows[0]["detail"].endswith("FULL_TEXT_END")
     pdf_text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, draft, "pdf"))).pages)
-    assert "reason-64" in pdf_text and "FULL_TEXT_END" in pdf_text
+    # 표 칸의 긴 값은 줄바꿈되어 추출되므로 줄바꿈을 지우고 끝까지 실렸는지 본다.
+    assert "reason-64" in pdf_text and "FULL_TEXT_END" in pdf_text.replace("\n", "")
 
 
 def test_unavailable_stages_require_ack_even_without_unverified_findings(report_case):
@@ -512,9 +513,46 @@ def test_word_and_pdf_appendix_scale_with_many_entries(report_case, monkeypatch)
 
     monkeypatch.setattr(docx_report, "technical_payload", lambda _: {"items": [f"항목 {i}" for i in range(5000)]})
     started = time.perf_counter()
-    draft = create(report_case, ["docx"])
+    response = report_case.client.post("/api/projects/p1/reports", json={"formats": ["docx"], "detail_level": "FULL"})
+    assert response.status_code == 201, response.text
+    draft = response.json()
     assert time.perf_counter() - started < 20
     word = WordDocument(io.BytesIO(download(report_case, draft, "docx")))
     texts = [p.text for p in word.paragraphs]
     assert texts.index("항목 0") < texts.index("항목 4999")
     assert word.element.body[-1].tag.endswith("sectPr")
+
+
+def test_summary_report_keeps_review_content_and_moves_the_full_record_to_json(report_case):
+    """요약본은 판단 근거(수행하지 못한 단계·실패한 조회·미확인 항목)를 싣고 원자료 나열은 JSON에 둔다."""
+    case = report_case
+    summary = case.client.post("/api/projects/p1/reports", json={"formats": ["pdf", "docx", "xlsx"]}).json()
+    assert summary["formats"] == ["pdf", "docx", "xlsx", "json"]  # 전체 기록을 담을 JSON을 함께 만든다
+    full = case.client.post("/api/projects/p1/reports",
+                            json={"formats": ["pdf", "docx", "xlsx"], "detail_level": "FULL"}).json()
+    assert "json" not in full["formats"]
+    texts = {}
+    for name, report in (("summary", summary), ("full", full)):
+        pdf = download(case, report, "pdf")
+        texts[name] = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(pdf)).pages)
+        word = zipfile.ZipFile(io.BytesIO(download(case, report, "docx"))).read("word/document.xml").decode()
+        workbook = openpyxl.load_workbook(io.BytesIO(download(case, report, "xlsx")))
+        sheet_text = "\n".join(str(c.value) for ws in workbook for row in ws for c in row if c.value is not None)
+        for text in (texts[name], word, sheet_text):
+            assert "signature verification unavailable" in text and "full source note" in text
+            assert "official.example/full/source" in text and "UNVERIFIED" in text
+        texts[name + "_sheets"] = workbook.sheetnames
+    assert "전체 기술 기록(실행 당시의 모든 필드)을 싣지 않았습니다" in texts["summary"]
+    assert "검증근거" in texts["summary_sheets"] and "기술부록" not in texts["summary_sheets"]
+    assert "기술부록" in texts["full_sheets"]
+    assert "input_snapshot.context.profile" in texts["full"] and "input_snapshot.context.profile" not in texts["summary"]
+    payload = json.loads(download(case, summary, "json"))
+    assert payload["report"]["detail_level"] == "SUMMARY" and payload["documents"][0]["claims"]
+
+
+def test_finalized_report_keeps_the_draft_detail_level(report_case):
+    case = report_case
+    draft = case.client.post("/api/projects/p1/reports", json={"formats": ["pdf"], "detail_level": "FULL"}).json()
+    final = finalize(case, draft).json()
+    text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, final, "pdf"))).pages)
+    assert "detail_level: FULL" in text and "15. 전체 기술 기록" in text

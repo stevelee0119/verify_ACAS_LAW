@@ -6,6 +6,8 @@ import json
 
 from packages.common.terminology import EDITABLE_COPY_NOTICE, REVIEW_NOTICE
 from .snapshot import json_lines, technical_payload, xml_text
+from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, detail_level, evidence_summary,
+                      grouped_unverified, reviewed_workflow)
 
 
 def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=False):
@@ -112,16 +114,33 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
             paragraph(f"{key}: {metadata[key]}")
     if not metadata:
         paragraph(f"source_run_id: {run_result.run_id}")
+    summary = detail_level(run_result) == SUMMARY
+    paragraph("보고서 분량: " + ("요약본 — 전체 기술 기록은 검증 상세(JSON)에 보존" if summary else "전체 기술 기록 포함"))
     doc.add_heading("검증 결과", 1)
-    table(["항목", "시스템 판정", "근거 등급"],
-          [[f.title, str(f.status), str(f.evidence_grade)] for f in run_result.all_findings], [4.5, 1.5, 1])
-    for finding in run_result.all_findings:
+    if summary:
+        # 같은 제목·판정의 항목은 한 줄로 묶고 건수를 적는다. 설명은 중간 이상(참고 신호 제외)만 풀어 쓴다.
+        groups = {}
+        for f in run_result.all_findings:
+            groups.setdefault((f.title, str(f.status), str(f.evidence_grade)), []).append(f)
+        table(["항목", "시스템 판정", "근거 등급"],
+              [[title + (f" ({len(items)}건)" if len(items) > 1 else ""), status, grade]
+               for (title, status, grade), items in groups.items()], [4.5, 1.5, 1])
+        detailed = [items[0] for items in groups.values()
+                    if not items[0].advisory_only and str(items[0].severity) in ("CRITICAL", "HIGH", "MEDIUM")]
+    else:
+        table(["항목", "시스템 판정", "근거 등급"],
+              [[f.title, str(f.status), str(f.evidence_grade)] for f in run_result.all_findings], [4.5, 1.5, 1])
+        detailed = run_result.all_findings
+    for finding in detailed:
         doc.add_heading(xml_text(finding.title), 2)
         paragraph(finding.detail)
     doc.add_heading("미검증 항목과 사용 불가 자료", 1)
+    unverified = ([[i["target"] + (f" ({i['count']}건)" if i["count"] > 1 else ""), i["reason"]]
+                   for i in grouped_unverified(run_result.unverified_items)] if summary else
+                  [[item.get("raw_text") or item.get("document_id") or item.get("kind"), item.get("reason")]
+                   for item in run_result.unverified_items])
     table(["대상", "사유"],
-          [[item.get("raw_text") or item.get("document_id") or item.get("kind"), item.get("reason")]
-           for item in run_result.unverified_items] +
+          unverified +
           [[s.get("name"), f"{s.get('status')} / {s.get('note', '')}"] for s in run_result.unavailable_sources], [2.5, 4.5])
     doc.add_heading("AI 작성 분석 및 법률 주장 타당성 검토", 1)
     ai_rows = []
@@ -156,22 +175,52 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
         table(["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"], all_hallucination_rows, [1.0, 1.8, 1.5, 2.0, 0.7])
 
     doc.add_heading("사람의 검토 기록", 1)
+    workflow = snapshot.get("workflow", [])
+    shown, untouched = reviewed_workflow(workflow) if summary else (workflow, 0)
     table(["항목", "진행과 의견", "검토자와 메모"],
           [[r.get("title") or r.get("finding_id"), f"{r.get('workflow_state')} / {r.get('decision')}",
             f"{r.get('updated_by', '')} / {r.get('updated_at', '')}\n{r.get('note', '')}"]
-           for r in snapshot.get("workflow", [])], [2.5, 1.8, 2.7])
+           for r in shown], [2.5, 1.8, 2.7])
+    if untouched:
+        paragraph(f"검토를 시작하지 않은 항목 {untouched}건은 목록에서 생략했습니다(전체 목록은 검증 상세 JSON).")
     doc.add_heading("쟁점과 주장 및 증거 관계", 1)
     for issue in snapshot.get("matrix", {}).get("issues", []):
         doc.add_heading(xml_text(issue.get("title")), 2)
         paragraph(f"요건사실: {issue.get('elements', [])}")
         paragraph(f"법적 근거: {issue.get('legal_basis', '')} / 기준일: {issue.get('reference_date')}")
     rows = []
-    for item in snapshot.get("matrix", {}).get("claims", []):
+    claims = snapshot.get("matrix", {}).get("claims", [])
+    shown, unassessed = assessed_claims(claims) if summary else (claims, 0)
+    for item in shown:
         assessment = item.get("assessment", {})
         rows.append([item["claim"].get("text"), f"{assessment.get('position', 'UNASSESSED')} / {item.get('review_status')}",
                      {"issue_id": assessment.get("issue_id"), "evidence_links": assessment.get("evidence_links", []),
                       "missing_material": assessment.get("missing_material", "")}])
     table(["주장", "입장과 증거 검토", "쟁점 및 증거 연결"], rows, [2.5, 1.8, 2.7])
+    if unassessed:
+        paragraph(f"입장·증거를 아직 적지 않은 주장 {unassessed}건은 목록에서 생략했습니다(전체 목록은 검증 상세 JSON).")
+    if summary:
+        evidence = evidence_summary(run_result)
+        doc.add_heading("검증 근거 요약", 1)
+        table(["위치", "수행하지 못한 검사 단계"],
+              [[s["path"], str(s["stage"])] for s in evidence["unavailable_stages"]] or [["-", "기록된 항목 없음"]],
+              [2.5, 4.5])
+        table(["출처", "상태", "건수"], [[c["adapter"], c["status"], str(c["count"])] for c in evidence["source_counts"]]
+              or [["-", "-", "0"]], [3, 2.5, 1.5])
+        if evidence["problem_sources"]:
+            table(["출처 / 상태", "조회 / 주소", "비고"],
+                  [[f"{p['adapter']} / {p['status']}", f"{p.get('query') or ''}\n{p.get('url') or ''}",
+                    f"{p.get('note') or ''}\n{p.get('retrieved_at') or ''}"] for p in evidence["problem_sources"]],
+                  [1.8, 3.2, 2.0])
+            if evidence["problem_sources_omitted"]:
+                paragraph(f"성공하지 못한 조회 외 {evidence['problem_sources_omitted']}건은 검증 상세 JSON에 있습니다.")
+        doc.add_heading("전체 기술 기록", 1)
+        paragraph(FULL_RECORD_NOTE)
+        footer = section.footer.paragraphs[0]
+        footer.text = xml_text(metadata.get("label", "DRAFT") + " | " + run_result.run_id)
+        buffer = io.BytesIO()
+        doc.save(buffer)
+        return buffer.getvalue()
     doc.add_heading("전체 기술 부록", 1)
     paragraph("실행 당시 기록된 검사 상태, 수행하지 못한 단계, 전체 출처와 모델 실행 기록을 포함합니다. 기록이 없다는 사실은 검사 성공을 뜻하지 않습니다. 공유용에서 제외된 자료는 공유 정책에 표시됩니다.")
     payload = technical_payload(run_result)

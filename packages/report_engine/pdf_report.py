@@ -16,6 +16,8 @@ from typing import Any, Dict, List, Optional
 
 from packages.common.enums import MM4_ADVISORY_TYPES, Severity
 from .snapshot import json_lines, technical_payload, xml_text
+from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, component_line, detail_level, evidence_summary,
+                      grouped_citations, grouped_unverified, reviewed_workflow)
 
 KOREAN_FONT = "HYSMyeongJo-Medium"
 
@@ -135,7 +137,7 @@ def build_report_pdf(
     metadata = getattr(run_result, "report_metadata", {})
     if metadata:
         story.append(Paragraph(_escape(metadata["label"]), styles["h1"]))
-        for key in ("source_run_id", "source_run_hash", "snapshot_hash", "export_snapshot_hash",
+        for key in ("detail_level", "source_run_id", "source_run_hash", "snapshot_hash", "export_snapshot_hash",
                     "created_by", "created_at", "finalized_by", "finalized_at", "note", "review_notice"):
             if metadata.get(key) is not None:
                 story.append(Paragraph(_escape(f"{key}: {metadata[key]}"), styles["small"]))
@@ -190,22 +192,32 @@ def build_report_pdf(
     # --- 3. 법률 인용 검증표 ------------------------------------------------
     story.append(Paragraph(_escape("3. 판례·법령·유권해석·학술자료 검증표"), styles["h1"]))
     citation_rows = [["문서", "면", "인용", "구분", "종합 / 단계별 결과", "근거등급"]]
-    for d in run_result.documents:
-        verdict_by_id = {v["citation_id"]: v for v in (d.engine_data.get("legal_verdicts") or [])}
-        for citation in d.citations:
-            verdict = verdict_by_id.get(citation["citation_id"], {})
-            citation_rows.append(
-                [
-                    d.filename,
-                    str(citation.get("page") or "-"),
-                    (citation.get("raw_text") or ""),
-                    str(citation.get("type")),
-                    # 종합 상태는 가장 약한 단계를 따른다. 단계별로 무엇이 확인됐는지 함께 싣는다.
-                    verdict.get("status", "UNVERIFIED") + "".join(
-                        f"\n· {c['label']}: {c['meaning']}" for c in verdict.get("components") or []),
-                    "A" if verdict.get("official_record") else "U",
-                ]
-            )
+    if detail_level(run_result) == SUMMARY:
+        # 같은 인용이 여러 번 나오면 한 줄로 묶는다(면과 횟수를 적는다).
+        for row in grouped_citations(run_result.documents):
+            citation, verdict = row["citation"], row["verdict"]
+            pages = ", ".join(str(p) for p in sorted(row["pages"])) or "-"
+            citation_rows.append([
+                row["filename"], pages + (f"\n({row['count']}회)" if row["count"] > 1 else ""),
+                citation.get("raw_text") or "", str(citation.get("type")),
+                verdict.get("status", "UNVERIFIED") + component_line(verdict.get("components") or []),
+                "A" if verdict.get("official_record") else "U"])
+    else:
+        for d in run_result.documents:
+            verdict_by_id = {v["citation_id"]: v for v in (d.engine_data.get("legal_verdicts") or [])}
+            for citation in d.citations:
+                verdict = verdict_by_id.get(citation["citation_id"], {})
+                citation_rows.append(
+                    [
+                        d.filename,
+                        str(citation.get("page") or "-"),
+                        (citation.get("raw_text") or ""),
+                        str(citation.get("type")),
+                        verdict.get("status", "UNVERIFIED") + "".join(
+                            f"\n· {c['label']}: {c['meaning']}" for c in verdict.get("components") or []),
+                        "A" if verdict.get("official_record") else "U",
+                    ]
+                )
     if len(citation_rows) > 1:
         story.append(table(citation_rows, [70, 22, 130, 52, 160, 34]))
     else:
@@ -286,9 +298,14 @@ def build_report_pdf(
     # --- 8. 미검증 항목 / 사용하지 못한 Source -------------------------------
     story.append(Paragraph(_escape("8. 미검증 항목 및 사용하지 못한 Source"), styles["h1"]))
     unverified_rows = [["구분", "대상", "사유"]]
-    for item in run_result.unverified_items:
-        unverified_rows.append([item.get("kind", "-"), (item.get("raw_text") or item.get("document_id") or "-"),
-                                (item.get("reason") or "-")])
+    if detail_level(run_result) == SUMMARY:
+        for item in grouped_unverified(run_result.unverified_items):
+            unverified_rows.append([item["kind"] + (f"\n({item['count']}건)" if item["count"] > 1 else ""),
+                                    item["target"], item["reason"]])
+    else:
+        for item in run_result.unverified_items:
+            unverified_rows.append([item.get("kind", "-"), (item.get("raw_text") or item.get("document_id") or "-"),
+                                    (item.get("reason") or "-")])
     for source in run_result.unavailable_sources:
         unverified_rows.append(["source", source.get("name", "-"), f"{source.get('status', 'UNVERIFIED')} {source.get('note', '')}"])
     if len(unverified_rows) > 1:
@@ -356,46 +373,112 @@ def build_report_pdf(
         ["외부 AI 정책", str(context.get("external_ai_policy", "기록 없음"))],
         ["법령 기준일", str(context.get("case_date") or "미지정: 시행법 적합성 미검증")],
         ["판정 한계", "VERIFIED는 해당 검사 단계의 확인 결과이며 문서 전체의 적법성 보증이 아니다. 신뢰도 지표는 통계적으로 보정된 확률이 아니다."]], [100, 390]))
-    for item in run_result.documents:
-        for verdict in item.engine_data.get("legal_verdicts", []):
-            story.append(Paragraph(_escape(f"{item.filename} / {verdict.get('citation_id')}: {verdict.get('levels')}"), styles["small"]))
-        for coverage in item.engine_data.get("page_coverage", []):
-            story.append(Paragraph(_escape(f"{item.filename}: {coverage}"), styles["small"]))
-        for record in item.source_records:
-            source = record.to_dict() if hasattr(record, "to_dict") else record
-            story.append(Paragraph(_escape(f"Source: {source.get('adapter')} / {source.get('retrieved_at')} / SHA-256 {source.get('response_hash')} / {source.get('url')}"), styles["small"]))
-        for review in item.engine_data.get("semantic_reviews", []):
-            story.append(Paragraph(_escape(f"AI 참고 의견 / {review.get('citation_id')} / 근거 문구 대조 {review.get('source_quotes_validated', False)}: {review.get('reason')}"), styles["small"]))
-    executions = getattr(run_result, "model_executions", [])
-    story.append(Paragraph(_escape(f"모델 호출 기록: {executions}" if executions else "실행된 모델 호출 없음. 의미·법리 적용 검토를 완료한 것으로 해석할 수 없음."), styles["small"]))
-    story.append(Paragraph("실행에 저장된 검토 기록", styles["h2"]))
-    for finding in findings:
-        data = finding.to_dict()
-        story.append(Paragraph(_escape(f"{finding.title}: {data.get('review_status', 'NEEDS_REVIEW')} / {data.get('review_note', '')}"), styles["small"]))
+    level = detail_level(run_result)
+    summary = level == SUMMARY
+    if summary:
+        _summary_evidence(story, styles, table, run_result, findings)
+    else:
+        for item in run_result.documents:
+            for verdict in item.engine_data.get("legal_verdicts", []):
+                story.append(Paragraph(_escape(f"{item.filename} / {verdict.get('citation_id')}: {verdict.get('levels')}"), styles["small"]))
+            for coverage in item.engine_data.get("page_coverage", []):
+                story.append(Paragraph(_escape(f"{item.filename}: {coverage}"), styles["small"]))
+            for record in item.source_records:
+                source = record.to_dict() if hasattr(record, "to_dict") else record
+                story.append(Paragraph(_escape(f"Source: {source.get('adapter')} / {source.get('retrieved_at')} / SHA-256 {source.get('response_hash')} / {source.get('url')}"), styles["small"]))
+            for review in item.engine_data.get("semantic_reviews", []):
+                story.append(Paragraph(_escape(f"AI 참고 의견 / {review.get('citation_id')} / 근거 문구 대조 {review.get('source_quotes_validated', False)}: {review.get('reason')}"), styles["small"]))
+        executions = getattr(run_result, "model_executions", [])
+        story.append(Paragraph(_escape(f"모델 호출 기록: {executions}" if executions else "실행된 모델 호출 없음. 의미·법리 적용 검토를 완료한 것으로 해석할 수 없음."), styles["small"]))
+        story.append(Paragraph("실행에 저장된 검토 기록", styles["h2"]))
+        for finding in findings:
+            data = finding.to_dict()
+            story.append(Paragraph(_escape(f"{finding.title}: {data.get('review_status', 'NEEDS_REVIEW')} / {data.get('review_note', '')}"), styles["small"]))
     snapshot = getattr(run_result, "review_snapshot", {})
     story.append(Paragraph("13. 사람의 검토 기록", styles["h1"]))
+    workflow = snapshot.get("workflow", [])
+    shown, untouched = reviewed_workflow(workflow) if summary else (workflow, 0)
     rows = [["항목", "시스템 결과", "검토 진행", "검토 의견", "담당자와 메모"]]
-    for item in snapshot.get("workflow", []):
-        rows.append([item.get("finding_id"), item.get("system_status"), item.get("workflow_state"),
+    for item in shown:
+        rows.append([item.get("title") or item.get("finding_id"), item.get("system_status"), item.get("workflow_state"),
                      item.get("decision"), f"{item.get('updated_by', '')} / {item.get('note', '')}"])
-    story.append(table(rows, [105, 70, 80, 80, 155]))
+    if len(rows) > 1:
+        story.append(table(rows, [105, 70, 80, 80, 155]))
+    if untouched:
+        story.append(Paragraph(_escape(f"검토를 시작하지 않은 항목 {untouched}건은 목록에서 생략했다(전체 목록은 검증 상세 JSON)."), styles["body"]))
     story.append(Paragraph("14. 쟁점과 주장 및 증거 관계", styles["h1"]))
     for issue in snapshot.get("matrix", {}).get("issues", []):
         story.append(Paragraph(_escape(f"{issue.get('title')} / {issue.get('legal_basis', '')}"), styles["body"]))
         story.append(Paragraph(_escape(f"요건사실: {issue.get('elements', [])} / 기준일: {issue.get('reference_date')}"), styles["body"]))
+    claims = snapshot.get("matrix", {}).get("claims", [])
+    shown, unassessed = assessed_claims(claims) if summary else (claims, 0)
     rows = [["주장", "쟁점과 입장", "증거 검토", "연결 증거와 부족 자료"]]
-    for item in snapshot.get("matrix", {}).get("claims", []):
+    for item in shown:
         assessment = item.get("assessment", {})
         rows.append([item["claim"].get("text", ""), f"{assessment.get('issue_id', '')} / {assessment.get('position', 'UNASSESSED')}",
                      item.get("review_status", "UNASSESSED"),
                      f"{assessment.get('evidence_links', [])} / {assessment.get('missing_material', '')}"])
-    story.append(table(rows, [140, 95, 85, 170]))
+    if len(rows) > 1:
+        story.append(table(rows, [140, 95, 85, 170]))
+    if unassessed:
+        story.append(Paragraph(_escape(f"입장·증거를 아직 적지 않은 주장 {unassessed}건은 목록에서 생략했다(전체 목록은 검증 상세 JSON)."), styles["body"]))
     story.append(Paragraph("15. 전체 기술 기록", styles["h1"]))
-    story.append(Paragraph(_escape("실행 당시 기록된 검사 상태와 사용 불가 단계, 전체 출처, 모델 실행, 증거 및 검토 스냅샷을 수록합니다. 기록 부재는 검사 성공을 뜻하지 않습니다. 공유용에서 제외한 내용은 공유 정책에 표시합니다."), styles["body"]))
-    story.extend(_appendix_blocks(json_lines(technical_payload(run_result)), styles["small"],
-                                  document.width - 12))
+    if summary:
+        story.append(Paragraph(_escape(FULL_RECORD_NOTE), styles["body"]))
+    else:
+        story.append(Paragraph(_escape("실행 당시 기록된 검사 상태와 사용 불가 단계, 전체 출처, 모델 실행, 증거 및 검토 스냅샷을 수록합니다. 기록 부재는 검사 성공을 뜻하지 않습니다. 공유용에서 제외한 내용은 공유 정책에 표시합니다."), styles["body"]))
+        story.extend(_appendix_blocks(json_lines(technical_payload(run_result)), styles["small"],
+                                      document.width - 12))
     document.build(story)
     return buffer.getvalue()
+
+
+def _summary_evidence(story, styles, table, run_result, findings) -> None:
+    """요약본의 기술 근거. 수행하지 못한 단계·실패한 조회는 빠짐없이, 성공한 조회는 건수로 싣는다."""
+    from reportlab.platypus import Paragraph
+
+    evidence = evidence_summary(run_result)
+    story.append(Paragraph("수행하지 못한 검사 단계", styles["h2"]))
+    if evidence["unavailable_stages"]:
+        story.append(table([["위치", "단계"]] + [[s["path"], str(s["stage"])] for s in evidence["unavailable_stages"]],
+                           [150, 340]))
+    else:
+        story.append(Paragraph("기록된 항목 없음(기록 부재는 검사 성공을 뜻하지 않는다).", styles["small"]))
+    if evidence["page_coverage"]:
+        story.append(Paragraph(_escape("쪽별 본문 확보: " + ", ".join(
+            f"{k} {v}쪽" for k, v in evidence["page_coverage"].items())), styles["small"]))
+        for line in evidence["page_coverage_problems"]:
+            story.append(Paragraph(_escape(line), styles["small"]))
+    story.append(Paragraph("공식 출처 조회", styles["h2"]))
+    if evidence["source_counts"]:
+        story.append(table([["출처", "상태", "건수"]] + [[c["adapter"], c["status"], str(c["count"])]
+                                                        for c in evidence["source_counts"]], [200, 190, 100]))
+    if evidence["problem_sources"]:
+        story.append(Paragraph("성공하지 못한 조회", styles["h2"]))
+        story.append(table([["출처 / 상태", "조회 / 주소", "비고"]] + [
+            [f"{p['adapter']} / {p['status']}", f"{p.get('query') or ''}\n{p.get('url') or ''}",
+             f"{p.get('note') or ''}\n{p.get('retrieved_at') or ''}"] for p in evidence["problem_sources"]],
+            [110, 230, 150]))
+        if evidence["problem_sources_omitted"]:
+            story.append(Paragraph(_escape(f"외 {evidence['problem_sources_omitted']}건(전체 목록은 검증 상세 JSON)."),
+                                   styles["small"]))
+    executions = evidence["model_executions"]
+    story.append(Paragraph(_escape(
+        "모델 호출: " + ", ".join(f"{e['provider']} {e['status']} {e['count']}건" for e in executions)
+        if executions else "실행된 모델 호출 없음. 의미·법리 적용 검토를 완료한 것으로 해석할 수 없음."), styles["small"]))
+    for item in run_result.documents:
+        for review in item.engine_data.get("semantic_reviews", []):
+            story.append(Paragraph(_escape(f"AI 참고 의견 / {review.get('citation_id')} / 근거 문구 대조 "
+                                           f"{review.get('source_quotes_validated', False)}: {review.get('reason')}"),
+                                   styles["small"]))
+    reviewed = [f for f in findings if f.to_dict().get("review_note") or
+                str(f.to_dict().get("review_status", "NEEDS_REVIEW")) != "NEEDS_REVIEW"]
+    if reviewed:
+        story.append(Paragraph("실행에 저장된 검토 기록", styles["h2"]))
+        for finding in reviewed:
+            data = finding.to_dict()
+            story.append(Paragraph(_escape(f"{finding.title}: {data.get('review_status')} / {data.get('review_note', '')}"),
+                                   styles["small"]))
 
 
 _APPENDIX_LINES_PER_BLOCK = 80

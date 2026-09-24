@@ -208,6 +208,9 @@ def _resolve_run(session: Session, project_id: str, payload: ReportRequest) -> V
     unknown = [fmt for fmt in payload.formats if fmt not in MEDIA_TYPES]
     if unknown:
         raise HTTPException(422, f"지원하지 않는 보고서 형식입니다: {', '.join(unknown)}")
+    if payload.detail_level == "SUMMARY" and "json" not in payload.formats and set(payload.formats) & {"pdf", "docx", "xlsx"}:
+        # 요약본은 전체 기술 기록을 싣지 않으므로, 그 기록을 담은 검증 상세(JSON)를 함께 만든다.
+        payload.formats = [*payload.formats, "json"]
     return run
 
 
@@ -232,7 +235,7 @@ def _build_draft(session: Session, project: Project, run: VerificationRun, paylo
     report = ReportRow(id=new_uuid("rpt_"), created_at=datetime.utcnow(),
                        project_id=project.id, run_id=run.id, formats=payload.formats, include_sealed=False)
     metadata = {"report_id": report.id, "source_report_id": None, "state": "DRAFT",
-                "audience": payload.audience, "created_by": actor,
+                "audience": payload.audience, "detail_level": payload.detail_level, "created_by": actor,
                 "created_at": report.created_at.isoformat(), "finalized_by": None, "finalized_at": None,
                 "note": "", "source_run_id": run.id, "source_run_hash": canonical_hash(engine)}
     snapshot = _snapshot(session, project, run, engine, metadata, manifest)
