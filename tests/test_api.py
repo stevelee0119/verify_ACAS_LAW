@@ -549,6 +549,35 @@ def test_unhandled_error_returns_a_request_id_and_logs_without_case_data(client,
     assert "홍길동" not in logged and "홍길동" not in response.text
 
 
+def test_database_errors_name_the_driver_error_and_sqlstate_without_the_message(client, monkeypatch, caplog):
+    """OperationalError만으로는 교착·잠금 대기·질의 취소·연결 끊김을 가를 수 없다. SQLSTATE를 싣고 메시지는 싣지 않는다."""
+    import logging
+
+    from fastapi.testclient import TestClient
+    from sqlalchemy.exc import OperationalError
+
+    from apps.api.routers import projects as projects_router
+
+    class QueryCanceled(Exception):
+        sqlstate = "57014"
+
+    def broken(session, project):
+        raise OperationalError("SELECT 홍길동", {"name": "홍길동"}, QueryCanceled("홍길동 사건 질의 취소"))
+
+    client.post("/api/projects", json={"name": "DB 오류 재현"})
+    monkeypatch.setattr(projects_router, "_project_out", broken)
+    raw = TestClient(client.app, raise_server_exceptions=False)
+    raw.headers.update(client.headers)
+    with caplog.at_level(logging.ERROR, logger="apps.api.main"):
+        response = raw.get("/api/projects")
+    detail = response.json()["detail"]
+    assert response.status_code == 500
+    assert detail["error_type"] == "OperationalError(QueryCanceled, SQLSTATE 57014)"
+    assert "SQLSTATE 57014" in detail["message"]
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "SQLSTATE 57014" in logged and "홍길동" not in logged and "홍길동" not in response.text
+
+
 def test_value_error_inside_an_endpoint_is_not_reported_as_an_authentication_failure(client, monkeypatch):
     """엔드포인트 안의 ValueError(데이터 검증 오류 등)를 '인증 설정 오류(503)'로 바꾸지 않는다."""
     from fastapi.testclient import TestClient

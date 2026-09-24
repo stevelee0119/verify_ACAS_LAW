@@ -251,3 +251,59 @@ def test_purge_is_blocked_only_by_a_live_report_job(purge_case, minutes_ago, blo
         assert response.json()["rows"]["report_jobs"] == 1
         with s.factory() as session:
             assert session.get(Project, "pa") is None
+
+
+def _db_conflict(sqlstate="40P01"):
+    from sqlalchemy.exc import OperationalError
+
+    class DeadlockDetected(Exception):
+        pass
+    DeadlockDetected.sqlstate = sqlstate
+    return OperationalError("DELETE ...", {}, DeadlockDetected("deadlock detected"))
+
+
+def test_purge_retries_after_a_transient_database_conflict(purge_case, monkeypatch):
+    """교착(40P01) 같은 일시적 경합은 되돌린 뒤 다시 해서 삭제를 마친다."""
+    from apps.api.routers import projects as projects_router
+    s, storage, kept, _ = purge_case
+    headers = s.headers("admin")
+    s.client.delete("/api/projects/pa", headers=headers)
+    real, calls = projects_router.purge_rows, []
+
+    def flaky(session, project_id):
+        calls.append(project_id)
+        if len(calls) == 1:
+            raise _db_conflict()
+        return real(session, project_id)
+    monkeypatch.setattr(projects_router, "purge_rows", flaky)
+    monkeypatch.setattr(projects_router, "PURGE_RETRY_SECONDS", 0)
+    response = s.client.delete("/api/projects/pa/purge", headers=headers)
+    assert response.status_code == 200, response.text and len(calls) == 2
+    with s.factory() as session:
+        assert session.get(Project, "pa") is None
+
+
+@pytest.mark.parametrize("sqlstate,status", [("55P03", 409), ("40P01", 409), ("53100", 500)])
+def test_purge_reports_a_busy_project_instead_of_a_server_error(purge_case, monkeypatch, sqlstate, status):
+    """경합이 계속되면 '사용 중'(409)과 SQLSTATE를 알린다. 경합이 아닌 DB 오류(디스크 부족 등)는 그대로 500.
+    어느 경우든 삭제는 한 트랜잭션이라 아무것도 지워지지 않는다."""
+    from fastapi.testclient import TestClient
+
+    from apps.api.routers import projects as projects_router
+    s, storage, kept, _ = purge_case
+    headers = s.headers("admin")
+    s.client.delete("/api/projects/pa", headers=headers)
+
+    def always(session, project_id):
+        raise _db_conflict(sqlstate)
+    monkeypatch.setattr(projects_router, "purge_rows", always)
+    monkeypatch.setattr(projects_router, "PURGE_RETRY_SECONDS", 0)
+    raw = TestClient(s.client.app, raise_server_exceptions=False)
+    response = raw.delete("/api/projects/pa/purge", headers=headers)
+    assert response.status_code == status
+    if status == 409:   # 500의 SQLSTATE 표기는 전역 오류 처리기가 맡는다(test_api)
+        detail = response.json()["detail"]
+        assert detail["code"] == "PROJECT_BUSY" and f"SQLSTATE {sqlstate}" in detail["error_type"]
+    with s.factory() as session:
+        assert session.get(Project, "pa") is not None
+    assert storage.exists(kept[0])

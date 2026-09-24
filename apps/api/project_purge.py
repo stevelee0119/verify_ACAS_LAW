@@ -27,7 +27,7 @@ KEEP_TABLES = {"audit_events"}
 
 def _conditions(project_id: str) -> Dict[str, object]:
     """테이블마다 '이 프로젝트에 속한 행' 조건. 부모 조건을 하위 질의로 물려받는다."""
-    from . import job_control, workspace  # noqa: F401 - 모든 테이블을 메타데이터에 등록한다
+    from . import identity, job_control, workspace  # noqa: F401 - 모든 테이블을 메타데이터에 등록한다
     projects = Base.metadata.tables["projects"]
     conditions: Dict[str, object] = {"projects": projects.c.id == project_id}
     for table in Base.metadata.sorted_tables:  # 부모가 자식보다 먼저 나온다

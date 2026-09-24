@@ -25,6 +25,7 @@ from packages.common.storage import (StorageKeyConfigurationError,
                                      verify_storage_encryption_config)
 from .capabilities import runtime_capabilities
 from .durability import log_durability_warning
+from .db_errors import error_label
 from .db import User
 from .db import init_db
 from .access import workspace_access
@@ -119,14 +120,16 @@ def create_app() -> FastAPI:
         # 소스 줄은 싣지 않는다. 파일·줄 번호·함수 이름이면 원인 위치를 찾기에 충분하다.
         frames = "\n".join(f"  {Path(f.filename).name}:{f.lineno} in {f.name}"
                            for f in traceback.extract_tb(exc.__traceback__)[-12:])
+        # DB 오류는 드라이버 예외 종류와 SQLSTATE까지 적는다(교착·잠금 대기·연결 끊김을 가를 수 있게).
+        label = error_label(exc)
         logging.getLogger(__name__).error(
             "unhandled_error request_id=%s method=%s route=%s error_type=%s\n%s",
-            request_id, request.method, route, type(exc).__name__, frames)
-        message = (f"서버 내부 오류로 요청을 처리하지 못했습니다 ({type(exc).__name__}). "
+            request_id, request.method, route, label, frames)
+        message = (f"서버 내부 오류로 요청을 처리하지 못했습니다 ({label}). "
                    f"문의 번호 {request_id}로 서버 기록에서 원인을 확인할 수 있습니다.")
         return JSONResponse(status_code=500, headers={"X-Request-ID": request_id},
                             content={"detail": {"message": message, "code": "INTERNAL_ERROR",
-                                                "request_id": request_id, "error_type": type(exc).__name__}})
+                                                "request_id": request_id, "error_type": label}})
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

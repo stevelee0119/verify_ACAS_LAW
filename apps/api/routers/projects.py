@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from datetime import datetime
 from uuid import uuid4
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
-from sqlalchemy import func, select, update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy import func, select, text, update
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
@@ -20,6 +21,7 @@ from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 from ..db import Document, DocumentVersion, Project, VerificationRun, get_db
 from ..job_control import DurableJob, TERMINAL
 from ..project_lifecycle import lock_project
+from ..db_errors import error_label, is_retryable
 from ..project_purge import purge_files, purge_rows
 from ..workspace import ReportJob
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
@@ -234,7 +236,41 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
 
     휴지통에 넣지 않은 프로젝트는 바로 지우지 않는다(실수로 한 번에 지우는 일을 막는다).
     감사기록은 남기고, 원본·보고서 파일과 가명 처리 보관소는 DB 삭제를 커밋한 뒤 지운다.
+    같은 행을 쓰는 다른 작업과 교착·잠금 대기가 나면 되돌린 뒤 잠시 후 다시 한다. 그래도 안 되면
+    500이 아니라 '사용 중'(409)으로 알린다. 삭제는 한 트랜잭션이라 실패하면 아무것도 지워지지 않는다.
     """
+    for attempt in range(PURGE_ATTEMPTS):
+        try:
+            counts = _purge_rows_once(session, project_id)
+            break
+        except OperationalError as exc:
+            session.rollback()
+            if not is_retryable(exc):
+                raise
+            logger.warning("project_purge_retry project=%s attempt=%s error=%s",
+                           project_id, attempt + 1, error_label(exc))
+            if attempt + 1 == PURGE_ATTEMPTS:
+                raise HTTPException(409, {
+                    "message": "다른 작업이 이 프로젝트의 자료를 쓰고 있어 영구 삭제하지 못했습니다. 잠시 후 다시 시도하세요.",
+                    "code": "PROJECT_BUSY", "error_type": error_label(exc)})
+            time.sleep(PURGE_RETRY_SECONDS * (attempt + 1))
+    files = purge_files(project_id)
+    make_audit(session).record(AuditEventType.DELETE,
+                               {"action": "PROJECT_PURGED", "rows": counts,
+                                "files_removed": files["files_removed"], "file_errors": files["file_errors"]},
+                               project_id=project_id, actor=actor_id())
+    return {"project_id": project_id, "purged": True, "rows": counts, **files}
+
+
+PURGE_ATTEMPTS = 3
+PURGE_RETRY_SECONDS = 1.0
+PURGE_LOCK_TIMEOUT = "5s"
+
+
+def _purge_rows_once(session: Session, project_id: str) -> dict:
+    if session.get_bind().dialect.name == "postgresql":
+        # 잠금을 끝없이 기다리지 않는다. 초과하면 55P03으로 끝나 위에서 다시 한다.
+        session.execute(text(f"SET LOCAL lock_timeout = '{PURGE_LOCK_TIMEOUT}'"))
     lock_project(session, project_id)
     project = require_project(session, project_id, "ADMIN", include_deleted=True)
     if project.deleted_at is None:
@@ -247,12 +283,7 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
         raise HTTPException(409, "이 프로젝트의 보고서를 만드는 중입니다. 생성이 끝난 뒤 다시 시도하세요. 서버 재시작 등으로 멈춘 작업은 진행 기록이 2분간 없으면 중단된 것으로 정리됩니다.")
     counts = purge_rows(session, project_id)
     session.commit()
-    files = purge_files(project_id)
-    make_audit(session).record(AuditEventType.DELETE,
-                               {"action": "PROJECT_PURGED", "rows": counts,
-                                "files_removed": files["files_removed"], "file_errors": files["file_errors"]},
-                               project_id=project_id, actor=actor_id())
-    return {"project_id": project_id, "purged": True, "rows": counts, **files}
+    return counts
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)
