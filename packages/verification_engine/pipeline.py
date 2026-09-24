@@ -70,6 +70,7 @@ from packages.legal_engine.internal_citation import (build_clause_index, check_r
 from packages.legal_engine.omission import analyze_omissions, omission_findings
 
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document
+from .finalize import finalize_document_findings
 from .authorship import analyze_authorship, authorship_findings
 from .scoring import aggregate_scores
 
@@ -582,6 +583,8 @@ class VerificationPipeline:
 
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
+        # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
+        result.findings = finalize_document_findings(result.findings, doc, document.document_id)
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
         return result
 

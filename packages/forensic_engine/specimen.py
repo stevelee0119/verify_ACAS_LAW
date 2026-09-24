@@ -16,6 +16,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
+from packages.common.anonymization import is_masked_digits
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
     EvidenceGrade,
@@ -97,6 +98,31 @@ def _is_sequential(digits: str) -> bool:
 
 def _is_repeated(digits: str) -> bool:
     return len(digits) >= 4 and len(set(digits)) == 1
+
+
+DOCUMENT_LABELS = {"COMPLAINT": "소장", "BRIEF": "준비서면", "ANSWER": "답변서", "APPEAL": "항소·상고이유서",
+                   "OPINION_LETTER": "의견서", "CRIMINAL_COMPLAINT": "고소·고발장", "CONTRACT": "계약서",
+                   "REPORT": "보고서"}
+
+
+def _document_label(doc: NormalizedDocument) -> str:
+    """보고서 문구에 쓸 문서 종류. 종류를 모르면 '제출·체결 문서'."""
+    from packages.claim_engine.classification import document_kind
+    # 제목 줄로 판단한다. 바닥글·고지문의 '테스트용' 표기가 문서 종류를 가리지 않게 한다.
+    for block in doc.prose_blocks()[:3]:
+        label = DOCUMENT_LABELS.get(document_kind([block.text]))
+        if label:
+            return label
+    return "제출·체결 문서"
+
+
+def _with_ro(noun: str) -> str:
+    """'…로/으로': 받침이 있으면(ㄹ 제외) '으로'."""
+    last = noun[-1] if noun else ""
+    if "가" <= last <= "힣":
+        final = (ord(last) - 0xAC00) % 28
+        return noun + ("으로" if final not in (0, 8) else "로")
+    return noun + "로"
 
 
 def is_placeholder_number(digits: str) -> bool:
@@ -205,7 +231,7 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
                 detail=(
                     f"{', '.join(labels)} 표기가 확인된다. "
                     "문서 내부의 명시적 고지이므로 추정이 아니라 기재사실이다. "
-                    "이 문서를 실제 계약서로 취급해서는 안 된다."
+                    f"이 문서를 실제 {_with_ro(_document_label(doc))} 취급해서는 안 된다."
                 ),
                 doc=doc,
                 features=features,
@@ -264,7 +290,8 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
     for text, block in units:
         for match in PHONE_RE.finditer(text):
             tail = match.group(2) + match.group(3)
-            if is_placeholder_number(tail):
+            # 010-0000-0000은 비식별 처리한 번호다. 예시·자리표시 번호로 보지 않는다.
+            if is_placeholder_number(tail) and not is_masked_digits(tail):
                 placeholders.setdefault(("전화번호", match.group(0)), block)
         for match in INLINE_SPECIMEN_RE.finditer(text):
             placeholders.setdefault(("항목별 예시 표기", match.group(0)), block)

@@ -23,6 +23,8 @@ from packages.common.enums import (
 )
 from packages.common.schemas import Citation, Evidence, Finding
 
+from packages.common.anonymization import BRACKET_PLACEHOLDER_RE
+
 ENGINE_NAME = "claim_engine.assertion"
 
 # 마침표 앞이 숫자면 문장 끝으로 보지 않는다. "2021. 3. 25. 선고"를 세 문장으로
@@ -35,7 +37,9 @@ DRAFT_MARKER_PATTERNS = [
     (re.compile(r"\[[^\]\n]{0,30}(추가|보완|확인|검증|삽입|수정|작성)\s*(필요|요망|요)?[^\]\n]{0,10}\]"), "각괄호 작업 메모"),
     (re.compile(r"(인용|출처|근거|판례|조문)\s*(검증|확인)\s*(필요|요망|바람)"), "검증 필요 메모"),
     (re.compile(r"\bTODO\b|\bTBD\b|\bFIXME\b|\bXXX\b", re.IGNORECASE), "영문 작업 표지"),
-    (re.compile(r"[○◯oO]{3,}|[xX]{3,}(?![a-zA-Z])|●{3,}"), "미기재 자리표시"),
+    # ○○○·△△ 같은 가림 기호는 비식별 처리이므로 넣지 않는다(common/anonymization.py).
+    (re.compile(r"(?<![A-Za-z])[xX]{3,}(?![a-zA-Z])|●{3,}"), "미기재 자리표시"),
+    (BRACKET_PLACEHOLDER_RE, "각괄호 자리표시(미기재 항목)"),
     (re.compile(r"추후\s*(보완|확인|기재|삽입)"), "추후 보완 메모"),
     (re.compile(r"\(\s*(작성자|검토자)\s*(주|메모|코멘트)\s*:?[^)\n]{0,60}\)"), "작성자 주석"),
     (re.compile(r"※\s*(검토|확인|주의)[^\n]{0,40}"), "검토 표지"),

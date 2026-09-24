@@ -148,7 +148,7 @@ def score(result: Dict[str, Any], testset: Path, *, db_available: bool) -> Dict[
                     if str(finding.get("evidence_grade")) == "A":
                         a_grade_fp += 1
                     fp_details.append(f"{doc} FP-TRAP '{items[target][2]}' ← [{finding.get('evidence_grade')}] "
-                                      f"{finding.get('type')}: {finding.get('title')}")
+                                      f"{finding.get('type')}: {finding.get('title')} — {(finding.get('detail') or '')[:240]}")
         for ii, item in enumerate(items):
             kind, location, target = item[0], item[1], item[2]
             if kind == "FP-TRAP":
