@@ -1182,3 +1182,12 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .notice-reason { display: block; margin-top: 0.4rem; font-size: 0.92em; opacity: 0.85; line-height: 1.5; }
 .hallucination-section .warning-text { color: #b84e1b; font-weight: 600; }
 .hallucination-section .safe-text { color: #1f6b52; }
+
+/* 눌러서 세부 설명을 여는 지표 */
+.metric-explain { cursor: pointer; }
+.metric-explain:hover, .metric-explain:focus-visible { background: #f4f8f6; outline: none; }
+.metric-hint { display: block; margin-top: 4px; font-size: 12px; color: var(--green, #1f6b52); }
+.metric-explainer h3 { font-size: 16px; margin: 16px 0 6px; }
+.metric-explainer p { line-height: 1.65; }
+.unverified-cause { border-left: 3px solid var(--warn, #9a6700); padding: 2px 0 2px 12px; margin: 10px 0; }
+.unverified-cause h4 { margin: 0 0 4px; font-size: 15px; }

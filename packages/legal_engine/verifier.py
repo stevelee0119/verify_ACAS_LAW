@@ -140,6 +140,11 @@ class LegalVerifier:
                         "raw_text": verdict.citation.raw_text,
                         "reason": "; ".join(verdict.notes) or "공식 Source 확인 불가",
                         "source_lookup": verdict.lookup,
+                        "status": str(verdict.status),
+                        # PARTIAL: 공식 원문으로 존재·일치는 확인했고 취지·적용 판단만 사람 몫이다.
+                        # UNVERIFIED: 조회 실패·찾지 못함 등 실제로 확인하지 못했다.
+                        # 둘을 한 숫자로 세면 확인된 판례까지 '미확인'으로 보인다.
+                        "scope": "PARTIAL" if verdict.status == VerificationStatus.PARTIALLY_VERIFIED else "UNVERIFIED",
                     }
                 )
         result.data["verdicts"] = [

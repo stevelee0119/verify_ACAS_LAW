@@ -192,8 +192,12 @@ def evaluate_gate(findings: Sequence[Any], *,
     review: List[str] = []
     if nothing_analyzed:
         review.append("본문을 읽지 못해 내용 검증을 수행하지 못했다. 검증 통과로 볼 수 없다.")
-    if unverified_items:
-        review.append(f"공식 원문으로 확인하지 못한 항목이 {len(unverified_items)}건 있다.")
+    missing = [i for i in unverified_items if not (isinstance(i, dict) and i.get("scope") == "PARTIAL")]
+    partial = len(unverified_items) - len(missing)
+    if missing:
+        review.append(f"공식 원문으로 확인하지 못한 항목이 {len(missing)}건 있다.")
+    if partial:
+        review.append(f"공식 원문으로 존재는 확인했으나 취지·적용 여부는 사람이 검토해야 하는 인용이 {partial}건 있다.")
     if any(f.severity == Severity.CRITICAL for f in active):
         review.append("치명적 심각도의 Finding이 있다.")
     if any(f.status == VerificationStatus.UNVERIFIED for f in active):

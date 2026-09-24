@@ -270,7 +270,9 @@ class VerificationPipeline:
         )
         result.finished_at = datetime.utcnow()
 
-        degraded = bool(result.errors or result.unverified_items)
+        # '일부 미확인'은 실제로 확인하지 못한 항목이 있을 때만이다. 공식 원문으로 확인했고
+        # 취지·적용 검토만 남은 인용(PARTIAL)까지 세면 인용이 있는 모든 문서가 미확인이 된다.
+        degraded = bool(result.errors or any(item.get("scope") != "PARTIAL" for item in result.unverified_items))
         result.state = JobState.PARTIAL_COMPLETED if degraded else JobState.COMPLETED
         if all(d.normalized is None for d in result.documents) and result.documents:
             result.state = JobState.FAILED

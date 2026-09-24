@@ -73,7 +73,8 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
 
     citation_total = sum(len(d.citations) for d in result.documents)
     unverified_citations = sum(
-        1 for item in result.unverified_items if item.get("kind") == "citation"
+        1 for item in result.unverified_items
+        if item.get("kind") == "citation" and item.get("scope") != "PARTIAL"
     )
     verified_citations = sum(
         int((d.engine_data.get("legal") or {}).get("verified_count", 0)) for d in result.documents

@@ -329,10 +329,22 @@ function renderSummary() {
     ["확인 전 항목", state.findings.filter(f => f.review_status === "NEEDS_REVIEW").length],
     ["진행 상태", state.run ? label(state.run.state) : "시작 전"]
   ];
+  // 숫자·상태만으로는 뜻을 알 수 없는 두 지표는 눌러서 세부 설명을 본다.
+  const explainers = {"확인 전 항목": explainReviewPending, "진행 상태": explainRunStatus};
   for (const [title, value] of metrics) {
     const el = node("div", null, "metric");
     el.append(node("span", title), node("strong", value));
     if (title === "배포가능 상태" && gate) el.classList.add(`gate-${gate.release_gate.toLowerCase()}`);
+    if (explainers[title] && state.run) {
+      el.classList.add("metric-explain");
+      el.setAttribute("role", "button");
+      el.tabIndex = 0;
+      el.setAttribute("aria-label", `${title} ${value} — 세부 설명 보기`);
+      el.append(node("small", "눌러서 세부 보기", "metric-hint"));
+      const open = action(explainers[title]);
+      el.addEventListener("click", open);
+      el.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(event); } });
+    }
     $("summary").append(el);
   }
   if (gate) renderGateReasons(gate);
@@ -486,6 +498,148 @@ function renderHallucinationSummary(rows) {
   summary.textContent = `공식 법원 DB에서 확인되지 않는 판례와 이를 전제로 한 주장이 총 ${rows.length}건입니다(${parts.join(", ")}). ` +
     "공식 DB 미확인은 부존재를 뜻하지 않으므로 아래 표의 근거와 대응 방안을 함께 확인하세요.";
   summary.className = "warning-text";
+}
+
+// --- 지표 세부 설명 ---------------------------------------------------------
+function explainDialog(title, children) {
+  const root = node("div", null, "full metric-explainer");
+  root.append(...children);
+  const view = workflowUI.modal(title, [root], async () => {}, true);
+  view.submit.hidden = true;
+  return view;
+}
+
+function countBy(items, key) {
+  const counts = new Map();
+  for (const item of items) counts.set(key(item), (counts.get(key(item)) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+}
+
+function countList(entries) {
+  const list = node("ul", null, "reason-list");
+  for (const [name, n] of entries) list.append(node("li", `${name}: ${n}건`));
+  return list;
+}
+
+// '확인 전 항목' = 시스템이 찾아낸 확인 항목 중 담당자가 아직 검토 결정을 하지 않은 것.
+function explainReviewPending() {
+  const pending = state.findings.filter(f => f.review_status === "NEEDS_REVIEW");
+  const nature = f => f.advisory_only || ["INFO", "LOW"].includes(f.severity) ? "참고 신호(낮은 심각도·참고용)"
+    : ["UNVERIFIED", "ERROR", "SKIPPED"].includes(f.status) ? "시스템이 확인하지 못한 항목(원문 확인 필요)"
+    : "문제가 의심되는 항목(검토 후 조치 필요)";
+  const children = [
+    node("p", "‘확인 전 항목’은 프로그램이 찾아낸 확인 항목 가운데 담당자가 아직 검토 결정(지적 수용·오탐·조치 완료)을 " +
+      "내리지 않은 개수입니다. 법률 판단은 사람이 최종 결정한다는 원칙에 따라 모든 항목은 ‘확인 전’으로 시작합니다. " +
+      "따라서 이 숫자는 프로그램이 검사를 하지 못했다는 뜻이 아니라, 검사 결과를 사람이 아직 확인하지 않았다는 뜻입니다."),
+    node("h3", `확인 전 ${pending.length}건 — 성격별`),
+    countList(countBy(pending, nature)),
+    node("h3", "심각도별"),
+    countList(countBy(pending, f => label(f.severity))),
+    node("h3", "유형별"),
+    countList(countBy(pending, f => friendlyText(label(f.type)))),
+  ];
+  const unverified = pending.filter(f => ["UNVERIFIED", "ERROR", "SKIPPED"].includes(f.status)).length;
+  if (unverified) children.push(node("p", `이 중 ${unverified}건은 프로그램이 공식 원문으로 확인하지 못한 항목입니다. ` +
+    "원인과 대책은 ‘진행 상태’ 설명에서 확인할 수 있습니다.", "warning-text"));
+  children.push(node("p", "각 항목을 열어 ‘지적 수용’, ‘오탐’, ‘조치 완료’ 중 하나로 결정하면 이 숫자가 줄어듭니다.", "muted"));
+  const view = explainDialog("확인 전 항목이란", children);
+  children[children.length - 1].after(button("확인할 항목에서 보기", () => showPendingFindings(view), "primary"));
+}
+
+function showPendingFindings(view) {
+  view.dialog?.close?.();
+  document.querySelectorAll("dialog[open]").forEach(d => d.close());
+  if ($("reviewFilter")) $("reviewFilter").value = "NEEDS_REVIEW";
+  switchTab("review");
+  renderFindings();
+}
+
+// 확인하지 못한 항목을 원인별로 묶고 대책을 붙인다.
+const UNVERIFIED_CAUSES = [
+  ["page", "스캔 쪽의 글자를 읽지 못함(OCR)", "원본 화질을 높이거나 글자가 들어 있는 PDF·DOCX로 다시 올리세요. 관리자는 진단 화면에서 OCR 준비 상태를 확인하세요."],
+  ["body", "문서 본문을 추출하지 못함", "암호·손상 여부를 확인하고 PDF·DOCX·HWPX 등 다른 형식으로 다시 올리세요."],
+  ["connection", "외부 출처 연결 장애·시간 초과", "자동 재조회까지 실패한 항목입니다. 잠시 뒤 ‘다시 검증’을 누르세요. 반복되면 관리자가 /api/diagnostics/sources와 LV_HTTP_TIMEOUT을 확인해야 합니다."],
+  ["key", "출처 접속 키 미설정·권한 없음", "관리자가 해당 출처의 키(예: LV_LAW_GO_KR_OC)를 서버 환경변수에 설정해야 합니다."],
+  ["notfound", "공식 DB에서 같은 기록을 찾지 못함", "공식 DB는 모든 재판을 수록하지 않습니다. 판결문 사본이나 대법원 종합법률정보 등 다른 공식 경로로 직접 확인하세요. 부존재를 뜻하지 않습니다."],
+  ["date", "적용 기준일 미입력", "프로젝트 편집에서 적용법령 기준일(사건 발생일 등)을 입력한 뒤 다시 검증하세요."],
+  ["unsupported", "검증 경로가 없는 인용 유형", "해당 인용은 원문을 직접 확인해야 합니다."],
+  ["other", "기타", "각 항목의 사유를 확인하세요."],
+];
+
+function unverifiedCause(item) {
+  const reason = String(item.reason || "");
+  if (item.kind === "page") return "page";
+  if (item.kind === "document" || item.kind === "document_body") return "body";
+  if (item.status === "SKIPPED" || /지원하지 않습니다/.test(reason)) return "unsupported";
+  if (/OC가 없거나|키|권한|401|403/.test(reason)) return "key";
+  if (item.source_lookup?.retryable || /재조회|시간 한도|시간 초과|보류|연결|응답을 확보하지 못|TIMEOUT|RATE_LIMITED/.test(reason)) return "connection";
+  if (/기준일이 입력되지 않았다/.test(reason)) return "date";
+  if (/찾지 못|확인되지 않|일치하는 기록|미수록|NOT_FOUND|확인 불가/.test(reason)) return "notfound";
+  return "other";
+}
+
+// 예전 결과에는 scope가 없다. 공식 원문으로 존재를 확인했다는 문구가 있으면 PARTIAL로 본다.
+function isPartialItem(item) {
+  if (item.scope) return item.scope === "PARTIAL";
+  const reason = String(item.reason || "");
+  return /판례 존재·메타데이터 확인과 취지|조문 내용의 적용 여부는 별도 검토/.test(reason) &&
+    unverifiedCause(item) !== "connection" && unverifiedCause(item) !== "key";
+}
+
+function explainRunStatus() {
+  const run = state.run;
+  const items = run?.unverified_items || [];
+  const names = Object.fromEntries((state.result?.documents || []).map(d => [d.document_id, d.filename]));
+  const missing = items.filter(item => !isPartialItem(item));
+  const partial = items.filter(isPartialItem);
+  const children = [
+    node("p", run.state === "PARTIAL_COMPLETED"
+      ? "‘일부 미확인’은 검증 작업은 끝까지 진행되었지만, 일부 항목을 공식 원문으로 확인하지 못했다는 뜻입니다. " +
+        "확인하지 못한 항목은 ‘문제 없음’이 아니라 ‘판단 보류’이므로 아래 원인별 대책에 따라 보완해야 합니다."
+      : `현재 상태는 ‘${label(run.state)}’입니다.`),
+  ];
+  if (missing.length) {
+    children.push(node("h3", `확인하지 못한 항목 ${missing.length}건 — 원인별`));
+    const groups = countBy(missing, unverifiedCause);
+    for (const [cause] of groups) {
+      const [, title, remedy] = UNVERIFIED_CAUSES.find(([key]) => key === cause);
+      const group = missing.filter(item => unverifiedCause(item) === cause);
+      const block = node("div", null, "unverified-cause");
+      block.append(node("h4", `${title} ${group.length}건`), node("p", `대책: ${remedy}`, "muted"));
+      const list = node("ul", null, "reason-list");
+      for (const item of group) {
+        const where = [names[item.document_id], item.raw_text, item.page ? `${item.page}쪽` : ""].filter(Boolean).join(" · ");
+        list.append(node("li", friendlyText(`${where || "항목"} — ${item.reason || "확인하지 못함"}`)));
+      }
+      block.append(list);
+      children.push(block);
+    }
+  } else if (run.state === "PARTIAL_COMPLETED") {
+    children.push(node("p", "확인하지 못한 항목 기록은 없습니다. 실행 중 오류가 있었는지 아래를 확인하세요.", "muted"));
+  }
+  if ((run.errors || []).length) {
+    children.push(node("h3", `실행 중 오류 ${run.errors.length}건`), countList(run.errors.map(e => [friendlyText(e), 1])));
+  }
+  const sources = run.unavailable_sources || state.result?.unavailable_sources || [];
+  if (sources.length) {
+    children.push(node("h3", "연결되지 않은 외부 출처"));
+    const list = node("ul", null, "reason-list");
+    for (const source of sources) list.append(node("li", `${source.name}: ${label(source.status)}${source.note ? ` — ${source.note}` : ""}`));
+    children.push(list);
+  }
+  if (partial.length) {
+    children.push(node("h3", `공식 원문 확인됨 · 사람 검토 필요 ${partial.length}건`),
+      node("p", "아래 인용은 공식 원문으로 존재와 기본 정보가 확인되었습니다. 인용 취지나 이 사건에의 적용 여부는 " +
+        "프로그램이 확정하지 않으므로 담당자가 검토해야 합니다. 확인하지 못한 항목과는 다릅니다.", "muted"));
+    const list = node("ul", null, "reason-list");
+    for (const item of partial) list.append(node("li", friendlyText(`${item.raw_text || "인용"} — ${item.reason || ""}`)));
+    children.push(list);
+  }
+  const view = explainDialog(`진행 상태: ${label(run.state)}`, children);
+  if (missing.some(item => ["connection", "date"].includes(unverifiedCause(item)))) {
+    children[children.length - 1].after(button("다시 검증", async () => { view.dialog?.close?.();
+      document.querySelectorAll("dialog[open]").forEach(d => d.close()); await verify(); }, "primary"));
+  }
 }
 
 function filteredDocuments() {

@@ -335,3 +335,21 @@ def test_non_citation_brackets_are_not_extracted(text):
     from packages.legal_engine.citation_extractor import ACADEMIC_RE
 
     assert not list(ACADEMIC_RE.finditer(text))
+
+
+def test_a_case_confirmed_in_the_official_source_is_not_counted_as_unverified(registry):
+    """공식 원문으로 존재·메타데이터가 확인된 판례도 '일부 확인'으로 미확인 목록에 들어가,
+    인용이 있는 모든 문서가 '일부 미확인'으로 끝나고 배포 판정에도 미확인으로 잡혔다."""
+    from packages.verification_engine.gate import evaluate_gate
+
+    _, result = _verify(registry, "대법원 2099. 1. 15. 선고 2099도99999 판결 참조.")
+    assert result.unverified_items, "취지·적용 검토 범위는 여전히 기록한다"
+    assert all(item["scope"] == "PARTIAL" for item in result.unverified_items)
+
+    gate = evaluate_gate([], unverified_items=result.unverified_items)
+    assert not any("확인하지 못한 항목" in r for r in gate.review_reasons)
+    assert any("취지·적용 여부는 사람이 검토" in r for r in gate.review_reasons)
+
+    missing = [{"kind": "citation", "scope": "UNVERIFIED", "reason": "외부 출처 연결 실패"}]
+    gate = evaluate_gate([], unverified_items=result.unverified_items + missing)
+    assert "공식 원문으로 확인하지 못한 항목이 1건 있다." in gate.review_reasons
