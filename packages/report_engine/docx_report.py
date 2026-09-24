@@ -152,7 +152,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
                 str(row.get("validity_verdict", "")),
             ])
     if all_hallucination_rows:
-        doc.add_heading("AI 임의 생성(환각) 및 법률 주장 타당성 대조표", 2)
+        doc.add_heading("법률 인용 오류·근거 미확인 주장 대조표 (AI 작성 여부 판단과 별개)", 2)
         table(["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"], all_hallucination_rows, [1.0, 1.8, 1.5, 2.0, 0.7])
 
     doc.add_heading("사람의 검토 기록", 1)

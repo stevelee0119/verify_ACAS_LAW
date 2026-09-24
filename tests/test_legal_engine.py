@@ -120,12 +120,24 @@ def test_level3_quote_match_passes(registry):
 
 
 def test_unknown_case_is_unverified_not_declared_absent(registry):
-    """공식 Source를 쓸 수 없으면 '존재하지 않는 판례'라고 단정하지 않는다(제9.3장)."""
-    _, result = _verify(registry, "대법원 2099. 3. 3. 선고 2099도88888 판결")
+    """공식 Source를 쓸 수 없으면 '존재하지 않는 판례'라고 단정하지 않는다(제9.3장).
+
+    형식상 성립 가능한 사건번호를 쓴다. 아직 오지 않은 해의 번호는 조회 없이도 성립 불가로
+    판단되므로(아래 시험) 이 시험의 대상이 아니다.
+    """
+    _, result = _verify(registry, "대법원 2019. 3. 3. 선고 2019도88888 판결")
     findings = [f for f in result.findings if f.document_id == "D1"]
     assert findings
     assert all(f.status == VerificationStatus.UNVERIFIED for f in findings)
     assert all(f.evidence_grade == EvidenceGrade.U for f in findings)
+
+
+def test_impossible_case_number_is_reported_even_when_lookup_is_unavailable(registry):
+    _, result = _verify(registry, "대법원 2099. 3. 3. 선고 2099도88888 판결")
+    findings = [f for f in result.findings if f.document_id == "D1"]
+    assert [f.title.startswith("성립할 수 없는 사건번호 형식") for f in findings] == [True]
+    assert findings[0].status == VerificationStatus.SUSPICIOUS
+    assert findings[0].confidence_features["official_lookup"] == "UNAVAILABLE"
 
 
 # --- 제9.4장 기준시점 --------------------------------------------------------

@@ -15,6 +15,7 @@ from packages.common.schemas import Claim, Citation, Entity, Event, NormalizedDo
 from packages.common.textutil import sentences
 
 from .calculation import AMOUNT_RE, parse_amounts
+from .classification import classify_sentence, document_kind, segment_kind
 from .entity_resolution import resolve_entities
 from .structure import extract_evidence_references, structure_claim_text
 
@@ -112,6 +113,7 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
             by_block.setdefault(citation.block_id, []).append(citation)
 
     claims: List[Claim] = []
+    kind = document_kind(b.text for b in doc.prose_blocks()[:8])
     for block in doc.prose_blocks():
         cursor = 0
         for sentence in sentences(block.text):
@@ -121,7 +123,9 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
             cursor = start + len(sentence)
             if len(sentence) < 10:
                 continue
-            claim_type = classify_claim(sentence)
+            segment = segment_kind(sentence, block_type=block.block_type, source_layer=block.source_layer,
+                                   table_ref=block.attributes.get("table_ref"))
+            claim_type = classify_sentence(sentence, segment, classify_claim)
             related = [
                 c.citation_id
                 for c in by_block.get(block.block_id, [])
@@ -136,7 +140,11 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
                     page=block.page,
                     citation_ids=related,
                     attributes={"length": len(sentence), "extraction_method": "LEXICAL_RULES",
-                                "evidence_relationship": "UNASSESSED"},
+                                "evidence_relationship": "UNASSESSED",
+                                # 제목·안내·인용·OCR·표 구간을 본문과 구분해 남긴다.
+                                "segment_kind": segment, "document_kind": kind,
+                                "verification_target": claim_type not in (
+                                    ClaimType.DOCUMENT_META, ClaimType.ADVERSARIAL_INSTRUCTION)},
                     project_id=project_id or doc.metadata.get("project_id"),
                     source_run_id=source_run_id,
                     source_document_sha256=doc.sha256,

@@ -227,6 +227,12 @@ def select_provision(law: dict, article: str, paragraph: str | None = None,
                 implicit = [p for p in node.get("paragraphs", []) if p["number"] is None]
                 rows = implicit[0].get("items", []) if len(implicit) == 1 else []
         matches = [r for r in rows if r["number"] == wanted]
+        if not matches and level == "article" and rows:
+            # 조회한 버전의 전체 조문 목록을 모두 대조했는데 없다. 조회 실패와 구별해
+            # 범위(그 버전의 조문 수)와 함께 돌려준다. 다른 버전·부칙에 있었을 가능성은 남는다.
+            return {"status": "NOT_FOUND", "path": path, "searched_articles": len(rows),
+                    "scope": "SELECTED_VERSION_FULL_TEXT",
+                    "reason": "Article absent from every article of the selected official version"}
         if len(matches) != 1:
             return {"status": "UNVERIFIED", "path": path,
                     "reason": "Missing or ambiguous provision; no parent-text fallback"}

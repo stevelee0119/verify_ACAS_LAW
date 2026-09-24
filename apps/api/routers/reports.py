@@ -469,7 +469,9 @@ def _preflight(project, engine, human):
         concerns.append({"type": "INTERNAL_REVIEW", "title": "내부 검토 메모와 이력이 포함되어 있습니다"})
     expected = engine.get("input_snapshot", {}).get("scope_revision")
     stale = expected is None or expected != project.scope_revision
-    missing_sources = engine.get("unavailable_sources", [])
+    # 이번 문서의 검증에 쓰이지 않는 출처(예: 학술 인용이 없는 문서의 KCI)는 잔여 미확인으로 세지 않는다.
+    missing_sources = [s for s in engine.get("unavailable_sources", [])
+                       if not isinstance(s, dict) or s.get("impact") != "NOT_NEEDED"]
     unverified_items = engine.get("unverified_items", [])
     unavailable_stages = []
     unavailable_codes = {"UNVERIFIED", "PARTIALLY_VERIFIED", "UNAVAILABLE", "UNSUPPORTED", "BLOCKED",

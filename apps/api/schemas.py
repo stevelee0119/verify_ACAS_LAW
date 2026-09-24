@@ -155,6 +155,8 @@ class FindingOut(BaseModel):
     evidence: List[Dict[str, Any]] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list)
     bbox: Optional[List[float]] = None
+    # 같은 인용에서 나온 finding을 화면에서 한 묶음으로 보이기 위한 식별자
+    citation_id: Optional[str] = None
 
 
 class ReviewRequest(BaseModel):

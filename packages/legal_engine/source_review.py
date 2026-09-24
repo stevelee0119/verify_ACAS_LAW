@@ -72,6 +72,9 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
     verdict.review["provision"] = provision
     verdict.levels["article"] = provision["status"]
     verdict.levels["provision"] = provision["status"]
+    if provision["status"] == "NOT_FOUND":
+        _article_absent(verdict, official, provision, as_of)
+        return verdict
     if provision["status"] != "VERIFIED":
         verdict.notes.append(provision.get("reason", "지정 조항호목의 전문을 확인하지 못했다"))
         return verdict
@@ -107,6 +110,44 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
             verdict.notes.append("직접 인용문은 해당 조항호목 원문 대조가 더 필요하다")
     verdict.notes.append("시행 버전·본문 대조는 사건에 대한 법률 적용 결론이 아니다")
     return verdict
+
+
+def _article_absent(verdict, official, provision, as_of):
+    """조회한 시행 버전의 전체 조문에 인용 조문이 없을 때의 판정.
+
+    법령 자체는 공식 기록으로 확인됐으므로 법령 부존재가 아니다. 조문 조회가 실패한
+    것도 아니다. 확인한 범위(버전·시행일·조문 수)를 그대로 적고, 그 범위 밖(다른 시행
+    버전·부칙·별표)에 있었을 가능성은 열어 둔다. 허위·위조로 단정하지 않는다.
+    """
+    citation = verdict.citation
+    verdict.status = VerificationStatus.NOT_FOUND
+    verdict.levels["article"] = "NOT_FOUND_IN_SELECTED_VERSION"
+    verdict.levels["provision"] = "NOT_FOUND_IN_SELECTED_VERSION"
+    version = official.get("version_id")
+    effective = official.get("effective_from")
+    scope = (f"{official.get('law_name') or citation.law_name} 시행 버전 {version or '미상'}"
+             f"(시행 {effective or '미상'})의 전체 조문 {provision.get('searched_articles')}개")
+    basis = "기준일 " + str(as_of) if as_of else "기준일이 없어 현행 버전"
+    verdict.notes.append(f"{scope}를 대조했으나 제{citation.article}조가 없다({basis} 기준). "
+                         "다른 시행 버전·부칙에 있었는지는 확인하지 않았다")
+    ids = [r.source_record_id for r in verdict.source_records]
+    verdict.findings.append(Finding.create(
+        type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.NOT_FOUND,
+        severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.A,
+        title=f"조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함: {citation.raw_text}",
+        detail=(f"법령은 공식 기록으로 확인했다. {scope}를 모두 대조했으나 제{citation.article}조는 없다. "
+                f"({basis} 기준) 조문 번호 오기, 다른 시행 버전의 조문, 부칙 조항일 수 있으므로 "
+                "허위 인용으로 단정하지 않는다."),
+        document_id=citation.document_id, block_id=citation.block_id, page=citation.page,
+        span=citation.span, engine="legal_engine", source_record_ids=ids,
+        confidence_features={"official_source_match": True, "absence_scope": "SELECTED_VERSION_FULL_TEXT",
+                             "searched_articles": provision.get("searched_articles"),
+                             "version_id": version, "reference_date": as_of},
+        tags=["LEGAL", "STATUTE", "ARTICLE"],
+        evidence=[Evidence.create(description="조회한 공식 버전의 조문 목록에 해당 조문 없음",
+                                  grade=EvidenceGrade.A, excerpt=citation.raw_text,
+                                  source_record_ids=ids, supports=False)],
+    ))
 
 
 def verify_decision_source(verifier, citation):
@@ -204,3 +245,124 @@ def case_applicability_review(citation, official, *, source_record_ids=(), extra
     # 마쳤다는 표시로 쓸 수 없다. 값은 검토자나 임베딩 단계가 채운다.
     result["relevance"] = relevance_review((extracted or {}).get("relevance_axes"))
     return result
+
+
+def verify_admin_rule_source(verifier, citation):
+    """행정규칙(훈령·예규·고시·지침) 인용 검증.
+
+    존재·식별정보·조항·본문·위임 근거·법적 효력을 따로 판정한다. 행정규칙은 원칙적으로
+    행정조직 내부에서만 효력을 가지며, 상위법령의 위임과 결합하는 등 예외적인 경우에만
+    대외적 구속력이 논의된다. 문서가 "법률과 같은 효력"이라고 적었다는 사실만으로
+    효력을 확인 처리하지 않는다. 공식 기록이 불완전하면 미확인으로 남긴다.
+    """
+    from .verifier import CitationVerdict
+
+    attrs = citation.attributes or {}
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    verdict.review = {"advisory_only": True, "applicability": "REVIEW_NEEDED",
+                      "document_claims": {key: attrs.get(key) for key in (
+                          "rule_name", "issuing_agency", "rule_kind", "rule_number", "effective_date",
+                          "delegation_basis", "claimed_effect")}}
+    verdict.levels.update(existence="UNVERIFIED", metadata="UNVERIFIED", content="UNVERIFIED",
+                          delegation="NOT_STATED" if not attrs.get("delegation_basis") else "UNVERIFIED",
+                          legal_effect="CLAIM_NOT_VERIFIED" if attrs.get("claimed_effect") else "REVIEW_NEEDED",
+                          applicability="REVIEW_NEEDED")
+    if citation.article:
+        verdict.levels["article"] = "UNVERIFIED"
+    if attrs.get("claimed_effect"):
+        verdict.notes.append(
+            f"문서는 이 행정규칙이 '{attrs['claimed_effect']}'을 가진다고 적었으나, 행정규칙의 대외적 "
+            "구속력은 위임 근거·내용에 따라 사람이 판단할 사항이어서 자동으로 확인하지 않는다")
+    name = citation.law_name or attrs.get("rule_name")
+    search = getattr(verifier.registry.law, "search_admin_rule", None)
+    fetch = getattr(verifier.registry.law, "fetch_admin_rule", None)
+    if not name or search is None or fetch is None:
+        verdict.notes.append("행정규칙명 또는 행정규칙 공식 조회 경로가 없어 확인하지 못했다")
+        return verdict
+    response = search(name)
+    verdict.source_records.extend(response.source_records)
+    if not response.ok or not response.complete:
+        verdict.notes.append(response.message or "행정규칙 공식 목록 검색을 완료하지 못했다")
+        verdict.findings.append(verifier._unverified_finding(citation, verdict.notes[-1], response.source_record))
+        return verdict
+    from packages.source_adapters.law_go_kr import _same_law_name
+
+    named = [r for r in response.records if _same_law_name(name, r.get("rule_name"))]
+    number = attrs.get("rule_number")
+    exact = [r for r in named if not number or str(r.get("number") or "").replace(" ", "") == number]
+    if not named:
+        verdict.status = VerificationStatus.NOT_FOUND
+        verdict.levels["existence"] = "NOT_FOUND"
+        verdict.notes.append(f"공식 행정규칙 목록 {len(response.records)}건에서 이름이 같은 규칙을 찾지 못했다"
+                             "(조회 범위 내 미발견). 폐지·명칭 변경·미수록일 수 있어 부존재로 단정하지 않는다")
+        ids = [r.source_record_id for r in verdict.source_records]
+        verdict.findings.append(Finding.create(
+            type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.NOT_FOUND,
+            severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.B,
+            title=f"조회 범위 내에서 찾지 못한 행정규칙 인용: {citation.raw_text}",
+            detail=verdict.notes[-1], document_id=citation.document_id, block_id=citation.block_id,
+            page=citation.page, span=citation.span, engine="legal_engine", source_record_ids=ids,
+            confidence_features={"absence_scope": "SEARCHED_SCOPE_ONLY", "searched_records": len(response.records)},
+            tags=["LEGAL", "ADMIN_RULE"],
+        ))
+        return verdict
+    if len(exact) != 1:
+        verdict.notes.append("이름이 같은 행정규칙이 여러 건이거나 발령번호가 일치하는 기록이 없어 하나로 특정하지 못했다")
+        verdict.review["candidates"] = [{k: r.get(k) for k in ("rule_name", "number", "agency", "effective_from")}
+                                        for r in named[:10]]
+        return verdict
+    official = dict(exact[0])
+    verdict.official_record = official
+    verdict.levels["existence"] = "VERIFIED"
+    detail = fetch(official)
+    verdict.source_records.extend(detail.source_records)
+    if detail.ok and detail.records:
+        official = {**official, **detail.records[0]}
+        verdict.official_record = official
+    mismatches = []
+    for field_name, doc_value, off_value in (
+            ("발령기관", attrs.get("issuing_agency"), official.get("agency")),
+            ("규칙 종류", attrs.get("rule_kind"), official.get("rule_kind")),
+            ("시행일", attrs.get("effective_date"), official.get("effective_from"))):
+        if doc_value and off_value and str(doc_value).replace(" ", "") not in str(off_value).replace(" ", ""):
+            mismatches.append((field_name, doc_value, off_value))
+    identity_known = all(official.get(k) for k in ("agency", "rule_kind", "effective_from"))
+    verdict.levels["metadata"] = "CONTRADICTED" if mismatches else ("VERIFIED" if identity_known else "UNVERIFIED")
+    if mismatches:
+        description = "; ".join(f"{f}: 문서 {d} / 공식 {o}" for f, d, o in mismatches)
+        verdict.notes.append(description)
+        _mismatch(verdict, "행정규칙 식별정보 불일치", description, str(official.get("full_text") or "")[:300])
+    complete = bool(detail.ok and detail.complete and official.get("articles") is not None)
+    if citation.article:
+        if not complete:
+            verdict.notes.append("행정규칙 전문을 확보하지 못해 조항 존재를 확인하지 못했다")
+        else:
+            from .normalize import canonical_article
+            articles = {canonical_article(a) for a in official.get("articles") or []}
+            if canonical_article(citation.article) in articles:
+                verdict.levels["article"] = "VERIFIED"
+                text = (official.get("article_texts") or {}).get(canonical_article(citation.article), "")
+                verdict.levels["content"] = "AVAILABLE" if text else "UNVERIFIED"
+                if citation.quoted_text and text:
+                    level, ratio = verifier._compare_quote(citation.quoted_text, text)
+                    verdict.levels["content"] = level
+                    verdict.review["quote_similarity"] = ratio
+            else:
+                verdict.levels["article"] = "NOT_FOUND_IN_SELECTED_VERSION"
+                verdict.notes.append(f"확보한 행정규칙 전문의 조항 {len(articles)}개에 제{citation.article}조가 없다"
+                                     "(조회한 버전 기준, 다른 시점 버전은 확인하지 않음)")
+    basis = attrs.get("delegation_basis")
+    if basis and complete:
+        compact = re.sub(r"\s+", "", str(official.get("full_text") or ""))
+        law = re.sub(r"[「」『』\s]", "", basis.split("제")[0])
+        verdict.levels["delegation"] = "MENTIONED_IN_OFFICIAL_TEXT" if law and law in compact else "UNVERIFIED"
+        verdict.notes.append("위임 근거 법령의 해당 조문이 실제로 이 규칙에 위임했는지는 그 법령 조문을 따로 확인해야 한다")
+    if mismatches:
+        verdict.status = VerificationStatus.CONTRADICTED
+    elif verdict.levels.get("article") in ("NOT_FOUND_IN_SELECTED_VERSION",):
+        verdict.status = VerificationStatus.NOT_FOUND
+    else:
+        # 존재·조항이 확인돼도 법적 효력과 사건 적용은 사람 몫이다.
+        verdict.status = VerificationStatus.PARTIALLY_VERIFIED
+    verdict.notes.append("행정규칙의 존재·조항 확인은 법적 구속력이나 사건 적용 결론이 아니다")
+    return verdict

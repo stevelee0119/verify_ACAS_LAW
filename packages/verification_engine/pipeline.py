@@ -33,6 +33,7 @@ from packages.claim_engine import (
 )
 from packages.common.config import get_settings
 from packages.common.enums import (
+    ADVERSARIAL_FINDING_TYPES,
     AuditEventType,
     CitationType,
     EvidenceGrade,
@@ -49,6 +50,10 @@ from packages.document_engine import parse_document
 from packages.forensic_engine import ForensicContext, ForensicEngine
 from packages.forensic_engine.advisory import AdvisoryContext
 from packages.legal_engine import LegalVerifier, extract_citations, verify_argument_validity
+from packages.claim_engine.attachments import analyze_attachments
+from packages.claim_engine.classification import link_claim_evidence
+from packages.legal_engine.components import affected_by_unavailable
+from packages.legal_engine.reference_dates import reference_date_candidates
 from packages.legal_engine.source_review import case_applicability_review
 from packages.legal_engine.spec_mapping import relevance_finding
 from packages.source_adapters.legal_history import today_korea
@@ -239,7 +244,7 @@ class VerificationPipeline:
             base = 0.85 * index / total
             try:
                 document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
-                                                     source_run_id=run_id)
+                                                     source_run_id=run_id, run_inputs=documents)
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
                 result.errors.append(f"{document.filename}: {exc}")
@@ -260,7 +265,7 @@ class VerificationPipeline:
 
         # --- AGGREGATING ----------------------------------------------------
         emit(JobState.AGGREGATING, "결과 집계", 0.95)
-        result.unavailable_sources = self.registry.unavailable()
+        result.unavailable_sources = annotate_unavailable_sources(self.registry.unavailable(), result.documents)
         result.unverified_items = [item for d in result.documents for item in d.unverified_items]
         result.model_executions = [execution for d in result.documents
                                    for execution in d.engine_data.get("model_executions", [])]
@@ -302,6 +307,7 @@ class VerificationPipeline:
         span: float,
         *,
         source_run_id: Optional[str] = None,
+        run_inputs: Optional[List[DocumentInput]] = None,
     ) -> DocumentResult:
         if document.is_own_document is not None:
             from dataclasses import replace
@@ -443,6 +449,7 @@ class VerificationPipeline:
         self._legal_reviews(result, citations, context, progress=lambda done, total: emit(
             JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
             base + span * (0.55 + 0.20 * done / max(1, total))))
+        self._attach_reference_dates(result, doc, context)
         emit(JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토", base + span * 0.75)
         self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
             JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
@@ -464,6 +471,16 @@ class VerificationPipeline:
         entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
                                     project_id=context.project_id)
         events = extract_events(doc, project_id=context.project_id, source_run_id=source_run_id)
+        # 문서가 근거로 든 첨부·증거를 입력 파일과 대조하고, 관련 주장에 그 상태를 붙인다.
+        uploads = [{"document_id": d.document_id, "filename": d.filename, "sha256": d.sha256}
+                   for d in (run_inputs or [document])]
+        attachments = analyze_attachments(doc, uploads, claims)
+        result.findings.extend(attachments.pop("findings"))
+        result.engine_data["attachments"] = attachments
+        result.engine_data["tables"] = [
+            {k: v for k, v in table.items() if k != "cells"} | {"parsed": bool(table.get("cells"))}
+            for table in doc.structure.get("tables", [])]
+        link_claim_evidence(claims, attachments["items"])
         result.claims = [c.to_dict() for c in claims]
         result.entities = [e.to_dict() for e in entities]
         result.events = [e.to_dict() for e in events]
@@ -516,6 +533,10 @@ class VerificationPipeline:
                     external_ai_policy=context.external_ai_policy,
                     metadata_indications=metadata_hint,
                     mask=mask_for_models,
+                    # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
+                    exclude_texts=[str((f.confidence_features or {}).get("observed_text") or "")
+                                   for f in result.findings
+                                   if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only],
                 )
             )
             result.ai_detector_result = ai_detector_res.to_dict()
@@ -549,6 +570,26 @@ class VerificationPipeline:
             finding.document_id = finding.document_id or doc.document_id
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
         return result
+
+    @staticmethod
+    def _attach_reference_dates(result, doc, context):
+        """문서의 날짜를 기준일 '후보'로만 붙인다. 사람이 확인하기 전에는 적용하지 않는다."""
+        candidates = reference_date_candidates(doc.visible_text)
+        result.engine_data["reference_date_candidates"] = candidates
+        usable = [c for c in candidates if c["candidate_for_reference"]]
+        if context.case_date or not usable:
+            return
+        note = (f"문서에서 기준일 후보 {len(usable)}건(" + ", ".join(
+            f"{c['label']} {c['date']}" for c in usable[:3]) + ")을 찾았으나 자동 적용하지 않았다. "
+            "사건 설정에서 기준일을 확인해 입력하면 시간적 적용을 검토한다")
+        for verdict in result.engine_data.get("legal_verdicts", []):
+            temporal = next((c for c in verdict.get("components") or [] if c["key"] == "temporal_applicability"), None)
+            if temporal and temporal["status"] != "CONFIRMED":
+                verdict["reference_date_candidates"] = usable[:5]
+                temporal["meaning"] = "기준일 미입력 — " + note
+        for item in result.unverified_items:
+            if item.get("type") == "STATUTE":
+                item["reference_date_candidates"] = usable[:5]
 
     def _legal_reviews(self, result, citations, context, *, progress=None):
         """Keep the incident-date review and every issue-date review distinct."""
@@ -769,6 +810,25 @@ class VerificationPipeline:
                 findings.extend(internal_citation_findings(
                     checks, source_label=label, document_id=document_id))
         return findings
+
+
+def annotate_unavailable_sources(sources: List[Dict[str, Any]], documents: List[Any]) -> List[Dict[str, Any]]:
+    """사용하지 못한 출처마다 이번 실행에서 영향을 받은 인용을 연결한다.
+
+    학술자료가 없는 법령·판례 문서에서 KCI 키가 없다는 사실은 검증 결과에 영향이 없다.
+    영향이 없는 출처는 'NOT_NEEDED'로 표시해 결과를 불필요하게 낮춰 보이지 않게 한다.
+    """
+    citations = [c for d in documents for c in (d.citations or [])]
+    types = sorted({str(c.get("type")) for c in citations})
+    out = []
+    for source in sources:
+        affected_types = affected_by_unavailable(str(source.get("name", "")), types)
+        ids = [c.get("citation_id") for c in citations if str(c.get("type")) in (affected_types or [])]
+        out.append({**source, "impact": "AFFECTS_VERIFICATION" if ids else "NOT_NEEDED",
+                    "affected_citation_types": affected_types or [], "affected_citation_ids": ids,
+                    "impact_note": (f"이번 실행의 인용 {len(ids)}건 검증에 영향" if ids else
+                                    "이번 문서에 이 출처로 확인할 인용이 없어 검증 결과에 영향 없음")})
+    return out
 
 
 def _events_from(document: DocumentResult) -> List[Any]:

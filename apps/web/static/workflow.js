@@ -231,6 +231,7 @@ const workflowUI = (() => {
     const citationIds=new Set((doc?.citations || []).filter(c=>f.block_id ? c.block_id===f.block_id : f.page && c.page===f.page).map(c=>c.citation_id));
     for (const verdict of doc?.engine_data?.legal_verdicts || []) {
       if(!citationIds.has(verdict.citation_id))continue;
+      if(verdict.components?.length)area.append(citationComponents(verdict,(doc.citations || []).find(c=>c.citation_id===verdict.citation_id)));
       const record=verdict.official_record;
       if (!record) continue;
       const detail=node("details",null,"detail-section");
@@ -240,6 +241,23 @@ const workflowUI = (() => {
       area.append(detail);
     }
     icons();
+  }
+  // 인용 하나의 상태는 가장 약한 단계를 따른다. 법령·조문이 확인됐어도 기준일이 없으면
+  // '일부 확인'이 되므로, 무엇을 확인했고 무엇이 남았는지를 단계별로 따로 보인다.
+  const COMPONENT_STATUS={CONFIRMED:"확인",TEXT_AVAILABLE:"본문 확보",PARTIAL:"일부 확인",MISMATCH:"불일치",
+    NOT_FOUND_IN_SEARCHED_SCOPE:"조회 범위 내 미발견",NOT_FOUND_IN_SELECTED_VERSION:"조회한 버전에 없음",
+    DELETED:"삭제된 조문",INVALID_FORMAT:"성립 불가 형식",UNVERIFIED:"미확인",NOT_RUN:"검토 전",
+    REVIEW_NEEDED:"사람 검토 필요",NOT_APPLICABLE:"해당 없음"};
+  function citationComponents(verdict,citation) {
+    const box=node("section",null,"detail-section citation-components");
+    box.append(node("h3",`인용 검증 단계 · ${citation?.raw_text || verdict.citation_id}`));
+    box.append(table(["확인 항목","결과","설명"],(verdict.components || []).map(c=>{
+      const status=node("span",COMPONENT_STATUS[c.status] || c.status,`component-status status-${c.status.toLowerCase()}`);
+      return [c.label,status,c.meaning || ""];
+    })));
+    const dates=verdict.reference_date_candidates || [];
+    if(dates.length)box.append(node("p",`문서의 기준일 후보(자동 적용하지 않음): ${dates.map(d=>`${d.label} ${d.date}`).join(", ")}`,"muted"));
+    return box;
   }
   async function showHistory(subjectId) {
     const entries=await api(`/projects/${state.project.id}/review-history${subjectId?`?subject_id=${encodeURIComponent(subjectId)}`:""}`);

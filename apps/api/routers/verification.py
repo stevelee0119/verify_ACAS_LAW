@@ -274,6 +274,7 @@ def _finding_out(session: Session, row: FindingRow) -> FindingOut:
         evidence=safe_evidence,
         sources=list(data.get("sources") or []),
         bbox=data.get("bbox"),
+        citation_id=(data.get("confidence_features") or {}).get("citation_id"),
     )
 
 

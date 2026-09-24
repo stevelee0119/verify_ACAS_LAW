@@ -76,6 +76,39 @@ def _covered_by(line_signature: str, rows: List[List[str]]) -> bool:
     return all(c in line_signature for c in meaningful)
 
 
+def _inside(bbox, area, margin: float = 2.0) -> bool:
+    if not bbox or not area:
+        return False
+    x0, top, x1, bottom = (bbox.as_tuple() if hasattr(bbox, "as_tuple") else bbox)
+    ax0, atop, ax1, abottom = area
+    return x0 >= ax0 - margin and x1 <= ax1 + margin and top >= atop - margin and bottom <= abottom + margin
+
+
+def _link_lines_to_table(blocks, table_bbox, table_ref) -> List[str]:
+    """표 영역 안의 줄 블록에 표 식별자를 붙여, 줄 텍스트와 표 구조를 서로 찾아가게 한다."""
+    linked = []
+    for block in blocks:
+        if _inside(block.bbox, table_bbox):
+            block.attributes["table_ref"] = table_ref
+            linked.append(block.block_id)
+    return linked
+
+
+def _table_title(blocks, table_bbox) -> Optional[str]:
+    """표 바로 위(40pt 이내)의 줄을 표 제목 후보로 둔다."""
+    if not table_bbox:
+        return None
+    best = None
+    for block in blocks:
+        if not block.bbox or block.attributes.get("table_ref"):
+            continue
+        x0, top, x1, bottom = block.bbox.as_tuple()
+        gap = table_bbox[1] - bottom
+        if -3 <= gap <= 40 and (best is None or gap < best[0]):
+            best = (gap, block.text.strip())
+    return best[1] if best else None
+
+
 class PdfParser(DocumentParser):
     name = "PdfParser"
     extensions = [".pdf"]
@@ -149,20 +182,36 @@ class PdfParser(DocumentParser):
                 # 파편이 된다. 실제 검증보고서에서 주장 101건 중 16건이 이 파편이었다.
                 # 이미 줄 블록으로 읽은 내용과 같은 표는 버린다.
                 try:
-                    tables = page.extract_tables() or []
+                    found = page.find_tables() or []
+                    tables = [(t.extract() or [], t.bbox) for t in found]
                     # 표가 있는 페이지에서만 서명을 잇는다. 법률 서면은 표가
                     # 드물어 대부분의 페이지가 이 비용을 아예 건너뛴다.
                     line_signature = "".join(signature_parts) if tables else ""
-                    for t_index, table in enumerate(tables):
+                    for t_index, (table, table_bbox) in enumerate(tables):
                         rows = [[str(c) if c else "" for c in row] for row in table]
                         flat = "\n".join(" | ".join(row) for row in rows)
                         if not flat.strip():
                             continue
+                        table_ref = f"p{index}t{t_index}"
+                        structure = {"table_ref": table_ref, "page": index, "table_index": t_index,
+                                     "bbox": [float(v) for v in table_bbox] if table_bbox else None,
+                                     "cells": rows, "header": rows[0] if rows else [],
+                                     "title": _table_title(p.blocks, table_bbox),
+                                     "row_count": len(rows), "column_count": max((len(r) for r in rows), default=0)}
                         if _covered_by(line_signature, rows):
+                            # 같은 글자는 줄 블록으로 이미 있다. 표 블록을 따로 만들어 중복 표시하지
+                            # 않되, 행·열 구조는 버리지 않고 남겨 줄 블록과 연결한다. 첨부 목록처럼
+                            # "자료명"과 "첨부 여부"의 대응이 의미를 갖는 표가 있기 때문이다.
+                            structure["representation"] = "LINES_WITH_STRUCTURE"
+                            structure["line_block_ids"] = _link_lines_to_table(p.blocks, table_bbox, table_ref)
+                            doc.structure.setdefault("tables", []).append(structure)
                             doc.parse_warnings.append(
-                                f"page {index} table {t_index}: 줄 텍스트와 중복되어 표 블록을 만들지 않았다"
+                                f"page {index} table {t_index}: 줄 텍스트와 같은 내용이라 표 블록을 따로 만들지 않고 "
+                                "행·열 구조를 보존해 줄 블록과 연결했다"
                             )
                             continue
+                        structure["representation"] = "TABLE_BLOCK"
+                        doc.structure.setdefault("tables", []).append(structure)
                         blk = Block(
                             block_id=new_id("B"),
                             text=flat,
@@ -170,7 +219,7 @@ class PdfParser(DocumentParser):
                             source_layer="visible_text",
                             block_type="table",
                             # 셀 구조를 남겨 두면 검산이 " | " 재파싱에 의존하지 않는다
-                            attributes={"table_index": t_index, "cells": rows},
+                            attributes={"table_index": t_index, "cells": rows, "table_ref": table_ref},
                         )
                         p.blocks.append(blk)
                 except Exception as exc:  # pragma: no cover - 파서 방어

@@ -35,11 +35,13 @@ def _fabrication_row(c: Any) -> "HallucinationTableRow":
         cited_authority=c.raw_text,
         authority_exists=False,
         basis="FABRICATION_SUSPECTED",
+        # 인용 오류의 근거이지 작성 주체(AI 사용 여부)의 근거가 아니다. 사람도 이런 오류를 만든다.
         ai_generation_basis=("사건번호 자체가 성립할 수 없음(있을 수 없는 연도 또는 재판예규에 없는 "
-                             "사건부호). 공식 DB 수록 여부와 무관하게 실재할 수 없는 표기임."),
+                             "사건부호). 공식 DB 수록 여부와 무관하게 실재할 수 없는 표기임. "
+                             "법률 인용 오류의 근거이며, 이것만으로 AI 작성 여부를 추정하지 않음."),
         validity_verdict="근거 결여 (성립 불가한 사건번호)",
-        legal_reasoning=("실재할 수 없는 사건번호를 전제로 하고 있어 법리적 타당성을 인정할 수 "
-                         "없습니다. 임의 생성(환각)이 의심됩니다."),
+        legal_reasoning=("실재할 수 없는 사건번호를 전제로 하고 있어 그 판례를 근거로 한 부분은 "
+                         "법리적 타당성을 인정할 수 없습니다. 오기(誤記)인지 원문 확인이 필요합니다."),
         recommended_counteraction="상대방에게 판결문 사본 제출 또는 사건번호 정정 석명을 신청할 것.",
     )
 
@@ -53,13 +55,14 @@ def _fabrication_finding(c: Any, doc: Any) -> Finding:
         evidence_grade=EvidenceGrade.B,
         title=f"성립할 수 없는 사건번호에 근거한 법률 주장: {c.raw_text}",
         detail=("사건번호의 연도 또는 사건부호가 실재할 수 없는 값입니다. 공식 DB 수록 여부와 "
-                "무관하게 그 표기로는 사건이 존재할 수 없습니다."),
+                "무관하게 그 표기로는 사건이 존재할 수 없습니다. 법률 인용 오류이며 작성 주체의 "
+                "근거로 쓰지 않습니다."),
         confidence=confidence_score(feats),
-        confidence_features=feats,
+        confidence_features={**feats, "citation_id": c.citation_id, "error_category": "LEGAL_CITATION_ERROR"},
         document_id=doc.document_id,
         page=c.page,
         engine=ENGINE_NAME,
-        tags=["LEGAL", "ARGUMENT_VALIDITY", "AI_HALLUCINATION"],
+        tags=["LEGAL", "ARGUMENT_VALIDITY", "CITATION_ERROR"],
     )
 
 
@@ -110,6 +113,11 @@ class HallucinationTableRow:
             "legal_reasoning": self.legal_reasoning,
             "recommended_counteraction": self.recommended_counteraction,
             "basis": self.basis,
+            # 이 표는 '법률 인용 오류'와 '근거가 확인되지 않은 주장'을 다룬다. 작성 주체(AI 사용
+            # 여부)는 별도 축에서 판단하며, 이 표의 항목을 그 근거로 쓰지 않는다.
+            "error_category": ("LEGAL_CITATION_ERROR" if self.basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH")
+                               else "UNSUPPORTED_LEGAL_BASIS"),
+            "authorship_evidence": False,
         }
 
 
@@ -159,7 +167,8 @@ async def verify_argument_validity(
         levels = verdict.get("levels", {})
 
         # 판례가 공식 소스에서 발견되지 않았거나(NOT_FOUND), 심각한 불일치가 있는 경우
-        if status in ("NOT_FOUND", "CONTRADICTED") or levels.get("level1") == "NOT_FOUND":
+        if (status in ("NOT_FOUND", "CONTRADICTED") or levels.get("level1") == "NOT_FOUND"
+                or levels.get("number_format") == "IMPOSSIBLE"):
             unverified_cases.append({
                 "citation": citation,
                 "verdict": verdict,
@@ -221,7 +230,8 @@ async def verify_argument_validity(
         row.item_id = index
         result.rows.append(row)
 
-        feats = {"deterministic_rule": True, "unconfirmed_citation": c.raw_text}
+        feats = {"deterministic_rule": True, "unconfirmed_citation": c.raw_text, "citation_id": c.citation_id,
+                 "error_category": "LEGAL_CITATION_ERROR" if mismatch else "UNSUPPORTED_LEGAL_BASIS"}
         result.findings.append(
             Finding.create(
                 type=FindingType.LEGAL_ARGUMENT_INVALID,

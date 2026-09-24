@@ -404,8 +404,8 @@ function modelTitle(provider, model) {
 
 function authorshipVerdict(verdict) {
   return {
-    AI_FULL_GENERATION_LIKELY: ["AI 임의 전체 작성 유력", "badge CRITICAL"],
-    AI_PARTIAL_GENERATION: ["일부 AI 작성·인용 내용 확인", "badge HIGH"],
+    AI_FULL_GENERATION_LIKELY: ["AI 전체 작성 가능성 높음", "badge CRITICAL"],
+    AI_PARTIAL_GENERATION: ["일부 AI 작성 가능성", "badge HIGH"],
     HUMAN_AUTHORED_LIKELY: ["인간(변호사/당사자) 작성 유력", "badge VERIFIED"]
   }[verdict] || ["판단 보류", "badge INFO"];
 }
@@ -624,7 +624,9 @@ function explainRunStatus() {
   if (sources.length) {
     children.push(node("h3", "연결되지 않은 외부 출처"));
     const list = node("ul", null, "reason-list");
-    for (const source of sources) list.append(node("li", `${source.name}: ${label(source.status)}${source.note ? ` — ${source.note}` : ""}`));
+    // 이번 문서의 검증에 영향을 준 출처인지 함께 적는다. 영향이 없으면 결과를 낮춰 볼 이유가 없다.
+    for (const source of sources) list.append(node("li", `${source.name}: ${label(source.status)}${source.note ? ` — ${source.note}` : ""}` +
+      (source.impact_note ? ` (${source.impact_note})` : "")));
     children.push(list);
   }
   if (partial.length) {
@@ -1058,12 +1060,27 @@ function renderFindings() {
   const findings = state.findings.filter(f => workflowUI.matches(f) && (!$("reviewFilter").value || f.review_status === $("reviewFilter").value) && (!$("severityFilter").value || f.severity === $("severityFilter").value) && `${f.title} ${f.detail}`.toLowerCase().includes(query)).sort((a,b) => workflowUI.priority(a) - workflowUI.priority(b));
   $("findings").replaceChildren();
   if (!findings.length) empty($("findings"), state.run ? "표시할 확인 항목이 없습니다. 미확인 범위는 보고서에서 별도로 확인할 수 있습니다." : "검증 결과가 없습니다.");
+  // 같은 인용에서 나온 항목(예: 조회 범위 내 미발견 + 그 판례에 기댄 주장)은 한 줄로 묶고
+  // 하위 근거로 보인다. 서로 다른 경고가 여러 건인 것처럼 보이지 않게 한다.
+  const groups = new Map();
   for (const f of findings) {
+    const key = f.citation_id;
+    if (key) groups.set(key, [...(groups.get(key) || []), f]);
+  }
+  for (const f of findings) {
+    const members = groups.get(f.citation_id) || [f];
+    if (members[0] !== f) continue;
     const row = node("article", null, "row-item");
     const title = button(null, () => openFinding(f), "row-title");
     workflowUI.decorateFinding(f, row);
     title.append(node("span", label(f.severity), `badge ${f.severity}`), node("strong", friendlyText(f.title)));
     row.append(title, node("p", friendlyText(f.detail)), node("div", `${state.documents.find(d=>d.id===f.document_id)?.filename||"프로젝트 전체"}${f.page?` · ${f.page}쪽`:""} · ${label(f.status)} · ${label(f.review_status)}${f.advisory_only?" · 참고 의견":""}`, "row-meta"));
+    if (members.length > 1) {
+      const derived = node("details", null, "derived-findings");
+      derived.append(node("summary", `같은 인용에서 파생된 항목 ${members.length - 1}건`));
+      for (const m of members.slice(1)) derived.append(button(`${label(m.severity)} · ${friendlyText(m.title)}`, () => openFinding(m), "link-button"));
+      row.append(derived);
+    }
     $("findings").append(row);
   }
   if (state.run?.unverified_items.length) {
@@ -1111,8 +1128,12 @@ function renderAIVerification() {
       item.append(
         node("div", `${res.filename}: `),
         node("span", verdictLabel, badgeClass),
-        node("small", ` (신뢰도: ${Math.round((res.score || 0) * 100)}%)`, "muted")
+        // 이 값은 모델들이 낸 AI 작성 가능성 추정치(중앙값)다. 판정 근거의 신뢰도와는 다른 값이다.
+        node("small", ` (AI 작성 가능성 추정치 ${(res.score || 0).toFixed(2)})`, "muted")
       );
+      const dist = Object.entries(res.signals?.verdict_distribution || {}).filter(([, n]) => n);
+      if (dist.length) item.append(node("p", `모델별 판단 분포: ${dist.map(([v, n]) => `${authorshipVerdict(v)[0]} ${n}`).join(", ")}`, "muted"));
+      if (res.signals?.score_definition) item.append(node("p", `추정치: ${res.signals.score_definition} 신뢰도: ${res.signals.confidence_definition}`, "muted metric-definition"));
       const opinions = res.signals?.llm_opinions || [];
       const failures = Object.entries(res.signals?.llm_failures || {});
       // 모델별 설명은 모델 블록에서 모두 보이므로 요약에서는 뺀다. 예전 결과처럼

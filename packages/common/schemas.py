@@ -368,6 +368,8 @@ class Citation:
     # 인용문
     quoted_text: Optional[str] = None
     context: str = ""
+    # 유형별 추가 필드(행정규칙의 발령기관·종류·번호·시행일·위임 근거 등)
+    attributes: Dict[str, Any] = field(default_factory=dict)
 
     @staticmethod
     def create(type: CitationType, raw_text: str, **kw: Any) -> "Citation":

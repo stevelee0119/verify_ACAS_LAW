@@ -72,7 +72,9 @@ def test_ai_document_detector_with_chatbot_cliches_and_fake_case():
     assert res.verdict in ("AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION")
     assert res.score >= 0.5
     assert any("챗봇" in r or "관용구" in r for r in res.reasons)
-    assert any("판례" in r for r in res.reasons)
+    # 가공 인용은 인용 검증 축에서 다루고, 작성 주체 점수에는 넣지 않는다고 밝힌다.
+    assert any("작성 주체" in r for r in res.reasons)
+    assert res.signals["citation_errors_used_for_authorship"] is False
 
     # Finding 생성 검증
     findings = create_ai_detector_findings(doc, res)
@@ -211,7 +213,10 @@ def test_unconfirmed_citations_alone_do_not_drive_the_ai_authorship_verdict():
                                                not_found("2015모2524")], False)
     fake = _rule_based_ai_detection(document, [not_found("2088다77777"),
                                                not_found("2099다11111")], False)
-    assert real.score < fake.score, "실재 가능한 사건번호가 성립 불가와 같은 점수를 받으면 안 된다"
+    # 인용 오류(미확인·성립 불가)는 작성 주체 점수에 들어가지 않는다. 같은 문서면 같은 점수다.
+    assert real.score == fake.score
+    assert fake.signals["impossible_case_numbers"] == ["2088다77777", "2099다11111"]
+    assert fake.verdict == real.verdict == "UNCERTAIN"
     assert not any("가공" in reason for reason in real.reasons), real.reasons
 
 
@@ -270,7 +275,7 @@ def test_ai_opinions_never_turn_an_unconfirmed_case_into_a_fake_one():
     assert "010-1234-5678" not in router.requests[0].user and masked
 
 
-def test_authorship_verdict_needs_a_majority_of_models():
+def test_authorship_verdict_needs_agreement_and_objective_traces():
     """한 모델만 'AI 전체 작성'이라 해도 그대로 채택하던 것을 막는다."""
     text = "원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 요약하자면 피고의 책임이 인정됩니다."
     doc = _make_sample_doc(text)
@@ -288,7 +293,8 @@ def test_authorship_verdict_needs_a_majority_of_models():
     assert split.verdict == "UNCERTAIN" and split.signals["llm_agreement"] == "DISAGREE"
     assert create_ai_detector_findings(doc, split) == [] or all(
         f.type != FindingType.AI_FULL_GENERATION_SUSPECTED for f in create_ai_detector_findings(doc, split))
-    assert run({"anthropic": full, "openai": human}).verdict == "HUMAN_AUTHORED_LIKELY"
+    # 두 모델이 갈리면 어느 쪽으로도 확정하지 않는다.
+    assert run({"anthropic": full, "openai": human}).verdict == "UNCERTAIN"
 
     agreed = run({"anthropic": full, "openai": full, "gemini": None})
     assert agreed.verdict == "AI_FULL_GENERATION_LIKELY" and agreed.signals["llm_agreement"] == "AGREE"

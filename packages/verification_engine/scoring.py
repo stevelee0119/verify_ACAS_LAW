@@ -29,6 +29,14 @@ FORGERY_TYPES = {
     FindingType.PRIOR_VERSION_RECOVERABLE,
     FindingType.CROPPED_IMAGE_RESIDUE,
 }
+# 사실 주장의 근거(첨부·증거·해시)와 관련된 관찰. 허위 판정이 아니라 '검증되지 않은 사실'의 근거다.
+EVIDENCE_TYPES = {
+    FindingType.FACT_UNSUPPORTED,
+    FindingType.EVIDENCE_NOT_PROVIDED,
+    FindingType.EVIDENCE_REFERENCE_MISSING,
+    FindingType.HASH_FORMAT_INVALID,
+    FindingType.HASH_MISMATCH,
+}
 CONSISTENCY_TYPES = {
     FindingType.FACT_CONTRADICTION,
     FindingType.CROSS_DOCUMENT_CONTRADICTION,
@@ -57,6 +65,44 @@ def _risk_from(findings: List[Any]) -> str:
     if findings:
         return "LOW"
     return "NONE"
+
+
+def _sum_components(documents: List[Any]) -> Dict[str, int]:
+    total: Dict[str, int] = {}
+    for document in documents:
+        summary = (document.engine_data.get("legal") or {}).get("component_summary") or {}
+        for key, value in summary.items():
+            total[key] = total.get(key, 0) + int(value or 0)
+    return total
+
+
+def _factual_axis(documents: List[Any], consistency: List[Any], evidence: List[Any], content_risk) -> Dict[str, Any]:
+    """사실 신뢰성 축. '이슈 0건'이 '검사해서 이상 없음'인지 '검사할 수 없었음'인지 구분한다."""
+    claims = [c for d in documents for c in (d.claims or [])]
+    facts = [c for c in claims if str(c.get("type")) == "FACT"]
+    relations = [(c.get("attributes") or {}).get("evidence_relationship") for c in facts]
+    not_provided = sum(r in ("EVIDENCE_NOT_PROVIDED", "REFERENCE_MISSING") for r in relations)
+    attached = sum(r == "ATTACHED_NOT_ASSESSED" for r in relations)
+    issues = consistency + evidence
+    if not facts:
+        coverage = "NOT_ASSESSED"          # 사실 주장을 찾지 못했다. '이상 없음'이 아니다.
+    elif issues:
+        coverage = "ISSUES_FOUND"
+    elif attached or any(d.engine_data.get("attachments", {}).get("items") for d in documents):
+        coverage = "NO_ISSUES_IN_SCOPE"    # 검사한 범위 안에서는 이상이 없었다
+    else:
+        coverage = "INSUFFICIENT"          # 사실 주장은 있으나 대조할 근거 자료가 없었다
+    return {
+        "issue_count": len(issues),
+        "contradiction_issues": len(consistency),
+        "evidence_issues": len(evidence),
+        "fact_claims": len(facts),
+        "facts_without_provided_evidence": not_provided,
+        "facts_with_attached_evidence": attached,
+        "coverage": coverage,
+        "risk": content_risk(issues) if coverage != "INSUFFICIENT" else "UNVERIFIED",
+        "note": "근거 자료가 없는 사실은 '검증되지 않은 사실'이며 허위·위조 판정이 아니다.",
+    }
 
 
 def aggregate_scores(result: Any) -> Dict[str, Any]:
@@ -123,12 +169,20 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
             },
             "legal_citation_accuracy": {
                 "citation_total": citation_total,
+                # 사건 적용을 뺀 모든 단계가 확인된 인용 수. 기준일이 없으면 0이 되는 값이다.
                 "verified": verified_citations,
                 "unverified": unverified_citations,
+                # 단계별 집계. 인용 대상(법령·조문, 판례)을 공식 원문으로 확인한 수와
+                # 시간적 적용만 남은 수를 따로 센다. '확인 0건'이 '아무것도 못 찾음'으로
+                # 읽히지 않게 한다.
+                "components": _sum_components(result.documents),
                 "issue_count": len(legal),
                 "risk": content_risk(legal),
+                "note": "verified는 사건 적용을 뺀 모든 단계가 확인된 인용 수이고, "
+                        "components.identity_confirmed는 인용 대상 자체를 공식 원문으로 확인한 수다.",
             },
-            "factual_reliability": {"issue_count": len(consistency), "risk": content_risk(consistency)},
+            "factual_reliability": _factual_axis(result.documents, consistency,
+                                                 [f for f in findings if f.type in EVIDENCE_TYPES], content_risk),
             "internal_consistency": {
                 "cross_document_issues": sum(
                     1 for f in findings if f.type == FindingType.CROSS_DOCUMENT_CONTRADICTION
@@ -149,6 +203,9 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
             "unverified_ratio": {
                 "unverified_items": len(result.unverified_items),
                 "unavailable_sources": [s["name"] for s in result.unavailable_sources],
+                # 이번 실행의 검증에 실제로 영향을 준 출처만 따로 적는다.
+                "unavailable_sources_affecting": [s["name"] for s in result.unavailable_sources
+                                                  if s.get("impact", "AFFECTS_VERIFICATION") != "NOT_NEEDED"],
                 "ratio": round(len(result.unverified_items) / citation_total, 3) if citation_total else None,
                 "unreadable_documents": [d for d in unreadable if d],
                 "analyzed_documents": len(analyzed_documents),

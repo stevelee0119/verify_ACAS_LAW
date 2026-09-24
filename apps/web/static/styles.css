@@ -1202,3 +1202,15 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .metric-explainer p { line-height: 1.65; }
 .unverified-cause { border-left: 3px solid var(--warn, #9a6700); padding: 2px 0 2px 12px; margin: 10px 0; }
 .unverified-cause h4 { margin: 0 0 4px; font-size: 15px; }
+
+/* 인용 검증 단계: 확인·미확인·불일치를 색과 글자로 함께 구분한다. */
+.citation-components h3 {font-size:15px; margin:4px 0 8px;}
+.component-status {font-weight:600;}
+.component-status.status-confirmed, .component-status.status-text_available {color:var(--green);}
+.component-status.status-mismatch, .component-status.status-invalid_format {color:#a33a2c;}
+.component-status.status-not_found_in_searched_scope, .component-status.status-not_found_in_selected_version,
+.component-status.status-deleted {color:#8a5a00;}
+.derived-findings {margin-top:6px;}
+.derived-findings summary {cursor:pointer; color:var(--muted); font-size:14px;}
+.derived-findings .link-button {display:block; text-align:left; border:0; background:none; padding:4px 0; color:inherit; text-decoration:underline;}
+.metric-definition {font-size:13px;}

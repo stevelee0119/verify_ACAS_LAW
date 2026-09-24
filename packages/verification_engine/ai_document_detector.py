@@ -95,35 +95,21 @@ def _rule_based_ai_detection(
         score += min(0.40, cliche_hits * 0.20)
         reasons.append(f"AI 챗봇의 전형적인 관용구/면책/대화형 잔재 문구가 {cliche_hits}건 발견됨")
 
-    # 3. 판례 인용 정황 결합
+    # 3. 판례 인용 오류는 작성 주체의 근거로 쓰지 않는다.
     #
-    # "공식 DB에서 확인하지 못함"과 "그 표기로는 존재할 수 없음"은 증거력이 전혀
-    # 다르다. 국가법령정보 판례 DB는 모든 재판을 수록하지 않으므로(미공개 결정,
-    # 하급심, 수록범위 밖) 미확인만으로 AI 생성을 추정하면, 실재하는 판례를 제대로
-    # 인용한 서면이 "AI 임의 작성"으로 판정된다. 실제로 그런 일이 있었다.
+    # 가공·오류 인용은 '법률 인용 오류' 축에서 다룬다. 사람도 사건번호를 잘못 적고,
+    # 검증용 자료는 일부러 가공 인용을 넣는다. 예전에는 성립 불가 사건번호가 있으면
+    # AI 점수에 0.30을 더해, 인용 오류가 AI 작성 판정으로 두 번 계산됐다.
     unconfirmed = [f for f in citation_findings
                    if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND]
     impossible = [f for f in unconfirmed
                   if (f.confidence_features or {}).get("case_number")
                   and not case_number_possible(str(f.confidence_features["case_number"]))]
-    total_case_count = sum(1 for f in citation_findings if "CASE" in f.tags)
     signals["impossible_case_numbers"] = [str(f.confidence_features["case_number"]) for f in impossible]
-
-    if impossible:
-        # 있을 수 없는 연도·사건부호. 수록 범위와 무관하게 실재할 수 없다.
-        score += 0.30 if len(impossible) / max(1, total_case_count) >= 0.5 else 0.15
-        reasons.append(f"실재할 수 없는 사건번호(있을 수 없는 연도 또는 사건부호)가 {len(impossible)}건 인용됨")
-    remaining = len(unconfirmed) - len(impossible)
-    if remaining > 0:
-        ratio = remaining / max(1, total_case_count)
-        if ratio >= 0.5:
-            # 참고 신호로만 둔다. 이것만으로 AI 작성을 추정하지 않는다.
-            score += 0.10
-            reasons.append(f"인용 판례 중 공식 DB에서 확인되지 않은 것이 다수({remaining}건)임. "
-                           "공식 DB 수록 범위 밖일 수 있어 그 자체로 임의 생성을 뜻하지는 않으며 원문 확인이 필요함")
-        else:
-            reasons.append(f"공식 DB에서 확인되지 않은 판례 인용 {remaining}건(원문 확인 필요). "
-                           "점수에는 반영하지 않음")
+    signals["citation_errors_used_for_authorship"] = False
+    if unconfirmed:
+        reasons.append(f"법률 인용 오류·미확인 {len(unconfirmed)}건은 인용 검증 축에서 다루며, "
+                       "작성 주체(AI 사용 여부) 판단에는 반영하지 않음")
 
     # 4. 구조적 특징 (단락별 지나치게 기계적인 번호 매기기, 대칭적 서술)
     list_markers = len(re.findall(r"^\s*(?:\d+\.|\([0-9]\)|첫째|둘째|셋째|넷째|마지막으로)", text, re.MULTILINE))
@@ -133,17 +119,20 @@ def _rule_based_ai_detection(
         reasons.append("기계적인 나열식 번호 체계와 전형적인 개조식 설명문 구조가 두드러짐")
 
     # 종합 판정 도출
+    #
+    # 객관적 작성 흔적(도구 표기·챗봇 응답 잔재)이 있어야 AI 판정을 낸다. 서식·나열 구조는
+    # 사람이 쓴 법률 서면에도 흔하다. 흔적이 없다는 사실은 '사람이 썼다'는 근거도 아니다.
     score = min(1.0, score)
-    if score >= 0.65:
+    objective_traces = cliche_hits + (1 if metadata_indications else 0)
+    signals["objective_traces"] = objective_traces
+    if score >= 0.65 and objective_traces:
         verdict = "AI_FULL_GENERATION_LIKELY"
-    elif score >= 0.35:
+    elif score >= 0.35 and objective_traces:
         verdict = "AI_PARTIAL_GENERATION"
-    elif len(sents) < 5:
-        verdict = "UNCERTAIN"
-        reasons.append("문서 분량이 너무 적어 판정을 유보함")
     else:
-        verdict = "HUMAN_AUTHORED_LIKELY"
-        reasons.append("AI 특유의 환각이나 챗봇 잔재가 발견되지 않고 전통적인 법률 서면 작성 양식을 따르고 있음")
+        verdict = "UNCERTAIN"
+        reasons.append("문서 분량이 너무 적어 판정을 유보함" if len(sents) < 5 else
+                       "객관적 작성 흔적을 찾지 못해 판단을 유보함(흔적이 없다는 것이 사람 작성의 근거는 아님)")
 
     return AIDetectorResult(
         verdict=verdict,
@@ -163,8 +152,12 @@ async def detect_ai_document(
     external_ai_policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
     metadata_indications: bool = False,
     mask: Optional[Callable[[str], str]] = None,
+    exclude_texts: Optional[List[str]] = None,
 ) -> AIDetectorResult:
     """문서의 AI 전체/부분 생성 여부를 종합 분석하여 판정한다.
+
+    exclude_texts는 문서 안의 지시문(프롬프트 인젝션)처럼 공격 탐지 대상인 구간이다.
+    그 문구는 작성 주체의 근거가 아니므로 모델에게 보내는 본문에서 가린다.
     
     LLM(OpenAI/Gemini 등)이 활성화되어 있고 정책상 허용되면 심층 분석을 수행하고,
     그렇지 않으면 고도화된 규칙 기반 검출기로 대체한다.
@@ -188,20 +181,25 @@ async def detect_ai_document(
     if not can_use_llm:
         return rule_res
 
-    # 모델에게는 사실만 준다. 공식 DB 미확인을 "가짜 판례"라고 넘기면 모델이
-    # 그 전제를 받아 AI 작성으로 기운다. 성립 불가 사건번호만 적극적 근거로 준다.
-    impossible = rule_res.signals.get("impossible_case_numbers", [])
+    # 모델에게는 작성 주체 판단에 쓸 수 있는 것만 준다. 인용 오류나 문서 속 지시문을
+    # 넘기면 모델이 그것을 AI 작성의 근거로 삼아 같은 사실이 두 번 계산된다.
     hide = mask or (lambda value: value)
+    excluded = 0
+    for fragment in sorted({t.strip() for t in (exclude_texts or []) if t and len(t.strip()) >= 8}, key=len, reverse=True):
+        if fragment in text:
+            text = text.replace(fragment, "[문서 내 지시문 — 작성 주체 판단에서 제외]")
+            excluded += 1
+    rule_res.signals["excluded_instruction_segments"] = excluded
 
     system_prompt = (
         "당신은 법률 문서의 작성 경위를 감정하는 대한민국 법률 포렌식 전문가입니다.\n"
         "제공된 법률 서면 텍스트를 분석하여, 이 문서가 LLM(ChatGPT, Gemini 등)에 의해 전체 작성되었는지, "
         "일부 AI가 작성한 내용을 옮긴 것인지, 아니면 사람(변호사/당사자)이 작성한 실무 서면인지 판정하십시오.\n\n"
         "판정 기준:\n"
-        "1. 대한민국 법원 제출 실무 서면(소장, 답변서, 준비서면 등)의 전형적인 형식과의 부합성.\n"
-        "2. AI 특유의 번역투, 피상적이고 일반론적인 서술, 과도한 나열식 설명문 형식, 챗봇 상투구.\n"
-        "3. 형식상 성립할 수 없는 사건번호 인용(제공된 경우에만). 공식 DB에서 찾지 못한 판례는 수록 범위 "
-        "밖일 수 있으므로 근거로 삼지 마십시오.\n"
+        "1. AI 특유의 번역투, 피상적이고 일반론적인 서술, 챗봇 상투구·응답 잔재 같은 작성 흔적.\n"
+        "2. 다음은 작성 주체의 근거가 아닙니다: 표준 서식·전문적 문체·템플릿 반복(사람도 씀), "
+        "판례·법령 인용 오류나 가공 인용(인용 검증에서 따로 다룸), 문서 속 지시문('[문서 내 지시문 …]'으로 "
+        "가린 부분 포함, 공격 탐지에서 따로 다룸).\n"
         "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
         "문장을 그대로 옮기십시오.\n"
         "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
@@ -222,7 +220,6 @@ async def detect_ai_document(
     user_payload = {
         "document_filename": hide(doc.filename),
         "metadata_ai_hint": metadata_indications,
-        "impossible_case_numbers": [hide(str(n)) for n in impossible][:5],
         "document_sample_text": sample,
     }
     req = LLMRequest(
@@ -301,25 +298,36 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
             rule_res.signals["llm_failure_models"] = failure_models
         return rule_res
 
-    ranks = sorted(_VERDICT_RANK[o["verdict"]] for o in opinions)
-    majority = len(opinions) // 2 + 1
-    # 과반이 "이 정도 이상"이라고 본 가장 높은 단계
-    final_rank = max(r for r in ranks if sum(x >= r for x in ranks) >= majority)
-    verdict = next(v for v, r in _VERDICT_RANK.items() if r == final_rank)
     agreement = ("SINGLE" if len(opinions) == 1
                  else "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE")
+    # 최종 판정 규칙(과반수로 높은 확신의 결론을 고정하지 않는다)
+    #   - 모델 의견이 갈리면 유보(UNCERTAIN)한다. 분포는 그대로 싣는다.
+    #   - 모든 모델이 같은 'AI 작성' 판단을 내려도, 문체·형식 밖의 객관적 작성 흔적
+    #     (도구 표기·챗봇 응답 잔재)이 없으면 유보한다. 문체만으로 작성자를 정하지 않는다.
+    #   - 모델 하나의 의견만으로는 규칙 기반 판정보다 무겁게 올리지 않는다.
+    objective = int(rule_res.signals.get("objective_traces") or 0)
     single_downgraded = False
-    if agreement == "SINGLE":
-        # 한 모델의 의견만으로 판정을 올리지 않는다. 규칙 기반 판정보다 무거우면 규칙 쪽을 따른다.
-        rule_rank = _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"])
-        if final_rank > rule_rank:
-            final_rank, single_downgraded = rule_rank, True
-            verdict = next(v for v, r in _VERDICT_RANK.items() if r == final_rank)
+    held_reason = ""
+    if agreement == "AGREE":
+        verdict = opinions[0]["verdict"]
+        if verdict.startswith("AI_") and not objective:
+            verdict, held_reason = "UNCERTAIN", (
+                "모든 모델이 AI 작성 가능성을 높게 보았으나 문체·형식 밖의 객관적 작성 흔적이 없어 "
+                "판단을 유보함(문체·표준 형식·인용 오류만으로 작성 주체를 정하지 않음)")
+    elif agreement == "SINGLE":
+        verdict = opinions[0]["verdict"]
+        if _VERDICT_RANK[verdict] > _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"]):
+            verdict, single_downgraded = rule_res.verdict, True
+    else:
+        verdict = "UNCERTAIN"
+    final_rank = _VERDICT_RANK[verdict]
 
     reasons = []
     if agreement == "DISAGREE":
         reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
-                       + ". 과반이 지지하는 판단을 택함")
+                       + ". 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)")
+    if held_reason:
+        reasons.append(held_reason)
     elif agreement == "SINGLE":
         reasons.append(f"1개 모델({opinions[0]['provider']})의 의견만 있어 교차검증되지 않음"
                        + (f" — 응답하지 못한 모델: {failed_text}" if failed_text else ""))
@@ -346,10 +354,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                 excerpts.append({"snippet": snippet, "reason": f"[{o['provider']}] {str(e.get('reason') or '')[:200]}"})
     excerpts += [e for e in rule_res.suspicious_excerpts if e.get("snippet") not in seen]
 
+    model_median = float(statistics.median(o["score"] for o in opinions))
     return AIDetectorResult(
         verdict=verdict,
-        score=(rule_res.score if single_downgraded
-               else float(statistics.median(o["score"] for o in opinions))),
+        score=(rule_res.score if single_downgraded else model_median),
         reasons=reasons,
         suspicious_excerpts=excerpts,
         signals={**rule_res.signals,
@@ -360,9 +368,25 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "llm_agreement": agreement,
                  "llm_failures": failures,
                  "llm_failure_models": failure_models,
-                 "rule_score": rule_res.score},
+                 "rule_score": rule_res.score,
+                 "model_score_median": round(model_median, 3),
+                 "verdict_distribution": {v: sum(o["verdict"] == v for o in opinions) for v in _VERDICT_RANK},
+                 "decision_rule": ("UNANIMOUS_WITH_OBJECTIVE_TRACE" if agreement == "AGREE" and not held_reason
+                                   else "HELD_NO_OBJECTIVE_TRACE" if held_reason
+                                   else "HELD_DISAGREEMENT" if agreement == "DISAGREE"
+                                   else "SINGLE_MODEL_CAPPED_BY_RULES"),
+                 **SCORE_DEFINITIONS},
         used_llm=True,
     )
+
+
+# 화면·보고서에 그대로 싣는 지표 정의. 점수와 신뢰도는 서로 다른 값이다.
+SCORE_DEFINITIONS = {
+    "score_definition": ("AI 작성 가능성 추정치(0~1). 응답한 모델들이 낸 ai_score의 중앙값이며, "
+                         "모델 하나만 응답해 규칙 판정으로 낮춘 경우에는 규칙 점수다. 작성 주체의 증명이 아니다."),
+    "confidence_definition": ("판정 근거의 신뢰도(0~1). 근거가 객관적 흔적인지, 여러 모델이 교차검증했는지로 "
+                              "계산한 finding.confidence이다. 추정치가 높아도 근거가 문체뿐이면 낮다."),
+}
 
 
 def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResult) -> List[Finding]:
@@ -373,6 +397,11 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
         "used_llm": result.used_llm,
         "verdict": result.verdict,
         "llm_agreement": result.signals.get("llm_agreement", "NONE"),
+        "objective_traces": result.signals.get("objective_traces", 0),
+        # 문체만의 판단은 휴리스틱이다. 신뢰도 계산이 이것을 반영한다.
+        "heuristic_only": not result.signals.get("objective_traces"),
+        "score_definition": SCORE_DEFINITIONS["score_definition"],
+        "confidence_definition": SCORE_DEFINITIONS["confidence_definition"],
     }
     # 여러 모델이 같은 판단을 냈을 때만 한 단계 높은 증거등급을 준다.
     cross_checked_grade = (EvidenceGrade.B if result.used_llm and result.signals.get("llm_agreement") == "AGREE"
@@ -385,7 +414,7 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
                 status=VerificationStatus.SUSPICIOUS,
                 severity=Severity.HIGH,
                 evidence_grade=cross_checked_grade,
-                title=f"문서 전체의 AI 임의 생성 유력 (신뢰도: {int(result.score * 100)}%)",
+                title=f"문서 전체의 AI 작성 가능성 높음 (추정치 {result.score:.2f}, 근거 신뢰도는 별도 표시)",
                 detail="; ".join(result.reasons[:3]) + " 법원 제출 전 실무 법률문서 요건과 진정성립에 대한 면밀한 검토가 필요합니다.",
                 confidence=confidence_score(features),
                 confidence_features=features,
@@ -409,7 +438,7 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
                 status=VerificationStatus.SUSPICIOUS,
                 severity=Severity.MEDIUM,
                 evidence_grade=EvidenceGrade.C,
-                title=f"문서 내 일부 AI 작성·인용 내용 확인 (신뢰도: {int(result.score * 100)}%)",
+                title=f"문서 일부의 AI 작성 가능성 (추정치 {result.score:.2f}, 근거 신뢰도는 별도 표시)",
                 detail="; ".join(result.reasons[:3]),
                 confidence=confidence_score(features),
                 confidence_features=features,
@@ -419,24 +448,46 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
             )
         )
 
-    # 개별 의심 문단에 대해 Finding 생성
+    elif result.verdict == "UNCERTAIN" and result.used_llm and (result.signals.get("model_score_median") or 0) >= 0.5:
+        # 판정은 유보했지만 모델 의견이 AI 쪽으로 기운 경우. 숨기지 않고 참고로 싣는다.
+        dist = result.signals.get("verdict_distribution") or {}
+        findings.append(
+            Finding.create(
+                type=FindingType.AI_AUTHORSHIP_LIKELY,
+                status=VerificationStatus.UNVERIFIED,
+                severity=Severity.INFO,
+                evidence_grade=EvidenceGrade.D,
+                title=f"AI 작성 가능성 판단 유보 (모델 추정치 중앙값 {result.signals.get('model_score_median'):.2f})",
+                detail=("모델별 판단: " + ", ".join(f"{k} {v}건" for k, v in dist.items() if v) + ". "
+                        + "; ".join(result.reasons[:2])),
+                confidence=confidence_score(features),
+                confidence_features=features,
+                document_id=doc.document_id,
+                engine=ENGINE_NAME,
+                advisory_only=True,
+                tags=["AUTHORSHIP", "AI_DETECTION"],
+            )
+        )
+
+    # 개별 의심 문단: 작성 주체에 관한 참고 신호다. 내용의 오류(환각)와 섞지 않는다.
     for exc in result.suspicious_excerpts[:4]:
         snippet = exc.get("snippet", "")
         reason = exc.get("reason", "")
         if snippet:
             findings.append(
                 Finding.create(
-                    type=FindingType.AI_HALLUCINATED_CONTENT,
-                    status=VerificationStatus.SUSPICIOUS,
-                    severity=Severity.MEDIUM,
+                    type=FindingType.AI_AUTHORSHIP_LIKELY,
+                    status=VerificationStatus.UNVERIFIED,
+                    severity=Severity.INFO,
                     evidence_grade=EvidenceGrade.C,
-                    title="AI 임의 생성 의심 문단 발견",
+                    advisory_only=True,
+                    title="AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
                     detail=f"근거: {reason}. 발췌: \"{snippet[:150]}...\"",
                     confidence=confidence_score(features),
                     confidence_features=features,
                     document_id=doc.document_id,
                     engine=ENGINE_NAME,
-                    tags=["AUTHORSHIP", "AI_HALLUCINATION"],
+                    tags=["AUTHORSHIP", "AUTHORSHIP_SIGNAL"],
                     evidence=[
                         Evidence.create(
                             description="의심 문구 발췌",

@@ -70,6 +70,7 @@ class AdversarialScanner:
             if classification.label == AdversarialClass.BENIGN_CONTENT:
                 continue
             in_ocr = block.source_layer == "ocr_layer"
+            descriptive = bool(classification.features.get("descriptive_mention"))
             finding_type = self._finding_type_for_block(block, classification)
             severity = severity_for(classification, in_ocr_layer=in_ocr)
             features = {
@@ -77,6 +78,9 @@ class AdversarialScanner:
                 "cross_layer_mismatch": not block.visible,
                 "forensic_signal": classification.features.get("corroborating_signals", 0),
                 **classification.features,
+                # 원문(OCR 포함)과 위치를 그대로 남긴다. 요약 발췌만으로는 판단을 되짚을 수 없다.
+                "observed_text": block.text[:2000],
+                "bbox": block.bbox.as_tuple() if block.bbox else None,
             }
             out.append(
                 Finding.create(
@@ -84,8 +88,10 @@ class AdversarialScanner:
                     status=VerificationStatus.SUSPICIOUS,
                     severity=severity,
                     evidence_grade=EvidenceGrade.A if not block.visible else EvidenceGrade.C,
-                    title=self._title_for(finding_type, classification),
+                    title=("지시문을 주제로 설명·언급하는 문구 (명령 아님)" if descriptive
+                           else self._title_for(finding_type, classification)),
                     detail=self._detail_for(block, classification),
+                    advisory_only=descriptive,
                     confidence=confidence_score(features),
                     confidence_features=features,
                     document_id=doc.document_id,
@@ -135,6 +141,12 @@ class AdversarialScanner:
     def _detail_for(block: Block, classification: Classification) -> str:
         reason = block.attributes.get("hidden_reason")
         where = f"{block.source_layer}" + (f"/{reason}" if reason else "")
+        if classification.features.get("descriptive_mention"):
+            return (
+                f"{where} 위치의 문구가 지시형 낱말을 포함하지만 명령형 어미 없이 표제·명사구·설명 문맥으로 "
+                "쓰였다. 지시문이나 공격 기법을 설명하는 문구로 보고 참고 표시만 한다. "
+                "본 문자열은 자료로만 취급되며 시스템 지침이나 Tool 권한을 변경하지 않는다."
+            )
         return (
             f"{where} 위치에서 지시형 문자열이 관찰되었다. "
             f"분류={classification.label}, 점수={classification.score}, "
@@ -433,6 +445,8 @@ class AdversarialScanner:
     @staticmethod
     def risk_level(findings: List[Finding]) -> str:
         """제19.1장 Adversarial Manipulation Risk."""
+        # 지시문을 설명하는 문구(참고 표시)는 공격 위험 수준에 넣지 않는다.
+        findings = [f for f in findings if not (f.advisory_only and f.severity == Severity.INFO)]
         if any(f.severity == Severity.CRITICAL for f in findings):
             return "CRITICAL"
         if any(f.severity == Severity.HIGH for f in findings):

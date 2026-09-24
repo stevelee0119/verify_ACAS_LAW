@@ -82,6 +82,8 @@ def _escape(text: Any) -> str:
         .replace("&", "&amp;")
         .replace("<", "&lt;")
         .replace(">", "&gt;")
+        # 표 칸 안의 줄바꿈을 살린다. 이스케이프 뒤에 넣으므로 문서 내용이 태그가 될 수 없다.
+        .replace("\n", "<br/>")
     )
 
 
@@ -187,7 +189,7 @@ def build_report_pdf(
 
     # --- 3. 법률 인용 검증표 ------------------------------------------------
     story.append(Paragraph(_escape("3. 판례·법령·유권해석·학술자료 검증표"), styles["h1"]))
-    citation_rows = [["문서", "면", "인용", "구분", "검증결과", "근거등급"]]
+    citation_rows = [["문서", "면", "인용", "구분", "종합 / 단계별 결과", "근거등급"]]
     for d in run_result.documents:
         verdict_by_id = {v["citation_id"]: v for v in (d.engine_data.get("legal_verdicts") or [])}
         for citation in d.citations:
@@ -198,12 +200,14 @@ def build_report_pdf(
                     str(citation.get("page") or "-"),
                     (citation.get("raw_text") or ""),
                     str(citation.get("type")),
-                    verdict.get("status", "UNVERIFIED"),
+                    # 종합 상태는 가장 약한 단계를 따른다. 단계별로 무엇이 확인됐는지 함께 싣는다.
+                    verdict.get("status", "UNVERIFIED") + "".join(
+                        f"\n· {c['label']}: {c['meaning']}" for c in verdict.get("components") or []),
                     "A" if verdict.get("official_record") else "U",
                 ]
             )
     if len(citation_rows) > 1:
-        story.append(table(citation_rows, [80, 24, 170, 60, 90, 44]))
+        story.append(table(citation_rows, [70, 22, 130, 52, 160, 34]))
     else:
         story.append(Paragraph("추출된 법률 인용이 없다.", styles["body"]))
 
@@ -244,7 +248,7 @@ def build_report_pdf(
             ])
     if all_hallucination_rows:
         story.append(Spacer(1, 4))
-        story.append(Paragraph(_escape("AI 임의 생성(환각) 및 법률적 주장 타당성 대조표"), styles["h2"]))
+        story.append(Paragraph(_escape("법률 인용 오류·근거 미확인 주장 대조표 (AI 작성 여부 판단과 별개)"), styles["h2"]))
         h_table_rows = [["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"]] + all_hallucination_rows
         story.append(table(h_table_rows, [65, 110, 105, 150, 60]))
 

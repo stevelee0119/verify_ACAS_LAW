@@ -185,6 +185,13 @@ class ClaimType(StrEnum):
     ACADEMIC_CITATION = "ACADEMIC_CITATION"
     CALCULATION = "CALCULATION"
     OPINION = "OPINION"
+    # 당사자가 법적 평가를 주장하는 문장(위법하다·무효이다·취소되어야 한다).
+    # 사실 주장과도, 법령 문언 인용과도, 단순 의견과도 검증 방법이 다르다.
+    LEGAL_ARGUMENT = "LEGAL_ARGUMENT"
+    # 제목·목차·작성 안내·시험 안내처럼 문서 자체를 설명하는 문구. 검증 대상 주장이 아니다.
+    DOCUMENT_META = "DOCUMENT_META"
+    # 문서 안에서 검증기·모델에 명령하려는 문구. 주장이 아니라 공격 탐지 대상이다.
+    ADVERSARIAL_INSTRUCTION = "ADVERSARIAL_INSTRUCTION"
 
 
 class CitationType(StrEnum):
@@ -194,6 +201,8 @@ class CitationType(StrEnum):
     INTERPRETATION = "INTERPRETATION"
     ADMIN_APPEAL = "ADMIN_APPEAL"
     ACADEMIC = "ACADEMIC"
+    # 훈령·예규·고시·지침. 법령과 달리 원칙적으로 대외적 구속력이 없으므로 따로 검증한다.
+    ADMIN_RULE = "ADMIN_RULE"
 
 
 class EntityType(StrEnum):
@@ -410,6 +419,11 @@ class FindingType(StrEnum):
     INTERNAL_CITATION_ERROR = "INTERNAL_CITATION_ERROR"
     QUOTE_MISMATCH = "QUOTE_MISMATCH"
     FACT_UNSUPPORTED = "FACT_UNSUPPORTED"
+    # 증거·첨부자료. 자료가 없다는 것은 '검증되지 않음'이지 허위·위조의 근거가 아니다.
+    EVIDENCE_NOT_PROVIDED = "EVIDENCE_NOT_PROVIDED"          # 문서 스스로 미첨부를 밝힌 자료
+    EVIDENCE_REFERENCE_MISSING = "EVIDENCE_REFERENCE_MISSING"  # 첨부·증거로 적혔으나 입력 파일에 없음
+    HASH_FORMAT_INVALID = "HASH_FORMAT_INVALID"              # 기재 해시가 알고리즘 형식에 맞지 않음
+    HASH_MISMATCH = "HASH_MISMATCH"                          # 입력 파일 바이트의 해시와 다름
     SOURCE_CONFLICT_IGNORED = "SOURCE_CONFLICT_IGNORED"
     CALCULATION_INVARIANT_VIOLATION = "CALCULATION_INVARIANT_VIOLATION"
     LEGAL_REQUIREMENT_OMITTED = "LEGAL_REQUIREMENT_OMITTED"

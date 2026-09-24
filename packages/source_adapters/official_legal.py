@@ -22,6 +22,8 @@ _USED_FIELDS = {
               "항번호", "항내용", "호번호", "호내용", "목번호", "목내용", "부칙내용"],
     "expc": ["법령해석례일련번호", "안건번호", "회신일자", "해석일자",
              "회신기관명", "해석기관명", "질의요지", "회답", "이유"],
+    "admrul": ["행정규칙일련번호", "행정규칙명", "행정규칙종류", "발령일자", "발령번호",
+               "소관부처명", "시행일자", "조문내용"],
     "decc": ["행정심판재결례일련번호", "행정심판례일련번호", "사건번호",
              "처분일자", "의결일자", "재결청", "주문", "청구취지", "이유", "재결요지"],
 }
@@ -88,6 +90,9 @@ class OfficialLegalMixin:
                                        response.message, sources)
             try:
                 container = payload.get(root)
+                if container is None and isinstance(payload, dict):
+                    # 응답 최상위 키의 대소문자 표기가 대상마다 다르다(AdmRulSearch 등).
+                    container = next((v for k, v in payload.items() if k.lower() == root.lower()), None)
                 if not isinstance(container, dict):
                     raise ValueError("Unexpected official list root")
                 count = int(container["totalCnt"])
@@ -174,6 +179,47 @@ class OfficialLegalMixin:
                 response.status, response.message = AdapterStatus.ERROR, str(exc)
         return response
 
+    # -- 행정규칙(훈령·예규·고시·지침) ---------------------------------------
+    # 목록: lawSearch.do?target=admrul, 본문: lawService.do?target=admrul&ID=일련번호.
+    # 응답 필드 이름은 행정규칙명·행정규칙종류·발령번호·소관부처명·시행일자 등이다.
+    # 운영 응답 형식은 실연동 점검으로 확인해야 하며, 형식이 다르면 ERROR(미확인)로 남긴다.
+    def search_admin_rule(self, name):
+        response = self._legal_list(name, "admrul", "AdmRulSearch", "admrul", query=name)
+        if response.ok:
+            response.records = [_admin_rule(row) for row in response.records]
+        return response
+
+    def fetch_admin_rule(self, record):
+        identifier = str(record.get("source_id") or "")
+        name = str(record.get("rule_name") or identifier)
+        if not identifier.isdigit():
+            return self._unavailable(name, AdapterStatus.ERROR, "Missing official administrative rule identifier")
+        response, payload = self._legal_json(name, detail=True, target="admrul", ID=identifier)
+        if not response.ok:
+            return response
+        try:
+            raw = payload.get("AdmRulService") or next(
+                (v for k, v in payload.items() if k.lower() == "admrulservice"), None)
+            if not isinstance(raw, dict):
+                raise ValueError("Unexpected administrative rule detail shape")
+            info = raw.get("행정규칙기본정보") if isinstance(raw.get("행정규칙기본정보"), dict) else raw
+            detail = _admin_rule(info)
+            content = raw.get("조문내용")
+            # 조문내용은 문자열 목록이거나 {"조문내용": …} 객체 목록일 수 있다.
+            lines = [body_text(item.get("조문내용") if isinstance(item, dict) else item)
+                     for item in (content if isinstance(content, list) else [content]) if item]
+            full_text = "\n".join(filter(None, lines))
+            articles, texts = _rule_articles(full_text)
+            if detail["source_id"] and detail["source_id"] != identifier:
+                raise ValueError("Official list/detail identity mismatch")
+            detail.update(full_text=full_text, articles=articles if full_text else None, article_texts=texts,
+                          source_id=identifier)
+            response.records = [detail]
+            response.complete = bool(full_text)
+        except (ValueError, TypeError, AttributeError) as exc:
+            response.status, response.message = AdapterStatus.ERROR, str(exc)
+        return response
+
     def search_interpretation(self, query):
         filters = {"itmno": query.replace("-", "")} if re.fullmatch(r"\d{2}-\d{4}", query) else {"query": query}
         return self._search_decision(query, "expc", **filters)
@@ -239,3 +285,32 @@ def _decision(raw, target, *, detail=False):
         "summary": body_text(raw.get("재결요지")), "raw": raw,
         "applicability_advisory_only": True,
     }
+
+
+def _admin_rule(raw):
+    return {
+        "source_id": str(raw.get("행정규칙일련번호")) if raw.get("행정규칙일련번호") is not None else None,
+        "rule_id": body_text(raw.get("행정규칙ID")) or None,
+        "rule_name": body_text(raw.get("행정규칙명")),
+        "rule_kind": body_text(raw.get("행정규칙종류")),
+        "agency": body_text(raw.get("소관부처명")),
+        "number": re.sub(r"\s+", "", body_text(raw.get("발령번호")) or ""),
+        "issued_date": legal_date(raw.get("발령일자")),
+        "effective_from": legal_date(raw.get("시행일자")),
+        "current_status": body_text(raw.get("현행연혁구분")),
+    }
+
+
+def _rule_articles(full_text):
+    """행정규칙 본문에서 조 번호와 조별 본문을 나눈다. 줄 첫머리의 '제N조'만 조로 본다."""
+    from packages.legal_engine.normalize import canonical_article
+
+    heads = list(re.finditer(r"(?m)^\s*제\s*(\d+)\s*조(?:\s*의\s*(\d+))?", full_text or ""))
+    articles, texts = [], {}
+    for index, head in enumerate(heads):
+        number = f"{head.group(1)}의{head.group(2)}" if head.group(2) else head.group(1)
+        key = canonical_article(number)
+        articles.append(number)
+        end = heads[index + 1].start() if index + 1 < len(heads) else len(full_text)
+        texts[key] = full_text[head.start():end].strip()
+    return articles, texts

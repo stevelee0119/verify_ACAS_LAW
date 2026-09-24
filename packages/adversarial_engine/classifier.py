@@ -15,8 +15,12 @@ from packages.common.enums import AdversarialClass, FindingType, InjectionIntent
 from .patterns import (
     AI_ADDRESSING_RE,
     BENIGN_CONTEXT_RE,
+    DESCRIPTIVE_LABEL_RE,
+    DISCLAIMER_RE,
+    IMPERATIVE_RE,
     INSTRUCTION_PATTERNS,
     INTENT_TO_FINDING,
+    NOMINAL_FOLLOWER_RE,
     QUOTE_WRAPPERS,
 )
 
@@ -66,6 +70,30 @@ def _is_quoted(text: str, start: int, end: int) -> bool:
     return False
 
 
+def _imperative_near(text: str, hit: PatternHit, window: int = 24) -> bool:
+    """지시형 낱말과 같은 절 안에 명령·요청 어미가 있는지 본다."""
+    tail = re.split(r"[.!?。\n/|·]", text[hit.end:hit.end + window], maxsplit=1)[0]
+    return bool(IMPERATIVE_RE.search(hit.matched_text + tail))
+
+
+def _mentions_only(text: str, hits: List[PatternHit]) -> bool:
+    """모든 지시형 낱말이 명령이 아니라 주제로 언급된 것인지 판정한다.
+
+    설명용 표제("테스트 포인트: … 인용 검증 생략 유도"), 명사구("생략 유도",
+    "무시 시도"), 문서 스스로 따르지 않는다고 밝힌 설명은 공격 문구가 아니다.
+    하나라도 명령형으로 쓰였으면 언급이 아니다.
+    """
+    labelled = bool(DESCRIPTIVE_LABEL_RE.search(text))
+    disclaimed = bool(DISCLAIMER_RE.search(text))
+    for hit in hits:
+        if _imperative_near(text, hit):
+            return False
+        nominal = bool(NOMINAL_FOLLOWER_RE.match(text[hit.end:hit.end + 12]))
+        if not (labelled or disclaimed or nominal):
+            return False
+    return True
+
+
 CITATION_CONTEXT_RE = re.compile(
     r"(대법원|헌법재판소|고등법원|지방법원|판결|결정|선고|제\s*\d+\s*조|판시|요지|규정한다|규정하고)"
 )
@@ -101,6 +129,10 @@ def classify(
     encoded = bool(extra_signals.get("encoded"))
     unicode_obfuscated = bool(extra_signals.get("unicode_obfuscated"))
     cross_layer_only = bool(extra_signals.get("cross_layer_only"))
+    imperative = any(_imperative_near(text, h) for h in hits)
+    # 숨김·인코딩·유니코드 은닉·AI 호명이 있으면 '설명'이라는 겉모습을 믿지 않는다.
+    descriptive = (not (is_hidden or encoded or unicode_obfuscated or cross_layer_only or addresses_ai)
+                   and _mentions_only(text, hits))
 
     score = sum(h.weight for h in hits)
     if addresses_ai:
@@ -123,6 +155,8 @@ def classify(
         score -= 0.8
     if citation_context and not is_hidden and not addresses_ai:
         score -= 0.5
+    if descriptive:
+        score = min(score, 0.9)
 
     features = {
         "pattern_hits": len(hits),
@@ -139,6 +173,12 @@ def classify(
         "source_layer": source_layer,
         "block_type": block_type,
         "raw_score": round(score, 3),
+        # 명령형 어미가 있었는지, 지시형 낱말이 주제로만 언급됐는지. 둘 다 근거로 남긴다.
+        "imperative": imperative,
+        "descriptive_mention": descriptive,
+        "directive_target": "AI_OR_VERIFIER" if addresses_ai else "UNSPECIFIED",
+        "matched_patterns": [{"text": h.matched_text, "description": h.description, "intent": str(h.intent),
+                              "span": [h.start, h.end]} for h in hits],
     }
 
     # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다
@@ -148,7 +188,10 @@ def classify(
     )
     features["corroborating_signals"] = corroboration
 
-    if score >= 3.0 and corroboration >= 2:
+    if descriptive:
+        # 지시문을 설명하는 문구. 명령이 아니므로 참고 표시로만 남긴다.
+        label = AdversarialClass.INSTRUCTION_LIKE
+    elif score >= 3.0 and corroboration >= 2:
         label = AdversarialClass.PROMPT_INJECTION_LIKELY
     elif score >= 2.0 and corroboration >= 1:
         label = AdversarialClass.SUSPICIOUS_META_INSTRUCTION
@@ -188,6 +231,8 @@ ESCALATING_INTENTS = {
 
 def severity_for(classification: Classification, *, in_ocr_layer: bool = False) -> Severity:
     base = SEVERITY_BY_CLASS[classification.label]
+    if classification.features.get("descriptive_mention"):
+        return Severity.INFO
     if classification.label == AdversarialClass.PROMPT_INJECTION_LIKELY:
         if in_ocr_layer or any(i in CRITICAL_INTENTS for i in classification.intents):
             return Severity.CRITICAL

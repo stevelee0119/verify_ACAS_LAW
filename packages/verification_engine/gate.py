@@ -127,14 +127,18 @@ class GateDecision:
     review_reasons: List[str] = field(default_factory=list)
     auto_fixable: List[str] = field(default_factory=list)
     lawyer_approval_required: List[str] = field(default_factory=list)
+    citation_groups: List[Dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "release_gate": str(self.gate),
             "hallucination_risk": self.risk_index,
             "risk_index_note": ("작성주체 확률이 아니라 검증위험 지수다. 문체는 "
-                                "계산에 포함하지 않는다(제8.2장)."),
+                                "계산에 포함하지 않는다(제8.2장). AI 작성 가능성 추정치와는 "
+                                "다른 값이며 서로 더하거나 비교하지 않는다. 같은 인용의 같은 유형은 한 번만 센다."),
             "contributions": [c.to_dict() for c in self.contributions],
+            # 같은 인용에서 파생된 finding 묶음(차단 사유·조회 범위·원문 확인 여부)
+            "citation_groups": list(self.citation_groups),
             "hard_block_reasons": list(self.hard_block_reasons),
             "review_reasons": list(self.review_reasons),
             "auto_fixable_findings": list(self.auto_fixable),
@@ -147,12 +151,19 @@ class GateDecision:
 def risk_index(findings: Sequence[Any]) -> (int, List[RiskContribution]):
     """제8.2장 검증위험 지수. 상한은 100이다."""
     buckets: Dict[FindingType, RiskContribution] = {}
+    seen = set()
     for finding in findings:
         if getattr(finding, "advisory_only", False):
             continue
         weight = RISK_WEIGHTS.get(finding.type)
         if weight is None:
             continue
+        # 같은 인용이 기준일별 검토 등으로 여러 번 판정돼도 같은 유형은 한 번만 센다.
+        citation_id = (getattr(finding, "confidence_features", None) or {}).get("citation_id")
+        if citation_id:
+            if (finding.type, citation_id) in seen:
+                continue
+            seen.add((finding.type, citation_id))
         bucket = buckets.get(finding.type)
         if bucket is None:
             bucket = RiskContribution(finding_type=str(finding.type),
@@ -164,6 +175,50 @@ def risk_index(findings: Sequence[Any]) -> (int, List[RiskContribution]):
     contributions = sorted(buckets.values(), key=lambda c: (-c.subtotal, c.finding_type))
     total = min(100, sum(c.subtotal for c in contributions))
     return total, contributions
+
+
+_SEVERITY_RANK = {Severity.INFO: 0, Severity.LOW: 1, Severity.MEDIUM: 2, Severity.HIGH: 3, Severity.CRITICAL: 4}
+
+
+def citation_groups(findings: Sequence[Any]) -> Dict[str, Dict[str, Any]]:
+    """같은 인용에서 나온 finding을 하나의 상위 항목으로 묶는다.
+
+    분류별 finding(예: 조회 범위 내 미발견 + 그 판례에 기댄 법률 주장)은 그대로 두되,
+    화면·합산에서 서로 다른 경고처럼 보이지 않게 대표 항목과 하위 근거로 정리한다.
+    """
+    groups: Dict[str, Dict[str, Any]] = {}
+    for finding in findings:
+        features = getattr(finding, "confidence_features", None) or {}
+        citation_id = features.get("citation_id")
+        if not citation_id:
+            continue
+        group = groups.setdefault(citation_id, {"citation_id": citation_id, "members": [],
+                                                "lookup_scope": None, "searched": [],
+                                                "official_text_checked": False})
+        group["members"].append({"finding_id": finding.finding_id, "type": str(finding.type),
+                                 "severity": str(finding.severity), "title": finding.title})
+        group["lookup_scope"] = group["lookup_scope"] or features.get("absence_scope")
+        group["searched"] = group["searched"] or features.get("searched") or []
+        group["official_text_checked"] |= bool(features.get("official_source_match"))
+        if features.get("number_format_valid") is False:
+            group["number_format"] = "IMPOSSIBLE"
+    for group in groups.values():
+        members = [m for m in group["members"]]
+        primary = max(members, key=lambda m: (_SEVERITY_RANK.get(Severity(m["severity"]), 0),
+                                              m["type"] in {str(t) for t in HARD_BLOCK_TYPES}))
+        group["primary"] = primary
+        group["derived_count"] = len(members)
+        adapters = sorted({s.get("adapter") for s in group["searched"] if s.get("adapter")})
+        scope = {"SEARCHED_SCOPE_ONLY": "조회 범위 내 미발견(부존재 확정 아님)",
+                 "SELECTED_VERSION_FULL_TEXT": "조회한 시행 버전 전문에서 미발견",
+                 "FORMAT_ONLY": "공식 DB 조회 불가 — 번호 형식만으로 판단(성립 불가 형식)",
+                 }.get(group["lookup_scope"] or "", "공식 DB 조회 불가 — 미확인(부존재 판단 아님)")
+        group["reason"] = (f"{primary['type']}: {primary['title']} — 조회 범위: {scope}"
+                           + (f" ({', '.join(adapters)})" if adapters else "")
+                           + f"; 공식 원문 확인: {'예' if group['official_text_checked'] else '아니오'}"
+                           + (f"; 같은 인용에서 파생된 finding {len(members)}건("
+                              + ", ".join(sorted({m['type'] for m in members})) + ")" if len(members) > 1 else ""))
+    return groups
 
 
 def evaluate_gate(findings: Sequence[Any], *,
@@ -179,8 +234,16 @@ def evaluate_gate(findings: Sequence[Any], *,
     total, contributions = risk_index(active)
 
     hard: List[str] = []
+    groups = citation_groups(active)
+    explained = set()
     for finding in active:
-        if finding.type in HARD_BLOCK_TYPES:
+        citation_id = (finding.confidence_features or {}).get("citation_id")
+        if finding.type in HARD_BLOCK_TYPES and citation_id in groups:
+            # 같은 인용에서 파생된 finding은 차단 사유 한 줄로 묶고 하위 근거를 함께 적는다.
+            if citation_id not in explained:
+                explained.add(citation_id)
+                hard.append(groups[citation_id]["reason"])
+        elif finding.type in HARD_BLOCK_TYPES:
             hard.append(f"{finding.type}: {finding.title}")
         elif finding.type in HARD_BLOCK_IF_CRITICAL and finding.severity == Severity.CRITICAL:
             hard.append(f"{finding.type}: {finding.title}")
@@ -221,6 +284,7 @@ def evaluate_gate(findings: Sequence[Any], *,
         gate=gate,
         risk_index=total,
         contributions=contributions,
+        citation_groups=[{k: v for k, v in g.items() if k != "reason"} for g in groups.values()],
         hard_block_reasons=hard,
         review_reasons=review,
         auto_fixable=[f.finding_id for f in active if f.type in AUTO_FIXABLE_TYPES],

@@ -28,8 +28,9 @@ from packages.common.schemas import Citation, EngineResult, Evidence, Finding, S
 from packages.common.textutil import contains_fuzzy, normalize_quote, similarity
 from packages.source_adapters import SourceRegistry
 
-from .normalize import canonical_article, same_case_number
-from .source_review import date_context, verify_decision_source, verify_statute_source
+from .components import citation_components, component_summary, identity_confirmed
+from .normalize import canonical_article, case_number_possible, same_case_number
+from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
 from packages.source_adapters.legal_history import legal_date
 from packages.source_adapters.transport import source_lookup_trace, source_recovery
@@ -74,6 +75,8 @@ class LegalVerifier:
                                               incident_date=incident_date, current_date=current_date)
             elif citation.type in (CitationType.INTERPRETATION, CitationType.ADMIN_APPEAL):
                 verdict = verify_decision_source(self, citation)
+            elif citation.type == CitationType.ADMIN_RULE:
+                verdict = verify_admin_rule_source(self, citation)
             elif citation.type == CitationType.ACADEMIC:
                 verdict = self.verify_academic(citation)
             else:
@@ -129,6 +132,9 @@ class LegalVerifier:
                     verdict.findings = [f for f in verdict.findings if f.type != FindingType.CASE_NOT_FOUND]
                     verdict.findings.append(self._unverified_finding(
                         verdict.citation, verdict.notes[-1], None))
+            # 같은 인용에서 나온 finding을 한 묶음으로 보여 줄 수 있게 인용 식별자를 남긴다.
+            for finding in verdict.findings:
+                finding.confidence_features.setdefault("citation_id", verdict.citation.citation_id)
             result.findings.extend(verdict.findings)
             result.source_records.extend(verdict.source_records)
             if verdict.status in (VerificationStatus.UNVERIFIED, VerificationStatus.PARTIALLY_VERIFIED, VerificationStatus.SKIPPED):
@@ -147,10 +153,18 @@ class LegalVerifier:
                         "scope": "PARTIAL" if verdict.status == VerificationStatus.PARTIALLY_VERIFIED else "UNVERIFIED",
                     }
                 )
+        def components_of(v):
+            return citation_components(str(v.citation.type), v.levels, article_cited=bool(v.citation.article))
+
         result.data["verdicts"] = [
             {
                 "citation_id": v.citation.citation_id,
+                "type": str(v.citation.type),
                 "status": str(v.status),
+                # 법령 존재·조문·버전·본문·시간적 적용·사건 적용을 따로 싣는다.
+                # status 하나는 가장 약한 단계를 따르므로 이것만으로는 무엇이 확인됐는지 알 수 없다.
+                "components": components_of(v),
+                "identity_confirmed": identity_confirmed(str(v.citation.type), components_of(v)),
                 # 명세 제4.1장 어휘로 읽을 수 있는 단일 값. 다단계 판정을
                 # 대체하지 않고 함께 싣는다. 조회 실패(UNVERIFIABLE)와
                 # 원문 미발견(NOT_FOUND)은 끝까지 구분한다.
@@ -165,6 +179,7 @@ class LegalVerifier:
             }
             for v in verdicts
         ]
+        result.data["component_summary"] = component_summary(result.data["verdicts"])
         result.data["citation_count"] = len(citations)
         result.data["verified_count"] = sum(1 for v in verdicts if v.status == VerificationStatus.VERIFIED)
         result.data["unverified_count"] = sum(1 for v in verdicts if v.status == VerificationStatus.UNVERIFIED)
@@ -179,6 +194,10 @@ class LegalVerifier:
             verdict.notes.append("사건번호를 식별하지 못했다")
             return verdict
 
+        # 번호 형식은 조회와 별개로 판정한다. 있을 수 없는 연도·사건부호는 DB 수록 범위와
+        # 무관하게 실재할 수 없고, 형식은 맞지만 조회되지 않은 번호는 '미발견'일 뿐이다.
+        format_valid = case_number_possible(case_number)
+        verdict.levels["number_format"] = "VALID" if format_valid else "IMPOSSIBLE"
         response = self.registry.law.search_case(case_number, court=citation.court)
         if response.source_record:
             verdict.source_records.append(response.source_record)
@@ -187,7 +206,11 @@ class LegalVerifier:
         if response.status != AdapterStatus.READY:
             verdict.levels["level1"] = "UNVERIFIED"
             verdict.notes.append(f"공식 Source 조회 불가({response.status}): {response.message}")
-            verdict.findings.append(self._unverified_finding(citation, response.message, response.source_record))
+            if not format_valid:
+                # 번호 형식이 성립하지 않는다는 판단은 조회 없이도 가능하다. 조회 실패로 묻히지 않게 한다.
+                verdict.findings.append(self._impossible_number_finding(citation, case_number, verdict))
+            else:
+                verdict.findings.append(self._unverified_finding(citation, response.message, response.source_record))
             return verdict
 
         official = self._match_official(citation, response.records)
@@ -211,20 +234,31 @@ class LegalVerifier:
             verdict.status = VerificationStatus.NOT_FOUND
             # 사건번호를 함께 남긴다. 뒤 단계가 제목 문자열에서 되짚지 않아도
             # "확인 못 함"과 "성립할 수 없음"을 구분할 수 있어야 한다.
+            searched = [{"adapter": r.adapter, "query": r.query} for r in verdict.source_records]
             features = {"official_source_absent": True, "deterministic_rule": True, "source_count": 1,
-                        "case_number": case_number}
+                        "case_number": case_number, "number_format_valid": format_valid,
+                        # 조회한 범위에서 찾지 못했다는 뜻이다. 실제 부존재 확정이 아니다.
+                        "absence_scope": "SEARCHED_SCOPE_ONLY", "searched": searched}
+            if format_valid:
+                title = f"조회 범위 내에서 찾지 못한 판례 인용: {citation.raw_text}"
+                reason = ("미공개 판결이거나 DB 수록 범위 밖일 수 있으므로 '존재하지 않는 판례'라고 "
+                          "단정하지 않는다. 원문 확인이 필요하다.")
+            else:
+                title = f"성립할 수 없는 사건번호 형식의 판례 인용: {citation.raw_text}"
+                reason = ("사건번호의 연도 또는 사건부호가 실재할 수 없는 값이어서 DB 수록 범위와 무관하게 "
+                          "그 표기로는 사건이 존재할 수 없다. 오기인지 원문 확인이 필요하다.")
             verdict.findings.append(
                 Finding.create(
                     type=FindingType.CASE_NOT_FOUND,
                     status=VerificationStatus.NOT_FOUND,
                     severity=Severity.HIGH,
                     evidence_grade=EvidenceGrade.B,
-                    title=f"공식 Source에서 확인되지 않는 판례 인용: {citation.raw_text}",
+                    title=title,
                     detail=(
-                        f"사건번호 {case_number}와 일치하는 기록을 공식 Source에서 확인하지 못했다"
-                        "(NOT_FOUND_IN_PRIMARY_SOURCE). 검색 결과에 다른 사건이 포함되어 있더라도 "
-                        "사건번호가 다르면 그 사건에 결부시키지 않는다. 미공개 판결이거나 DB 수록 범위 "
-                        "밖일 수 있으므로 '존재하지 않는 판례'라고 단정하지 않는다. 원문 확인이 필요하다."
+                        f"사건번호 {case_number}와 일치하는 기록을 조회한 공식 Source "
+                        f"({', '.join(sorted({x['adapter'] for x in searched})) or '공식 DB'})에서 찾지 못했다"
+                        "(NOT_FOUND_IN_SEARCHED_SCOPE). 검색 결과에 다른 사건이 포함되어 있더라도 "
+                        "사건번호가 다르면 그 사건에 결부시키지 않는다. " + reason
                     ),
                     confidence=confidence_score(features),
                     confidence_features=features,
@@ -747,6 +781,22 @@ class LegalVerifier:
         return verdict
 
     # -- 공통 -------------------------------------------------------------
+    @staticmethod
+    def _impossible_number_finding(citation: Citation, case_number: str, verdict: "CitationVerdict") -> Finding:
+        features = {"deterministic_rule": True, "case_number": case_number, "number_format_valid": False,
+                    "absence_scope": "FORMAT_ONLY", "official_lookup": "UNAVAILABLE"}
+        return Finding.create(
+            type=FindingType.CASE_NOT_FOUND, status=VerificationStatus.SUSPICIOUS, severity=Severity.HIGH,
+            evidence_grade=EvidenceGrade.B,
+            title=f"성립할 수 없는 사건번호 형식의 판례 인용: {citation.raw_text}",
+            detail=("사건번호의 연도 또는 사건부호가 실재할 수 없는 값이다. 공식 DB 조회는 수행하지 못했으나 "
+                    "번호 형식만으로 그 표기의 사건은 존재할 수 없다. 오기인지 원문 확인이 필요하다."),
+            confidence=confidence_score(features), confidence_features=features,
+            document_id=citation.document_id, block_id=citation.block_id, page=citation.page,
+            span=citation.span, engine=ENGINE_NAME,
+            source_record_ids=[r.source_record_id for r in verdict.source_records], tags=["LEGAL", "CASE"],
+        )
+
     @staticmethod
     def _unverified_finding(citation: Citation, message: str, record: Optional[SourceRecord]) -> Finding:
         features = {"heuristic_only": False, "source_count": 0}

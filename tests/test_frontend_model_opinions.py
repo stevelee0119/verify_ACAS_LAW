@@ -94,7 +94,7 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
                 expect(block).to_be_visible()
                 for reason in reasons:
                     expect(block.get_by_text(reason, exact=True)).to_be_visible()
-            expect(first.locator(".model-opinion", has_text="Gemini")).to_contain_text("AI 임의 전체 작성 유력")
+            expect(first.locator(".model-opinion", has_text="Gemini")).to_contain_text("AI 전체 작성 가능성 높음")
             expect(first.locator(".model-opinion", has_text="OpenAI")).to_contain_text("일부 AI 작성")
             # 모델별 판정에 공급자와 모델명을 함께 적는다.
             expect(first.locator(".model-opinion-head strong")).to_have_text(
