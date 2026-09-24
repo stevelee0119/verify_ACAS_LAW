@@ -402,6 +402,13 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
     for s_start, s_end in _sentences(text):
         inside = [c for c in located if s_start <= c.span[0] < s_end]
         for position, citation in enumerate(inside):
+            if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
+                # 판례를 근거로 서면이 말하는 내용: 같은 문장에서 인용 표시를 뺀 부분(의견 귀속·결론 방향 검사용)
+                sentence = text[s_start:s_end]
+                claim = sentence[:citation.span[0] - s_start] + " " + sentence[citation.span[1] - s_start:]
+                claim = re.sub(r"\(\s*\)|\[\s*\]", " ", claim)
+                citation.attributes["case_claim"] = " ".join(claim.split())[:400]
+                continue
             if citation.type not in _STATUTE_TYPES:
                 continue
             start, end = citation.span

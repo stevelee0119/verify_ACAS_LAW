@@ -31,7 +31,8 @@ from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
 from .citation_format import format_violations
-from .quote_diff import quote_changes
+from .opinion_attribution import attribute_claim, direction_conflict, split_opinions
+from .quote_diff import quote_changes, quote_diff_summary, render_quote_diff
 from .normalize import canonical_article, case_number_possible, same_case_number
 from .source_review import date_context, verify_admin_rule_source, verify_decision_source, verify_statute_source
 from .spec_mapping import spec_source_verdict
@@ -320,6 +321,7 @@ class LegalVerifier:
                 "deterministic_rule": True,
                 "source_count": 1,
                 "mismatched_fields": [m[0] for m in mismatches],
+                "defect_summary": "; ".join(f"{field} 불일치(문서 {doc} / 공식 {off})" for field, doc, off in mismatches),
             }
             verdict.findings.append(
                 Finding.create(
@@ -357,6 +359,10 @@ class LegalVerifier:
         if citation.quoted_text:
             official_text = " ".join(str(official.get(key) or "") for key in ("full_text", "holding", "summary"))
             level3, ratio = self._compare_quote(citation.quoted_text, official_text)
+            # 원문과 0.85 이상 비슷한 구간이 있으면 어절 단위로 무엇이 바뀌었는지 제시한다(전문 확보 시).
+            modified = quote_changes(citation.quoted_text, official_text) if official.get("full_text") else None
+            if modified and level3 == "CONTRADICTED":
+                level3 = "MODIFIED"
             if level3 == "CONTRADICTED" and not official.get("full_text"):
                 level3 = "UNVERIFIED"
                 verdict.notes.append("판례 전문을 확보하지 못해 직접 인용 불일치를 확정하지 않았다")
@@ -408,12 +414,25 @@ class LegalVerifier:
                 )
             elif level3 == "TRUNCATED":
                 verdict.notes.append("인용문이 원문의 일부만 포함한다. 인용 절단 여부는 MM-4 참고신호로 전달된다.")
-            if level3 in ("VERIFIED", "PARTIALLY_VERIFIED", "TRUNCATED") and official.get("full_text"):
-                modified = quote_changes(citation.quoted_text, official_text)
-                if modified:
-                    verdict.levels["level3"] = "CONTRADICTED"
+            if modified:
+                verdict.levels["level3"] = "CONTRADICTED" if modified["meaningful"] else "MODIFIED"
+                if modified["meaningful"]:
                     verdict.status = VerificationStatus.CONTRADICTED
-                    verdict.findings.append(self._modified_quote_finding(citation, modified, official_text, verdict))
+                elif verdict.status == VerificationStatus.VERIFIED:
+                    verdict.status = VerificationStatus.PARTIALLY_VERIFIED
+                verdict.findings.append(self._modified_quote_finding(citation, modified, official_text, verdict))
+                # AI 교차검토가 인용문이 아니라 원문 기준으로 평가하도록 차이를 판정에 싣는다.
+                verdict.review["quote_diff"] = render_quote_diff(modified)
+                verdict.review["quote_meaningful_change"] = modified["meaningful"]
+
+        # 다수의견·반대의견 귀속과 판시사항 결론 방향(v3 D3)
+        opinion = self._opinion_findings(citation, official)
+        if opinion:
+            verdict.findings.extend(opinion)
+            verdict.levels["opinion"] = "CONTRADICTED" if any(
+                f.status == VerificationStatus.CONTRADICTED for f in opinion) else "SUSPICIOUS"
+            if verdict.levels["opinion"] == "CONTRADICTED":
+                verdict.status = VerificationStatus.CONTRADICTED
 
         # Level 4·5는 LLM 담당. 공식 Source가 있어야만 의미 비교를 수행한다.
         verdict.levels.setdefault("level4", "PENDING_LLM")
@@ -810,25 +829,104 @@ class LegalVerifier:
 
     # -- 공통 -------------------------------------------------------------
     @staticmethod
+    def _opinion_findings(citation: Citation, official: Dict[str, Any]) -> List[Finding]:
+        """다수의견·반대의견 귀속과 판시사항 결론 방향(v3 D3)."""
+        full_text, summary = str(official.get("full_text") or ""), str(official.get("summary") or "")
+        holding = " ".join(str(official.get(k) or "") for k in ("holding", "summary"))
+        claim = citation.attributes.get("case_claim") or ""
+        out: List[Finding] = []
+
+        def make(label, status, grade, title, detail, excerpt, extra):
+            features = {"deterministic_rule": True, "official_source_match": True, "verdict_label": label,
+                        "rule_id": f"OPINION.{label}", **extra}
+            return Finding.create(
+                type=FindingType.CASE_HOLDING_DISTORTION, status=status,
+                severity=Severity.HIGH if grade == EvidenceGrade.A else Severity.MEDIUM, evidence_grade=grade,
+                title=f"{title}: {citation.raw_text}", detail=detail, confidence=0.85 if grade == EvidenceGrade.A else 0.7,
+                confidence_features=features, document_id=citation.document_id, block_id=citation.block_id,
+                page=citation.page, span=citation.span, engine=ENGINE_NAME, tags=["LEGAL", "CASE", "OPINION", label],
+                evidence=[Evidence.create(description="서면의 판결 요약·인용", grade=EvidenceGrade.B,
+                                          document_id=citation.document_id, excerpt=(citation.quoted_text or claim)[:300],
+                                          supports=False),
+                          Evidence.create(description="공식 판결 원문의 해당 부분", grade=EvidenceGrade.A,
+                                          excerpt=excerpt[:300])])
+
+        if full_text or summary:
+            parts = [split_opinions(full_text), split_opinions(summary)]
+            dissents = [d for p in parts for d in p["DISSENT"]]
+            majority = " ".join(p["MAJORITY"] for p in parts)
+            quote_key = re.sub(r"[\s\"'“”‘’.,·]", "", citation.quoted_text or "")
+            in_dissent = bool(quote_key) and any(quote_key in re.sub(r"[\s\"'“”‘’.,·]", "", d) for d in dissents)
+            in_majority = bool(quote_key) and quote_key in re.sub(r"[\s\"'“”‘’.,·]", "", majority)
+            if in_dissent and not in_majority:
+                out.append(make("MISATTRIBUTED_OPINION", VerificationStatus.CONTRADICTED, EvidenceGrade.A,
+                                "반대의견의 문장을 판결의 판시로 인용",
+                                "직접 인용한 문장은 이 판결의 반대의견에만 있고 다수의견에는 없다. 반대의견은 판결의 "
+                                "판시(법원의 판단)가 아니다.", next(d for d in dissents), {"closest": "DISSENT",
+                                "defect_summary": "반대의견 문장을 판시로 인용"}))
+            elif dissents:
+                result = attribute_claim(citation.quoted_text or claim, full_text, summary)
+                if result["verdict"] == "MISATTRIBUTED_OPINION":
+                    strong = result["scores"]["DISSENT"] >= 0.7 and result["scores"]["MAJORITY"] < 0.6
+                    out.append(make(
+                        "MISATTRIBUTED_OPINION", VerificationStatus.CONTRADICTED,
+                        EvidenceGrade.A if strong else EvidenceGrade.B, "반대의견 취지를 판결의 판시처럼 요약",
+                        f"서면의 요약은 반대의견과 가장 가깝다(겹침: 반대의견 {result['scores']['DISSENT']:.2f}, "
+                        f"다수의견 {result['scores']['MAJORITY']:.2f}). 판결의 판시는 다수의견이다.",
+                        result["dissent_excerpt"], {"closest": "DISSENT", "attribution_scores": result["scores"],
+                                                    "defect_summary": "반대의견 취지를 판시로 요약"}))
+        if claim and holding.strip() and not any(f.confidence_features["verdict_label"] == "MISATTRIBUTED_OPINION"
+                                                 for f in out):
+            conflict = direction_conflict(claim, holding)
+            if conflict:
+                principled = conflict["principled"]
+                out.append(make(
+                    "HOLDING_DIRECTION_REVERSED",
+                    VerificationStatus.SUSPICIOUS if principled else VerificationStatus.CONTRADICTED,
+                    EvidenceGrade.C if principled else EvidenceGrade.B,
+                    f"판시사항과 결론 방향이 반대(판결: {'원칙적 ' if principled else ''}{conflict['holding_direction']}, "
+                    f"서면: {conflict['claim_direction']})",
+                    f"판시사항의 쟁점 '{conflict['issue']}'에 대해 판결은 "
+                    f"{'원칙적 ' if principled else ''}{conflict['holding_direction']}으로 판단했는데, 서면은 반대로 단정한다."
+                    + (" '원칙적' 판단이므로 예외 사정은 사람이 확인한다." if principled else ""),
+                    conflict["issue"], {"direction": conflict,
+                                        "defect_summary": f"판시 방향 반대(판결 {conflict['holding_direction']})"}))
+        return out
+
+    @staticmethod
     def _modified_quote_finding(citation: Citation, modified: Dict[str, Any], official_text: str,
                                 verdict: "CitationVerdict") -> Finding:
-        described = "; ".join(f"{c['label']} '{c['text']}' {c['side']}" for c in modified["changes"])
+        shown = render_quote_diff(modified)
+        meaningful = modified["meaningful"]
+        kinds = sorted({c["label"] for c in modified["changes"]})
         features = {"deterministic_rule": True, "official_source_match": True, "quote_mismatch": True,
                     "verdict_label": "MODIFIED_QUOTE", "quote_similarity": modified["similarity"],
-                    "quote_changes": modified["changes"], "rule_id": "QUOTE.MEANINGFUL_CHANGE"}
+                    "quote_changes": modified["changes"], "quote_ops": modified["ops"],
+                    "meaningful_change": meaningful, "defect_summary": quote_diff_summary(modified),
+                    "rule_id": "QUOTE.MEANINGFUL_CHANGE" if meaningful else "QUOTE.WORDING_CHANGE"}
+        if meaningful:
+            title = f"직접 인용문 변형(MODIFIED_QUOTE, {'·'.join(kinds)} 변경): {citation.raw_text} — {shown}"
+            detail = (f"인용문과 공식 원문의 유사도는 {modified['similarity']:.2f}로 높지만, 판시의 의미를 바꾸는 "
+                      f"어절이 달라졌다. {shown}. 따옴표로 표시한 직접 인용은 원문과 같아야 한다.")
+        else:
+            title = f"직접 인용문 표현 차이(MODIFIED_QUOTE): {citation.raw_text} — {shown}"
+            detail = (f"인용문과 공식 원문의 유사도는 {modified['similarity']:.2f}이다. {shown}. 의미를 바꾸는 "
+                      "말(정도·부정·양태·조문 한정어·수량)은 바뀌지 않았으나 직접 인용은 원문과 같아야 한다.")
         return Finding.create(
-            type=FindingType.CASE_QUOTE_MISMATCH, status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH,
-            evidence_grade=EvidenceGrade.A,
-            title=f"직접 인용문이 원문과 다르게 바뀌었다(MODIFIED_QUOTE): {citation.raw_text} — {described}",
-            detail=(f"인용문과 공식 원문의 유사도는 {modified['similarity']:.2f}로 높지만, 판시의 의미를 바꾸는 "
-                    f"말이 달라졌다({described}). 따옴표로 표시한 직접 인용은 원문과 같아야 한다."),
-            confidence=0.9, confidence_features=features,
+            type=FindingType.CASE_QUOTE_MISMATCH,
+            status=VerificationStatus.CONTRADICTED if meaningful else VerificationStatus.SUSPICIOUS,
+            severity=Severity.HIGH if meaningful else Severity.MEDIUM,
+            evidence_grade=EvidenceGrade.A if meaningful else EvidenceGrade.B,
+            title=title, detail=detail,
+            confidence=0.9 if meaningful else 0.7, confidence_features=features,
             document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
             engine=ENGINE_NAME, source_record_ids=[r.source_record_id for r in verdict.source_records],
             tags=["LEGAL", "CASE", "QUOTE", "MODIFIED_QUOTE"],
             evidence=[Evidence.create(description="문서의 인용문", grade=EvidenceGrade.A,
                                       document_id=citation.document_id, block_id=citation.block_id,
                                       excerpt=citation.quoted_text[:300], supports=False),
+                      Evidence.create(description="원문과 나란히 본 차이(어절 단위)", grade=EvidenceGrade.A,
+                                      excerpt=shown[:300]),
                       Evidence.create(description="공식 원문(판시사항·판결요지·전문)", grade=EvidenceGrade.A,
                                       excerpt=official_text[:300])],
         )

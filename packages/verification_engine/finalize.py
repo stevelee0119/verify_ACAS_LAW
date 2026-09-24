@@ -62,6 +62,13 @@ def consolidate_citation_findings(findings: List[Finding]) -> List[Finding]:
                     final.tags.append(tag)
             dropped.add(other.finding_id)
         final.confidence_features["final_verdict"] = True
+        # 한 인용에 서로 다른 결함이 여럿이면(예: 선고일 불일치 + 인용문 변형) 최종 판정 제목에 모두 드러낸다.
+        defects = [m.confidence_features.get("defect_summary") for m in members
+                   if (m.confidence_features or {}).get("defect_summary")]
+        defects = list(dict.fromkeys(defects))
+        if len(defects) > 1:
+            final.confidence_features["defects"] = defects
+            final.title = f"{final.title} — 결함 {len(defects)}건: {'; '.join(defects)}"
     return [f for f in findings if f.finding_id not in dropped]
 
 

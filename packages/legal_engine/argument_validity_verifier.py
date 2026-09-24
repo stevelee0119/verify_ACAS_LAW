@@ -175,6 +175,7 @@ async def verify_argument_validity(
                 # 조회에서 사건번호를 찾지 못한 것과, 사건은 있으나 인용 내용이
                 # 다른 것은 실무상 대응이 정반대다. 끝까지 구분한다.
                 "basis": _basis_for(citation, status),
+                "quote_diff": (verdict.get("review") or {}).get("quote_diff"),
                 "context": citation.context or doc.full_text[max(0, citation.span[0] - 200) : min(len(doc.full_text), citation.span[1] + 200)] if citation.span else "",
             })
 
@@ -207,13 +208,15 @@ async def verify_argument_validity(
             authority_exists=False,
             basis=item.get("basis", "UNCONFIRMED"),
             ai_generation_basis=(
-                "공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
-                "인용 오류·발췌 왜곡·임의 생성 가능성을 모두 열어 두고 원문과 대조가 필요함."
+                ("공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
+                 + (f"원문과 다른 어절: {item['quote_diff']}. " if item.get("quote_diff") else "")
+                 + "인용 오류·발췌 왜곡·임의 생성 가능성을 모두 열어 두고 원문과 대조가 필요함.")
                 if mismatch else
                 "국가법령정보 공식 DB 검색 결과 같은 사건번호의 기록을 확인하지 못함. "
                 "공식 DB는 모든 재판을 수록하지 않으므로(미공개·수록범위 밖) 이 사실만으로 "
                 "부존재나 임의 생성으로 단정하지 않음."),
-            validity_verdict="인용 내용 불일치 (원문 대조 필요)" if mismatch else "공식 DB 미확인 (원문 확인 필요)",
+            validity_verdict=("인용문 변형 (원문과 어절 차이)" if mismatch and item.get("quote_diff")
+                              else "인용 내용 불일치 (원문 대조 필요)") if mismatch else "공식 DB 미확인 (원문 확인 필요)",
             legal_reasoning=(
                 "사건 자체는 확인되나 인용 내용이 공식 기록과 달라, 그 취지를 전제로 한 주장은 "
                 "원문 대조 전까지 근거가 확정되지 않습니다."
@@ -319,7 +322,8 @@ _OPINION_SYSTEM = (
     "대한민국 법률 서면 검토를 보조한다. 각 항목의 인용 판례에는 국가법령정보 공식 판례 DB 조회 결과가 "
     "'확인 상태'로 적혀 있다. 확인 상태는 사실로 받아들이되 그 이상을 추정하지 마라. 특히 공식 DB에서 "
     "찾지 못했다는 사실만으로 판례가 존재하지 않는다거나 AI가 지어냈다고 단정하지 마라. 새로운 판례·조문·"
-    "사건번호를 지어내지 마라.\n"
+    "사건번호를 지어내지 마라. '원문 대조' 항목이 있으면 문서의 인용문이 공식 원문과 어절 단위로 어떻게 "
+    "다른지 보여 준다. 이때는 문서의 인용문이 아니라 공식 원문의 표현을 기준으로 주장의 타당성을 평가하라.\n"
     "각 항목에 대해 (1) 작성자가 그 인용으로 뒷받침하려는 법률적 주장, (2) 그 인용을 빼고 볼 때 그 주장이 "
     "대한민국 실정법과 확립된 법리에 비추어 타당한지, (3) 확인하거나 다툴 때 검토할 사항을 적어라.\n"
     "validity_verdict는 '타당', '일부 타당', '부당', '판단 불가' 중 하나로 적어라.\n"
@@ -346,6 +350,7 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
         "cited_case": hide(item["citation"].raw_text),
         "확인 상태": _BASIS_LABEL.get(item.get("basis", "UNCONFIRMED"), _BASIS_LABEL["UNCONFIRMED"]),
         "surrounding_context_and_claim": hide(item["context"][:1000]),
+        **({"원문 대조(어절 단위, 원문 기준)": hide(item["quote_diff"])} if item.get("quote_diff") else {}),
     } for index, item in enumerate(unverified_cases, 1)]
     # 한 번에 모두 물으면 인용이 많을 때 응답이 출력 한도에서 잘린다. 한국어 JSON은
     # 공급자마다 토큰 사용량이 달라, 잘리는 모델만 교차검증에서 빠졌다.
