@@ -404,3 +404,117 @@ def test_report_rendering_does_not_hold_a_database_writer_lock(report_case, monk
         assert writes and observed == ["json", "manifest", "json", "manifest"]
     finally:
         event.remove(engine, "before_cursor_execute", track)
+
+
+def _synchronous_jobs(case, monkeypatch):
+    """생성 스레드 대신 요청 안에서 바로 실행해 진행 기록을 순서대로 모은다."""
+    engine = case.session.get_bind()
+    monkeypatch.setattr(reports, "_job_session", lambda: Session(engine, expire_on_commit=False))
+    monkeypatch.setattr(reports, "_launch_job", reports._run_report_job)
+    seen = []
+    original = reports._job_update
+
+    def record(job_id, **values):
+        seen.append(dict(values))
+        original(job_id, **values)
+    monkeypatch.setattr(reports, "_job_update", record)
+    return seen
+
+
+def test_report_job_shows_progress_until_the_report_exists(report_case, monkeypatch):
+    case = report_case
+    seen = _synchronous_jobs(case, monkeypatch)
+    started = case.client.post("/api/projects/p1/report-jobs", json={"formats": ["pdf", "docx", "json"]})
+    assert started.status_code == 202, started.text
+    job = started.json()
+    assert job["state"] == "QUEUED" and job["percent"] == 0
+    polled = case.client.get(f"/api/projects/p1/report-jobs/{job['job_id']}").json()
+    assert polled["state"] == "COMPLETED" and polled["percent"] == 100 and polled["error"] is None
+    reports_list = case.client.get("/api/projects/p1/reports").json()
+    report = next(item for item in reports_list if item["report_id"] == polled["report_id"])
+    assert set(report["artifacts"]) == {"pdf", "docx", "json"}
+    assert not any("error" in artifact for artifact in report["artifacts"].values())
+    # 단계마다 이름과 진행률을 남기고, 진행률은 되돌아가지 않는다.
+    stages = [item["stage"] for item in seen if item.get("stage")]
+    assert any("PDF 작성 중 (1/3)" == stage for stage in stages)
+    assert any("Word 작성 중 (2/3)" == stage for stage in stages)
+    percents = [item["percent"] for item in seen if "percent" in item]
+    assert percents == sorted(percents) and percents[-1] == 100
+    assert case.client.get("/api/projects/p1/report-jobs?active=true").json() == []
+    assert case.client.get(f"/api/projects/p1/report-jobs/{job['job_id']}",
+                           headers={"x-test-outsider": "yes"}).status_code == 404
+
+
+def test_report_job_rejects_bad_requests_before_queueing(report_case, monkeypatch):
+    case = report_case
+    _synchronous_jobs(case, monkeypatch)
+    assert case.client.post("/api/projects/p1/report-jobs",
+                            json={"audience": "SHAREABLE", "formats": ["highlight"]}).status_code == 422
+    assert case.client.post("/api/projects/p1/report-jobs", json={"formats": ["pptx"]}).status_code == 422
+    assert case.client.get("/api/projects/p1/report-jobs").json() == []
+
+
+def test_report_job_failure_is_explained(report_case, monkeypatch):
+    case = report_case
+    _synchronous_jobs(case, monkeypatch)
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("renderer crashed")
+    monkeypatch.setattr(reports, "_build_draft", broken)
+    job = case.client.post("/api/projects/p1/report-jobs", json={"formats": ["pdf"]}).json()
+    polled = case.client.get(f"/api/projects/p1/report-jobs/{job['job_id']}").json()
+    assert polled["state"] == "FAILED" and polled["report_id"] is None
+    assert "보고서를 만들지 못했습니다 (RuntimeError)" in polled["error"]
+
+
+def test_interrupted_report_job_is_not_left_running(report_case):
+    from datetime import timedelta
+    from apps.api.workspace import ReportJob
+    case = report_case
+    case.session.add(ReportJob(id="rjb_stale", project_id="p1", run_id="r1", created_by="local-owner",
+                               request={"formats": ["pdf"]}, state="RUNNING", stage="PDF 작성 중 (1/1)", percent=40,
+                               created_at=datetime.utcnow() - timedelta(minutes=10),
+                               updated_at=datetime.utcnow() - timedelta(minutes=5)))
+    case.session.commit()
+    polled = case.client.get("/api/projects/p1/report-jobs/rjb_stale").json()
+    assert polled["state"] == "FAILED" and "다시 시작" in polled["error"]
+
+
+def test_technical_appendix_lists_each_claim_text_once():
+    from packages.report_engine.snapshot import CLAIM_REFERENCE_NOTE, compact_claim_rows
+    claim = {"claim_id": "c1", "text": "긴 주장 전문"}
+    result = {"documents": [{"claims": [claim]}],
+              "review_snapshot": {"matrix": {"claims": [{"claim": dict(claim), "review_status": "PARTIAL"}]},
+                                  "preflight": {"incomplete_claim_reviews": [{"claim": dict(claim)}],
+                                                "unresolved_claims": [{"claim": dict(claim)}]}}}
+    compact_claim_rows(result)
+    assert json.dumps(result, ensure_ascii=False).count("긴 주장 전문") == 1
+    assert result["review_snapshot"]["matrix"]["claims"][0] == {
+        "claim": {"claim_id": "c1", "note": CLAIM_REFERENCE_NOTE}, "review_status": "PARTIAL"}
+
+
+def test_word_and_pdf_appendix_scale_with_many_entries(report_case, monkeypatch):
+    """부록 항목이 많아도 Word 문단은 구역 설정 앞에 순서대로, PDF 줄은 페이지 폭 안에 들어간다."""
+    import time
+    from docx import Document as WordDocument
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from packages.report_engine import docx_report
+    from packages.report_engine.pdf_report import _appendix_blocks, _styles
+    style = _styles()["small"]
+    entries = [(f"documents[0].claims[{i}].text", "가나다 " * 40 + "https://official.example/full/source")
+               for i in range(3000)]
+    started = time.perf_counter()
+    blocks = _appendix_blocks(entries, style, 470)
+    assert time.perf_counter() - started < 10
+    lines = [line for block in blocks for line in block.lines]
+    assert max(stringWidth(line, style.fontName, style.fontSize) for line in lines) <= 470
+    assert "".join(line.strip() for line in lines).count("https://official.example/full/source") == 3000
+
+    monkeypatch.setattr(docx_report, "technical_payload", lambda _: {"items": [f"항목 {i}" for i in range(5000)]})
+    started = time.perf_counter()
+    draft = create(report_case, ["docx"])
+    assert time.perf_counter() - started < 20
+    word = WordDocument(io.BytesIO(download(report_case, draft, "docx")))
+    texts = [p.text for p in word.paragraphs]
+    assert texts.index("항목 0") < texts.index("항목 4999")
+    assert word.element.body[-1].tag.endswith("sectPr")

@@ -388,12 +388,58 @@ def build_report_pdf(
     story.append(table(rows, [140, 95, 85, 170]))
     story.append(Paragraph("15. 전체 기술 기록", styles["h1"]))
     story.append(Paragraph(_escape("실행 당시 기록된 검사 상태와 사용 불가 단계, 전체 출처, 모델 실행, 증거 및 검토 스냅샷을 수록합니다. 기록 부재는 검사 성공을 뜻하지 않습니다. 공유용에서 제외한 내용은 공유 정책에 표시합니다."), styles["body"]))
-    for path, value in json_lines(technical_payload(run_result)):
-        story.append(Paragraph(_escape(path), styles["small"]))
-        for offset in range(0, max(1, len(value)), 1600):
-            story.append(Paragraph(_escape(value[offset:offset + 1600]), styles["small"]))
+    story.extend(_appendix_blocks(json_lines(technical_payload(run_result)), styles["small"],
+                                  document.width - 12))
     document.build(story)
     return buffer.getvalue()
+
+
+_APPENDIX_LINES_PER_BLOCK = 80
+
+
+def _appendix_blocks(entries, style, width: float) -> List[Any]:
+    """기술 부록을 미리 줄바꿈한 고정 블록으로 만든다.
+
+    부록 항목마다 Paragraph를 두면 ReportLab이 낱말마다 폭을 재어 줄을 나눈다. 큰 사건의
+    부록은 항목이 수만 개라 PDF 한 부에 1분 가까이 걸렸다. 글자 폭을 글자마다 한 번만
+    재어 두고 줄을 직접 나눈 뒤, 여러 줄을 한 블록(Preformatted)으로 싣는다. 내용과 순서는
+    같고, 줄이 페이지 폭을 넘지 않는다.
+    """
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+    from reportlab.platypus import Preformatted
+
+    font, size = style.fontName, style.fontSize
+    widths: Dict[str, float] = {}
+
+    indent = "  "
+    indent_width = stringWidth(indent, font, size)
+
+    def wrap(text: str, limit: float) -> List[str]:
+        lines: List[str] = []
+        for raw in text.split("\n"):
+            start, used = 0, 0.0
+            for index, char in enumerate(raw):
+                char_width = widths.get(char)
+                if char_width is None:
+                    char_width = widths[char] = stringWidth(char, font, size)
+                if used + char_width > limit and index > start:
+                    lines.append(raw[start:index])
+                    start, used = index, 0.0
+                used += char_width
+            lines.append(raw[start:])
+        return lines
+
+    blocks: List[Any] = []
+    pending: List[str] = []
+    for path, value in entries:
+        pending.extend(wrap(_sanitize(xml_text(path)), width))
+        pending.extend(indent + line for line in wrap(_sanitize(xml_text(value)), width - indent_width))
+        if len(pending) >= _APPENDIX_LINES_PER_BLOCK:
+            blocks.append(Preformatted("\n".join(pending), style))
+            pending = []
+    if pending:
+        blocks.append(Preformatted("\n".join(pending), style))
+    return blocks
 
 
 def _section_table(table_fn, findings: List[Any], types: set, styles) -> Any:

@@ -23,10 +23,10 @@ def test_upgrade_existing_review_database(tmp_path, monkeypatch):
     schema = inspect(engine)
     assert {"case_issues", "finding_workflows", "review_drafts", "review_revisions", "claim_assessments",
             "identity_accounts", "identity_api_tokens", "identity_browser_sessions", "identity_external",
-            "durable_jobs", "job_attempts", "budget_accounts", "budget_reservations"} <= set(schema.get_table_names())
+            "durable_jobs", "job_attempts", "budget_accounts", "budget_reservations", "report_jobs"} <= set(schema.get_table_names())
     assert "submitted_on" in {c["name"] for c in schema.get_columns("documents")}
     assert "base_revision" in {c["name"] for c in schema.get_columns("review_drafts")}
     with engine.connect() as connection:
         assert connection.execute(text("SELECT filename FROM documents WHERE id='existing-document'")).scalar_one() == "original.pdf"
-        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "b83f21"
+        assert connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == "c94d32"
     engine.dispose()

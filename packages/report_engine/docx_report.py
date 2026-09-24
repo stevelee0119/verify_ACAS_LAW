@@ -14,6 +14,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     from docx.oxml import OxmlElement
     from docx.oxml.ns import qn
     from docx.shared import Inches, Pt, RGBColor
+    from docx.text.paragraph import Paragraph
 
     doc = Document()
     section = doc.sections[0]
@@ -35,8 +36,26 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     doc.core_properties.author = str(metadata.get("created_by") or "ACASia_LAW")
     doc.core_properties.comments = "Editable copy; retained artifacts and snapshot hashes identify the generated version."
 
+    body = doc.element.body
+    # doc.add_paragraph는 매번 본문 전체에서 구역 설정(sectPr)을 찾아 그 앞에 넣는다.
+    # 기술 부록처럼 문단이 수만 개면 비용이 제곱으로 늘어 Word 한 부에 4분이 걸렸다.
+    # 구역 설정은 문서 끝의 같은 요소이므로 한 번만 찾아 두고 그 앞에 직접 넣는다.
+    # 결과 XML은 같고 시간은 문단 수에 비례한다.
+    section_properties = body.sectPr
+
     def paragraph(value, style=None):
-        return doc.add_paragraph(xml_text(value), style)
+        element = OxmlElement("w:p")
+        if section_properties is not None:
+            section_properties.addprevious(element)
+        else:
+            body.append(element)
+        item = Paragraph(element, doc._body)
+        text = xml_text(value)
+        if text:
+            item.add_run(text)
+        if style is not None:
+            item.style = style
+        return item
 
     def table(headers, rows, widths):
         t = doc.add_table(rows=1, cols=len(headers))

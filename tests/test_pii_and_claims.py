@@ -277,3 +277,14 @@ def test_case_numbers_are_still_excluded_from_masking():
 
     text = "2023가합12345 사건과 2018다275017 판결, 상법 제341조 제1항을 인용한다."
     assert [m for m in detect(text) if m.kind in ("ACCOUNT", "RRN", "PHONE")] == []
+
+
+def test_address_detection_stays_linear_on_long_korean_runs():
+    """띄어쓰기 없는 긴 한글 구간에서 주소 패턴이 되짚기로 수십 초 멈추지 않는다."""
+    import time
+    from packages.pii_engine.detector import ADDRESS_RE, detect
+    started = time.perf_counter()
+    assert not list(ADDRESS_RE.finditer("가" * 64000))
+    assert time.perf_counter() - started < 1.0
+    found = [m.kind for m in detect("주소: 서울특별시 서초구 서초대로 219, 경기도 수원시 장안구 정자동 123-4번지")]
+    assert found.count("ADDRESS") == 2

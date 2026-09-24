@@ -1046,6 +1046,17 @@ table {
 .report-formats {display:flex; flex-wrap:wrap; gap:12px; border:1px solid #cbd4d1; padding:14px; border-radius:4px;}
 .report-formats label {display:flex; flex-direction:row; align-items:center; gap:8px;}
 .report-formats input[type=checkbox] {width:18px; height:18px;}
+/* 보고서 생성 진행률: 단계 이름, 백분율, 경과 시간을 함께 보인다. */
+.report-progress {border:1px solid var(--line); border-radius:4px; padding:12px 14px; background:#f6f9f8;}
+.report-progress-head {display:flex; justify-content:space-between; align-items:baseline; gap:12px; font-size:15px;}
+.report-progress-value {font-variant-numeric:tabular-nums; font-weight:700; color:var(--green);}
+.report-progress-track {height:12px; margin:8px 0 6px; border-radius:6px; background:#dce3e2; overflow:hidden;}
+.report-progress-fill {height:100%; width:0; background:var(--green); transition:width .4s ease;}
+.report-progress[data-state="FAILED"] .report-progress-fill {background:#a33a2c;}
+.report-progress[data-state="FAILED"] .report-progress-value {color:#a33a2c;}
+.report-progress-time {margin:0; font-size:13px;}
+.report-job-row .report-progress {margin-top:8px;}
+@media (prefers-reduced-motion: reduce) {.report-progress-fill {transition:none;}}
 .job-controls {justify-content:flex-start; gap:8px; flex-wrap:wrap;}
 .workflow-dialog input[type=checkbox] {width:18px; height:18px;}
 .workflow-dialog label:has(input[type=checkbox]) {display:flex; flex-direction:row; align-items:center; gap:8px;}

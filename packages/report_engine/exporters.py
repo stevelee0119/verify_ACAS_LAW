@@ -9,7 +9,7 @@ from typing import Any, Dict, List
 
 from packages.common.enums import MM4_ADVISORY_TYPES, spec_code
 from packages.common.terminology import TERMINOLOGY_VERSION, terminology_catalog, EDITABLE_COPY_NOTICE
-from .snapshot import json_lines, xml_text
+from .snapshot import compact_claim_rows, json_lines, xml_text
 
 FINDING_COLUMNS = [
     "finding_id", "type", "spec_code", "status", "severity", "evidence_grade", "confidence",
@@ -231,7 +231,8 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
         append(issues, [row.get(c) for c in columns])
     technical = workbook.create_sheet("기술부록")
     append(technical, ["JSON path", "part", "value"])
-    for path, value in json_lines(json.loads(to_json(run_result, reveal_sealed=reveal_sealed))):
+    appendix = json.loads(json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed), ensure_ascii=False, default=str))
+    for path, value in json_lines(compact_claim_rows(appendix)):
         for part, offset in enumerate(range(0, max(1, len(value)), 29000), start=1):
             append(technical, [path, part, value[offset:offset + 29000]])
 

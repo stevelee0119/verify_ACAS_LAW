@@ -1338,6 +1338,7 @@ async function loadReports() {
     reportWorkbench.decorate(report, row);
     $("reportList").append(row);
   }
+  await reportWorkbench.showActive(id, $("reportList"));
 }
 async function createReport() {
   return reportWorkbench.create();

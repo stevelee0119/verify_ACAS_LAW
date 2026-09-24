@@ -14,7 +14,8 @@ from sqlalchemy.engine import Engine
 ROOT = Path(__file__).resolve().parents[1]
 MERGED_HEAD = "f3a91c"
 TRASH_HEAD = "a72e10"
-CURRENT_HEAD = "b83f21"
+SESSION_HEAD = "b83f21"
+CURRENT_HEAD = "c94d32"
 CREATED = datetime(2026, 9, 1, 10, 0, 0)
 EXPIRES = datetime(2027, 9, 1, 10, 0, 0)
 PASSWORD_HASH = "scrypt$32768$8$1$" + "01" * 16 + "$" + "02" * 32
@@ -149,7 +150,8 @@ def test_published_revision_parents_are_unchanged(migration_db):
     config, _ = migration_db
     graph = ScriptDirectory.from_config(config)
     assert graph.get_heads() == [CURRENT_HEAD]
-    assert graph.get_revision(CURRENT_HEAD).down_revision == TRASH_HEAD
+    assert graph.get_revision(CURRENT_HEAD).down_revision == SESSION_HEAD
+    assert graph.get_revision(SESSION_HEAD).down_revision == TRASH_HEAD
     assert graph.get_revision(TRASH_HEAD).down_revision == MERGED_HEAD
     for revision, parent in {
         "98e07fd05c9e": None,

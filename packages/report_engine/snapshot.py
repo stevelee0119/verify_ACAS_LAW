@@ -99,6 +99,11 @@ class FrozenFinding:
         return copy.deepcopy(self._data) if reveal_sealed else remove_sealed(self._data)
 
 
+_DOCUMENT_DEFAULTS = {"filename": "", "quarantined": False, "rag_indexable": False, "warnings": [],
+                      "authorship": {}, "masked_preview": "", "citations": [], "claims": [], "entities": [],
+                      "events": [], "engine_data": {}, "source_records": [], "pages": []}
+
+
 def view_from_snapshot(snapshot, snapshot_hash):
     engine = copy.deepcopy(snapshot["engine_result"])
     view = SimpleNamespace(**engine)
@@ -106,7 +111,9 @@ def view_from_snapshot(snapshot, snapshot_hash):
     view.finished_at = datetime.fromisoformat(engine["finished_at"]) if engine.get("finished_at") else None
     view.documents = []
     for item in engine.get("documents", []):
-        doc = SimpleNamespace(**item)
+        # 필드가 추가되기 전에 저장된 검증 결과에는 일부 키가 없다. 없는 값 때문에
+        # 형식마다 AttributeError로 산출물이 빠지지 않도록 빈 값으로 채운다.
+        doc = SimpleNamespace(**(_DOCUMENT_DEFAULTS | item))
         doc.normalized = SimpleNamespace(sha256=item.get("sha256"), parser_name=item.get("parser"))
         doc.findings = [FrozenFinding(f) for f in item.get("findings", [])]
         view.documents.append(doc)
@@ -120,14 +127,39 @@ def view_from_snapshot(snapshot, snapshot_hash):
     return view
 
 
+CLAIM_REFERENCE_NOTE = "주장 전문은 documents[].claims에 수록"
+
+
+def compact_claim_rows(result):
+    """부록에서 같은 주장 전문이 네 번 반복되지 않게 참조로 바꾼다.
+
+    주장 전문은 documents[].claims에 이미 있다. 검토표(matrix.claims)와 사전 점검의 두
+    목록(incomplete_claim_reviews, unresolved_claims)이 같은 전문을 다시 실어, 큰 사건에서는
+    부록의 60%가 중복이었고 PDF·Word·Excel 생성 시간이 그만큼 늘었다. 주장 식별자와
+    문서 식별자, 검토 상태는 그대로 두므로 어느 주장인지는 잃지 않는다. 고정본(스냅샷)과
+    JSON 내보내기는 바꾸지 않는다.
+    """
+    review = result.get("review_snapshot") or {}
+    rows = [(review.get("matrix") or {}).get("claims") or [],
+            (review.get("preflight") or {}).get("incomplete_claim_reviews") or [],
+            (review.get("preflight") or {}).get("unresolved_claims") or []]
+    for group in rows:
+        for row in group:
+            claim = row.get("claim") if isinstance(row, dict) else None
+            if isinstance(claim, dict):
+                row["claim"] = {"claim_id": claim.get("claim_id"), "note": CLAIM_REFERENCE_NOTE}
+    return result
+
+
 def technical_payload(run_result):
     """One complete JSON representation used by PDF, Word and spreadsheet appendices."""
-    from .exporters import to_json
-    result = json.loads(to_json(run_result))
+    from .exporters import to_payload
+    # 날짜·열거형을 JSON과 같은 문자열로 맞추되, 들여쓰기 없이 한 번만 직렬화한다.
+    result = json.loads(json.dumps(to_payload(run_result), ensure_ascii=False, default=str))
     # The static glossary is versioned separately; retain every execution/review field.
     result.pop("terminology", None)
     result.get("review_snapshot", {}).pop("terminology", None)
-    return result
+    return compact_claim_rows(result)
 
 
 def json_lines(value, prefix=""):

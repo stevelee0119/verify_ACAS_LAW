@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import json
 import copy
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+import logging
+import threading
+from collections import OrderedDict
+from datetime import datetime, timedelta
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from sqlalchemy import select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from packages.common.enums import AuditEventType
@@ -26,16 +30,18 @@ from ..db import (
     ReportRow,
     VerificationRun,
     get_db,
+    get_session_factory,
     new_uuid,
 )
 from ..schemas import ReportRequest, ReportFinalizeRequest
 from ..services import make_audit
-from ..identity import current_principal, require_project
-from ..workspace import ReportReview, ReviewRevision, CaseProfile, as_dict
+from ..identity import _principal, current_principal, require_project
+from ..workspace import ReportJob, ReportReview, ReviewRevision, CaseProfile, as_dict
 from .workspace import matrix_data, workflow_value
 from .audit import get_manifest as project_manifest
 
 router = APIRouter(tags=["reports"])
+logger = logging.getLogger(__name__)
 
 MEDIA_TYPES = {
     "pdf": "application/pdf",
@@ -177,9 +183,7 @@ def _load_run_view(session: Session, run: VerificationRun, reveal_sealed: bool) 
     return _RunView(run, findings, documents)
 
 
-@router.post("/projects/{project_id}/reports", status_code=201)
-def create_report(project_id: str, payload: ReportRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
-    project = require_project(session, project_id, "MEMBER")
+def _resolve_run(session: Session, project_id: str, payload: ReportRequest) -> VerificationRun:
     run = (
         session.get(VerificationRun, payload.run_id)
         if payload.run_id
@@ -201,7 +205,19 @@ def create_report(project_id: str, payload: ReportRequest, session: Session = De
         raise HTTPException(403, "보호된 내용은 개별 열람 승인 후에만 확인할 수 있습니다")
     if payload.audience == "SHAREABLE" and "highlight" in payload.formats:
         raise HTTPException(422, "원본 내용을 포함하는 highlight 형식은 공유용 보고서에서 제외하세요")
+    unknown = [fmt for fmt in payload.formats if fmt not in MEDIA_TYPES]
+    if unknown:
+        raise HTTPException(422, f"지원하지 않는 보고서 형식입니다: {', '.join(unknown)}")
+    return run
 
+
+def _no_progress(stage: str, percent: float) -> None:
+    return None
+
+
+def _build_draft(session: Session, project: Project, run: VerificationRun, payload: ReportRequest,
+                 actor: str, progress: Callable[[str, float], None] = _no_progress):
+    progress("검증 결과를 불러오는 중", 5)
     view = _load_run_view(session, run, False)
     engine = remove_sealed(json.loads(to_json(view)))
     # Store the draft's engine evidence once. Finalization never reloads engine output.
@@ -209,26 +225,163 @@ def create_report(project_id: str, payload: ReportRequest, session: Session = De
         for key in ("documents", "project_findings"):
             if key in run.result_json:
                 engine[key] = remove_sealed(copy.deepcopy(run.result_json[key]))
+    progress("개인정보·미확인 항목을 점검하는 중", 15)
     audit = make_audit(session)
-    manifest = project_manifest(project_id, session=session)
+    manifest = project_manifest(project.id, session=session)
     manifest["input_snapshot"] = run.input_snapshot or {}
     report = ReportRow(id=new_uuid("rpt_"), created_at=datetime.utcnow(),
-                       project_id=project_id, run_id=run.id, formats=payload.formats, include_sealed=False)
+                       project_id=project.id, run_id=run.id, formats=payload.formats, include_sealed=False)
     metadata = {"report_id": report.id, "source_report_id": None, "state": "DRAFT",
-                "audience": payload.audience, "created_by": current_principal().user_id,
+                "audience": payload.audience, "created_by": actor,
                 "created_at": report.created_at.isoformat(), "finalized_by": None, "finalized_at": None,
                 "note": "", "source_run_id": run.id, "source_run_hash": canonical_hash(engine)}
     snapshot = _snapshot(session, project, run, engine, metadata, manifest)
+    progress("고정본을 만드는 중", 30)
     review = _save_review(session, report, snapshot)
-    _generate_artifacts(session, report, review, project, audit, strict=False)
+    _generate_artifacts(session, report, review, project, audit, strict=False, progress=progress)
     session.commit()
     audit.record(
         AuditEventType.REPORT_GENERATED,
         {"report_id": report.id, "run_id": run.id, "formats": payload.formats,
          "include_sealed": False, "state": "DRAFT", "snapshot_hash": review.snapshot_hash},
-        actor=current_principal().user_id, project_id=project_id,
+        actor=actor, project_id=project.id,
     )
+    return report, review
+
+
+@router.post("/projects/{project_id}/reports", status_code=201)
+def create_report(project_id: str, payload: ReportRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
+    project = require_project(session, project_id, "MEMBER")
+    run = _resolve_run(session, project_id, payload)
+    report, review = _build_draft(session, project, run, payload, current_principal().user_id)
     return _report_response(report, review)
+
+
+# ---------------------------------------------------------------------------
+# 진행률을 보이는 보고서 생성
+#
+# 큰 검증 결과로 보고서를 만들면 요청 하나가 수십 초씩 붙잡혀 있었고, 그동안 연결이
+# 끊기면 화면은 '응답이 끊겼습니다'만 보였다. 생성은 뒤에서 하고 화면은 짧은 조회로
+# 단계와 진행률을 받는다. 한 번에 하나만 만들어 검증 작업·헬스체크와 CPU를 나눈다.
+# ---------------------------------------------------------------------------
+_REPORT_SLOT = threading.Semaphore(1)
+# 진행 중인 작업은 이 주기로 살아 있음을 기록한다. 기록이 멈춘 작업은 서버 재시작
+# 등으로 중단된 것이므로, 화면이 끝없이 기다리지 않게 실패로 알린다.
+_JOB_HEARTBEAT_SECONDS = 15
+_JOB_STALE_AFTER = timedelta(seconds=120)
+_ACTIVE_JOB_STATES = ("QUEUED", "RUNNING")
+
+
+def _job_session() -> Session:
+    return get_session_factory()()
+
+
+def _launch_job(job_id: str, principal: Any) -> None:
+    threading.Thread(target=_run_report_job, args=(job_id, principal), name=f"report-{job_id}", daemon=True).start()
+
+
+def _job_update(job_id: str, **values) -> None:
+    values["updated_at"] = datetime.utcnow()
+    with _job_session() as session:
+        session.execute(sa_update(ReportJob).where(ReportJob.id == job_id,
+                                                  ReportJob.state.in_(_ACTIVE_JOB_STATES)).values(**values))
+        session.commit()
+
+
+def _job_error(exc: BaseException) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        message = detail if isinstance(detail, str) else (detail or {}).get("message", "")
+        return message or f"보고서를 만들지 못했습니다 (HTTP {exc.status_code})"
+    return f"보고서를 만들지 못했습니다 ({type(exc).__name__}). 다시 시도하고, 반복되면 관리자에게 알리세요."
+
+
+def _run_report_job(job_id: str, principal: Any) -> None:
+    token = _principal.set(principal)
+    stop = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(_JOB_HEARTBEAT_SECONDS):
+            try:
+                _job_update(job_id)
+            except Exception:  # 진행 기록 실패가 생성 자체를 멈추지 않게 한다
+                logger.warning("report job heartbeat failed", exc_info=True)
+
+    beat = threading.Thread(target=heartbeat, name=f"report-heartbeat-{job_id}", daemon=True)
+    beat.start()
+    try:
+        if not _REPORT_SLOT.acquire(blocking=False):
+            _job_update(job_id, stage="앞서 요청한 보고서 생성을 기다리는 중", percent=0)
+            _REPORT_SLOT.acquire()
+        try:
+            _job_update(job_id, state="RUNNING", stage="보고서 생성을 시작하는 중", percent=1)
+            with _job_session() as session:
+                job = session.get(ReportJob, job_id)
+                project = session.get(Project, job.project_id)
+                payload = ReportRequest(**job.request)
+                run = _resolve_run(session, job.project_id, payload)
+                report, _ = _build_draft(session, project, run, payload, job.created_by,
+                                         progress=lambda stage, percent: _job_update(
+                                             job_id, stage=stage, percent=int(percent)))
+            _job_update(job_id, state="COMPLETED", stage="완료", percent=100, report_id=report.id,
+                        finished_at=datetime.utcnow())
+        finally:
+            _REPORT_SLOT.release()
+    except Exception as exc:
+        logger.exception("report job %s failed", job_id)
+        _job_update(job_id, state="FAILED", error=_job_error(exc), finished_at=datetime.utcnow())
+    finally:
+        stop.set()
+        _principal.reset(token)
+
+
+def _job_response(session: Session, job: ReportJob) -> Dict[str, Any]:
+    if job.state in _ACTIVE_JOB_STATES and job.updated_at and datetime.utcnow() - job.updated_at > _JOB_STALE_AFTER:
+        job.state, job.finished_at = "FAILED", datetime.utcnow()
+        job.error = "서버가 다시 시작되어 보고서 생성이 중단됐습니다. 다시 생성하세요."
+        session.commit()
+    elapsed_end = job.finished_at or datetime.utcnow()
+    return {"job_id": job.id, "project_id": job.project_id, "run_id": job.run_id, "state": job.state,
+            "stage": job.stage, "percent": job.percent or 0, "report_id": job.report_id, "error": job.error,
+            "formats": (job.request or {}).get("formats", []),
+            "created_at": job.created_at.isoformat() if job.created_at else None,
+            "elapsed_seconds": round((elapsed_end - job.created_at).total_seconds(), 1) if job.created_at else None}
+
+
+@router.post("/projects/{project_id}/report-jobs", status_code=202)
+def start_report_job(project_id: str, payload: ReportRequest, session: Session = Depends(get_db)) -> Dict[str, Any]:
+    require_project(session, project_id, "MEMBER")
+    run = _resolve_run(session, project_id, payload)  # 입력 오류는 기다리지 않고 바로 알린다
+    principal = current_principal()
+    job = ReportJob(project_id=project_id, run_id=run.id, created_by=principal.user_id,
+                    request={**payload.model_dump(), "run_id": run.id}, state="QUEUED",
+                    stage="보고서 생성을 기다리는 중", percent=0)
+    session.add(job)
+    session.commit()
+    response = _job_response(session, job)
+    _launch_job(job.id, principal)
+    return response
+
+
+@router.get("/projects/{project_id}/report-jobs")
+def list_report_jobs(project_id: str, active: bool = False, session: Session = Depends(get_db)):
+    require_project(session, project_id)
+    query = select(ReportJob).where(ReportJob.project_id == project_id)
+    if active:
+        query = query.where(ReportJob.state.in_(_ACTIVE_JOB_STATES))
+    rows = session.scalars(query.order_by(ReportJob.created_at.desc()).limit(20)
+                           .execution_options(populate_existing=True)).all()
+    return [_job_response(session, row) for row in rows]
+
+
+@router.get("/projects/{project_id}/report-jobs/{job_id}")
+def get_report_job(project_id: str, job_id: str, session: Session = Depends(get_db)):
+    require_project(session, project_id)
+    # 진행률은 다른 연결(생성 스레드)이 바꾼다. 이 세션이 기억한 값이 아니라 DB 값을 읽는다.
+    job = session.get(ReportJob, job_id, populate_existing=True)
+    if job is None or job.project_id != project_id:
+        raise HTTPException(404, "보고서 생성 작업을 찾을 수 없습니다")
+    return _job_response(session, job)
 
 
 @router.get("/projects/{project_id}/reports")
@@ -265,6 +418,30 @@ def _human_review(session, project, run, engine=None):
                 ReviewRevision.project_id == project.id).order_by(ReviewRevision.id))]}
 
 
+# 초안 생성·확정 전 점검·확정 때마다 같은 고정 결과를 다시 훑었다. 내용이 같으면
+# 결과도 같으므로 내용 해시로 기억한다. 종류와 건수만 두어 메모리를 거의 쓰지 않는다.
+_PII_CACHE: "OrderedDict[str, tuple]" = OrderedDict()
+_PII_CACHE_SIZE = 64
+_PII_CACHE_LOCK = threading.Lock()
+
+
+def _personal_data(doc):
+    from packages.pii_engine import detect
+    text = json.dumps(doc, ensure_ascii=False, default=str)
+    key = sha256_bytes(text.encode("utf-8"))
+    with _PII_CACHE_LOCK:
+        if key in _PII_CACHE:
+            _PII_CACHE.move_to_end(key)
+            return _PII_CACHE[key]
+    matches = detect(text)
+    value = (sorted({m.kind for m in matches}), len(matches))
+    with _PII_CACHE_LOCK:
+        _PII_CACHE[key] = value
+        while len(_PII_CACHE) > _PII_CACHE_SIZE:
+            _PII_CACHE.popitem(last=False)
+    return value
+
+
 def _preflight(project, engine, human):
     findings = [f for d in engine.get("documents", []) for f in d.get("findings", [])]
     findings += engine.get("project_findings", [])
@@ -283,13 +460,11 @@ def _preflight(project, engine, human):
     concerns = [{"finding_id": f.get("finding_id"), "type": f.get("type"), "title": f.get("title"),
                  "has_sealed_content": bool(f.get("has_sealed_content"))}
                 for f in findings if f.get("has_sealed_content") or f.get("type") in sensitive_types]
-    from packages.pii_engine import detect
     for doc in engine.get("documents", []):
-        matches = detect(json.dumps(doc, ensure_ascii=False, default=str))
-        if matches:
+        kinds, count = _personal_data(doc)
+        if count:
             concerns.append({"type": "PERSONAL_DATA", "document_id": doc.get("document_id"),
-                             "title": "탐지된 개인정보", "kinds": sorted({m.kind for m in matches}),
-                             "count": len(matches)})
+                             "title": "탐지된 개인정보", "kinds": kinds, "count": count})
     if any(item.get("note") for item in human["workflow"]) or human.get("review_history"):
         concerns.append({"type": "INTERNAL_REVIEW", "title": "내부 검토 메모와 이력이 포함되어 있습니다"})
     expected = engine.get("input_snapshot", {}).get("scope_revision")
@@ -435,7 +610,13 @@ def finalize_report(report_id: str, payload: ReportFinalizeRequest, session: Ses
     return _report_response(final, review)
 
 
-def _generate_artifacts(session, report, review, project, audit, *, strict):
+# 형식별 상대 작업량. 진행률이 PDF·Word에서 오래 멈춰 보이지 않도록 나눈다.
+_FORMAT_WEIGHTS = {"pdf": 4, "docx": 4, "highlight": 4, "xlsx": 2, "json": 0.5, "csv": 0.3, "manifest": 0.2}
+_FORMAT_NAMES = {"pdf": "PDF", "docx": "Word", "highlight": "원문 표시 PDF", "xlsx": "Excel", "json": "검증 상세(JSON)",
+                 "csv": "CSV", "manifest": "무결성 기록"}
+
+
+def _generate_artifacts(session, report, review, project, audit, *, strict, progress=_no_progress):
     snapshot = _checked_snapshot(review)
     # The private review snapshot remains complete; exports receive a documented projection.
     if review.audience == "SHAREABLE":
@@ -446,7 +627,11 @@ def _generate_artifacts(session, report, review, project, audit, *, strict):
     manifest = {**snapshot["manifest"], "report": view.report_metadata,
                 "input_snapshot": view.input_snapshot, "terminology": terminology_catalog()}
     rendered, artifacts = {}, {}
-    for fmt in report.formats:
+    total = sum(_FORMAT_WEIGHTS.get(fmt, 1) for fmt in report.formats) or 1
+    done = 0.0
+    for index, fmt in enumerate(report.formats, start=1):
+        progress(f"{_FORMAT_NAMES.get(fmt, fmt)} 작성 중 ({index}/{len(report.formats)})", 35 + 60 * done / total)
+        done += _FORMAT_WEIGHTS.get(fmt, 1)
         try:
             data = _render(fmt, view, project, manifest, audit, session, False)
             if data is None:
@@ -458,6 +643,7 @@ def _generate_artifacts(session, report, review, project, audit, *, strict):
                 raise HTTPException(409, {"message": "산출물 생성 실패로 확정되지 않았습니다", "format": fmt,
                                           "error": type(exc).__name__}) from exc
             artifacts[fmt] = {"error": f"{type(exc).__name__}: 산출물을 생성하지 못했습니다"}
+    progress("보고서 파일을 저장하는 중", 96)
     storage = get_storage()
     artifact_rows = []
     try:

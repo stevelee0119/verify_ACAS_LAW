@@ -108,6 +108,25 @@ class ReportReview(Base):
     snapshot_hash = Column(String(64), nullable=False)
 
 
+class ReportJob(Base):
+    """보고서 생성 진행 기록. 요청 하나가 오래 붙잡혀 연결이 끊기지 않도록
+    생성은 뒤에서 하고, 화면은 이 행의 단계·진행률을 짧게 조회한다."""
+    __tablename__ = "report_jobs"
+    id = Column(String(40), primary_key=True, default=lambda: new_uuid("rjb_"))
+    project_id = Column(String(40), ForeignKey("projects.id"), nullable=False, index=True)
+    run_id = Column(String(40), nullable=False)
+    created_by = Column(String(80), nullable=False)
+    request = Column(JSONType, default=dict)
+    state = Column(String(20), default="QUEUED", index=True)
+    stage = Column(String(200), default="")
+    percent = Column(Integer, default=0)
+    report_id = Column(String(40))
+    error = Column(Text)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow)
+    finished_at = Column(DateTime)
+
+
 def as_dict(row):
     if row is None:
         return {}
