@@ -254,15 +254,15 @@ def build_report_pdf(
             all_hallucination_rows.append([
                 d.filename + " " + str(row.get("location", "")),
                 str(row.get("claim_text", ""))[:120] + "\n(" + str(row.get("cited_authority", "")) + ")",
-                str(row.get("ai_generation_basis", ""))[:120],
-                str(row.get("legal_reasoning", ""))[:140] + "\n[대응] " + str(row.get("recommended_counteraction", ""))[:100],
-                str(row.get("validity_verdict", "")),
+                "[평가] " + str(row.get("validity_verdict", "") or "확인 필요") + "\n"
+                + str(row.get("ai_generation_basis", ""))[:120],
+                str(row.get("legal_reasoning", ""))[:240] + "\n[대응] " + str(row.get("recommended_counteraction", ""))[:140],
             ])
     if all_hallucination_rows:
         story.append(Spacer(1, 4))
         story.append(Paragraph(_escape("법률 인용 오류·근거 미확인 주장 대조표 (AI 작성 여부 판단과 별개)"), styles["h2"]))
-        h_table_rows = [["위치", "문서 주장 / 인용", "AI 생성 근거", "법리적 검토 및 반박 근거", "평가"]] + all_hallucination_rows
-        story.append(table(h_table_rows, [65, 110, 105, 150, 60]))
+        h_table_rows = [["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"]]
+        story.append(table(h_table_rows + all_hallucination_rows, [60, 105, 110, 215]))
 
     # --- 6. 문서 포렌식·전자서명 --------------------------------------------
     story.append(PageBreak())

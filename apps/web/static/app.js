@@ -1170,20 +1170,23 @@ function renderAIVerification() {
       node("strong", r.cited_authority || "인용 판례"),
       node("p", r.claim_text || "", "claim-text")
     );
-    const tdBasis = node("td", r.ai_generation_basis || "공식 소스 미존재");
+    // 주장 평가는 짧은 배지라 인용 오류·미확인 근거 칸 머리에 함께 싣고, 남는 폭은 법리 검토 칸에 준다.
+    const tdBasis = node("td");
+    let verdictCls = "badge HIGH";
+    if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
+      verdictCls = "badge CRITICAL";
+    }
+    tdBasis.append(
+      node("span", r.validity_verdict || "확인 필요", `${verdictCls} validity-verdict`),
+      node("p", r.ai_generation_basis || "공식 소스 미존재", "basis-text")
+    );
     const tdReason = node("td");
     tdReason.append(
       node("p", r.legal_reasoning || "", "legal-reasoning"),
       node("div", `대응 방안: ${r.recommended_counteraction || ""}`, "counteraction-box")
     );
-    const tdVerdict = node("td");
-    let verdictCls = "badge HIGH";
-    if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
-      verdictCls = "badge CRITICAL";
-    }
-    tdVerdict.append(node("span", r.validity_verdict || "확인 필요", verdictCls));
 
-    tr.append(tdLoc, tdClaim, tdBasis, tdReason, tdVerdict);
+    tr.append(tdLoc, tdClaim, tdBasis, tdReason);
     container.append(tr);
   }
 }

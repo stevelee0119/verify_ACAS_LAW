@@ -569,3 +569,27 @@ def test_summary_verdict_table_has_a_document_column_grouped_by_document(report_
     rows = [[c.text for c in r.cells] for r in table.rows[1:]]
     assert rows and all(r[0] for r in rows)
     assert report_case.document.filename in {r[0] for r in rows}
+
+
+def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_case):
+    """주장 평가는 인용 오류·미확인 근거 칸에 함께 싣고, 법리 검토 칸을 가장 넓게 둔다(Word·PDF)."""
+    from docx import Document as WordDocument
+    case = report_case
+    result = dict(case.run.result_json)
+    result["documents"] = [{**result["documents"][0], "ai_hallucination_table": [{
+        "location": "3쪽", "claim_text": "처분은 위법하다", "cited_authority": "대법원 2099. 1. 1. 선고 2099두1 판결",
+        "ai_generation_basis": "공식 DB에서 확인되지 않음", "legal_reasoning": "법리 검토 본문",
+        "recommended_counteraction": "원문 제출 요구", "validity_verdict": "근거 결여"}]}]
+    case.run.result_json = result
+    case.session.commit()
+    report = create(case, ["docx", "pdf"])
+    word = WordDocument(io.BytesIO(download(case, report, "docx")))
+    [table] = [t for t in word.tables if t.rows[0].cells[-1].text == "법리적 타당성 검토 및 반박 근거"]
+    header = [c.text for c in table.rows[0].cells]
+    assert header == ["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"]
+    basis = table.rows[1].cells[2].text
+    assert "[평가] 근거 결여" in basis and "공식 DB에서 확인되지 않음" in basis
+    widths = [c.width for c in table.rows[0].cells]
+    assert widths[3] == max(widths)
+    text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, report, "pdf"))).pages)
+    assert "[평가] 근거 결여" in text and "주장 평가" in text

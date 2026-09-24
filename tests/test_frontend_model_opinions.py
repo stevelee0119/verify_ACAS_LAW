@@ -118,6 +118,14 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
             expect(cards.get_by_text("허위 판례(할루시네이션) 발견")).to_have_count(0)
             expect(page.locator("#hallucinationSummary")).to_contain_text("총 2건입니다(성립할 수 없는 사건번호 1건, 공식 DB 미확인 1건)")
             expect(page.locator("#aiVerificationRows tr")).to_have_count(2)
+            # 주장 평가는 인용 오류·미확인 근거 칸에 함께 싣고 표는 네 칸이다(법리 검토 칸이 가장 넓다).
+            expect(page.locator(".ai-table thead th")).to_have_count(4)
+            expect(page.locator("#aiVerificationRows tr").first.locator("td")).to_have_count(4)
+            basis = page.locator("#aiVerificationRows tr").first.locator("td").nth(2)
+            expect(basis.locator(".validity-verdict")).to_have_text("근거 결여")
+            expect(basis).to_contain_text("b")
+            widths = page.locator(".ai-table thead th").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
+            assert widths[3] == max(widths), widths
             if width > 900:
                 # 넓은 화면: AI 진단 카드가 가로 전체를 쓰고 모델 블록이 나란히 놓인다.
                 tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
