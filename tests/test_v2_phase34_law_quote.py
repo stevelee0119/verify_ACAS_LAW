@@ -68,3 +68,11 @@ def test_numbers_are_compared_within_the_clause_of_the_same_subject():
     assert compare_claim_to_provision("보수의 3분의 1을 감액", body, subject="정직")["status"] == "CONTRADICTED"
     assert compare_claim_to_provision("보수의 3분의 2를 감액", body, subject="정직")["status"] == "VERIFIED"
     assert compare_claim_to_provision("보수의 3분의 1을 감액", body, subject="감봉")["status"] == "VERIFIED"
+
+
+def test_constitution_short_name_resolves_to_official_title():
+    # 국가법령정보센터의 공식 제명은 '대한민국헌법'이다(https://www.law.go.kr/법령/대한민국헌법).
+    # '헌법'으로 정확 일치 검색하면 목록에 없어 NOT_FOUND_LAW로 잘못 판정되던 실연동 결과(TC-04)의 재현.
+    from packages.legal_engine.normalize import canonical_law_name
+    assert canonical_law_name("헌법") == "대한민국헌법"
+    assert canonical_law_name("대한민국 헌법") == "대한민국헌법"

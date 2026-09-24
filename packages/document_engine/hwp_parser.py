@@ -11,7 +11,7 @@ import re
 import struct
 import zlib
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from packages.common.schemas import Block, NormalizedDocument, Page, new_id
 
@@ -132,7 +132,7 @@ class HwpParser(DocumentParser):
             doc.parse_warnings.append("HWP CFB 시그니처가 아니다. 형식 확인 필요.")
         texts: List[str] = []
         try:
-            texts = _extract_hwp_text(raw)
+            texts = _extract_hwp_text(raw, doc.parse_warnings)
         except Exception as exc:
             doc.parse_warnings.append(f"HWP native parse 실패: {exc}")
 
@@ -210,7 +210,7 @@ def _section_text(data: bytes) -> List[str]:
     return texts
 
 
-def _extract_hwp_text(raw: bytes) -> List[str]:
+def _extract_hwp_text(raw: bytes, notes: Optional[List[str]] = None) -> List[str]:
     """Read CFB streams and raw DEFLATE records per the Hancom HWP 5.0 spec.
 
     https://tech.hancom.com/python-hwp-parsing-2/
@@ -240,8 +240,12 @@ def _extract_hwp_text(raw: bytes) -> List[str]:
             if flags & 1:
                 decoder = zlib.decompressobj(-15)
                 data = decoder.decompress(data, MAX_HWP_SECTION_BYTES + 1)
-                if len(data) > MAX_HWP_SECTION_BYTES or not decoder.eof or decoder.unused_data:
-                    raise ParserError("HWP 압축 본문 한도 초과 또는 손상")
+                if len(data) > MAX_HWP_SECTION_BYTES or not decoder.eof:
+                    raise ParserError(f"HWP 압축 본문 한도 초과 또는 손상({section[1]}: 스트림 완결={decoder.eof}, "
+                                      f"해제 {len(data)}바이트)")
+                # 완결된 DEFLATE 스트림 뒤의 바이트는 본문이 아니다(작성기 채움 바이트). 읽지 않고 알린다.
+                if decoder.unused_data and notes is not None:
+                    notes.append(f"HWP {section[1]} 압축 스트림 뒤 {len(decoder.unused_data)}바이트는 본문으로 읽지 않았다")
             body_size += len(data)
             if body_size > MAX_HWP_BODY_BYTES:
                 raise ParserError("HWP 전체 본문 크기 한도 초과")

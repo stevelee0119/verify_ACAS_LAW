@@ -44,6 +44,7 @@ def raw_get(adapter, url, params):
 
 def download_text(url):
     """별표 파일(HWP·PDF 등)을 받아 저장소 파서로 글자를 뽑는다."""
+    import base64
     import hashlib
     import tempfile
 
@@ -68,7 +69,10 @@ def download_text(url):
     tables = [t.get("cells") for t in doc.structure.get("tables") or []]
     return {"status": response.status_code, "filename": filename, "content_type": response.headers.get("content-type"),
             "size": len(response.content), "text": text[:60000], "tables": json.dumps(tables, ensure_ascii=False)[:60000],
-            "warnings": doc.parse_warnings[:5]}
+            "warnings": doc.parse_warnings[:5], "sha256": hashlib.sha256(response.content).hexdigest(),
+            # 본문을 못 읽은 공개 별표는 원본을 로그에 남겨 파서 결함을 오프라인에서 재현할 수 있게 한다.
+            **({"raw_base64": base64.b64encode(response.content).decode()}
+               if not text and len(response.content) <= 64 * 1024 else {})}
 
 
 def main() -> int:

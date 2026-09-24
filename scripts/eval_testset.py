@@ -122,6 +122,7 @@ def score(result: Dict[str, Any], testset: Path, *, db_available: bool) -> Dict[
     total_credit = total_items = 0
     trap_fp = a_grade_fp = 0
     fp_details: List[str] = []
+    unmatched: List[str] = []  # 정답지 어느 항목과도 맞지 않는 결함 주장 finding(오탐 여부는 사람이 확인)
     for doc, meta in gt["documents"].items():
         items = meta["items"]
         groups_list = spec[doc]
@@ -143,6 +144,9 @@ def score(result: Dict[str, Any], testset: Path, *, db_available: bool) -> Dict[
                 tp += 1
             else:
                 fp += 1
+                if target < 0:
+                    unmatched.append(f"{doc} [{finding.get('status')}/{finding.get('evidence_grade')}] "
+                                     f"{finding.get('type')}: {(finding.get('title') or '')[:160]}")
                 if target >= 0:
                     trap_fp += 1
                     if str(finding.get("evidence_grade")) == "A":
@@ -213,6 +217,7 @@ def score(result: Dict[str, Any], testset: Path, *, db_available: bool) -> Dict[
     overall = max(0.0, 100 * recall - 2 * trap_fp - 3 * a_grade_fp)
     return {"overall": round(overall, 1), "weighted_recall": round(recall, 3), "defect_items": int(total_items),
             "fp_trap_false_positives": trap_fp, "a_grade_false_positives": a_grade_fp, "fp_details": fp_details,
+            "unmatched_defect_findings": unmatched,
             "per_document": per_doc,
             "per_type": {k: {"recall": round(v[0] / v[1], 3), "items": v[1]} for k, v in sorted(per_type.items())},
             "duplicate_citation_verdicts": duplicate_groups, "findings_without_document_id": missing_document_id,
@@ -235,6 +240,8 @@ def render(report: Dict[str, Any], testset: Path) -> str:
     lines += ["", "## 유형별 재현율", "", "| 유형 | 재현율 | 항목 |", "|---|---|---|"]
     lines += [f"| {k} | {v['recall']} | {v['items']} |" for k, v in report["per_type"].items()]
     lines += ["", "## 오탐", ""] + [f"- {d}" for d in report["fp_details"] or ["없음"]]
+    lines += ["", "## 정답지 밖 결함 주장 finding(정밀도 분모, 오탐 여부는 사람 확인)", ""] + \
+        [f"- {d}" for d in report.get("unmatched_defect_findings") or ["없음"]]
     lines += ["", "## 항목별", "", "| 문서 | 유형 | 위치 | 대상 | 점수 | 방식 | 근거 |", "|---|---|---|---|---|---|---|"]
     for row in report["items"]:
         lines.append(f"| {row['doc']} | {row['type']} | {row['location']} | {row['target'][:40]} | {row['credit']} | "

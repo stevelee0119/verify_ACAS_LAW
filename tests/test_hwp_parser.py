@@ -89,3 +89,17 @@ def test_failed_hwp_is_explicitly_body_unverified(tmp_path):
     doc = hwp.HwpParser().parse(str(path), document_id="d", filename=path.name, mime_type="", sha256="test")
     assert doc.structure["body_extraction_failed"] and doc.structure["unsupported_body"]
     assert not doc.body_blocks()
+
+
+def test_trailing_bytes_after_complete_stream_are_reported_not_fatal(monkeypatch):
+    # 일부 HWP 작성기는 완결된 DEFLATE 스트림 뒤에 채움 바이트를 남긴다. 본문은 완결됐으므로 읽되, 사실을 알린다.
+    mock_ole(monkeypatch, {"BodyText/Section0": raw_deflate(record("본문")) + b"\x00" * 7})
+    notes = []
+    assert hwp._extract_hwp_text(b"synthetic", notes) == ["본문"]
+    assert notes and "7" in notes[0]
+
+
+def test_truncated_compressed_stream_still_fails_with_diagnostics(monkeypatch):
+    mock_ole(monkeypatch, {"BodyText/Section0": raw_deflate(record("본문" * 50))[:-6]})
+    with pytest.raises(ParserError, match="Section0"):
+        hwp._extract_hwp_text(b"synthetic")

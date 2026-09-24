@@ -51,3 +51,14 @@ def test_clock_rules_yield_to_a_confirming_official_record():
 def test_split_case_number_is_normalized():
     [citation] = extract_from_text("대법원 2019. 2. 28. 선고 2018두 47215 판결")
     assert citation.canonical_case_number == "2018두47215"
+
+
+@pytest.mark.parametrize("particle", ["", "도 ", "는 ", "이 ", "의 "])
+def test_dated_interpretation_with_particle_after_authority_is_format_checked(particle):
+    # 기관명 뒤 조사("국방부 법무관리관실도 2025. 4. 31.자 유권해석")가 있으면 추출되지 않아 달력 검사를 건너뛰던 문제.
+    from packages.legal_engine.citation_extractor import extract_from_text
+    from packages.legal_engine.citation_format import format_violations
+    text = f"국방부 법무관리관실{particle}2025. 4. 31.자 유권해석에서 그러한 입장을 밝혔다."
+    cites = [c for c in extract_from_text(text) if c.decision_date == "2025-04-31"]
+    assert cites, text
+    assert format_violations(cites[0])[0]["rule_id"] == "FMT.DATE_NOT_ON_CALENDAR"
