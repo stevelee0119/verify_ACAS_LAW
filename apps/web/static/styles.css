@@ -1220,3 +1220,22 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .derived-findings summary {cursor:pointer; color:var(--muted); font-size:14px;}
 .derived-findings .link-button {display:block; text-align:left; border:0; background:none; padding:4px 0; color:inherit; text-decoration:underline;}
 .metric-definition {font-size:13px;}
+
+.storage-tables {
+  margin: 6px 0;
+  padding-left: 18px;
+  font-size: 13px;
+  color: var(--muted, #555)
+}
+
+.storage-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px
+}
+
+.storage-result {
+  margin-top: 6px;
+  font-weight: 600
+}

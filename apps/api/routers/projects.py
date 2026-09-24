@@ -23,6 +23,7 @@ from ..job_control import DurableJob, TERMINAL
 from ..project_lifecycle import lock_project
 from ..db_errors import error_label, is_retryable
 from ..project_purge import purge_files, purge_rows
+from ..storage_admin import vacuum_in_background
 from ..workspace import ReportJob
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
 from ..services import make_audit
@@ -255,6 +256,8 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
                     "code": "PROJECT_BUSY", "error_type": error_label(exc)})
             time.sleep(PURGE_RETRY_SECONDS * (attempt + 1))
     files = purge_files(project_id)
+    # 지운 행의 자리를 다시 쓸 수 있게 정리한다(PostgreSQL은 삭제만으로 공간이 돌아오지 않는다).
+    vacuum_in_background(counts)
     make_audit(session).record(AuditEventType.DELETE,
                                {"action": "PROJECT_PURGED", "rows": counts,
                                 "files_removed": files["files_removed"], "file_errors": files["file_errors"]},

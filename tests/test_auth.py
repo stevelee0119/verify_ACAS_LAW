@@ -218,6 +218,15 @@ def test_only_admin_sees_runtime_configuration(app_client, org_and_users):
     assert app_client.get("/api/diagnostics", headers=_auth(tokens[ROLE_ADMIN])).status_code == 200
 
 
+def test_only_admin_manages_storage(app_client, org_and_users):
+    """저장 공간 사용량·회수는 관리자만. 회수는 테이블을 잠글 수 있다."""
+    tokens = org_and_users["tokens"]
+    for method, path in (("get", "/api/admin/storage"), ("post", "/api/admin/storage/reclaim")):
+        call = getattr(app_client, method)
+        kwargs = {"json": {}} if method == "post" else {}
+        assert call(path, headers=_auth(tokens[ROLE_MEMBER]), **kwargs).status_code == 403
+    assert app_client.get("/api/admin/storage", headers=_auth(tokens[ROLE_ADMIN])).status_code == 200
+
 def test_health_does_not_leak_configuration(app_client):
     """헬스체크는 무인증이므로 설정을 담으면 안 된다."""
     body = app_client.get("/api/health").json()

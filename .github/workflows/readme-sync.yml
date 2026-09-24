@@ -1,0 +1,42 @@
+name: README 변경표 갱신
+
+# 푸시될 때마다 README의 '버전별 변경 내역' 표를 docs/releases.json과 프로그램 버전에 맞춘다.
+# 버전을 올렸는데 기록이 없으면 마지막 커밋 제목으로 항목을 채운다. 바뀐 것이 있을 때만 커밋한다.
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths-ignore: ["README.md", "docs/releases.json"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: readme-sync-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: README 버전별 변경표 갱신
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: 변경표 생성
+        run: python scripts/update_readme.py
+      - name: 바뀐 경우에만 커밋
+        run: |
+          if git diff --quiet -- README.md docs/releases.json; then
+            echo "README가 이미 최신입니다."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md docs/releases.json
+          git commit -m "docs: README 버전별 변경표 자동 갱신 [skip ci]"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

@@ -14,6 +14,8 @@ from unittest.mock import Mock
 
 import openpyxl
 import pytest
+
+from apps.api.snapshot_store import unpack as unpack_snapshot
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
@@ -347,7 +349,7 @@ def test_snapshot_and_artifact_tampering_are_rejected(report_case):
     case = report_case
     draft = create(case, ["json"])
     review = case.session.get(ReportReview, draft["report_id"])
-    assert canonical_hash(review.review_snapshot) == review.snapshot_hash
+    assert canonical_hash(unpack_snapshot(case.storage, review.review_snapshot)) == review.snapshot_hash
     review.review_snapshot = {**review.review_snapshot, "unexpected": True}
     case.session.commit()
     assert finalize(case, draft).status_code == 409
@@ -596,3 +598,46 @@ def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_ca
                    for p in PdfReader(io.BytesIO(download(case, report, "pdf"))).pages)
     text = text.replace("·", "").replace("・", "")
     assert "평가]근거결여" in text and "인용오류미확인근거및주장평가" in text
+
+
+# --- 고정본의 큰 부분은 DB 밖(파일 저장소)에 내용 주소로 보관한다 --------------------------
+def test_large_snapshot_parts_live_outside_the_database_and_are_shared(report_case):
+    """검증 결과·사전 점검은 파일로 옮기고 DB에는 참조만 둔다. 같은 내용은 한 번만 저장한다."""
+    import json as _json
+
+    from apps.api.snapshot_store import BLOB_KEYS, MARKER
+    case = report_case
+    first, second = create(case, ["json"]), create(case, ["json"])
+    stored = [case.session.get(ReportReview, r["report_id"]).review_snapshot for r in (first, second)]
+    for snapshot in stored:
+        for key in BLOB_KEYS:
+            assert MARKER in snapshot[key]
+        assert len(_json.dumps(snapshot, default=str)) < 20000      # DB에는 참조와 작은 항목만
+    # 같은 검증 결과는 같은 파일을 가리킨다.
+    assert stored[0]["engine_result"] == stored[1]["engine_result"]
+    assert finalize(case, first).status_code == 201
+    assert case.client.get(first["artifacts"]["json"]["download"]).status_code == 200
+
+
+def test_tampered_or_missing_snapshot_file_is_rejected(report_case):
+    case = report_case
+    draft = create(case, ["json"])
+    ref = case.session.get(ReportReview, draft["report_id"]).review_snapshot["engine_result"]
+    import gzip
+    case.storage.path(ref["$snapshot_blob"]).write_bytes(gzip.compress(b'{"documents": []}'))
+    response = finalize(case, draft)
+    assert response.status_code == 409 and "고정본" in str(response.json())
+    case.storage.path(ref["$snapshot_blob"]).unlink()
+    assert finalize(case, draft).status_code == 409
+
+
+def test_legacy_inline_snapshot_is_still_readable(report_case):
+    """예전 형식(전부 DB에 있는 고정본)으로 저장된 보고서도 그대로 확정·내려받기가 된다."""
+    case = report_case
+    draft = create(case, ["json"])
+    review = case.session.get(ReportReview, draft["report_id"])
+    review.review_snapshot = unpack_snapshot(case.storage, review.review_snapshot)
+    case.session.commit()
+    assert canonical_hash(review.review_snapshot) == review.snapshot_hash
+    assert finalize(case, draft).status_code == 201
+

@@ -33,3 +33,22 @@ def error_label(exc: BaseException) -> str:
 def is_retryable(exc: BaseException) -> bool:
     info = db_error_info(exc)
     return bool(info and info["sqlstate"] in RETRYABLE)
+
+
+# DB 자체를 쓸 수 없는 상태: 연결 실패(08xxx), 자원 부족(53xxx: 저장 공간·메모리·연결 수), DB 종료·복구 중(57P0x).
+# 연결 단계의 실패는 SQLSTATE가 없다(연결 거부·시간 초과).
+DISK_FULL = "53100"
+
+
+def database_unavailable_reason(exc: BaseException) -> Optional[str]:
+    """DB를 쓸 수 없는 오류이면 사용자에게 보일 설명을, 아니면 None."""
+    from sqlalchemy.exc import OperationalError
+    if not isinstance(exc, OperationalError):
+        return None
+    code = (db_error_info(exc) or {}).get("sqlstate")
+    if code == DISK_FULL:
+        return "데이터베이스 저장 공간이 가득 차 요청을 처리하지 못했습니다. 관리자가 DB 저장 용량을 늘리거나 공간을 정리해야 합니다"
+    if code is None or code.startswith(("08", "53", "57P")):
+        return ("데이터베이스에 연결할 수 없어 요청을 처리하지 못했습니다. 잠시 후 다시 시도하고, 계속되면 관리자가 "
+                "DB 상태(저장 공간·연결 수·중단 여부)를 확인해야 합니다")
+    return None

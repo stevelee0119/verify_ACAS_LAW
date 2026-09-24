@@ -145,6 +145,11 @@ def _authorize(session, request, principal, route, params, payload):
         if not read:
             raise HTTPException(403, "Global settings changes require local administration")
         return
+    if template.startswith("/api/admin/storage"):
+        # 사용량 조회와 공간 회수(VACUUM). 사건 내용은 다루지 않지만 테이블을 잠글 수 있어 관리자만.
+        if principal.role != "ADMIN":
+            raise HTTPException(403, "Administrator required")
+        return
     if template.endswith(("/diagnostics", "/diagnostics/sources")) and principal.role != "ADMIN":
         raise HTTPException(403, "Administrator required")
     if read and template.endswith("/diagnostics/sources"):

@@ -25,8 +25,13 @@ from packages.common.storage import (StorageKeyConfigurationError,
                                      verify_storage_encryption_config)
 from .capabilities import runtime_capabilities
 from .durability import log_durability_warning
-from .db_errors import error_label
-from .db import User
+from .db_errors import database_unavailable_reason, error_label
+from .storage_admin import database_status, storage_report, vacuum
+from sqlalchemy.orm import Session
+
+from packages.common.enums import AuditEventType
+
+from .db import User, get_db, get_session_factory
 from .db import init_db
 from .access import workspace_access
 from .routers import (audit, auth_router, projects, reports, settings_router, verification,
@@ -122,9 +127,17 @@ def create_app() -> FastAPI:
                            for f in traceback.extract_tb(exc.__traceback__)[-12:])
         # DB 오류는 드라이버 예외 종류와 SQLSTATE까지 적는다(교착·잠금 대기·연결 끊김을 가를 수 있게).
         label = error_label(exc)
+        unavailable = database_unavailable_reason(exc)
         logging.getLogger(__name__).error(
             "unhandled_error request_id=%s method=%s route=%s error_type=%s\n%s",
             request_id, request.method, route, label, frames)
+        if unavailable:
+            # DB에 연결할 수 없거나 저장 공간이 찬 상태는 기능 오류가 아니다. 모든 기능이 같은 오류를 내므로
+            # 사용자가 무엇을 확인해야 하는지 알린다.
+            message = f"{unavailable} ({label}). 문의 번호 {request_id}."
+            return JSONResponse(status_code=503, headers={"X-Request-ID": request_id, "Retry-After": "30"},
+                                content={"detail": {"message": message, "code": "DATABASE_UNAVAILABLE",
+                                                    "request_id": request_id, "error_type": label}})
         message = (f"서버 내부 오류로 요청을 처리하지 못했습니다 ({label}). "
                    f"문의 번호 {request_id}로 서버 기록에서 원인을 확인할 수 있습니다.")
         return JSONResponse(status_code=500, headers={"X-Request-ID": request_id},
@@ -180,6 +193,9 @@ def create_app() -> FastAPI:
             "commit": (os.getenv("RENDER_GIT_COMMIT") if re.fullmatch(
                 r"[0-9a-fA-F]{40}", os.getenv("RENDER_GIT_COMMIT", "")) else None),
             "principles": ["Source First", "Evidence First", "Human Final Decision"],
+            # DB가 끊겨도 웹 서버는 살아 있어 배포 플랫폼은 '정상'으로 본다. 원인을 가를 수 있게 따로 싣는다.
+            # 재시작이 반복되지 않도록 응답 코드는 200을 유지한다.
+            "database": database_status(),
         }
 
     @app.get("/api/diagnostics/sources")
@@ -253,6 +269,25 @@ def create_app() -> FastAPI:
                 else "한국어 스캔 시험 문서의 본문·페이지 위치 인식을 확인했습니다. 개별 문서의 인식 결과는 별도 검토가 필요합니다."
             ),
         }
+
+    @app.get("/api/admin/storage")
+    def admin_storage(admin: User = Depends(require_admin)) -> Dict[str, Any]:
+        """DB·파일 저장소 사용량(관리자 전용). 사건 내용은 싣지 않고 크기·행 수만 싣는다."""
+        return storage_report()
+
+    @app.post("/api/admin/storage/reclaim")
+    def admin_storage_reclaim(payload: Dict[str, Any], admin: User = Depends(require_admin),
+                              session: Session = Depends(get_db)) -> Dict[str, Any]:
+        """빈 공간 정리(VACUUM) 또는 디스크 반환(VACUUM FULL, 테이블 잠김). 실행 사실은 감사기록에 남긴다."""
+        full = bool((payload or {}).get("full"))
+        session.close()  # VACUUM은 트랜잭션 밖에서 실행되어야 하므로 요청 세션의 연결을 먼저 돌려준다
+        result = vacuum(full=full)
+        from .services import make_audit
+        with get_session_factory()() as audit_session:
+            make_audit(audit_session).record(AuditEventType.USER_OVERRIDE,
+                {"action": "STORAGE_RECLAIMED", **{k: result[k] for k in ("full", "before_bytes", "after_bytes", "seconds")}},
+                actor=admin.id)
+        return result
 
     web_dir = Path(__file__).resolve().parents[1] / "web"
     if (web_dir / "index.html").exists():

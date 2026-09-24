@@ -1523,10 +1523,54 @@ function renderDiagnostics(data) {
   content.append(technical);
 }
 
+function bytesText(value) {
+  const n = Number(value) || 0;
+  if (n >= 1024 ** 3) return `${(n / 1024 ** 3).toFixed(2)} GB`;
+  if (n >= 1024 ** 2) return `${(n / 1024 ** 2).toFixed(1)} MB`;
+  return `${Math.round(n / 1024)} KB`;
+}
+
+// 저장 공간: PostgreSQL은 행을 지워도 파일이 바로 줄지 않는다. 사용량과 회수 방법을 관리자에게 보인다.
+async function renderStorage() {
+  const content = $("settingsContent");
+  const section = node("section", null, "diagnostic-row storage-panel");
+  content.append(section);
+  async function draw(message) {
+    const data = await api("/admin/storage", {interactiveAuth: false});
+    section.replaceChildren();
+    const heading = node("div", null, "diagnostic-heading");
+    heading.append(node("h3", "저장 공간"), node("span", `DB ${bytesText(data.database_bytes)}`, "badge LOW"));
+    const parts = data.files?.parts || {};
+    section.append(heading,
+      node("p", `파일 저장소 ${bytesText(data.files?.root_bytes)} (원본 ${bytesText(parts.originals)} · 보고서·고정본 ${bytesText(parts.derivatives)})`
+        + (data.dead_rows ? ` · 정리 대기 행 ${Number(data.dead_rows).toLocaleString("ko-KR")}개` : "")),
+      node("p", data.note, "muted"));
+    if (data.tables?.length) {
+      const list = node("ul", null, "storage-tables");
+      for (const t of data.tables.slice(0, 6)) list.append(node("li", `${t.table} ${bytesText(t.bytes)} · 행 ${t.live_rows}${t.dead_rows ? ` · 정리 대기 ${t.dead_rows}` : ""}`));
+      section.append(list);
+    }
+    const actions = node("div", null, "storage-actions");
+    const reclaim = (full) => async () => {
+      if (full && await ask("디스크 반환", "테이블을 새로 써서 빈 공간을 운영체제에 돌려줍니다. 실행하는 동안 해당 테이블의 읽기·쓰기가 잠시 멈추고, 가장 큰 테이블만큼의 여유 공간이 필요합니다. 사용자가 적을 때 실행하세요.") === null) return;
+      for (const b of actions.querySelectorAll("button")) b.disabled = true;
+      try {
+        const r = await api("/admin/storage/reclaim", {method: "POST", body: {full}, timeoutMs: 600000});
+        await draw(`${full ? "디스크 반환" : "빈 공간 정리"} 완료: ${bytesText(r.before_bytes)} → ${bytesText(r.after_bytes)} (${r.seconds}초)`);
+      } finally { for (const b of actions.querySelectorAll("button")) b.disabled = false; }
+    };
+    actions.append(button("빈 공간 정리", reclaim(false)), button("디스크 반환(잠시 멈춤)", reclaim(true)));
+    section.append(actions);
+    if (message) section.append(node("p", message, "storage-result"));
+  }
+  try { await draw(); } catch (error) { section.replaceChildren(node("h3", "저장 공간"), node("p", error.message, "error")); }
+}
+
 $("settingsButton").onclick = action(async () => {
   const data = await api("/diagnostics");
   renderDiagnostics(data);
   $("settingsDialog").showModal();
+  await renderStorage();
 });
 $("calculationForm").onsubmit = action(async e => {
   e.preventDefault();

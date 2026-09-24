@@ -36,6 +36,7 @@ from ..db import (
 from ..schemas import ReportRequest, ReportFinalizeRequest
 from ..services import make_audit
 from ..identity import _principal, current_principal, require_project
+from ..snapshot_store import SnapshotBlobMissing, pack as pack_snapshot, unpack as unpack_snapshot
 from ..workspace import ReportJob, ReportReview, ReviewRevision, CaseProfile, as_dict
 from .workspace import matrix_data, workflow_value
 from .audit import get_manifest as project_manifest
@@ -547,7 +548,7 @@ def _save_review(session, report, snapshot):
     review = ReportReview(report_id=report.id, audience=meta["audience"], state=meta["state"],
                           created_by=meta["created_by"], finalized_by=meta.get("finalized_by"),
                           finalized_at=datetime.fromisoformat(meta["finalized_at"]) if meta.get("finalized_at") else None,
-                          note=meta.get("note", ""), review_snapshot=copy.deepcopy(snapshot),
+                          note=meta.get("note", ""), review_snapshot=pack_snapshot(get_storage(), report.project_id, snapshot),
                           snapshot_hash=canonical_hash(snapshot))
     return review
 
@@ -581,9 +582,13 @@ def _report_or_404(session, report_id, minimum="VIEWER"):
 def _checked_snapshot(review):
     if not review or not review.review_snapshot:
         raise HTTPException(409, "이전 보고서에는 고정 스냅샷이 없습니다. 새 초안을 생성하세요")
-    if canonical_hash(review.review_snapshot) != review.snapshot_hash:
+    try:
+        snapshot = unpack_snapshot(get_storage(), copy.deepcopy(review.review_snapshot))
+    except SnapshotBlobMissing:
+        raise HTTPException(409, "보고서 고정본 파일을 찾을 수 없거나 내용이 바뀌었습니다. 새 초안을 생성하세요")
+    if canonical_hash(snapshot) != review.snapshot_hash:
         raise HTTPException(409, "보고서 스냅샷 무결성을 확인할 수 없습니다")
-    return copy.deepcopy(review.review_snapshot)
+    return snapshot
 
 
 @router.get("/reports/{report_id}/preflight")

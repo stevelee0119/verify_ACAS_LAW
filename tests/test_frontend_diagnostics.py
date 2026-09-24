@@ -26,6 +26,11 @@ def test_diagnostics_layout_and_technical_disclosure(tmp_path):
             route.fulfill(json={"status": "ok", "version": "0.5.0"})
         elif path == "/api/diagnostics":
             route.fulfill(json=data)
+        elif path == "/api/admin/storage":
+            route.fulfill(json={"dialect": "postgresql", "database_bytes": 734003200, "dead_rows": 1200,
+                                "files": {"root_bytes": 52428800, "parts": {"originals": 41943040, "derivatives": 10485760}},
+                                "tables": [{"table": "report_reviews", "bytes": 314572800, "live_rows": 40, "dead_rows": 900}],
+                                "note": "행을 지워도 DB 파일은 바로 줄지 않습니다."})
         else:
             route.fulfill(status=401, json={"detail": "Login required"})
     with sync_playwright() as playwright:
@@ -55,6 +60,10 @@ def test_diagnostics_layout_and_technical_disclosure(tmp_path):
                 expect(dialog.locator("pre")).to_be_hidden()
                 assert dialog.evaluate("el => el.scrollWidth <= el.clientWidth")
                 page.screenshot(path=str(tmp_path / f"diagnostics-{width}.png"), full_page=True)
+                storage = dialog.locator(".storage-panel")
+                expect(storage).to_contain_text("DB 700.0 MB")
+                expect(storage).to_contain_text("정리 대기 행 1,200개")
+                expect(storage.get_by_role("button", name="빈 공간 정리")).to_be_visible()
                 dialog.locator("summary").click()
                 expect(dialog.locator("pre")).to_contain_text('"missing_languages": null')
                 assert dialog.evaluate("el => el.scrollWidth <= el.clientWidth")
