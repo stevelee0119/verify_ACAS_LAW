@@ -65,12 +65,14 @@ from packages.source_adapters.transport import prepare_source_document, source_l
 from packages.claim_engine.assertion import analyze_assertions
 from packages.claim_engine.evidence_consistency import check_document as check_evidence_consistency
 from packages.claim_engine.evidence_consistency import cross_document_copies
+from packages.claim_engine.fact_checks import check_periods
+from packages.claim_engine.fact_store import cross_document_facts
 from packages.legal_engine.legal_rules import review_legal_rules
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
 
-from .ai_document_detector import create_ai_detector_findings, detect_ai_document
+from .ai_document_detector import create_ai_detector_findings, detect_ai_document, reconcile_model_fact_remarks
 from .finalize import finalize_document_findings
 from packages.document_engine.reading_text import SPACE_MAP
 from .authorship import analyze_authorship, authorship_findings
@@ -493,6 +495,11 @@ class VerificationPipeline:
         result.entities = [e.to_dict() for e in entities]
         result.events = [e.to_dict() for e in events]
         result.findings.extend(self.calculation.verify_document(doc))
+        # 날짜 구간 일수·기간 경과 만료일 재계산(추가지시 G5)
+        try:
+            result.findings.extend(check_periods(doc))
+        except Exception as exc:  # pragma: no cover - 방어
+            result.warnings.append(f"기간 재계산 경고: {exc}")
         result.findings.extend(analyze_timeline(events))
         # 법리 규칙 검토: 공식 원문 근거로 청구취지·주장의 형태를 점검한다(v2 Phase 6).
         try:
@@ -596,6 +603,8 @@ class VerificationPipeline:
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
+        # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
+        result.findings = reconcile_model_fact_remarks(result.findings)
         statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
         result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
@@ -796,8 +805,10 @@ class VerificationPipeline:
         candidates = claim_contradictions(claims, project_id=result.project_id)
         candidates.extend(cross_document_contradictions(events_by_document))
         candidates.extend(self._internal_citation_check(result))
-        candidates.extend(cross_document_copies(
-            [d.normalized for d in result.documents if not d.quarantined and d.normalized is not None]))
+        readable = [d.normalized for d in result.documents if not d.quarantined and d.normalized is not None]
+        candidates.extend(cross_document_copies(readable))
+        # 사건 단위 사실 저장소: 신체 부위 좌·우, 사고일, 청구금액의 문서 간 불일치(추가지시 G5)
+        candidates.extend(cross_document_facts(readable))
         findings, seen = [], set()
         for finding in candidates:
             features = finding.confidence_features

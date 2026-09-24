@@ -401,9 +401,78 @@ SCORE_DEFINITIONS = {
 }
 
 
+# 모델이 적은 판단 근거 가운데 사실 모순 지적(날짜·금액·기간·수치). AI 작성 근거가 아니라 내용 검증 대상이다(J2).
+FACT_REMARK_CATEGORIES = [
+    ("PERIOD", re.compile(r"(\d+\s*일|\d+\s*년|\d+\s*개월).{0,40}(일수|기간|경과|만료|입원)|(일수|기간|경과|만료).{0,40}\d")),
+    ("ARITHMETIC", re.compile(r"(합계|총액|합산|계산서|계산|산식|금액).{0,60}\d|\d[\d,]*\s*원.{0,40}(합계|총액|다름|불일치)")),
+    ("EVIDENCE_DATE", re.compile(r"(작성일|발급일|발행일).{0,60}(늦|앞서|앞선|이후|이전|뒤)")),
+]
+CONFIRMING_RULES = {
+    "PERIOD": ("CALC.DATE_RANGE_DAYS", "CALC.ELAPSED_EXPIRY", "CALC.PERIOD_SPAN"),
+    "ARITHMETIC": ("CALC.",),
+    "EVIDENCE_DATE": ("EVI.EVIDENCE_TIMELINE_INVERSION",),
+}
+
+
+def _fact_category(reason: str) -> Optional[str]:
+    for category, pattern in FACT_REMARK_CATEGORIES:
+        if pattern.search(reason):
+            return category
+    return None
+
+
+def _fact_remark_finding(doc: NormalizedDocument, reason: str, category: str) -> Finding:
+    return Finding.create(
+        type=FindingType.MODEL_FACT_REMARK, status=VerificationStatus.UNVERIFIED, severity=Severity.MEDIUM,
+        evidence_grade=EvidenceGrade.C, title=f"모델이 지적한 사실 모순(재계산 대상): {reason[:90]}",
+        detail=(f"AI 판별 모델이 문서 내용의 모순을 지적했다: {reason}. 이것은 AI 작성 근거가 아니라 내용 검증 대상이며, "
+                "결정론 엔진의 재계산 결과와 대조한다."),
+        confidence=0.4, confidence_features={"category": category, "model_remark": reason,
+                                             "rule_id": f"MODEL.FACT_REMARK.{category}"},
+        document_id=doc.document_id, engine=ENGINE_NAME, tags=["MODEL_REMARK", category])
+
+
+def reconcile_model_fact_remarks(findings: List[Finding]) -> List[Finding]:
+    """모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(J2).
+
+    같은 종류의 결정론 판정(재계산·작성일 대조)이 있으면 지적을 그 판정의 근거로 붙이고 지적 항목은 뺀다.
+    없으면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
+    """
+    remarks = [f for f in findings if f.type == FindingType.MODEL_FACT_REMARK]
+    if not remarks:
+        return findings
+    out = [f for f in findings if f.type != FindingType.MODEL_FACT_REMARK]
+    for remark in remarks:
+        category = remark.confidence_features.get("category")
+        prefixes = CONFIRMING_RULES.get(category, ())
+        match = next((f for f in out if f.status == VerificationStatus.CONTRADICTED and f.document_id == remark.document_id
+                      and str((f.confidence_features or {}).get("rule_id", "")).startswith(prefixes)
+                      and not (f.confidence_features or {}).get("model_remarks")), None)
+        if match is None:
+            match = next((f for f in out if f.status == VerificationStatus.CONTRADICTED
+                          and f.document_id == remark.document_id
+                          and str((f.confidence_features or {}).get("rule_id", "")).startswith(prefixes)), None)
+        if match is not None:
+            match.confidence_features.setdefault("model_remarks", []).append(remark.confidence_features["model_remark"])
+            continue
+        remark.detail += " 결정론 재계산으로 확인하지 못했으므로 사람이 원문을 확인한다."
+        out.append(remark)
+    return out
+
+
 def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResult) -> List[Finding]:
     """분석 결과를 시스템 Finding 목록으로 변환."""
     findings: List[Finding] = []
+    # 사실 모순 지적은 AI 작성 근거에서 빼고 내용 검증 항목으로 따로 낸다(J2).
+    remark_reasons = [(r, _fact_category(r)) for r in result.reasons]
+    for reason, category in remark_reasons:
+        if category:
+            findings.append(_fact_remark_finding(doc, reason, category))
+    kept = [r for r, category in remark_reasons if not category]
+    if len(kept) != len(result.reasons):
+        result = AIDetectorResult(verdict=result.verdict, score=result.score, reasons=kept,
+                                  suspicious_excerpts=result.suspicious_excerpts, signals=result.signals,
+                                  used_llm=result.used_llm)
     features = {
         "ai_score": result.score,
         "used_llm": result.used_llm,

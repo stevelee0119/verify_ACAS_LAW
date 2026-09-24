@@ -48,6 +48,7 @@ class CalculationCheck:
     block_id: Optional[str] = None
     page: Optional[int] = None
     detail: str = ""
+    rows: List[str] = field(default_factory=list)
 
     @property
     def matches(self) -> bool:
@@ -101,6 +102,59 @@ def day_count(start: date, end: date, *, inclusive: bool = False) -> int:
     return delta + 1 if inclusive else delta
 
 
+OPERATOR_RE = re.compile(r"\s*([+\-−×xX*＋])\s*")
+MULTIPLIER_RE = re.compile(r"^\s*[×xX*]\s*(\d[\d,]*(?:\.\d+)?)\s*(?:개월|개|회|일|명|건|배)?")
+AMOUNT_HEADER_RE = re.compile(r"(금액|합계|청구액|손해액|피해액|소계|청구\s*금액|총액|계)")
+
+
+def evaluate_expression(text: str) -> Optional[Decimal]:
+    """'3,100,000원 + 1,250,000원', '500,000원 × 3' 같은 산식의 값. 산식이 아니면 None."""
+    amounts = parse_amounts(text)
+    if not amounts:
+        return None
+    total = amounts[0].value
+    cursor = amounts[0].end
+    for amount in amounts[1:]:
+        between = text[cursor:amount.start]
+        if not between.strip() and amount.raw.lstrip()[:1] in "+-−":
+            total += amount.value  # 금액 패턴이 부호를 금액에 붙여 읽었다(값에 부호가 이미 들어 있다)
+            cursor = amount.end
+            continue
+        op = OPERATOR_RE.fullmatch(between)
+        if not op:
+            return None
+        total = total - amount.value if op.group(1) in "-−" else total + amount.value
+        cursor = amount.end
+    tail = MULTIPLIER_RE.match(text[cursor:])
+    if tail:
+        total *= Decimal(tail.group(1).replace(",", ""))
+        cursor += tail.end()
+    elif len(amounts) == 1:
+        return None
+    return total
+
+
+def row_final_amount(text: str) -> Tuple[Optional[Amount], Optional[CalculationCheck]]:
+    """행의 최종 금액과(있으면) 그 행 산식의 검산 결과. '=' 뒤 금액을 최종 금액으로 본다."""
+    amounts = parse_amounts(text)
+    if not amounts:
+        return None, None
+    if "=" in text:
+        left, _, right = text.rpartition("=")
+        right_amounts = parse_amounts(right)
+        value = evaluate_expression(left[left.rfind(":") + 1:] if ":" in left else left)
+        if right_amounts:
+            final = right_amounts[0]
+            check = None
+            if value is not None:
+                check = CalculationCheck(kind="FORMULA", stated=final.value, computed=value,
+                                         detail=f"산식 '{' '.join(text.split())}'의 계산값 {value:,} / 기재 {final.value:,}")
+            return Amount(final.value, final.raw, len(left) + 1 + final.start, len(left) + 1 + final.end), check
+    if len(amounts) == 1:
+        return amounts[0], None
+    return None, None
+
+
 class CalculationEngine:
     """문서에서 합계 진술을 찾아 세부 금액과 검산한다."""
 
@@ -142,23 +196,27 @@ class CalculationEngine:
                 is_total = bool(TOTAL_LABEL_RE.search(block.text))
 
                 if is_total and amounts and len(run) >= MIN_LINE_ITEMS:
-                    check = check_sum(run, amounts[-1])
+                    check = check_sum([a for a, _ in run], amounts[-1])
+                    check.rows = [label for _, label in run]
                     if not check.matches:
                         excerpt = "\n".join(
-                            [f"{a.raw}" for a in run] + [f"{TOTAL_LABEL_RE.search(block.text).group(0)} {amounts[-1].raw}"]
+                            [label for _, label in run] + [f"{TOTAL_LABEL_RE.search(block.text).group(0)} {amounts[-1].raw}"]
                         )
                         findings.append(self._mismatch_finding(doc, check, block.block_id, block.page, excerpt))
                     run = []
                     continue
 
+                # 행마다 최종 금액을 쓴다. 산식 행('a원 + b원 = c원')은 '=' 뒤 금액을 쓰고 산식은 따로 검산한다(J3).
+                final, formula = row_final_amount(block.text) if amounts else (None, None)
+                if formula is not None and not formula.matches:
+                    findings.append(self._formula_finding(doc, formula, block.block_id, block.page, block.text))
                 if is_total:
                     run = []
-                elif len(amounts) == 1:
-                    run.append(amounts[0])
-                elif amounts:
-                    run = []  # 한 줄에 금액이 여럿이면 내역 줄로 보지 않는다
+                elif final is not None:
+                    final.block_id, final.page = block.block_id, block.page
+                    run.append((final, " ".join(block.text.split())[:120]))
                 else:
-                    run = []  # 금액 없는 줄에서 묶음을 끊는다
+                    run = []  # 금액 없는 줄이나 최종 금액을 가를 수 없는 줄에서 묶음을 끊는다
         return findings
 
     def _verify_block(self, doc: NormalizedDocument, block) -> List[Finding]:
@@ -180,11 +238,60 @@ class CalculationEngine:
             return []
         return [self._mismatch_finding(doc, check, block.block_id, block.page, text)]
 
+    def _verify_cell_tables(self, doc: NormalizedDocument) -> Tuple[List[Finding], set]:
+        """셀 단위 표: 금액 열(머리글)을 찾아 행마다 최종 금액을 쓰고, 산식 칸은 금액 칸과 대조한다(J3)."""
+        findings: List[Finding] = []
+        handled = set()
+        for table in doc.structure.get("tables") or []:
+            cells = [[str(c or "").strip() for c in row] for row in table.get("cells") or []]
+            if len(cells) < 3:
+                continue
+            header = cells[0]
+            amount_cols = [i for i, h in enumerate(header) if AMOUNT_HEADER_RE.search(h)]
+            if not amount_cols:
+                counts = [sum(1 for r in cells[1:] if i < len(r) and parse_amounts(r[i])) for i in range(len(header))]
+                amount_cols = [max(range(len(header)), key=lambda i: (counts[i], i))] if any(counts) else []
+            if not amount_cols:
+                continue
+            col = amount_cols[-1]
+            total_row = next((r for r in cells[1:] if r and TOTAL_LABEL_RE.fullmatch(r[0].replace(" ", ""))), None)
+            items, rows_used = [], []
+            for row in cells[1:]:
+                if row is total_row or col >= len(row):
+                    continue
+                final, formula = row_final_amount(row[col])
+                if final is None:
+                    continue
+                items.append(final)
+                rows_used.append(f"{row[0]}: {final.raw}")
+                for index, cell in enumerate(row):
+                    if index == col or not cell or not parse_amounts(cell):
+                        continue
+                    value = evaluate_expression(cell.split("=")[0]) if "=" in cell or OPERATOR_RE.search(cell) else None
+                    if value is not None and abs(value - final.value) > TOLERANCE:
+                        check = CalculationCheck(kind="FORMULA", stated=final.value, computed=value,
+                                                 detail=f"'{row[0]}' 행 산식 '{cell}'의 계산값 {value:,} / 금액 칸 {final.value:,}")
+                        findings.append(self._formula_finding(doc, check, None, table.get("page"), " | ".join(row)))
+            if total_row is None or len(items) < 2 or col >= len(total_row):
+                continue
+            stated, _ = row_final_amount(total_row[col])
+            if stated is None:
+                continue
+            handled.add(table.get("table_ref"))
+            check = check_sum(items, stated)
+            check.rows = rows_used
+            if not check.matches:
+                excerpt = "\n".join(" | ".join(r) for r in cells)
+                findings.append(self._mismatch_finding(doc, check, None, table.get("page"), excerpt))
+        return findings, handled
+
     def _verify_table_totals(self, doc: NormalizedDocument) -> List[Finding]:
         """표 블록에서 '합계' 행과 나머지 행의 금액을 대조한다."""
-        findings: List[Finding] = []
+        findings, handled = self._verify_cell_tables(doc)
         for block in doc.blocks:
             if block.block_type != "table" or not block.visible:
+                continue
+            if block.attributes.get("table_ref") in handled:
                 continue
             rows = [r for r in block.text.splitlines() if r.strip()]
             if len(rows) < 3:
@@ -209,6 +316,21 @@ class CalculationEngine:
         return findings
 
     @staticmethod
+    def _formula_finding(doc: NormalizedDocument, check: CalculationCheck, block_id, page, excerpt: str) -> Finding:
+        difference = check.stated - check.computed
+        features = {"arithmetic_proof": True, "deterministic_rule": True, "stated": str(check.stated),
+                    "computed": str(check.computed), "difference": str(difference), "kind": "FORMULA",
+                    "rule_id": "CALC.FORMULA"}
+        return Finding.create(
+            type=FindingType.ARITHMETIC_MISMATCH, status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH,
+            evidence_grade=EvidenceGrade.A, title=f"산식의 계산 결과가 기재 금액과 다르다 (차이 {difference:,}원)",
+            detail=f"{check.detail}. Python 계산엔진으로 검산한 결정론적 결과이다.",
+            confidence=confidence_score(features), confidence_features=features, document_id=doc.document_id,
+            block_id=block_id, page=page, engine=ENGINE_NAME, tags=["CALCULATION"],
+            evidence=[Evidence.create(description="산식이 적힌 행", grade=EvidenceGrade.A, document_id=doc.document_id,
+                                      block_id=block_id, page=page, excerpt=excerpt[:300])])
+
+    @staticmethod
     def _mismatch_finding(doc: NormalizedDocument, check: CalculationCheck, block_id, page, excerpt: str) -> Finding:
         difference = check.stated - check.computed
         features = {
@@ -218,6 +340,8 @@ class CalculationEngine:
             "computed": str(check.computed),
             "difference": str(difference),
             "item_count": len(check.items),
+            # 판정 근거에 쓴 행(J3). 산식 행은 '=' 뒤 최종 금액으로 셌다.
+            "rows_used": list(getattr(check, "rows", []) or [f"{a.raw}" for a in check.items]),
         }
         return Finding.create(
             type=FindingType.ARITHMETIC_MISMATCH,

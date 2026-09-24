@@ -23,6 +23,8 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, join_separator, sentence_bounds
 
+from .exhibits import parse_exhibit_label
+
 ENGINE_NAME = "claim_engine.evidence_consistency"
 
 EXHIBIT_RE = re.compile(r"(?P<party>갑|을|병)\s*(?:제\s*)?(?P<number>\d{1,3})\s*호\s*증(?:\s*의\s*(?P<branch>\d{1,3}))?")
@@ -210,14 +212,18 @@ def check_exhibits(doc: NormalizedDocument) -> List[Finding]:
                                           "filed": filed.isoformat()}))
             continue
         described = f"{row.get('name', '')} {row.get('purpose', '')}"
-        if AFTER_EVENT_KINDS.search(row.get("name", "")):
+        # 사건을 기록·증명하는 서증(분석·보고·진술·확인·의료·조서 등)은 그 사건보다 먼저 작성될 수 없다(G5).
+        # 사건일은 입증취지·서증명의 날짜, 없으면 본문의 사고·사건 날짜를 쓴다.
+        if EVENT_RECORD_KINDS.search(row.get("name", "")):
             later = [d for d in _all_dates(described) if d > parsed]
+            if not later and EVENT_WORDS.search(described):
+                later = [d for d in incident_dates(doc) if d > parsed]
             if later:
-                event = max(later)
+                event = max(later) if _all_dates(described) else min(later)
                 out.append(_finding(doc, FindingType.EVIDENCE_TIMELINE_INVERSION, EvidenceGrade.B, Severity.HIGH,
-                                    f"분석·보고 자료의 작성일이 그 대상 사건보다 앞선다: {where} 작성일 "
+                                    f"사건을 기록·증명하는 서증의 작성일이 그 사건보다 앞선다: {where} 작성일 "
                                     f"{_k(parsed)}, 대상 {_k(event)}",
-                                    "대상 사건이 일어나기 전에 그 사건을 분석·보고한 문서가 작성되었다고 적혀 있다.",
+                                    "입증하려는 사건이 일어나기 전에 그 사건을 기록·증명한 문서가 작성되었다고 적혀 있다.",
                                     f"{where} | {row.get('date')} | {row.get('purpose')}", page=row.get("page"),
                                     features={"exhibit": row["label"], "written": parsed.isoformat(),
                                               "event": event.isoformat()}))
@@ -229,6 +235,60 @@ def check_exhibits(doc: NormalizedDocument) -> List[Finding]:
                                 status=VerificationStatus.UNVERIFIED,
                                 features={"exhibit": row["label"], "human_review": True}))
     out.extend(_numbering(doc, rows))
+    out.extend(_attached_originals(doc, rows))
+    return out
+
+
+EVENT_RECORD_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|소견|조사|진단서|의무기록|진료기록|진료비|영수증|"
+                                r"조서|증명서|사실조회|사고\s*사실")
+EVENT_WORDS = re.compile(r"사고|사건|폭행|상해|부상|피해|경위|치료|입원|발생")
+INCIDENT_SENTENCE_RE = re.compile(r"사고|사건\s*당일|발생(?:하|한|일)|폭행|상해를\s*입|부상을\s*입|추돌|충돌")
+ORG_RE = re.compile(r"[가-힣○△□A-Za-z]{1,20}(?:대학교병원|병원|의원|한의원|치과|보건소|경찰서|검찰청|법원|청|구청|시청|군청|"
+                    r"센터|공단|공사|위원회|협회|주식회사|은행|보험)")
+ISSUER_LINE_RE = re.compile(r"(?:발행|발급|작성)\s*(?:기관|처|자)?\s*[:：]\s*(?P<org>[^\n]{2,40})|(?P<head>[^\n]{2,30}(?:병원|의원)장)")
+
+
+def incident_dates(doc: NormalizedDocument) -> List[date]:
+    """본문에서 사고·사건이 일어난 날로 적힌 날짜."""
+    text = build_reading_text(doc).text
+    found: List[date] = []
+    for start, end in sentence_bounds(text):
+        sentence = text[start:end]
+        if INCIDENT_SENTENCE_RE.search(sentence):
+            found.extend(_all_dates(sentence))
+    return sorted(set(found))
+
+
+def _org_key(text: str) -> str:
+    return re.sub(r"[\s○△□()（）㈜]|주식회사", "", text or "")
+
+
+def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
+    """같은 파일에 붙은 원문(진단서 등)의 발급기관을 증거목록의 작성자와 대조한다(G5)."""
+    text = build_reading_text(doc).text
+    lines = text.split("\n")
+    out: List[Finding] = []
+    for row in rows:
+        author, name = row.get("author") or "", re.sub(r"\s", "", row.get("name") or "")
+        if not name or not ORG_RE.search(author):
+            continue
+        for index, line in enumerate(lines):
+            if re.sub(r"\s", "", line) != name:
+                continue  # 원문 첫머리의 제목 줄(예: '진 단 서')
+            window = "\n".join(lines[index + 1:index + 25])
+            issuers = [m.group("org") or m.group("head") for m in ISSUER_LINE_RE.finditer(window)]
+            issuers = [ORG_RE.search(i).group(0) for i in issuers if i and ORG_RE.search(i)]
+            if issuers and not any(_org_key(i) in _org_key(author) or _org_key(author) in _org_key(i)
+                                   for i in issuers):
+                where = f"{row['label']} {row.get('name', '')}".strip()
+                out.append(_finding(doc, FindingType.EVIDENCE_LIST_MISMATCH, EvidenceGrade.B, Severity.MEDIUM,
+                                    f"증거목록의 작성자와 첨부 원문의 발급기관이 다르다: {where} — 목록 '{author}', "
+                                    f"원문 '{issuers[0]}'",
+                                    "같은 파일 안의 증거목록과 첨부 원문이 발급기관을 다르게 적었다. 원본을 확인해야 한다.",
+                                    f"{where} | 목록: {author} | 원문: {issuers[0]}", page=row.get("page"),
+                                    features={"exhibit": row["label"], "list_author": author,
+                                              "original_issuer": issuers[0]}))
+            break
     return out
 
 
@@ -237,6 +297,21 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
     listed: Dict[str, set] = {}
     for row in rows:
         listed.setdefault(row["party"], set()).add(row["number"])
+    # 가지번호: '의 2'만 있고 '의 1'이 없으면 결번이다(G5). 범위 표기('의 1 내지 3')는 모두 있는 것으로 본다.
+    branches: Dict[tuple, set] = {}
+    for row in rows:
+        parsed = parse_exhibit_label(row.get("id") or row.get("label") or "")
+        if parsed and parsed["branches"]:
+            branches.setdefault((parsed["party"], parsed["number"]), set()).update(parsed["branches"])
+    for (party, number), present in sorted(branches.items()):
+        missing = [b for b in range(1, max(present) + 1) if b not in present]
+        if missing:
+            labels = ", ".join(f"{party} 제{number}호증의 {b}" for b in missing)
+            out.append(_finding(doc, FindingType.EVIDENCE_NUMBERING_GAP, EvidenceGrade.B, Severity.MEDIUM,
+                                f"가지번호가 비어 있다: {labels} 결번",
+                                "같은 호증의 가지번호가 1부터 이어지지 않는다. 누락된 증거가 있는지 확인해야 한다.",
+                                ", ".join(f"{party} 제{number}호증의 {b}" for b in sorted(present)),
+                                features={"party": party, "number": number, "missing_branches": missing}))
     for party, numbers in listed.items():
         gaps = [n for n in range(1, max(numbers) + 1) if n not in numbers]
         if gaps:
