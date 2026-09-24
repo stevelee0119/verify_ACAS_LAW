@@ -27,3 +27,27 @@ def test_ordinary_brief_has_no_residue():
     text = ("원고는 피고의 처분이 재량권을 일탈·남용하였다고 주장합니다. 대법원 2006. 12. 21. 선고 2006두16274 판결 "
             "참조. 따라서 이 사건 처분은 취소되어야 합니다. 원고 소송대리인 변호사 ○○○ (인)")
     assert scan_residue(text) == []
+
+
+def test_models_agreeing_on_human_authorship_are_withheld():
+    import asyncio
+    from test_ai_document_detector import _ConsultRouter, _make_sample_doc
+    from packages.verification_engine.ai_document_detector import detect_ai_document
+    doc = _make_sample_doc("원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 피고의 책임이 인정됩니다.")
+    human = {"verdict": "HUMAN_AUTHORED_LIKELY", "ai_score": 0.05}
+    result = asyncio.run(detect_ai_document(doc, [], router=_ConsultRouter({"anthropic": human, "openai": human})))
+    assert result.verdict == "UNCERTAIN"
+    assert any("사람 작성을 단정하지 않" in r for r in result.reasons)
+
+
+def test_calibration_interface_prefers_zero_false_ai():
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("calibrate", Path(__file__).resolve().parents[1] / "scripts" / "calibrate_ai_detector.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    rows = [{"label": "AI", "score": 0.8, "objective_traces": 3}, {"label": "HUMAN", "score": 0.4, "objective_traces": 1},
+            {"label": "HUMAN", "score": 0.1, "objective_traces": 0}]
+    report = module.calibrate(rows)
+    assert report["recommended"]["human_flagged_as_ai"] == 0 and report["recommended"]["ai_missed"] == 0
+    assert 0.4 < report["recommended"]["threshold"] <= 0.8

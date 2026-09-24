@@ -328,6 +328,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
             verdict, single_downgraded = rule_res.verdict, True
     else:
         verdict = "UNCERTAIN"
+    if verdict == "HUMAN_AUTHORED_LIKELY":
+        # AI 흔적을 찾지 못했다는 것은 사람이 썼다는 근거가 아니다. '사람 작성 유력'으로 단정하지 않는다(v2 Phase 8).
+        verdict, held_reason = "UNCERTAIN", (
+            "모델이 사람 작성 쪽으로 판단했으나 AI 흔적이 없다는 사실만으로 사람 작성을 단정하지 않으므로 판단을 유보함")
     final_rank = _VERDICT_RANK[verdict]
 
     reasons = []

@@ -67,7 +67,14 @@
 비식별 저자명(김○○)의 학술 인용. 공식 원문 수집은 `scripts/fetch_official_sources.py`(Actions "공식 원문 수집")로 한다.
 시험: `tests/test_v2_phase2_format.py`.
 
-## Phase 8 (일부) AI 응답 잔재 신호
+## Phase 8 AI 작성 판별 분리·보정 인터페이스
+
+- 모델에는 지시문 블록(3-1 R8)과 머리글·바닥글(시험 문서 표식, R6)을 뺀 본문만 보낸다. 인용 오류는 작성 주체 근거로 쓰지 않는다(기존).
+- 모델들이 '사람 작성 유력'으로 모아져도 판정은 UNCERTAIN으로 유보한다(AI 흔적 부재는 사람 작성의 근거가 아님).
+- `scripts/calibrate_ai_detector.py`: 작성 주체 라벨(AI/HUMAN)이 있는 문서 묶음으로 임계값별 오탐·미탐을 계산하고, 사람 작성 오탐 0
+  조건에서 미탐이 가장 적은 임계값을 권장한다. 라벨 묶음이 저장소에 없어 인터페이스만 제공한다.
+
+### AI 응답 잔재 신호
 
 `verification_engine/ai_residue.py`: 대화형 응답 서두, AI 면책·안내문, 지식 기준일 언급, 마크다운 잔재, 챗봇식
 요약 도입구는 객관적 흔적(SUSPICIOUS, B)으로, 상투 표현(3종 이상)·영문 병기는 문체 신호(UNVERIFIED, C)로 범주마다
