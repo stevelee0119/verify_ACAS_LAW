@@ -145,3 +145,82 @@ def test_background_summary_is_scoped_compact_and_survives_project_switches(work
         session.commit()
     assert s.client.delete("/api/projects/pa", headers=s.headers("admin")).status_code == 204
     assert s.client.get("/api/verification-runs", headers=s.headers("member")).json() == {"active_count": 0, "runs": []}
+
+
+# --- 휴지통에서 영구 삭제 ---------------------------------------------------------
+@pytest.fixture
+def purge_case(workspace, tmp_path, monkeypatch):
+    """두 프로젝트에 자료·실행·판정·보고서와 저장 파일을 두고 한쪽만 영구 삭제한다."""
+    from apps.api import project_purge
+    from apps.api.db import EvidenceRow, FindingRow, ReportRow
+    from packages.common.storage import LocalObjectStorage
+
+    storage = LocalObjectStorage(tmp_path / "storage")
+    monkeypatch.setattr(project_purge, "get_storage", lambda: storage)
+    monkeypatch.setenv("LV_DATA_DIR", str(tmp_path))
+    s = workspace
+    add_run(s, "run-a")
+    add_run(s, "run-b", project="pb")
+    with s.factory() as session:
+        session.add_all([
+            FindingRow(id="f-a", run_id="run-a", project_id="pa", document_id="document", type="CASE_NOT_FOUND",
+                       status="UNVERIFIED", severity="HIGH", evidence_grade="U", title="t", data={}),
+            FindingRow(id="f-b", run_id="run-b", project_id="pb", type="CASE_NOT_FOUND",
+                       status="UNVERIFIED", severity="HIGH", evidence_grade="U", title="t", data={}),
+            ReportRow(id="rpt-a", project_id="pa", run_id="run-a", formats=["json"]),
+        ])
+        session.flush()
+        session.add(EvidenceRow(id="ev-a", finding_id="f-a", data={}))
+        session.commit()
+    kept = [storage.put_original("pa/aaaa.pdf", b"original"), storage.put_derivative("pa/rpt-a/r.json", b"{}"),
+            storage.put_original("pb/bbbb.pdf", b"other project")]
+    vault = tmp_path / "pii_vault"
+    vault.mkdir()
+    (vault / "pa.vault").write_bytes(b"x")
+    (vault / "pb.vault").write_bytes(b"y")
+    return s, storage, kept, vault
+
+
+def test_purge_requires_the_project_to_be_in_the_trash(purge_case):
+    s, storage, kept, _ = purge_case
+    response = s.client.delete("/api/projects/pa/purge", headers=s.headers("admin"))
+    assert response.status_code == 409 and "휴지통" in response.json()["detail"]
+    assert storage.exists(kept[0])
+
+
+def test_purge_removes_the_project_rows_and_files_but_keeps_audit_and_other_projects(purge_case):
+    from apps.api.db import EvidenceRow, FindingRow, ReportRow
+    s, storage, kept, vault = purge_case
+    headers = s.headers("admin")
+    assert s.client.delete("/api/projects/pa", headers=headers).status_code == 204
+    with s.factory() as session:
+        audit_before = session.query(AuditEventRow).count()
+    response = s.client.delete("/api/projects/pa/purge", headers=headers)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["purged"] and body["files_removed"] == 2 and body["file_errors"] == []
+    assert body["rows"]["projects"] == 1 and body["rows"]["findings"] == 1 and body["rows"]["evidence"] == 1
+    with s.factory() as session:
+        assert session.get(Project, "pa") is None and session.get(Document, "document") is None
+        assert session.get(VerificationRun, "run-a") is None and session.get(ReportRow, "rpt-a") is None
+        assert session.query(EvidenceRow).count() == 0
+        # 다른 프로젝트는 그대로다.
+        assert session.get(Project, "pb") and session.get(VerificationRun, "run-b") and session.get(FindingRow, "f-b")
+        # 감사기록은 지우지 않고 영구 삭제 사실을 하나 더 남긴다.
+        events = session.query(AuditEventRow).order_by(AuditEventRow.sequence).all()
+        assert len(events) == audit_before + 1
+        assert events[-1].event_type == "DELETE" and events[-1].payload["action"] == "PROJECT_PURGED"
+    assert not storage.exists(kept[0]) and not storage.exists(kept[1]) and storage.exists(kept[2])
+    assert not (vault / "pa.vault").exists() and (vault / "pb.vault").exists()
+    assert s.client.get("/api/projects?deleted=true", headers=headers).json() == []
+    assert s.client.delete("/api/projects/pa/purge", headers=headers).status_code == 404
+
+
+@pytest.mark.parametrize("user,status", [("member", 403), ("viewer", 403), ("other", 404)])
+def test_only_project_administrators_can_purge(purge_case, user, status):
+    s, storage, kept, _ = purge_case
+    s.client.delete("/api/projects/pa", headers=s.headers("admin"))
+    assert s.client.delete("/api/projects/pa/purge", headers=s.headers(user)).status_code == status
+    with s.factory() as session:
+        assert session.get(Project, "pa") is not None
+    assert storage.exists(kept[0])

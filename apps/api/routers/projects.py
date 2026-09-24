@@ -20,6 +20,8 @@ from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 from ..db import Document, DocumentVersion, Project, VerificationRun, get_db
 from ..job_control import DurableJob, TERMINAL
 from ..project_lifecycle import lock_project
+from ..project_purge import purge_files, purge_rows
+from ..workspace import ReportJob
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
 from ..services import make_audit
 from ..security import scan_upload
@@ -224,6 +226,31 @@ def restore_project(project_id: str, session: Session = Depends(get_db)):
         make_audit(session).record(AuditEventType.USER_OVERRIDE, {"action": "PROJECT_RESTORED"},
                                   project_id=project_id, actor=actor_id())
     return _project_out(session, project)
+
+
+@router.delete("/projects/{project_id}/purge")
+def purge_project(project_id: str, session: Session = Depends(get_db)):
+    """휴지통에 있는 프로젝트를 영구 삭제한다. 되돌릴 수 없다.
+
+    휴지통에 넣지 않은 프로젝트는 바로 지우지 않는다(실수로 한 번에 지우는 일을 막는다).
+    감사기록은 남기고, 원본·보고서 파일과 가명 처리 보관소는 DB 삭제를 커밋한 뒤 지운다.
+    """
+    lock_project(session, project_id)
+    project = require_project(session, project_id, "ADMIN", include_deleted=True)
+    if project.deleted_at is None:
+        raise HTTPException(409, "휴지통에 있는 프로젝트만 영구 삭제할 수 있습니다. 먼저 휴지통으로 이동하세요.")
+    active_job = session.scalar(select(ReportJob.id).where(
+        ReportJob.project_id == project_id, ReportJob.state.in_(("QUEUED", "RUNNING"))).limit(1))
+    if active_job:
+        raise HTTPException(409, "이 프로젝트의 보고서를 만드는 중입니다. 생성이 끝난 뒤 다시 시도하세요.")
+    counts = purge_rows(session, project_id)
+    session.commit()
+    files = purge_files(project_id)
+    make_audit(session).record(AuditEventType.DELETE,
+                               {"action": "PROJECT_PURGED", "rows": counts,
+                                "files_removed": files["files_removed"], "file_errors": files["file_errors"]},
+                               project_id=project_id, actor=actor_id())
+    return {"project_id": project_id, "purged": True, "rows": counts, **files}
 
 
 @router.get("/projects/{project_id}", response_model=ProjectOut)

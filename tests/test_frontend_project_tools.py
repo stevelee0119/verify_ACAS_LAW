@@ -52,6 +52,10 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
                 route.fulfill(status=204)
             else:
                 route.fulfill(json=project)
+        elif path.endswith("/purge"):
+            assert method == "DELETE"
+            projects.pop(path.split("/")[-2])
+            route.fulfill(json={"purged": True, "files_removed": 1, "file_errors": []})
         elif path.endswith("/restore"):
             project = projects[path.split("/")[-2]]
             project["deleted_at"] = None
@@ -122,13 +126,27 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             page.screenshot(path=str(tmp_path / f"trash-{width}.png"), full_page=True)
             trash.locator(".project-trash-item").filter(has_text="Background case").get_by_role("button", name="복원").click()
             expect(trash.locator(".project-trash-item")).to_have_count(1)
+            # 영구 삭제는 한 번 더 확인한다. 취소하면 요청을 보내지 않는다.
+            second = trash.locator(".project-trash-item").filter(has_text="Second case")
+            expect(second.get_by_role("button", name="영구 삭제")).to_be_visible()
+            assert second.evaluate("el => el.scrollWidth <= el.clientWidth")
+            second.get_by_role("button", name="영구 삭제").click()
+            purge_dialog = page.get_by_role("dialog", name="프로젝트 영구 삭제", exact=True)
+            expect(purge_dialog).to_contain_text("되돌릴 수 없습니다")
+            purge_dialog.get_by_role("button", name="취소", exact=True).click()
+            assert not [p for m, p in requests if p.endswith("/purge")]
+            second.get_by_role("button", name="영구 삭제").click()
+            purge_dialog.get_by_role("button", name="확인", exact=True).click()
+            expect(trash.locator(".project-trash-item")).to_have_count(0)
+            expect(trash).to_contain_text("삭제된 프로젝트가 없습니다")
             trash.get_by_role("button", name="닫기", exact=True).click()
             expect(page.locator("#projectTitle")).to_have_text("Background case")
             page.evaluate("state.project.can_delete = false; projectTools.renderControls()")
             expect(page.locator("#deleteProject")).to_be_hidden()
             assert [(m, p) for m, p in requests if m in {"POST", "DELETE"}
                     and p != "/api/verification-runs/run-alpha/session"] == [
-                ("DELETE", "/api/projects/alpha"), ("DELETE", "/api/projects/beta"), ("POST", "/api/projects/alpha/restore")]
+                ("DELETE", "/api/projects/alpha"), ("DELETE", "/api/projects/beta"), ("POST", "/api/projects/alpha/restore"),
+                ("DELETE", "/api/projects/beta/purge")]
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
             assert not errors
         finally:

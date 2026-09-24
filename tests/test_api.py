@@ -521,3 +521,47 @@ def test_source_diagnostics_reports_why_full_text_is_missing(client, monkeypatch
     assert payload["steps"][0]["matched"] is True and payload["steps"][0]["has_source_id"] is True
     assert "JSON이 아님" in payload["steps"][1]["message"]
     assert "SECRET_OC_VALUE" not in body.text
+
+
+def test_unhandled_error_returns_a_request_id_and_logs_without_case_data(client, monkeypatch, caplog):
+    """처리하지 못한 오류는 문의 번호가 담긴 JSON 500으로 돌려주고, 로그에는 예외 종류·호출 위치만 남긴다."""
+    import logging
+
+    from fastapi.testclient import TestClient
+
+    from apps.api.routers import projects as projects_router
+
+    def broken(session, project):
+        raise RuntimeError("홍길동 사건 원문이 섞인 예외 메시지")
+
+    client.post("/api/projects", json={"name": "오류 재현"})
+    monkeypatch.setattr(projects_router, "_project_out", broken)
+    raw = TestClient(client.app, raise_server_exceptions=False)
+    raw.headers.update(client.headers)
+    with caplog.at_level(logging.ERROR, logger="apps.api.main"):
+        response = raw.get("/api/projects")
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["code"] == "INTERNAL_ERROR" and detail["error_type"] == "RuntimeError"
+    assert detail["request_id"] == response.headers["X-Request-ID"] and detail["request_id"] in detail["message"]
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert detail["request_id"] in logged and "route=/api/projects" in logged and "in broken" in logged
+    assert "홍길동" not in logged and "홍길동" not in response.text
+
+
+def test_value_error_inside_an_endpoint_is_not_reported_as_an_authentication_failure(client, monkeypatch):
+    """엔드포인트 안의 ValueError(데이터 검증 오류 등)를 '인증 설정 오류(503)'로 바꾸지 않는다."""
+    from fastapi.testclient import TestClient
+
+    from apps.api.routers import projects as projects_router
+
+    def broken(session, project):
+        raise ValueError("invalid stored value")
+
+    client.post("/api/projects", json={"name": "값 오류"})
+    monkeypatch.setattr(projects_router, "_project_out", broken)
+    raw = TestClient(client.app, raise_server_exceptions=False)
+    raw.headers.update(client.headers)
+    response = raw.get("/api/projects")
+    assert response.status_code == 500
+    assert response.json()["detail"]["error_type"] == "ValueError"

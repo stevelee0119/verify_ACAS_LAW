@@ -4,9 +4,11 @@ from __future__ import annotations
 import logging
 import os
 import re
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Dict, List
+from uuid import uuid4
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -104,6 +106,27 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.middleware("http")(workspace_access)
+
+    @app.exception_handler(Exception)
+    async def unhandled_error(request: Request, exc: Exception):
+        """처리하지 못한 오류도 원인을 추적할 수 있게 문의 번호와 함께 남긴다.
+
+        예외 메시지에는 SQL 인자·파일 경로 같은 사건 정보가 섞일 수 있어 기록하지 않는다.
+        예외 종류와 호출 위치(스택)만 남기고, 화면에는 같은 문의 번호를 보인다.
+        """
+        request_id = uuid4().hex[:12]
+        route = request.url.path
+        # 소스 줄은 싣지 않는다. 파일·줄 번호·함수 이름이면 원인 위치를 찾기에 충분하다.
+        frames = "\n".join(f"  {Path(f.filename).name}:{f.lineno} in {f.name}"
+                           for f in traceback.extract_tb(exc.__traceback__)[-12:])
+        logging.getLogger(__name__).error(
+            "unhandled_error request_id=%s method=%s route=%s error_type=%s\n%s",
+            request_id, request.method, route, type(exc).__name__, frames)
+        message = (f"서버 내부 오류로 요청을 처리하지 못했습니다 ({type(exc).__name__}). "
+                   f"문의 번호 {request_id}로 서버 기록에서 원인을 확인할 수 있습니다.")
+        return JSONResponse(status_code=500, headers={"X-Request-ID": request_id},
+                            content={"detail": {"message": message, "code": "INTERNAL_ERROR",
+                                                "request_id": request_id, "error_type": type(exc).__name__}})
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):

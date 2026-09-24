@@ -1142,7 +1142,9 @@ table {
 .project-trash-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .project-trash-item>div { min-width: 0; overflow-wrap: anywhere; }
 .project-trash-item p { margin: 6px 0 0; }
-.project-trash-item>button { flex-shrink: 0; }
+.project-trash-item>button, .project-trash-actions { flex-shrink: 0; }
+.project-trash-actions { display: flex; gap: 8px; }
+.project-trash-actions .project-purge { color: #a13d37; }
 .background-job { overflow-wrap: anywhere; }
 .background-job>.badge { margin-left: 10px; }
 .background-job progress { display: block; width: 100%; height: 6px; }

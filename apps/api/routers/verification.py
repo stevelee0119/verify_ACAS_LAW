@@ -196,6 +196,10 @@ async def stream_progress(
     스트림을 열기 전에 접근 권한을 확인한다. 진행률·상태도 사건 정보이다.
     """
     accessible_run(session, user, run_id)
+    # 요청 의존성의 세션은 응답(스트림)이 끝날 때까지 닫히지 않는다. 최대 5분 동안
+    # 커넥션 하나를 붙잡으면 작은 풀(운영 5개)이 스트림 몇 개로 바닥나 다른 요청이
+    # 풀 대기 시간 초과(HTTP 500)로 실패한다. 권한 확인이 끝났으니 바로 돌려준다.
+    session.close()
 
     principal = current_principal()
     with get_session_factory()() as session:

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -45,6 +46,38 @@ class ObjectStorage(ABC):
 
     @abstractmethod
     def exists(self, storage_key: str) -> bool: ...
+
+    def delete_project_files(self, project_id: str) -> int:
+        """휴지통에서 영구 삭제하는 프로젝트의 원본·파생물을 지운다. 지운 파일 수를 돌려준다."""
+        raise NotImplementedError
+
+
+PROJECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+
+
+def _remove_tree(target: Path) -> int:
+    """읽기 전용(0o444)으로 고정한 원본도 지울 수 있게 권한을 풀고 지운다."""
+    if not target.is_dir():
+        return 0
+    files = [p for p in target.rglob("*") if p.is_file()]
+    for item in files:
+        try:
+            os.chmod(item, 0o600)
+        except OSError:  # pragma: no cover - 플랫폼 의존
+            pass
+    shutil.rmtree(target)
+    return len(files)
+
+
+def _project_dirs(root: Path, project_id: str):
+    if not PROJECT_ID_RE.match(project_id or ""):
+        raise ValueError("invalid project id")
+    base = root.resolve()
+    for area in ("originals", "derivatives"):
+        target = (base / area / project_id).resolve()
+        if target.parent != (base / area).resolve():
+            raise ValueError("path traversal detected")
+        yield target
 
 
 class LocalObjectStorage(ObjectStorage):
@@ -92,6 +125,9 @@ class LocalObjectStorage(ObjectStorage):
 
     def exists(self, storage_key: str) -> bool:
         return self._abs(storage_key).exists()
+
+    def delete_project_files(self, project_id: str) -> int:
+        return sum(_remove_tree(target) for target in _project_dirs(self.root, project_id))
 
     def copy_to_temp(self, storage_key: str, suffix: str = "") -> Path:
         """파서가 파일 경로를 요구할 때 원본을 건드리지 않도록 사본을 만든다."""
@@ -233,6 +269,12 @@ class EncryptedObjectStorage(ObjectStorage):
         shutil.copyfile(source, destination)
         os.chmod(destination, 0o600)
         return destination
+
+    def delete_project_files(self, project_id: str) -> int:
+        # 풀어 둔 평문 사본도 함께 지운다. 사본은 개수에 넣지 않는다.
+        for target in _project_dirs(self.cache_root, project_id):
+            _remove_tree(target)
+        return self.base.delete_project_files(project_id)
 
     def purge_plaintext_cache(self) -> int:
         """풀어 둔 평문을 지운다. 처리 후 호출한다."""

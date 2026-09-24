@@ -104,7 +104,8 @@ def _authorize(session, request, principal, route, params, payload):
     if "/members" in template or "/access" in template or request.method == "DELETE":
         minimum = "ADMIN"
     trash_access = ((template == "/api/projects/{project_id}/restore" and request.method == "POST")
-                    or (template == "/api/projects/{project_id}" and request.method == "DELETE"))
+                    or (template in ("/api/projects/{project_id}", "/api/projects/{project_id}/purge")
+                        and request.method == "DELETE"))
     if trash_access:
         minimum = "ADMIN"
     project_ids = set()
@@ -294,13 +295,22 @@ def _clear_session_cookies(response, secure: bool) -> None:
 
 
 async def workspace_access(request, call_next):
+    endpoint_started = False
+
+    async def forward(request):
+        # 아래 ValueError 처리는 인증 설정·요청 해석 오류만 위한 것이다. 엔드포인트 안에서
+        # 난 ValueError(데이터 검증 오류 등)까지 '인증 설정 오류(503)'로 바꾸면 원인이 가려진다.
+        nonlocal endpoint_started
+        endpoint_started = True
+        return await call_next(request)
+
     try:
         mode = auth_mode()
         if mode == "multi-user" and _public_shell(request):
-            return await call_next(request)
+            return await forward(request)
         if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path == "/api/health":
             # Readiness probes are public, never configuration or principal data.
-            response = await call_next(request)
+            response = await forward(request)
             response.headers["Cache-Control"] = "no-store"
             return response
         secure = secure_transport(request)
@@ -313,7 +323,7 @@ async def workspace_access(request, call_next):
             # Login CSRF must be checked even though no principal exists yet.
             check_origin(request, secure=secure,
                          required=bool(request.headers.get("sec-fetch-site") or request.headers.get("cookie")))
-            response = await call_next(request)
+            response = await forward(request)
             response.headers["Cache-Control"] = "no-store"
             response.headers["Vary"] = "Origin, Cookie, Authorization"
             return response
@@ -341,7 +351,7 @@ async def workspace_access(request, call_next):
         request.state.secure_transport = secure
         context_token = _principal.set(principal)
         try:
-            response = await call_next(request)
+            response = await forward(request)
         finally:
             _principal.reset(context_token)
         await run_in_threadpool(_renew_cookie, request, response, principal, secure)
@@ -353,6 +363,8 @@ async def workspace_access(request, call_next):
         # 저장소 키 설정 오류를 인증 오류로 표시하면 엉뚱한 곳을 보게 된다.
         response = JSONResponse({"detail": str(exc)}, status_code=503)
     except ValueError:
+        if endpoint_started:
+            raise
         response = JSONResponse({"detail": "Invalid authentication configuration or request"}, status_code=503)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = ", ".join(filter(None, [response.headers.get("Vary"), "Authorization", "Cookie"]))

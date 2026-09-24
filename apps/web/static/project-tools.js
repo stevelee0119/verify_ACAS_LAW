@@ -65,7 +65,19 @@ const projectTools = (() => {
           } finally { restore.disabled = false; }
         });
         const icon = node("i"); icon.dataset.lucide = "rotate-ccw"; restore.prepend(icon);
-        row.append(info, restore); root.append(row);
+        // 영구 삭제는 되돌릴 수 없으므로 한 번 더 묻는다. 감사기록은 서버가 남긴다.
+        const purge = button("영구 삭제", async () => {
+          if (await ask("프로젝트 영구 삭제", `‘${project.name}’ 프로젝트의 자료·검증 결과·보고서·검토 기록과 업로드 원본을 모두 지웁니다. 되돌릴 수 없습니다. 삭제했다는 사실은 감사기록에 남습니다.`) === null) return;
+          purge.disabled = restore.disabled = true;
+          try {
+            const result = await api(`/projects/${project.id}/purge`, {method:"DELETE"});
+            await draw();
+            toast(result.file_errors?.length ? `프로젝트를 영구 삭제했지만 일부 파일을 지우지 못했습니다: ${result.file_errors.join(", ")}` : "프로젝트를 영구 삭제했습니다.");
+          } finally { purge.disabled = restore.disabled = false; }
+        }, "danger project-purge");
+        const purgeIcon = node("i"); purgeIcon.dataset.lucide = "trash-2"; purge.prepend(purgeIcon);
+        const actions = node("div", null, "project-trash-actions"); actions.append(restore, purge);
+        row.append(info, actions); root.append(row);
       }
       icons();
     }

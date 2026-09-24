@@ -233,3 +233,19 @@ def test_bad_key_configuration_does_not_prevent_the_service_from_starting(monkey
     finally:
         db._engine = db._SessionLocal = None
         reset_storage()
+
+
+def test_project_purge_removes_sealed_objects_and_plaintext_copies_of_one_project(storage):
+    """영구 삭제는 그 프로젝트의 봉인 원본·파생물·평문 사본만 지우고 다른 프로젝트는 건드리지 않는다."""
+    key = storage.put_original("prj_a/aaaa.pdf", b"case A")
+    storage.put_derivative("prj_a/report/r.json", b"{}")
+    other = storage.put_original("prj_b/bbbb.pdf", b"case B")
+    plaintext = storage.path(key)  # 파서용으로 풀어 둔 평문 사본
+    assert plaintext.exists()
+    assert storage.delete_project_files("prj_a") == 2
+    assert not storage.exists(key) and not plaintext.exists()
+    assert storage.get(other) == b"case B"
+    for bad in ("../prj_b", "prj_a/../prj_b", ""):
+        with pytest.raises(ValueError):
+            storage.delete_project_files(bad)
+    assert storage.exists(other)
