@@ -131,3 +131,33 @@ def test_verifier_leaves_majority_consistent_claim_alone():
     from packages.legal_engine.verifier import LegalVerifier
     claim = "군인이 재판청구권을 행사하기 전에 건의 절차를 먼저 거쳐야 하는 것은 아니라고 판시하였다"
     assert LegalVerifier._opinion_findings(_case_citation(claim), OFFICIAL) == []
+
+
+# 공식 판시사항(대법원 2018. 3. 22. 선고 2012두26401 전원합의체 판결, 국가법령정보 공동활용 API 수집 2026-09-24)
+REAL_HOLDING = (" [1] 군인이 상관의 지시와 명령에 대하여 헌법소원 등 재판청구권을 행사하는 것이 군인의 복종의무에 "
+                "위반되는지 여부(원칙적 소극)  [2] 구 군인복무규율 제24조와 제25조를 군인에게 건의나 고충심사를 청구하여야 할 "
+                "의무를 부과한 조항 내지 군인의 재판청구권 행사에 앞서 반드시 거쳐야 하는 군 내 사전절차로서의 의미를 갖는 것으로 "
+                "볼 수 있는지 여부(소극)  [3] 구 군인복무규율 제13조 제1항에서 금지하는 ‘군무 외의 일을 위한 집단행위’의 의미 및 "
+                "군인의 기본권 행사에 해당하는 행위가 이에 해당하는지 판단하는 방법 ")
+# 테스트셋 v1 TC-02 2.가의 서면 문장
+TC02_CLAIM = ("가. 대법원 전원합의체는 \"군인은 상관의 지시에 대하여 이의가 있는 경우 반드시 군 내부의 건의 절차를 먼저 "
+              "거쳐야 하고, 이를 거치지 않은 채 외부 기관에 권리구제를 구하는 것은 복종의무 위반으로서 징계사유가 된다\"라고 "
+              "판시하였습니다 .")
+
+
+def test_reproduction_real_holding_direction_reversed_for_tc02():
+    conflict = direction_conflict(TC02_CLAIM, REAL_HOLDING)
+    assert conflict and conflict["holding_direction"] == "소극"
+
+
+def test_subordinate_negation_does_not_flip_the_claim():
+    holding = "[1] 공무원이 허가 없이 겸직한 것이 징계사유에 해당하는지 여부(적극)"
+    assert direction_conflict("허가를 받지 않고 겸직한 것은 징계사유에 해당한다고 판시하였다", holding) is None
+    assert direction_conflict("허가를 받지 않고 겸직하였더라도 징계사유에 해당하지 않는다고 판시하였다", holding)
+
+
+def test_synthetic_civil_holding_direction():
+    holding = "[1] 임대차계약 종료 후 임차인이 목적물을 계속 점유하는 경우 차임 상당 부당이득반환의무가 있는지 여부(소극)"
+    assert direction_conflict("임대차 종료 후 임차인이 계속 점유하면 차임 상당 부당이득을 반환할 의무가 있다고 판시하였다", holding)
+    assert direction_conflict("임대차 종료 후 임차인이 계속 점유하더라도 차임 상당 부당이득반환의무는 없다고 판시하였다",
+                              holding) is None

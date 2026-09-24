@@ -107,6 +107,10 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"(판례|법령|인용|날짜|사건번호|출처|실존|진위|존재)\s*(여부)?[를을]?\s*(다시|별도로|따로|추가로|직접)?\s*"
         r"(확인|검증|조회|검색)하지\s*(말|마|않)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "검증 금지 요구(한국어)"),
+    # AI·검토 도구를 수신자로 한 검증 금지(대상 명사와 무관). 사람에게 하는 요청과 구분하려고 수신자를 요구한다.
+    (_c(r"(AI|인공지능|LLM|언어\s*모델|검증\s*(?:시스템|엔진|도구)|검토\s*(?:시스템|도구|AI|프로그램)|보조\s*도구)"
+        r"[은는이가]?\s[^.\n]{0,80}?(확인|검증|조회|대조|검산|계산)[을를]?\s*(?:하지\s*(?:말|마)|생략|건너뛰)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "AI 수신 검증 금지 요구"),
     (_c(r"(검증|검토|분석)\s*(대상|절차|범위)?\s*(에서\s*)?(제외|생략|건너뛰|스킵|뺄\s*것|빼)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 0.8, "검증 제외 요구"),
     (_c(r"do\s+not\s+(verify|check|validate|search|look\s+up|fact.?check)"),

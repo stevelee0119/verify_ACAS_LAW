@@ -24,6 +24,8 @@ from typing import Any, Dict, Iterable, List, Optional
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 
+from .exhibits import parse_exhibit_label
+
 ENGINE_NAME = "claim_engine.attachments"
 
 NOT_PROVIDED_RE = re.compile(
@@ -138,12 +140,36 @@ def _table_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     return items
 
 
+NUMBERING_RE = re.compile(r"^\s*(?:\d{1,2}\s*[.)]\s*|[-•·※]\s*)?")
+
+
+def _exhibit_table_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
+    """호증 목록 표(서증명·작성일 등 칸)가 있으면 셀 단위로 자료명을 읽는다(v3 D6)."""
+    from .evidence_consistency import exhibit_rows
+
+    items = []
+    for row in exhibit_rows(doc):
+        if row.get("from_lines") or not row.get("name"):
+            continue
+        items.append({"name": " ".join(row["name"].split()), "reference": row.get("label"), "source": "TABLE",
+                      "table_ref": row.get("table_ref"), "page": row.get("page"),
+                      "stated_status": " ".join(str(row.get(k) or "") for k in ("label", "name", "date")).strip()})
+    return items
+
+
 def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     items = []
-    for block in doc.body_blocks():
-        if block.block_type == "table":
+    # 표 안의 줄(table_line)은 칸 구분이 사라진 채 이어 붙어 있으므로 목록으로 읽지 않는다. 표는 셀 단위로 읽는다.
+    for block in doc.prose_blocks():
+        text = block.text.strip()
+        body = NUMBERING_RE.sub("", text, count=1)
+        exhibit = parse_exhibit_label(body) if body.startswith(("갑", "을", "병", "증")) else None
+        if exhibit and exhibit["span"][0] == 0 and len(_norm(exhibit["name"])) >= 2:
+            items.append({"name": exhibit["name"], "reference": exhibit["label"], "source": "LIST",
+                          "page": block.page, "block_id": block.block_id, "stated_status": text,
+                          "branches": exhibit["branches"]})
             continue
-        m = LIST_ITEM_RE.match(block.text.strip())
+        m = LIST_ITEM_RE.match(text)
         if m:
             items.append({"name": m.group("name").strip(), "reference": " ".join(m.group("label").split()),
                           "source": "LIST", "page": block.page, "block_id": block.block_id,
@@ -175,7 +201,7 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                         claims: Iterable[Any] = ()) -> Dict[str, Any]:
     """첨부 목록·본문 인용·입력 파일을 대조한 결과와 finding을 만든다."""
     uploads = list(uploads)
-    raw = _table_items(doc) + _line_items(doc) + _statement_items(doc)
+    raw = _table_items(doc) + _exhibit_table_items(doc) + _line_items(doc) + _statement_items(doc)
     merged: Dict[str, Dict[str, Any]] = {}
     for item in raw:
         key = _norm(item["name"])
@@ -231,11 +257,34 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                         for status in ("ATTACHED", "NOT_PROVIDED", "REFERENCE_MISSING", "UNVERIFIED")}}
 
 
+def _missing_notice(doc: NormalizedDocument, missing: List[Dict[str, Any]]) -> Finding:
+    """증거 파일을 함께 올리지 않은 실행: 문서당 INFO 알림 1건(v3 D6). 목록은 features와 근거에 싣는다."""
+    listing = [f"{i.get('reference') or ''} {i['name']}".strip() for i in missing]
+    return Finding.create(
+        type=FindingType.EVIDENCE_REFERENCE_MISSING, status=VerificationStatus.UNVERIFIED, severity=Severity.INFO,
+        evidence_grade=EvidenceGrade.C, title=f"첨부 증거 {len(missing)}건이 입력에 없음 — 목록 보기",
+        detail=("이번 실행에는 증거 파일이 함께 입력되지 않아 첨부 자료와 대조하지 않았다. 목록: "
+                + "; ".join(listing[:30]) + (f" 외 {len(listing) - 30}건" if len(listing) > 30 else "")
+                + ". 자료가 없다는 사실만으로 주장이 허위이거나 자료가 위조되었다고 판단하지 않는다."),
+        document_id=doc.document_id, engine=ENGINE_NAME,
+        confidence_features={"attachment_status": "NOT_UPLOADED", "missing_items": listing,
+                             "rule_id": "EVI.ATTACHMENTS_NOT_UPLOADED"},
+        tags=["EVIDENCE", "ATTACHMENT"],
+        evidence=[Evidence.create(description="입력되지 않은 첨부 증거 목록", grade=EvidenceGrade.C,
+                                  document_id=doc.document_id, excerpt="; ".join(listing)[:300])])
+
+
 def _findings(doc: NormalizedDocument, items: List[Dict[str, Any]], hashes: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
+    evidence_uploaded = any(i["status"] == "ATTACHED" for i in items)
+    missing = [i for i in items if i["status"] == "REFERENCE_MISSING"]
+    if missing and not evidence_uploaded:
+        out.append(_missing_notice(doc, missing))
     for item in items:
         if item["status"] not in ("NOT_PROVIDED", "REFERENCE_MISSING"):
             continue
+        if item["status"] == "REFERENCE_MISSING" and not evidence_uploaded:
+            continue  # 증거 파일을 함께 올린 실행에서만 자료별로 대조한다
         provided = item["status"] == "NOT_PROVIDED"
         out.append(Finding.create(
             type=FindingType.EVIDENCE_NOT_PROVIDED if provided else FindingType.EVIDENCE_REFERENCE_MISSING,

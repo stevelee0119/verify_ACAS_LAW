@@ -556,3 +556,16 @@ def test_finalized_report_keeps_the_draft_detail_level(report_case):
     final = finalize(case, draft).json()
     text = "\n".join(p.extract_text() for p in PdfReader(io.BytesIO(download(case, final, "pdf"))).pages)
     assert "detail_level: FULL" in text and "15. 전체 기술 기록" in text
+
+
+def test_summary_verdict_table_has_a_document_column_grouped_by_document(report_case):
+    """v3 D8: 요약 판정 표의 모든 항목에 문서명을 적고 문서별로 묶는다."""
+    from docx import Document as WordDocument
+    report = create(report_case, ["docx"])
+    word = WordDocument(io.BytesIO(download(report_case, report, "docx")))
+    table = word.tables[0]
+    header = [c.text for c in table.rows[0].cells]
+    assert header[0] == "문서"
+    rows = [[c.text for c in r.cells] for r in table.rows[1:]]
+    assert rows and all(r[0] for r in rows)
+    assert report_case.document.filename in {r[0] for r in rows}

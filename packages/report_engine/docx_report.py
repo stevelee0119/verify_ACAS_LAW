@@ -117,20 +117,38 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     summary = detail_level(run_result) == SUMMARY
     paragraph("보고서 분량: " + ("요약본 — 전체 기술 기록은 검증 상세(JSON)에 보존" if summary else "전체 기술 기록 포함"))
     doc.add_heading("검증 결과", 1)
+    # 모든 판정 항목에 문서명을 적고 문서별로 묶는다(v3 D8). 여러 문서에 걸친 판정은 '문서 간' 묶음에 관련 문서를 모두 적는다.
+    names = {getattr(d, "document_id", None): getattr(d, "filename", None) or getattr(d, "document_id", "-")
+             for d in run_result.documents}
+    order = {doc_id: index for index, doc_id in enumerate(names)}
+    cross_ids = {f.finding_id for f in getattr(run_result, "project_findings", None) or []}
+
+    def document_label(f):
+        if f.finding_id in cross_ids:
+            related = [f.document_id] + [getattr(e, "document_id", None) for e in f.evidence or []]
+            related = [names.get(i, i) for i in dict.fromkeys(i for i in related if i)]
+            return "문서 간: " + (", ".join(related) if related else "-")
+        return names.get(f.document_id) or f.document_id or "-"
+
+    def document_order(f):
+        return (f.finding_id in cross_ids, order.get(f.document_id, len(order)))
+
+    findings_in_order = sorted(run_result.all_findings, key=document_order)
     if summary:
-        # 같은 제목·판정의 항목은 한 줄로 묶고 건수를 적는다. 설명은 중간 이상(참고 신호 제외)만 풀어 쓴다.
+        # 같은 문서·제목·판정의 항목은 한 줄로 묶고 건수를 적는다. 설명은 중간 이상(참고 신호 제외)만 풀어 쓴다.
         groups = {}
-        for f in run_result.all_findings:
-            groups.setdefault((f.title, str(f.status), str(f.evidence_grade)), []).append(f)
-        table(["항목", "시스템 판정", "근거 등급"],
-              [[title + (f" ({len(items)}건)" if len(items) > 1 else ""), status, grade]
-               for (title, status, grade), items in groups.items()], [4.5, 1.5, 1])
+        for f in findings_in_order:
+            groups.setdefault((document_label(f), f.title, str(f.status), str(f.evidence_grade)), []).append(f)
+        table(["문서", "항목", "시스템 판정", "근거 등급"],
+              [[label, title + (f" ({len(items)}건)" if len(items) > 1 else ""), status, grade]
+               for (label, title, status, grade), items in groups.items()], [1.4, 3.6, 1.3, 0.7])
         detailed = [items[0] for items in groups.values()
                     if not items[0].advisory_only and str(items[0].severity) in ("CRITICAL", "HIGH", "MEDIUM")]
     else:
-        table(["항목", "시스템 판정", "근거 등급"],
-              [[f.title, str(f.status), str(f.evidence_grade)] for f in run_result.all_findings], [4.5, 1.5, 1])
-        detailed = run_result.all_findings
+        table(["문서", "항목", "시스템 판정", "근거 등급"],
+              [[document_label(f), f.title, str(f.status), str(f.evidence_grade)] for f in findings_in_order],
+              [1.4, 3.6, 1.3, 0.7])
+        detailed = findings_in_order
     for finding in detailed:
         doc.add_heading(xml_text(finding.title), 2)
         paragraph(finding.detail)

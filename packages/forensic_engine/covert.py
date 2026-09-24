@@ -26,7 +26,11 @@ ENGINE_NAME = "forensic_engine.mm3"
 
 URL_RE = re.compile(r"https?://[^\s\"'<>)]+")
 TRACKING_PARAM_RE = re.compile(r"[?&](utm_[a-z]+|cid|uid|track|tid|ref)=", re.IGNORECASE)
-FILENAME_MARKER_RE = re.compile(r"(copy|dist|배포|사본|v\d+|_[A-Za-z0-9]{8,}_)", re.IGNORECASE)
+# 배포 대상별로 붙인 무작위 식별자로 볼 만한 것만 본다(16자 이상 16진수, UUID). copy·dist·사본·v2 같은 일반 단어와
+# 버전 표기는 근거가 없어 보지 않는다(추가지시 G6: 'scan', 'bundle' 등으로 생긴 오탐).
+FILENAME_MARKER_RE = re.compile(
+    r"(?<![0-9a-f])(?:[0-9a-f]{16,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?![0-9a-f])",
+    re.IGNORECASE)
 
 ZW_CANARY_MIN = 8
 
@@ -147,8 +151,9 @@ def scan_covert(doc: NormalizedDocument) -> List[Finding]:
                 doc,
                 FindingType.DOCUMENT_FINGERPRINT_SUSPECTED,
                 Severity.INFO,
-                f"파일명에 배포본 식별 가능 문자열이 있다: {doc.filename}",
-                "파일명 규칙 자체가 배포 대상별 식별자로 쓰일 수 있다는 참고정보이다.",
+                f"파일명에 무작위 식별자로 보이는 문자열이 있다(참고): {doc.filename}",
+                "16진수 16자 이상 또는 UUID 형태의 문자열은 배포 대상별 식별자로 쓰일 수 있다는 참고정보이다. "
+                "단독으로 추적·유출을 뜻하지 않는다.",
                 level=ForensicLevel.BENIGN,
             )
         )

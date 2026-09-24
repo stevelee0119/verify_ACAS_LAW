@@ -24,6 +24,7 @@ from .classifier import Classification, classify, severity_for
 from .cross_layer import compare_layers
 from .encoding_scan import decode_candidates
 from .unicode_scan import scan_unicode
+from .patterns import AI_ADDRESSING_RE
 
 ENGINE_NAME = "adversarial_engine"
 
@@ -151,6 +152,11 @@ class AdversarialScanner:
             finding_type = self._finding_type_for_block(block, classification)
             severity = severity_for(classification, in_ocr_layer=in_ocr)
             bbox = _union_bbox(blocks)
+            # 보이는 본문이라도 AI·검토 도구를 수신자로 검증 생략·결과 조작·보고 억제를 요구하면 B 이상(v3 D9)
+            machine_directed = (block.visible and not descriptive and bool(AI_ADDRESSING_RE.search(text))
+                                and bool({str(i) for i in classification.intents}
+                                         & {"VERIFICATION_SUPPRESSION", "OUTPUT_MANIPULATION"}))
+            grade = EvidenceGrade.A if not block.visible else EvidenceGrade.B if machine_directed else EvidenceGrade.C
             features = {
                 "deterministic_rule": True,
                 "cross_layer_mismatch": not block.visible,
@@ -162,13 +168,14 @@ class AdversarialScanner:
                 "hidden_reason": block.attributes.get("hidden_reason"),
                 "injection_path": _injection_path(block),
                 "bbox": bbox.as_tuple() if bbox else None,
+                "machine_directed_suppression": machine_directed,
             }
             out.append(
                 Finding.create(
                     type=finding_type,
                     status=VerificationStatus.SUSPICIOUS,
                     severity=severity,
-                    evidence_grade=EvidenceGrade.A if not block.visible else EvidenceGrade.C,
+                    evidence_grade=grade,
                     title=("지시문을 주제로 설명·언급하는 문구 (명령 아님)" if descriptive
                            else self._title_for(finding_type, classification, block)),
                     detail=self._detail_for(block, classification),
@@ -187,7 +194,7 @@ class AdversarialScanner:
                     evidence=[
                         Evidence.create(
                             description=f"{block.source_layer} 레이어에서 관찰된 지시형 문자열",
-                            grade=EvidenceGrade.A if not block.visible else EvidenceGrade.C,
+                            grade=grade,
                             document_id=doc.document_id,
                             block_id=block.block_id,
                             page=block.page,

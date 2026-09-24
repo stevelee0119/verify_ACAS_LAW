@@ -422,6 +422,7 @@ class LegalVerifier:
                     "quote_mismatch": True,
                     "deterministic_rule": True,
                     "quote_similarity": round(ratio, 3),
+                    "defect_summary": f"직접 인용문 불일치(원문과 최대 유사도 {ratio:.2f})",
                 }
                 verdict.findings.append(
                     Finding.create(
@@ -812,6 +813,16 @@ class LegalVerifier:
                 elif citation.title and record.get("title") and similarity(citation.title, str(record["title"])) >= 0.85:
                     matches.append(record)
 
+        failed = [r for r in responses if r.status != AdapterStatus.READY]
+        if not matches and failed:
+            # 설정된 출처 가운데 하나라도 답하지 못했으면(키 없음·요청 한도·오류) '찾지 못함'이 아니라 미확인이다(v3 D7).
+            names = ", ".join(f"{getattr(r, 'adapter', None) or getattr(r.source_record, 'adapter', '?')}"
+                              f"({r.status})" for r in failed)
+            reason = f"조회에 실패한 출처가 있어 존재 여부를 판단하지 않는다 — 실패: {names}; 정상 응답 {len(usable)}곳에서는 찾지 못함"
+            verdict.levels["lookup"] = "PARTIAL_FAILURE"
+            verdict.notes.append(reason)
+            verdict.findings.append(self._unverified_finding(citation, reason, failed[0].source_record))
+            return verdict
         if not matches:
             verdict.status = VerificationStatus.NOT_FOUND
             features = {"official_source_absent": True, "source_count": len(usable)}
@@ -929,15 +940,20 @@ class LegalVerifier:
             conflict = direction_conflict(claim, holding)
             if conflict:
                 principled = conflict["principled"]
+                # 쟁점 대응이 뚜렷하고(유사도 높음) '원칙적' 판단이 아니면 확정(B), 아니면 사람 확인(C)
+                firm = conflict.get("strong", True) and not principled
                 out.append(make(
                     "HOLDING_DIRECTION_REVERSED",
-                    VerificationStatus.SUSPICIOUS if principled else VerificationStatus.CONTRADICTED,
-                    EvidenceGrade.C if principled else EvidenceGrade.B,
+                    VerificationStatus.CONTRADICTED if firm else VerificationStatus.SUSPICIOUS,
+                    EvidenceGrade.B if firm else EvidenceGrade.C,
                     f"판시사항과 결론 방향이 반대(판결: {'원칙적 ' if principled else ''}{conflict['holding_direction']}, "
                     f"서면: {conflict['claim_direction']})",
                     f"판시사항의 쟁점 '{conflict['issue']}'에 대해 판결은 "
                     f"{'원칙적 ' if principled else ''}{conflict['holding_direction']}으로 판단했는데, 서면은 반대로 단정한다."
-                    + (" '원칙적' 판단이므로 예외 사정은 사람이 확인한다." if principled else ""),
+                    + (" '원칙적' 판단이므로 예외 사정은 사람이 확인한다." if principled else "")
+                    + ("" if conflict.get("strong", True) else
+                       f" 서면 문장('{conflict['clause'][:60]}')과 쟁점의 대응이 약해(유사도 {conflict['issue_similarity']:.2f}) "
+                       "같은 쟁점인지 사람이 확인한다."),
                     conflict["issue"], {"direction": conflict,
                                         "defect_summary": f"판시 방향 반대(판결 {conflict['holding_direction']})"}))
         return out
