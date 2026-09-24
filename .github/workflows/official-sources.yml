@@ -1,0 +1,37 @@
+name: 공식 원문 수집
+
+# 규칙표(data/legal_rules)의 근거가 될 공식 원문을 국가법령정보 API에서 받아 로그에 남긴다.
+# 실행: Actions → "공식 원문 수집" → Run workflow, 또는 커밋 메시지에 [fetch-sources]
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "claude/**"]
+
+jobs:
+  fetch:
+    if: >-
+      github.event.repository.fork == false &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[fetch-sources]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
+      LV_ALLOW_NETWORK: "1"
+      LV_HTTP_TIMEOUT: "20"
+      LV_DATA_DIR: ${{ github.workspace }}/.src-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: 공식 원문 수집
+        run: python scripts/fetch_official_sources.py --out official_sources.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: official-sources
+          path: official_sources.jsonl
+          retention-days: 14
