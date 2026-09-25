@@ -231,9 +231,10 @@ class PdfParser(DocumentParser):
                         continue
                     bbox = self._line_bbox(line)
                     hidden_reason = self._hidden_reason(line, page)
-                    if clipped:
+                    if clipped and (hidden_reason is None or hidden_reason.startswith("TINY_FONT")):
                         # 클리핑 영역 밖(또는 면적 0인 클리핑)에 그린 글자는 크기와 무관하게 보이지 않는다(v5 3-7).
-                        # 작은 글자로 함께 숨긴 경우에도 실제 숨김 수단인 클리핑으로 분류한다.
+                        # 작은 글자로 함께 숨긴 경우에도 실제 숨김 수단인 클리핑으로 분류한다. 쪽 경계도 클리핑으로 잡히므로
+                        # 페이지 밖 좌표(OFF_PAGE) 등 더 구체적인 사유는 그대로 둔다.
                         keys = [(index, round(float(c["x0"]), 1), round(float(c["y0"]), 1))
                                 for c in line if c["text"].strip()]
                         if keys and sum(k in clipped for k in keys) >= max(1, 0.8 * len(keys)):

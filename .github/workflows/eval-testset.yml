@@ -9,6 +9,9 @@ on:
   push:
     branches: ["main", "claude/**"]
 
+permissions:
+  contents: write
+
 concurrency:
   group: eval-testset-${{ github.ref }}
   cancel-in-progress: true
@@ -68,3 +71,21 @@ jobs:
           name: eval-reports
           path: reports-ci/
           retention-days: 14
+      # 완전 환경(공식 DB·AI 3종·한국어 OCR) 실행 결과를 저장소에 남긴다(v5 2-1). 채점 결과(eval_*.json·md)와
+      # 파이프라인 결과(result_*.json, gzip)를 docs/eval_ci/에 두어 같은 결과 JSON으로 다시 채점·비교할 수 있게 한다.
+      - name: 평가 결과 기록
+        if: always() && github.event_name == 'push'
+        run: |
+          set -e
+          mkdir -p docs/eval_ci
+          rm -f docs/eval_ci/*
+          cp reports-ci/eval_*.json reports-ci/eval_*.md docs/eval_ci/ 2>/dev/null || true
+          for f in reports-ci/result_*.json; do [ -f "$f" ] && gzip -c "$f" > "docs/eval_ci/$(basename "$f").gz"; done
+          echo "{\"commit\": \"${GITHUB_SHA}\", \"run_id\": \"${GITHUB_RUN_ID}\", \"at\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"}" > docs/eval_ci/RUN.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/eval_ci
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: 완전 환경 테스트셋 평가 결과 기록 [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
