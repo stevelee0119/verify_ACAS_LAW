@@ -649,10 +649,9 @@ class VerificationPipeline:
             result.authorship = assessment.to_dict()
             result.findings.extend(authorship_findings(doc, assessment))
 
-        # 메타데이터 AI 힌트 여부
-        metadata_hint = bool(assessment.signals.get("provenance_metadata")) or any(
-            f.type == FindingType.METADATA_ANOMALY for f in result.findings
-        )
+        # 메타데이터 AI 힌트: 생성 도구 이름(ChatGPT 등)·C2PA 같은 실제 AI 표기만 쓴다. '생성·저장 도구가 다름',
+        # 양식 필드·첨부 같은 일반 메타데이터 이상은 AI 관여의 근거가 아니다(v4 P6: 모든 문서에 0.35가 붙던 원인).
+        metadata_hint = bool(assessment.signals.get("provenance_metadata") or assessment.signals.get("has_c2pa"))
         emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
         # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
         injection_texts = [str((f.confidence_features or {}).get("observed_text") or "")

@@ -91,9 +91,16 @@ def unified_authorship(document: Any) -> Dict[str, Any]:
     detector = document.ai_detector_result or {}
     stylometry = (document.authorship or {}).get("verdict")
     verdict = detector.get("verdict") or stylometry or "UNCERTAIN"
+    traces = int((detector.get("signals") or {}).get("objective_traces") or 0)
+    # 두 축을 나눈다(v4 P6): AI가 관여했다는 객관적 흔적이 있는가(관여), 있다면 문서의 어디까지인가(범위).
+    # 흔적이 없다는 것은 '사람 작성'의 근거가 아니다.
+    involvement = "TRACES_FOUND" if traces else "NO_OBJECTIVE_TRACES"
+    scope = ({"AI_FULL_GENERATION_LIKELY": "WHOLE_DOCUMENT", "AI_PARTIAL_GENERATION": "PART_OF_DOCUMENT"}
+             .get(verdict, "UNDETERMINED") if traces else "NOT_APPLICABLE")
     return {"document_id": document.document_id, "verdict": verdict,
             "basis": "AI_DETECTOR" if detector.get("verdict") else "STYLOMETRY",
-            "score": detector.get("score"), "stylometry_signal": stylometry}
+            "score": detector.get("score"), "stylometry_signal": stylometry,
+            "involvement": involvement, "objective_traces": traces, "scope": scope}
 
 
 def _sum_components(documents: List[Any]) -> Dict[str, int]:
@@ -203,6 +210,10 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
         "axes": {
             "ai_authorship": {
                 "verdicts": [v["verdict"] for v in authorship_verdicts],
+                "involvement": {k: sum(1 for v in authorship_verdicts if v["involvement"] == k)
+                                for k in ("TRACES_FOUND", "NO_OBJECTIVE_TRACES")},
+                "scope": {k: sum(1 for v in authorship_verdicts if v["scope"] == k)
+                          for k in ("WHOLE_DOCUMENT", "PART_OF_DOCUMENT", "UNDETERMINED")},
                 "documents": authorship_verdicts,
                 # AI 관여의 객관적 흔적(응답 잔재). 작성 주체의 단정 근거가 아니라 확인할 흔적이다.
                 "response_residue": {

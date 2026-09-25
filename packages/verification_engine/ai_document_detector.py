@@ -210,6 +210,8 @@ async def detect_ai_document(
         "가린 부분 포함, 공격 탐지에서 따로 다룸).\n"
         "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
         "문장을 그대로 옮기십시오.\n"
+        "reasons의 kind: style은 작성 흔적(문체·응답 잔재 등) 근거, contradiction은 문서 안의 날짜·금액·기간 모순 "
+        "지적, confirmation은 모순이 없음을 확인한 내용입니다. 모순 지적과 확인은 작성 주체의 근거로 쓰지 마십시오.\n"
         "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
         "이내). 주민등록번호 등 개인 식별번호가 든 문장은 발췌하지 말고, 인터넷 주소(URL)는 쓰지 마십시오"
         "(응답이 보안 검사에서 격리됩니다). JSON 객체 하나만 답하십시오.\n\n"
@@ -217,7 +219,7 @@ async def detect_ai_document(
         "{\n"
         '  "verdict": "AI_FULL_GENERATION_LIKELY" | "AI_PARTIAL_GENERATION" | "HUMAN_AUTHORED_LIKELY" | "UNCERTAIN",\n'
         '  "ai_score": 0.0 ~ 1.0,\n'
-        '  "reasons": ["구체적인 판단 근거 1", "근거 2", ...],\n'
+        '  "reasons": [{"kind": "style" | "contradiction" | "confirmation", "text": "구체적인 근거"}, ...],\n'
         '  "suspicious_excerpts": [\n'
         '    {"snippet": "의심 문장 또는 문단", "reason": "이 부분이 AI 생성으로 의심되는 구체적 이유"}\n'
         "  ]\n"
@@ -247,6 +249,26 @@ async def detect_ai_document(
     return _combine_model_verdicts(rule_res, answers, sample)
 
 
+REASON_KINDS = ("style", "contradiction", "confirmation")
+
+
+def _structured_reasons(raw: Any) -> List[Dict[str, str]]:
+    """모델 근거를 {kind, text}로 맞춘다. 문자열이면 사실 모순 표현이 있는지로 kind를 추정한다(예전 형식)."""
+    out = []
+    for item in (raw or [])[:4]:
+        if isinstance(item, dict):
+            text = str(item.get("text") or item.get("reason") or "")[:300]
+            kind = str(item.get("kind") or "").lower()
+            if kind not in REASON_KINDS:
+                kind = "contradiction" if _fact_category(text) else "style"
+        else:
+            text = str(item)[:300]
+            kind = "contradiction" if _fact_category(text) else "style"
+        if text.strip():
+            out.append({"kind": kind, "text": text})
+    return out
+
+
 _DETECTOR_SCHEMA = {
     "type": "object",
     "required": ["verdict"],
@@ -254,7 +276,9 @@ _DETECTOR_SCHEMA = {
         "verdict": {"enum": ["AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION",
                              "HUMAN_AUTHORED_LIKELY", "UNCERTAIN"]},
         "ai_score": {"type": "number"},
-        "reasons": {"type": "array", "items": {"type": "string"}},
+        # 근거는 {"kind", "text"} 객체다(v4 P6). 예전 형식(문자열)도 받는다.
+        "reasons": {"type": "array", "items": {"type": "object", "properties": {
+            "kind": {"enum": list(REASON_KINDS)}, "text": {"type": "string"}}}},
         "suspicious_excerpts": {"type": "array", "items": {"type": "object"}},
     },
 }
@@ -297,8 +321,13 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
             score = rule_res.score
         opinions.append({"provider": getattr(execution, "provider", "unknown"),
                          "model": getattr(execution, "model", ""), "verdict": verdict, "score": score,
-                         "reasons": [str(r)[:300] for r in (parsed.get("reasons") or [])][:4],
+                         "structured_reasons": _structured_reasons(parsed.get("reasons")),
                          "excerpts": [e for e in (parsed.get("suspicious_excerpts") or []) if isinstance(e, dict)]})
+    for o in opinions:
+        # 확인(모순 없음) 문장은 작성 주체의 근거도, 사실 모순 지적도 아니다. 참고로만 따로 둔다.
+        o["reasons"] = [r["text"] for r in o["structured_reasons"] if r["kind"] != "confirmation"]
+        o["confirmations"] = [r["text"] for r in o["structured_reasons"] if r["kind"] == "confirmation"]
+        o["contradictions"] = [r["text"] for r in o["structured_reasons"] if r["kind"] == "contradiction"]
     if not opinions:
         if failed_text:
             rule_res.reasons.append(f"AI 교차검토를 수행하지 못해 규칙 기반 결과만 사용함 — 응답하지 못한 모델: {failed_text}")
@@ -376,7 +405,10 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "llm_providers": [o["provider"] for o in opinions],
                  "llm_verdicts": {o["provider"]: o["verdict"] for o in opinions},
                  "llm_opinions": [{"provider": o["provider"], "model": o["model"], "verdict": o["verdict"],
-                                   "score": round(o["score"], 3), "reasons": o["reasons"]} for o in opinions],
+                                   "score": round(o["score"], 3), "reasons": o["reasons"],
+                                   "structured_reasons": o["structured_reasons"]} for o in opinions],
+                 "model_confirmations": [f"[{o['provider']}] {c}" for o in opinions for c in o["confirmations"]],
+                 "model_contradictions": [f"[{o['provider']}] {c}" for o in opinions for c in o["contradictions"]],
                  "llm_agreement": agreement,
                  "llm_failures": failures,
                  "llm_failure_models": failure_models,
@@ -464,7 +496,11 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
     """분석 결과를 시스템 Finding 목록으로 변환."""
     findings: List[Finding] = []
     # 사실 모순 지적은 AI 작성 근거에서 빼고 내용 검증 항목으로 따로 낸다(J2).
-    remark_reasons = [(r, _fact_category(r)) for r in result.reasons]
+    # 모델이 contradiction으로 표시한 근거만 사실 모순 지적이다. 표시가 없는 규칙 근거는 표현으로 추정한다.
+    contradictions = set(result.signals.get("model_contradictions") or [])
+    structured = bool(result.signals.get("llm_opinions"))
+    remark_reasons = [(r, (_fact_category(r) or "OTHER") if r in contradictions else
+                       (None if structured and r.startswith("[") else _fact_category(r))) for r in result.reasons]
     for reason, category in remark_reasons:
         if category:
             findings.append(_fact_remark_finding(doc, reason, category))
@@ -550,8 +586,9 @@ def create_ai_detector_findings(doc: NormalizedDocument, result: AIDetectorResul
             )
         )
 
-    # AI 응답 잔재: 범주마다 하나씩, 발견한 문구를 그대로 싣는다(참고용, 확정 불가).
-    for residue in result.signals.get("residues") or []:
+    # AI 응답 잔재: 객관적 흔적은 ai_residue.residue_findings가 '생성 초안 흔적(DRAFT_ARTIFACT)'으로 싣는다.
+    # 여기서는 사람도 쓰는 문체 신호만 참고 부록(advisory)으로 싣는다(v4 P6 약한 신호 분리).
+    for residue in [r for r in result.signals.get("residues") or [] if not r["objective"]]:
         sample = residue["matches"][0]
         findings.append(Finding.create(
             type=FindingType.AI_AUTHORSHIP_LIKELY,
