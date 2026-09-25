@@ -52,6 +52,16 @@ CONSISTENCY_TYPES = {
     FindingType.EVIDENCE_PERSON_INCONSISTENT,
     FindingType.CROSS_DOC_COPY,
 }
+# 법리 주장의 타당성(인용 정확성과 따로 센다). 결론은 사람이 판단할 항목이 섞여 있다.
+REASONING_TYPES = {
+    FindingType.LEGAL_ARGUMENT_INVALID,
+    FindingType.UNSUPPORTED_GENERALIZATION,
+    FindingType.OVERCLAIM,
+    FindingType.REASONING_GAP,
+    FindingType.LEGAL_REQUIREMENT_OMITTED,
+    FindingType.AUTHORITY_RANK_ERROR,
+    FindingType.UNCERTAINTY_NOT_DISCLOSED,
+}
 AUTHENTICITY_TYPES = {
     FindingType.SPECIMEN_DOCUMENT_DECLARED,
     FindingType.INVALID_IDENTIFIER,
@@ -135,6 +145,8 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
     authenticity = [f for f in findings if f.type in AUTHENTICITY_TYPES]
     forgery = [f for f in findings if f.type in FORGERY_TYPES]
     advisory = [f for f in findings if f.type in MM4_ADVISORY_TYPES or f.advisory_only]
+    reasoning = [f for f in findings if f.type in REASONING_TYPES and not f.advisory_only]
+    residue = [f for f in findings if (f.confidence_features or {}).get("defect_code") == "AI_RESPONSE_RESIDUE"]
 
     citation_total = sum(len(d.citations) for d in result.documents)
     unverified_only = [i for i in result.unverified_items if i.get("kind") != "applicability"]
@@ -189,6 +201,12 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
             "ai_authorship": {
                 "verdicts": [v["verdict"] for v in authorship_verdicts],
                 "documents": authorship_verdicts,
+                # AI 관여의 객관적 흔적(응답 잔재). 작성 주체의 단정 근거가 아니라 확인할 흔적이다.
+                "response_residue": {
+                    "count": len(residue),
+                    "categories": sorted({str((f.confidence_features or {}).get("residue_category")) for f in residue}),
+                    "documents": sorted({f.document_id for f in residue if f.document_id}),
+                },
                 "note": "확정판정이 아니며 사용자 판단이 필요하다. 문서별 판정은 규칙·모델 교차판정 하나로 내고 "
                         "문체 통계는 보조 신호로만 표시한다.",
             },
@@ -205,6 +223,12 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 "content_confirmed": _sum_components(result.documents).get("content_confirmed", 0),
                 "issue_count": len(legal),
                 "risk": content_risk(legal),
+                # 법리 주장 검토(규칙·주장 유형). 인용 정확성과 섞지 않고 따로 센다.
+                "reasoning_issues": len(reasoning),
+                "reasoning_by_type": {str(t): sum(1 for f in reasoning if f.type == t)
+                                      for t in sorted({f.type for f in reasoning}, key=str)},
+                "reasoning_human_review": sum(1 for f in reasoning if "사람 판단" in (f.title or "")
+                                              or (f.confidence_features or {}).get("human_review")),
                 "note": "verified는 사건 적용을 뺀 모든 단계가 확인된 인용 수이고, "
                         "components.identity_confirmed는 인용 대상 자체를 공식 원문으로 확인한 수다.",
             },

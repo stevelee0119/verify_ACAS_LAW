@@ -270,7 +270,7 @@ ITEMS: List[Dict[str, Any]] = [
      "call": ("legal_engine/citation_extractor.py", "_resolve_article_references"), "tests": "test_v3_g3_paragraph_binding.py", "report_na": True,
      "defects": [D("G3-1", "민사: '같은 조 제2항' → 가상손해배상법 제10조 제2항", check=lambda out: resolved_label(out, "민사_준비서면.pdf", "가상손해배상법 제10조 제2항"))]},
     {"id": "G4", "title": "법리 주장 유형 분류→근거 조회→판단", "code": "legal_engine/claim_review.py",
-     "call": ("verification_engine/pipeline.py", "review_claims"), "tests": "test_v3_g4_claims.py",
+     "call": ("verification_engine/pipeline.py", "review_claims"), "tests": "test_v3_g4_claims.py, test_v4_g4_reasoning_axis.py",
      "defects": [D("G4-1", "민사: 전칭 일반화", lambda f: rule(f) == "CLAIM.UNSUPPORTED_GENERALIZATION"),
                  D("G4-2", "민사: 법률 근거 없는 배수 배상", lambda f: rule(f) == "CLAIM.NO_BASIS_REMEDY"),
                  D("G4-3", "행정: 취소소송 제소기간 배제 주장", lambda f: rule(f) in {"CLAIM.LITIGATION_REQUIREMENT_EXCLUSION", "ADMIN.DEADLINE_EXCEPTION"})]},
