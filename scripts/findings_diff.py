@@ -7,6 +7,9 @@
 
 finding은 (문서, 유형, 규칙·결함 코드, 제목의 숫자·식별자를 뺀 형태)로 맞춘다. 정답지를 쓰지 않으므로
 '새로 생긴 finding'이 정탐인지 오탐인지는 판정하지 않는다. 없어진 결함 주장 finding은 회귀 후보로 보고한다.
+새로 생긴 CONTRADICTED 판정과 A·B등급 SUSPICIOUS 판정은 모두 '오탐 후보'로 따로 싣는다(사람 확인, v5 2-2).
+두 결과의 환경 지문(run_manifest.environment.fingerprint)이 다르면 '비교 불가 항목'을 먼저 적고,
+'회귀 0건'이라는 결론을 쓰지 않는다(v5 1-4).
 """
 from __future__ import annotations
 
@@ -20,6 +23,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 DEFECT_STATUSES = {"NOT_FOUND", "CONTRADICTED", "SUSPICIOUS", "INVALID_FORMAT", "INVALID"}
 # 문서 내용에 대한 결함 주장이 아니라 처리 실패 알림이다. 없어지면 '읽기 실패 해소'로 따로 보고한다.
 PROCESSING_NOTICES = {"PARSE_ERROR", "OCR_LOW_QUALITY"}
@@ -70,8 +74,30 @@ def finding_keys(result: Dict[str, Any]) -> Counter:
     return keys
 
 
+def _verdicts(result: Dict[str, Any]) -> Dict[Tuple, List[str]]:
+    """finding 키 → 그 키에 해당하는 finding들의 '상태/등급' 목록(오탐 후보 판단용)."""
+    out: Dict[Tuple, List[str]] = {}
+    docs = [((d.get("filename") or d.get("document_id") or "").split("_")[0], d.get("findings") or [])
+            for d in result.get("documents") or []] + [("(문서 간)", result.get("project_findings") or [])]
+    for doc, findings in docs:
+        for f in findings:
+            code = f.get("rule_id") or (f.get("confidence_features") or {}).get("defect_code") or ""
+            key = (doc, str(f.get("type")), str(code), _norm_title(f.get("title")), is_defect(f))
+            if not f.get("advisory_only"):
+                out.setdefault(key, []).append(f"{f.get('verification_status') or f.get('status')}/{f.get('evidence_grade')}")
+    return out
+
+
+def is_fp_candidate(verdicts: List[str]) -> bool:
+    return any(v.startswith("CONTRADICTED/") or v in ("SUSPICIOUS/A", "SUSPICIOUS/B") for v in verdicts)
+
+
 def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
+    from packages.verification_engine.environment import comparability
+
     before, after = finding_keys(previous), finding_keys(current)
+    env = comparability((previous.get("run_manifest") or {}).get("environment"),
+                        (current.get("run_manifest") or {}).get("environment"))
     added = [(k, after[k] - before.get(k, 0)) for k in after if after[k] > before.get(k, 0)]
     removed = [(k, before[k] - after.get(k, 0)) for k in before if before[k] > after.get(k, 0)]
 
@@ -85,6 +111,14 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
     merged = _merged_into_current(removed_rows, current, resolved)
     lost_defects = [r for r in removed_rows if r["defect_claim"] and r["count"] > 0
                     and r not in resolved and r not in merged]
+    verdicts = _verdicts(current)
+    fp_candidates = []
+    for r in added_rows:
+        if r["count"] <= 0:
+            continue
+        seen = verdicts.get((r["doc"], r["type"], r["code"], r["title"], r["defect_claim"]), [])
+        if is_fp_candidate(seen):
+            fp_candidates.append({**r, "verdicts": sorted(set(seen))})
     return {"summary": {"findings": [sum(before.values()), sum(after.values())],
                         "defect_claims": [sum(n for k, n in before.items() if k[4]), sum(n for k, n in after.items() if k[4])],
                         "release_gate": [(previous.get("summary") or {}).get("release_gate"),
@@ -92,7 +126,8 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
             "added": [r for r in added_rows if r["count"] > 0], "removed": [r for r in removed_rows if r["count"] > 0],
             "reworded": reworded, "resolved_processing_failures": resolved, "merged_into_current": merged,
             "lost_defect_claims": lost_defects,
-            "regression_candidates": sum(r["count"] for r in lost_defects)}
+            "regression_candidates": sum(r["count"] for r in lost_defects),
+            "false_positive_candidates": fp_candidates, "environment": env}
 
 
 def _excerpt(title: str) -> str:
@@ -147,9 +182,18 @@ def _pair_reworded(removed: List[Dict[str, Any]], added: List[Dict[str, Any]]) -
 
 def render(title: str, d: Dict[str, Any]) -> str:
     s = d["summary"]
-    lines = [f"### {title}", "",
+    env = d.get("environment") or {}
+    lines = [f"### {title}", ""]
+    if not env.get("same_environment"):
+        lines += [f"**환경 지문이 다르거나 기록되지 않았다({env.get('fingerprints')}). 아래 영역은 비교할 수 없다:**", ""]
+        lines += [f"- {a}" for a in env.get("incomparable_areas") or ["(환경 기록 없음)"]] + [""]
+    regression = (f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**" if env.get("same_environment") else
+                  f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건 — 환경이 달라 이 수치로 '회귀 0건'이라고 "
+                  f"결론 내리지 않는다(비교 가능 영역 한정)**")
+    lines += [f"- 환경 지문: {env.get('fingerprints')}",
              f"- finding {s['findings'][0]} → {s['findings'][1]}, 결함 주장 finding {s['defect_claims'][0]} → {s['defect_claims'][1]}",
-             f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**",
+             regression,
+             f"- **오탐 후보(새로 생긴 CONTRADICTED·A/B 판정, 사람 확인) {sum(r['count'] for r in d.get('false_positive_candidates', []))}건**",
              f"- 해소된 처리 실패 알림(본문을 읽게 됨 등) {sum(r['count'] for r in d.get('resolved_processing_failures', []))}건",
              f"- 현재 finding에 합쳐진 결함 주장(발췌문 포함 확인) {sum(r['count'] for r in d.get('merged_into_current', []))}건", ""]
     lines += [f"**문구만 바뀐 finding(같은 결함)** ({sum(r['count'] for r in d['reworded'])}건)", ""]
@@ -158,6 +202,16 @@ def render(title: str, d: Dict[str, Any]) -> str:
         for r in d["reworded"]:
             lines.append(f"| {r['doc']} | {r['type']} | {r['before'].replace('|', '/')[:70]} | "
                          f"{r['after'].replace('|', '/')[:70]} | {r['similarity']} |")
+        lines.append("")
+    else:
+        lines += ["없음", ""]
+    lines += [f"**오탐 후보 — 새로 생긴 CONTRADICTED·A/B 판정(정탐 여부는 사람이 확인)** "
+              f"({sum(r['count'] for r in d.get('false_positive_candidates', []))}건)", ""]
+    if d.get("false_positive_candidates"):
+        lines += ["| 문서 | 유형 | 코드 | 제목 | 판정 | 건수 | 확인 결과 |", "|---|---|---|---|---|---|---|"]
+        for r in d["false_positive_candidates"]:
+            t = r["title"].replace("|", "\\|")[:90]
+            lines.append(f"| {r['doc']} | {r['type']} | {r['code']} | {t} | {', '.join(r['verdicts'])} | {r['count']} |  |")
         lines.append("")
     else:
         lines += ["없음", ""]

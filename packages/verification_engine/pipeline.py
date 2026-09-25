@@ -75,6 +75,7 @@ from packages.legal_engine.internal_citation import (build_clause_index, check_r
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
 
+from .environment import preflight
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document, reconcile_model_fact_remarks
 from .ai_residue import residue_findings, scan_residue
 from .finalize import finalize_document_findings
@@ -289,7 +290,8 @@ class VerificationPipeline:
         result.scores = aggregate_scores(result)
         result.run_manifest = manifest.to_dict(versions={
             "program": self.settings.version, "rule": self.settings.rule_version,
-            "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()})
+            "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()},
+            environment=preflight(self.settings, self.registry, self.router))
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )

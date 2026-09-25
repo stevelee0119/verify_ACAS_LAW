@@ -8,13 +8,19 @@
 - 둘 다 양수인데 달라짐: 판정 방식 변화(예: 시스템 판정 1.0 ↔ 참고 신호 0.5)
 정상 함정(FP-TRAP) 오탐은 새로 생긴 것과 없어진 것을 따로 센다. 판정 방식이 낮아진 것도 회귀로 센다.
 정답지는 읽지 않는다. 채점이 끝난 두 결과 파일만 쓴다.
+대조군 오탐(control_fp_details)도 새 오탐에 넣는다. 두 결과의 환경 지문이 다르거나 채점 방식(scoring_version)이
+다르면 '비교 불가 항목'을 먼저 적고 '회귀 0건'이라는 결론을 쓰지 않는다(v5 1-4).
 """
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, Tuple
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def _key(item: Dict[str, Any]) -> Tuple[str, str, str, str]:
@@ -49,13 +55,22 @@ def compare(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]
             up.append(row)
     for key in before.keys() - after.keys():
         unmatched.append({"key": list(key), "note": "현재 결과에 없는 항목(정답지 변경)"})
-    fp_before = {_fp_key(d) for d in previous.get("fp_details") or []}
-    fp_after = {_fp_key(d) for d in current.get("fp_details") or []}
+    from packages.verification_engine.environment import comparability
+
+    fp_before = {_fp_key(d) for d in (previous.get("fp_details") or []) + (previous.get("control_fp_details") or [])}
+    fp_after = {_fp_key(d) for d in (current.get("fp_details") or []) + (current.get("control_fp_details") or [])}
+    env = comparability(previous.get("environment"), current.get("environment"))
+    scoring = [previous.get("scoring_version", 1), current.get("scoring_version", 1)]
+    if scoring[0] != scoring[1]:
+        env["same_environment"] = False
+        env["incomparable_areas"] = [f"채점 방식이 다름(v{scoring[0]} → v{scoring[1]}): 같은 결과 JSON을 같은 방식으로 "
+                                     "다시 채점한 뒤 비교해야 한다"] + env["incomparable_areas"]
     summary = {
         "overall": [previous.get("overall"), current.get("overall")],
         "weighted_recall": [previous.get("weighted_recall"), current.get("weighted_recall")],
         "fp_trap_false_positives": [previous.get("fp_trap_false_positives"), current.get("fp_trap_false_positives")],
         "a_grade_false_positives": [previous.get("a_grade_false_positives"), current.get("a_grade_false_positives")],
+        "control_false_positives": [previous.get("control_false_positives"), current.get("control_false_positives")],
         "db_available": [previous.get("db_available"), current.get("db_available")],
         "injection_defended": [(previous.get("injection_defense") or {}).get("defended"),
                                (current.get("injection_defense") or {}).get("defended")],
@@ -63,18 +78,25 @@ def compare(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]
     regressions = len(lost) + len(down) + len(fp_after - fp_before)
     return {"summary": summary, "newly_caught": newly, "lost": lost, "credit_down": down, "credit_up": up,
             "new_false_positives": sorted(fp_after - fp_before), "removed_false_positives": sorted(fp_before - fp_after),
-            "item_set_changes": unmatched, "regressions": regressions}
+            "item_set_changes": unmatched, "regressions": regressions, "environment": env}
 
 
 def render(title: str, diff: Dict[str, Any]) -> str:
     s = diff["summary"]
-    lines = [f"### {title}", "",
-             f"- 종합점수 {s['overall'][0]} → {s['overall'][1]}, 가중 재현율 {s['weighted_recall'][0]} → {s['weighted_recall'][1]}",
+    env = diff.get("environment") or {}
+    lines = [f"### {title}", ""]
+    if not env.get("same_environment"):
+        lines += [f"**비교 불가 항목 — 환경 지문 {env.get('fingerprints')}:**", ""]
+        lines += [f"- {a}" for a in env.get("incomparable_areas") or ["(환경 기록 없음)"]] + [""]
+    lines += [f"- 종합점수 {s['overall'][0]} → {s['overall'][1]}, 가중 재현율 {s['weighted_recall'][0]} → {s['weighted_recall'][1]}",
              f"- 정상 함정 오탐 {s['fp_trap_false_positives'][0]} → {s['fp_trap_false_positives'][1]}, "
              f"A등급 오탐 {s['a_grade_false_positives'][0]} → {s['a_grade_false_positives'][1]}, "
              f"공식 DB 조회 {s['db_available'][0]} → {s['db_available'][1]}, 인젝션 방어 {s['injection_defended'][0]} → {s['injection_defended'][1]}",
+             f"- 대조군 오탐 {s.get('control_false_positives', [None, None])[0]} → {s.get('control_false_positives', [None, None])[1]}",
              f"- **회귀 {diff['regressions']}건**(놓치게 된 것 {len(diff['lost'])}, 판정 방식 하락 {len(diff['credit_down'])}, "
-             f"새 오탐 {len(diff['new_false_positives'])})", ""]
+             f"새 오탐 {len(diff['new_false_positives'])})"
+             + ("" if env.get("same_environment") else " — 환경·채점 방식이 달라 이 수치로 '회귀 0건'이라고 결론 내리지 않는다"),
+             ""]
 
     def table(name, rows):
         lines.append(f"**{name}** ({len(rows)}건)")
