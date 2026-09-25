@@ -48,7 +48,7 @@ def test_J2_model_remarks_are_reconciled_with_deterministic_recalculation(analys
     open_remarks = [f for f in analysed.findings if f.type == FindingType.MODEL_FACT_REMARK]
     confirmations = (detector.get("signals") or {}).get("model_confirmations") or []
     leaked = [f for f in open_remarks if any(c.split("] ", 1)[-1][:20] in f.title for c in confirmations)]
-    record("J2", prepared=2, detected=len(deterministic), false_positive=len(leaked),
+    record("J2", prepared=2, detected=len(deterministic) if opinions else 0, false_positive=len(leaked),
            summary=(f"모델 {len(opinions)}개 응답, 결정론 재계산 {len(deterministic)}건, 모델 지적 연결 {attached}건, "
                     f"사람 확인으로 남은 지적 {len(open_remarks)}건, 확인 문장의 오분류 {len(leaked)}건"),
            cases=[{"provider": o.get("provider"), "verdict": o.get("verdict"),
