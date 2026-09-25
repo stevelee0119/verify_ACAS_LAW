@@ -25,6 +25,7 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
 from .legal_rules import load_rules
+from .polarity import ASSERTED, NEGATED, polarity
 
 ENGINE_NAME = "legal_engine.claim_review"
 
@@ -369,12 +370,42 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
                       lambda s: _remedy(s, in_relief, criminal_doc), _unsourced_standard,
                       lambda s: _requirement_exclusion(s, previous)):
             match = check(sentence)
+            if match and not in_relief and not _author_asserts(match, previous):
+                continue  # 부정·전달·가정으로 쓴 문장은 작성자의 주장이 아니다(v5 3-2)
             if match:
                 match.start = start
                 out.append(match)
                 break  # 한 문장은 가장 앞선 유형 하나로만 판정한다(같은 문장 이중 판정 방지)
         previous = sentence
     return out
+
+
+# 유형마다 '명제'로 볼 부분: (앞 부분, 명제 끝을 정하는 뒷부분). 극성은 명제 끝 뒤의 글로 판별한다.
+_CLAIM_SPANS = {
+    "UNCONSTITUTIONALITY": (UNCON_RE, None),
+    "UNSUPPORTED_GENERALIZATION": (QUANTIFIER_RE, LEGAL_EFFECT_RE),
+    "NO_BASIS_REMEDY": (PUNITIVE_RE, None),
+    "UNSOURCED_STANDARD": (STANDARD_NOUN_RE, RELIANCE_RE),
+    "LITIGATION_REQUIREMENT_EXCLUSION": (EXCLUSION_RE, None),
+}
+
+
+def _author_asserts(match: ClaimMatch, previous: str) -> bool:
+    """이 문장의 명제를 작성자가 단정했는가. 출처 불명 기준은 내용의 긍정·부정과 무관하게 그 기준에 기댄 것이
+    문제이므로 부정은 보지 않고 전달·가정만 본다."""
+    head, tail = _CLAIM_SPANS.get(match.claim_type, (None, None))
+    found = head.search(match.sentence) if head else None
+    if not found:
+        return True
+    end = found.end()
+    if tail is not None:
+        after = tail.search(match.sentence, found.start())
+        if after:
+            end = max(end, after.end())
+    result = polarity(match.sentence, (found.start(), end), previous=previous)
+    if match.claim_type == "UNSOURCED_STANDARD" and result == NEGATED:
+        return True
+    return result == ASSERTED
 
 
 def _to_finding(doc: NormalizedDocument, match: ClaimMatch) -> Finding:
