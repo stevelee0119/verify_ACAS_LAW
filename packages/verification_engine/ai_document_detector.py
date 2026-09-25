@@ -86,6 +86,8 @@ def _rule_based_ai_detection(
     #    맺음말·면책 안내·마크다운·상투 표현은 문체 신호(style)로만 다룬다.
     #    직접 인용문구("...") 내부와 지시문/예시문은 스캔에서 제외한다.
     residues = scan_residue(text, exclude_texts=exclude_texts, mask_quotes=True)
+    # 보고 전용으로만 잡힌 잔재(문체 신호 최소 수 미달)는 작성 주체 추정치에 넣지 않는다
+    residues = [r for r in residues if r.signal]
     signals["residues"] = [{"category": r.category, "label": r.label, "objective": r.objective,
                             "matches": r.matches} for r in residues]
     objective_hits = sum(len(r.matches) for r in residues if r.objective)

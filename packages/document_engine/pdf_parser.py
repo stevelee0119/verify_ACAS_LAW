@@ -110,6 +110,15 @@ def _cells_run_together(blocks, table_bbox, rows: List[List[str]]) -> bool:
     return sum(1 for n in joined if n) * 2 >= len(multi)
 
 
+def _column_bounds(table) -> Optional[List[List[float]]]:
+    """pdfplumber 표의 열마다 [x0, x1]. 셀 병합 등으로 열을 알 수 없으면 None(연속 표 판단에 쓰지 않음)."""
+    try:
+        bounds = [[float(col.bbox[0]), float(col.bbox[2])] for col in table.columns if col.bbox]
+    except Exception:
+        return None
+    return bounds or None
+
+
 def _inside(bbox, area, margin: float = 2.0) -> bool:
     if not bbox or not area:
         return False
@@ -291,6 +300,8 @@ class PdfParser(DocumentParser):
                 try:
                     found = page.find_tables() or []
                     tables = [(t.extract() or [], t.bbox) for t in found]
+                    # 열 경계(x0, x1): 쪽을 넘어 이어지는 표를 열 너비 비율로 식별하는 데 쓴다(연속 표 엔진)
+                    column_bounds = [_column_bounds(t) for t in found]
                     # 표가 있는 페이지에서만 서명을 잇는다. 법률 서면은 표가
                     # 드물어 대부분의 페이지가 이 비용을 아예 건너뛴다.
                     line_signature = "".join(signature_parts) if tables else ""
@@ -304,7 +315,8 @@ class PdfParser(DocumentParser):
                                      "bbox": [float(v) for v in table_bbox] if table_bbox else None,
                                      "cells": rows, "header": rows[0] if rows else [],
                                      "title": _table_title(p.blocks, table_bbox),
-                                     "row_count": len(rows), "column_count": max((len(r) for r in rows), default=0)}
+                                     "row_count": len(rows), "column_count": max((len(r) for r in rows), default=0),
+                                     "column_bounds": column_bounds[t_index], "page_height": float(page.height or 0)}
                         if _covered_by(line_signature, rows) and not _cells_run_together(p.blocks, table_bbox, rows):
                             # 같은 글자는 줄 블록으로 이미 있다. 표 블록을 따로 만들어 중복 표시하지
                             # 않되, 행·열 구조는 버리지 않고 남겨 줄 블록과 연결한다. 첨부 목록처럼

@@ -216,6 +216,10 @@ class CalculationEngine:
                 seen_blocks.add(block.block_id)
             findings.extend(found)
         findings.extend(self._verify_table_totals(doc))
+        # 한 행·한 열 안의 표준 산식(공급가액+세액=합계, 원금+이자−변제=잔액, 지급총액−공제=실지급액)
+        from .table_formulas import formula_graph_findings
+
+        findings.extend(formula_graph_findings(doc))
         # 실무 서면은 항목이 줄마다 나뉘므로 줄 단위 내역-합계도 검산한다
         findings.extend(self._verify_line_items(doc, seen_blocks))
         findings = self._deduplicate_totals(merge_same_total(findings))
@@ -431,14 +435,28 @@ class CalculationEngine:
         if not raw_tables:
             return findings, handled
 
-        # Equal column counts do not establish that two tables are continuations.
+        # 열 수가 같다는 것만으로는 이어지는 표가 아니다. 위치·열 너비 비율·헤더 상태·이어짐 표지를 모두 갖춘
+        # 연속 표만 가상 결합 표로 검산하고(table_continuation), 그 구성 표는 따로 검산하지 않는다. 구성 표를
+        # 따로 검산하면 마지막 쪽의 최종 합계가 그 쪽 행만의 합으로 비교되어 오탐이 된다.
+        from .table_continuation import find_continuations, possible_continuations
+
+        chains = find_continuations(raw_tables, doc)
+        uncertain = possible_continuations(raw_tables, doc)
+        chained = {ref for chain in chains for ref in chain["members"]}
         tables_to_check = []
         for index, t in enumerate(raw_tables):
+            ref = t.get("table_ref") or f"table-{index}"
+            if ref in chained:
+                continue
             tables_to_check.append({
                 "page": t.get("page"),
-                "table_ref": t.get("table_ref") or f"table-{index}",
+                "table_ref": ref,
                 "cells": [[str(c or "").strip() for c in row] for row in t.get("cells") or []],
             })
+        for chain in chains:
+            tables_to_check.append({"page": chain["page"], "table_ref": chain["table_ref"], "cells": chain["cells"],
+                                    "continuation": {"members": chain["members"], "pages": chain["pages"],
+                                                     "evidence": chain["evidence"]}})
 
         for table in tables_to_check:
             cells = table.get("cells") or []
@@ -460,7 +478,7 @@ class CalculationEngine:
             for col in candidate_cols:
                 first_finding = len(findings)
                 col_header_name = header[col] if col < len(header) else f"열 {col}"
-                total_rows = [r for r in cells[1:] if r and TOTAL_LABEL_RE.search(r[0].replace(" ", ""))]
+                total_rows = [r for r in cells[1:] if r and is_total_label(r[0])]
                 grand = total_rows[-1] if total_rows else None
                 top: List[Amount] = []
                 segment: List[Tuple[Amount, str]] = []
@@ -532,8 +550,24 @@ class CalculationEngine:
 
                 if grand_checked:
                     handled.add(table.get("table_ref"))
+                    handled.update((table.get("continuation") or {}).get("members") or [])
                 for finding in findings[first_finding:]:
                     finding.confidence_features.update(table_ref=table["table_ref"], table_column=col)
+                    if table["table_ref"] in uncertain and finding.title.startswith("합계가"):
+                        # 앞 쪽 표와 형태·헤더는 이어지나 이어짐 표지가 없다: 최종 합계에 앞 쪽 행이 들어 있을 수 있어 확정 불가
+                        finding.status = VerificationStatus.UNVERIFIED
+                        finding.evidence_grade = EvidenceGrade.C
+                        finding.advisory_only = True
+                        finding.confidence_features["possible_continuation"] = uncertain[table["table_ref"]]
+                        finding.detail += (f" 다만 이 표는 앞 쪽 표({uncertain[table['table_ref']]['from']})와 열 구조·헤더가 "
+                                           "이어지나 '계속' 표지·이월 행·순번 연속이 없어 연속 표인지 확인되지 않는다. 앞 쪽 행이 "
+                                           "합계에 포함되었을 수 있으므로 원본에서 표의 범위를 확인해야 한다.")
+                    if table.get("continuation"):
+                        # 가상 결합 표의 판정: 구성 표·쪽과 결합 근거를 남긴다(원래 table_ref는 그대로 유지)
+                        finding.confidence_features["continuation"] = table["continuation"]
+                        pages = table["continuation"]["pages"]
+                        finding.detail += (f" 이 표는 {pages[0]}~{pages[-1]}쪽에 걸친 연속 표로 식별해 결합 검산했다"
+                                           f"(구성 표 {', '.join(table['continuation']['members'])}).")
 
         return findings, handled
 
@@ -629,6 +663,19 @@ class CalculationEngine:
                 ),
             ],
         )
+
+
+# 셀 표의 합계 행 이름. 행 이름 '전체'가 합계 표현이어야 한다('설계비'·'계약금'·'회계감사비'의 '계'는 합계가 아니다).
+_TOTAL_WORD = r"(?:합계|총계|소계|총액|총금액|총합계|지급총액|공제총액|공제합계)(?:액|금액)?"
+TOTAL_CELL_LABEL_RE = re.compile(
+    rf"^(?:[가-힣A-Za-z0-9·ㆍ.,~\-]{{0,10}}?{_TOTAL_WORD}|계|지급계|공제계|실지급액|차인지급액|총수령액)$")
+
+
+def is_total_label(label: str) -> bool:
+    """셀 표 첫 칸이 합계·소계 행 이름인가. 괄호·공백·콜론은 무시한다('합 계', '소계(1)', '1월분 합계')."""
+    compact = re.sub(r"[\s()（）\[\]:：]", "", str(label or ""))
+    compact = re.sub(r"\d+$", "", compact) if not compact.isdigit() else compact
+    return bool(TOTAL_CELL_LABEL_RE.match(compact))
 
 
 def _calculation_scope(finding: Finding) -> tuple:

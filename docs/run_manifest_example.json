@@ -1,8 +1,22 @@
 {
   "schema": 1,
+  "warning": "불완전 환경 — 없는 필수 자원: law_db, ai_models. 비교 불가 영역: 판례·법령 공식 DB 대조(존재·서지·인용문·취지); 조문 수치·부존재 조문; 행위시법 공식 연혁 대조; 판례 의미·적용 검토(semantic_review); 모델 지적 모순 재검증(model_fact_reconcile); AI 작성 판별의 모델 의견",
+  "regression_comparable": false,
+  "sources": {
+    "law_go_kr": "MISSING_KEY",
+    "kci": "MISSING_KEY",
+    "openalex": "DISABLED",
+    "semantic_scholar": "DISABLED",
+    "crossref": "DISABLED"
+  },
+  "ocr_engine_available": true,
+  "missing_resources": [
+    "law_db",
+    "ai_models"
+  ],
   "versions": {
-    "program": "0.9.0",
-    "rule": "2026.09.25.5",
+    "program": "0.9.1",
+    "rule": "2026.09.26.3",
     "prompt": "v0.2",
     "model_config": "none"
   },
@@ -71,7 +85,7 @@
       "inputs": 14,
       "input_unit": "쪽",
       "findings": 0,
-      "seconds": 7.831,
+      "seconds": 5.46,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -79,7 +93,7 @@
           "document_id": "doc1",
           "inputs": 3,
           "findings": 0,
-          "seconds": 0.498,
+          "seconds": 0.238,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -87,7 +101,7 @@
           "document_id": "doc2",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.034,
+          "seconds": 0.025,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -95,7 +109,7 @@
           "document_id": "doc3",
           "inputs": 2,
           "findings": 0,
-          "seconds": 2.602,
+          "seconds": 1.993,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -103,7 +117,7 @@
           "document_id": "doc4",
           "inputs": 4,
           "findings": 0,
-          "seconds": 4.566,
+          "seconds": 3.088,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -111,7 +125,7 @@
           "document_id": "doc5",
           "inputs": 2,
           "findings": 0,
-          "seconds": 0.079,
+          "seconds": 0.07,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -119,7 +133,7 @@
           "document_id": "doc6",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.022,
+          "seconds": 0.021,
           "note": "PdfParser",
           "input_unit": "쪽"
         },
@@ -127,7 +141,7 @@
           "document_id": "doc7",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.029,
+          "seconds": 0.025,
           "note": "PdfParser",
           "input_unit": "쪽"
         }
@@ -210,7 +224,7 @@
       "inputs": 168,
       "input_unit": "블록(숨김 포함)",
       "findings": 20,
-      "seconds": 0.137,
+      "seconds": 0.096,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -218,7 +232,7 @@
           "document_id": "doc1",
           "inputs": 66,
           "findings": 1,
-          "seconds": 0.033,
+          "seconds": 0.017,
           "note": "encoded_text,metadata,visible_text",
           "input_unit": "블록(숨김 포함)"
         },
@@ -234,7 +248,7 @@
           "document_id": "doc3",
           "inputs": 33,
           "findings": 19,
-          "seconds": 0.087,
+          "seconds": 0.064,
           "note": "actual_text,annotation,attachment,encoded_text,form_field,hidden_text,image_ocr,metadata,outline,visible_text",
           "input_unit": "블록(숨김 포함)"
         },
@@ -242,7 +256,7 @@
           "document_id": "doc4",
           "inputs": 24,
           "findings": 0,
-          "seconds": 0.007,
+          "seconds": 0.004,
           "note": "encoded_text,image_ocr,metadata,ocr_layer,visible_text",
           "input_unit": "블록(숨김 포함)"
         },
@@ -250,7 +264,7 @@
           "document_id": "doc5",
           "inputs": 24,
           "findings": 0,
-          "seconds": 0.005,
+          "seconds": 0.006,
           "note": "encoded_text,metadata,visible_text",
           "input_unit": "블록(숨김 포함)"
         },
@@ -258,7 +272,7 @@
           "document_id": "doc6",
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "note": "encoded_text,metadata,visible_text",
           "input_unit": "블록(숨김 포함)"
         },
@@ -266,7 +280,7 @@
           "document_id": "doc7",
           "inputs": 5,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "note": "encoded_text,metadata,visible_text",
           "input_unit": "블록(숨김 포함)"
         }
@@ -279,7 +293,7 @@
       "inputs": 168,
       "input_unit": "블록(숨김 포함)",
       "findings": 18,
-      "seconds": 0.008,
+      "seconds": 0.006,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -287,7 +301,7 @@
           "document_id": "doc1",
           "inputs": 66,
           "findings": 2,
-          "seconds": 0.003,
+          "seconds": 0.002,
           "input_unit": "블록(숨김 포함)"
         },
         {
@@ -322,7 +336,7 @@
           "document_id": "doc6",
           "inputs": 6,
           "findings": 2,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "블록(숨김 포함)"
         },
         {
@@ -403,7 +417,7 @@
       "inputs": 141,
       "input_unit": "본문 블록",
       "findings": 0,
-      "seconds": 0.012,
+      "seconds": 0.01,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -411,7 +425,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 0,
-          "seconds": 0.007,
+          "seconds": 0.005,
           "note": "인용 12건",
           "input_unit": "본문 블록"
         },
@@ -427,7 +441,7 @@
           "document_id": "doc3",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "note": "인용 3건",
           "input_unit": "본문 블록"
         },
@@ -435,7 +449,7 @@
           "document_id": "doc4",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "note": "인용 5건",
           "input_unit": "본문 블록"
         },
@@ -459,7 +473,7 @@
           "document_id": "doc7",
           "inputs": 5,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "note": "인용 2건",
           "input_unit": "본문 블록"
         }
@@ -472,7 +486,7 @@
       "inputs": 24,
       "input_unit": "인용",
       "findings": 27,
-      "seconds": 0.071,
+      "seconds": 0.056,
       "skip_reasons": [
         "인용이 없음"
       ],
@@ -482,7 +496,7 @@
           "document_id": "doc1",
           "inputs": 12,
           "findings": 12,
-          "seconds": 0.063,
+          "seconds": 0.051,
           "input_unit": "인용"
         },
         {
@@ -497,14 +511,14 @@
           "document_id": "doc3",
           "inputs": 3,
           "findings": 4,
-          "seconds": 0.005,
+          "seconds": 0.002,
           "input_unit": "인용"
         },
         {
           "document_id": "doc4",
           "inputs": 5,
           "findings": 7,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "input_unit": "인용"
         },
         {
@@ -604,7 +618,7 @@
       "inputs": 2,
       "input_unit": "검토한 조문 주장",
       "findings": 2,
-      "seconds": 0.003,
+      "seconds": 0.002,
       "skip_reasons": [
         "법령 연혁을 확보하지 못함: 민법 제750조(국가법령정보 조회 불가(MISSING_KEY)); 가상손해배상법 제10조 제1항(국가법령정보 조회 불가(MISSING_KEY)); 같은 조 제2항(국가법령정보 조회 불가(MISSING_KEY))",
         "조문 내용을 주장한 법령 인용이 없음",
@@ -616,7 +630,7 @@
           "document_id": "doc1",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "skipped": "법령 연혁을 확보하지 못함: 민법 제750조(국가법령정보 조회 불가(MISSING_KEY)); 가상손해배상법 제10조 제1항(국가법령정보 조회 불가(MISSING_KEY)); 같은 조 제2항(국가법령정보 조회 불가(MISSING_KEY))",
           "input_unit": "검토한 조문 주장"
         },
@@ -632,7 +646,7 @@
           "document_id": "doc3",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "skipped": "법령 연혁을 확보하지 못함: 가상행정절차법 제21조(국가법령정보 조회 불가(MISSING_KEY))",
           "input_unit": "검토한 조문 주장"
         },
@@ -676,7 +690,7 @@
       "inputs": 7,
       "input_unit": "검토한 인용",
       "findings": 0,
-      "seconds": 0.008,
+      "seconds": 0.007,
       "skip_reasons": [
         "AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.)",
         "공식 원문으로 확인된 판례 인용이 없음",
@@ -688,7 +702,7 @@
           "document_id": "doc1",
           "inputs": 5,
           "findings": 0,
-          "seconds": 0.006,
+          "seconds": 0.004,
           "skipped": "AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.)",
           "note": "공식 전문 근거가 확인된 AI 의견 0건, 모델 실행했으나 근거 미확인 0건, 모델 미실행 5건",
           "input_unit": "검토한 인용"
@@ -752,7 +766,7 @@
       "inputs": 141,
       "input_unit": "본문 블록",
       "findings": 0,
-      "seconds": 0.035,
+      "seconds": 0.03,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -760,7 +774,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 0,
-          "seconds": 0.016,
+          "seconds": 0.013,
           "note": "주장 37·개체 8·사건 14",
           "input_unit": "본문 블록"
         },
@@ -768,7 +782,7 @@
           "document_id": "doc2",
           "inputs": 10,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "note": "주장 4·개체 0·사건 2",
           "input_unit": "본문 블록"
         },
@@ -776,7 +790,7 @@
           "document_id": "doc3",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.006,
+          "seconds": 0.004,
           "note": "주장 13·개체 2·사건 5",
           "input_unit": "본문 블록"
         },
@@ -784,7 +798,7 @@
           "document_id": "doc4",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.005,
+          "seconds": 0.004,
           "note": "주장 12·개체 4·사건 4",
           "input_unit": "본문 블록"
         },
@@ -792,7 +806,7 @@
           "document_id": "doc5",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.004,
+          "seconds": 0.006,
           "note": "주장 13·개체 3·사건 5",
           "input_unit": "본문 블록"
         },
@@ -821,7 +835,7 @@
       "inputs": 10,
       "input_unit": "증거·첨부 항목",
       "findings": 6,
-      "seconds": 0.007,
+      "seconds": 0.005,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -829,7 +843,7 @@
           "document_id": "doc1",
           "inputs": 7,
           "findings": 5,
-          "seconds": 0.004,
+          "seconds": 0.003,
           "input_unit": "증거·첨부 항목"
         },
         {
@@ -843,14 +857,14 @@
           "document_id": "doc3",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "증거·첨부 항목"
         },
         {
           "document_id": "doc4",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "증거·첨부 항목"
         },
         {
@@ -883,7 +897,7 @@
       "inputs": 141,
       "input_unit": "본문 블록(표 포함)",
       "findings": 4,
-      "seconds": 0.007,
+      "seconds": 0.013,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -891,7 +905,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 3,
-          "seconds": 0.004,
+          "seconds": 0.008,
           "input_unit": "본문 블록(표 포함)"
         },
         {
@@ -919,7 +933,7 @@
           "document_id": "doc5",
           "inputs": 20,
           "findings": 1,
-          "seconds": 0.001,
+          "seconds": 0.002,
           "input_unit": "본문 블록(표 포함)"
         },
         {
@@ -1006,16 +1020,16 @@
       "skipped_runs": 0,
       "inputs": 32,
       "input_unit": "사건(날짜)",
-      "findings": 0,
-      "seconds": 0.003,
+      "findings": 6,
+      "seconds": 0.007,
       "skip_reasons": [],
       "errors": [],
       "documents": [
         {
           "document_id": "doc1",
           "inputs": 14,
-          "findings": 0,
-          "seconds": 0.001,
+          "findings": 3,
+          "seconds": 0.004,
           "input_unit": "사건(날짜)"
         },
         {
@@ -1029,21 +1043,21 @@
           "document_id": "doc3",
           "inputs": 5,
           "findings": 0,
-          "seconds": 0.0,
+          "seconds": 0.001,
           "input_unit": "사건(날짜)"
         },
         {
           "document_id": "doc4",
           "inputs": 4,
-          "findings": 0,
-          "seconds": 0.0,
+          "findings": 2,
+          "seconds": 0.001,
           "input_unit": "사건(날짜)"
         },
         {
           "document_id": "doc5",
           "inputs": 5,
           "findings": 0,
-          "seconds": 0.0,
+          "seconds": 0.001,
           "input_unit": "사건(날짜)"
         },
         {
@@ -1056,7 +1070,7 @@
         {
           "document_id": "doc7",
           "inputs": 0,
-          "findings": 0,
+          "findings": 1,
           "seconds": 0.0,
           "input_unit": "사건(날짜)"
         }
@@ -1069,7 +1083,7 @@
       "inputs": 141,
       "input_unit": "본문 블록",
       "findings": 3,
-      "seconds": 0.01,
+      "seconds": 0.012,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1077,7 +1091,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 0,
-          "seconds": 0.004,
+          "seconds": 0.005,
           "input_unit": "본문 블록"
         },
         {
@@ -1091,7 +1105,7 @@
           "document_id": "doc3",
           "inputs": 20,
           "findings": 1,
-          "seconds": 0.001,
+          "seconds": 0.002,
           "input_unit": "본문 블록"
         },
         {
@@ -1105,7 +1119,7 @@
           "document_id": "doc5",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.0,
+          "seconds": 0.001,
           "input_unit": "본문 블록"
         },
         {
@@ -1131,7 +1145,7 @@
       "inputs": 10,
       "input_unit": "증거·첨부 항목",
       "findings": 6,
-      "seconds": 0.015,
+      "seconds": 0.011,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1139,14 +1153,14 @@
           "document_id": "doc1",
           "inputs": 7,
           "findings": 5,
-          "seconds": 0.01,
+          "seconds": 0.007,
           "input_unit": "증거·첨부 항목"
         },
         {
           "document_id": "doc2",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "증거·첨부 항목"
         },
         {
@@ -1167,7 +1181,7 @@
           "document_id": "doc5",
           "inputs": 3,
           "findings": 1,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "input_unit": "증거·첨부 항목"
         },
         {
@@ -1193,7 +1207,7 @@
       "inputs": 87,
       "input_unit": "주장",
       "findings": 2,
-      "seconds": 0.007,
+      "seconds": 0.006,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1201,7 +1215,7 @@
           "document_id": "doc1",
           "inputs": 37,
           "findings": 2,
-          "seconds": 0.003,
+          "seconds": 0.002,
           "input_unit": "주장"
         },
         {
@@ -1255,7 +1269,7 @@
       "inputs": 24,
       "input_unit": "인용",
       "findings": 16,
-      "seconds": 0.004,
+      "seconds": 0.003,
       "skip_reasons": [
         "허위·미확인 판례에 기댄 주장이 없음"
       ],
@@ -1265,7 +1279,7 @@
           "document_id": "doc1",
           "inputs": 12,
           "findings": 7,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "인용"
         },
         {
@@ -1321,7 +1335,7 @@
       "inputs": 7,
       "input_unit": "문서",
       "findings": 0,
-      "seconds": 0.005,
+      "seconds": 0.004,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1350,7 +1364,7 @@
           "document_id": "doc4",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "문서"
         },
         {
@@ -1383,7 +1397,7 @@
       "inputs": 141,
       "input_unit": "본문 블록",
       "findings": 3,
-      "seconds": 0.01,
+      "seconds": 0.011,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1391,7 +1405,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 3,
-          "seconds": 0.008,
+          "seconds": 0.01,
           "note": "잔재 후보 3건",
           "input_unit": "본문 블록"
         },
@@ -1445,7 +1459,7 @@
       "skipped_runs": 0,
       "inputs": 7,
       "input_unit": "문서",
-      "findings": 1,
+      "findings": 2,
       "seconds": 0.006,
       "skip_reasons": [],
       "errors": [],
@@ -1453,7 +1467,7 @@
         {
           "document_id": "doc1",
           "inputs": 1,
-          "findings": 1,
+          "findings": 2,
           "seconds": 0.002,
           "note": "모델 의견 0건",
           "input_unit": "문서"
@@ -1494,7 +1508,7 @@
           "document_id": "doc6",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.0,
+          "seconds": 0.001,
           "note": "모델 의견 0건",
           "input_unit": "문서"
         },
@@ -1515,7 +1529,7 @@
       "inputs": 141,
       "input_unit": "본문 블록",
       "findings": 0,
-      "seconds": 0.004,
+      "seconds": 0.003,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1523,7 +1537,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "input_unit": "본문 블록"
         },
         {
@@ -1537,7 +1551,7 @@
           "document_id": "doc3",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.0,
           "input_unit": "본문 블록"
         },
         {
@@ -1571,6 +1585,68 @@
       ]
     },
     "calendar_dates": {
+      "executed": true,
+      "runs": 7,
+      "skipped_runs": 0,
+      "inputs": 141,
+      "input_unit": "본문 블록",
+      "findings": 0,
+      "seconds": 0.002,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": "doc1",
+          "inputs": 60,
+          "findings": 0,
+          "seconds": 0.001,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc2",
+          "inputs": 10,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc3",
+          "inputs": 20,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc4",
+          "inputs": 20,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc5",
+          "inputs": 20,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc6",
+          "inputs": 6,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        },
+        {
+          "document_id": "doc7",
+          "inputs": 5,
+          "findings": 0,
+          "seconds": 0.0,
+          "input_unit": "본문 블록"
+        }
+      ]
+    },
+    "provision_form": {
       "executed": true,
       "runs": 7,
       "skipped_runs": 0,
@@ -1710,7 +1786,7 @@
       "inputs": 74,
       "input_unit": "주장",
       "findings": 0,
-      "seconds": 0.003,
+      "seconds": 0.002,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1718,7 +1794,7 @@
           "document_id": null,
           "inputs": 74,
           "findings": 0,
-          "seconds": 0.003,
+          "seconds": 0.002,
           "input_unit": "주장"
         }
       ]
@@ -1750,7 +1826,7 @@
       "inputs": 6,
       "input_unit": "문서",
       "findings": 0,
-      "seconds": 0.008,
+      "seconds": 0.006,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1758,7 +1834,7 @@
           "document_id": null,
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.008,
+          "seconds": 0.006,
           "input_unit": "문서"
         }
       ]
@@ -1770,7 +1846,7 @@
       "inputs": 6,
       "input_unit": "문서",
       "findings": 0,
-      "seconds": 0.002,
+      "seconds": 0.001,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1778,7 +1854,7 @@
           "document_id": null,
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.002,
+          "seconds": 0.001,
           "input_unit": "문서"
         }
       ]
@@ -1790,7 +1866,7 @@
       "inputs": 6,
       "input_unit": "문서",
       "findings": 5,
-      "seconds": 0.006,
+      "seconds": 0.005,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1798,7 +1874,27 @@
           "document_id": null,
           "inputs": 6,
           "findings": 5,
-          "seconds": 0.006,
+          "seconds": 0.005,
+          "input_unit": "문서"
+        }
+      ]
+    },
+    "cross_document_entities": {
+      "executed": true,
+      "runs": 1,
+      "skipped_runs": 0,
+      "inputs": 6,
+      "input_unit": "문서",
+      "findings": 0,
+      "seconds": 0.007,
+      "skip_reasons": [],
+      "errors": [],
+      "documents": [
+        {
+          "document_id": null,
+          "inputs": 6,
+          "findings": 0,
+          "seconds": 0.007,
           "input_unit": "문서"
         }
       ]

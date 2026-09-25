@@ -76,9 +76,19 @@ def _court_code_violations(citation: Any, code: str, year: int,
             "reason": (f"헌법재판소 사건부호는 {'·'.join(constitutional)}뿐이다(근거: {basis.get('title', '헌법재판소 사건부호표')}). "
                        f"'{code}'는 헌법재판소 사건부호가 아니므로 문서의 '{citation.court}' 표시와 맞지 않는다"),
             "source_url": basis.get("url")}, official_record, lambda actual: court_family(actual) != "헌법재판소")]
+    entry = (table.get("codes") or {}).get(code) or {}
+    exclusive = entry.get("exclusive_court")
+    if exclusive and written == "하급법원" and exclusive not in (citation.court or "").replace(" ", ""):
+        # 전속 관할 부호(예: 특허1심 '허' → 특허법원): 하급법원끼리라도 다른 법원 표시와는 맞지 않는다
+        basis = (table.get("exclusive_court_basis") or {}).get(exclusive) or {}
+        return [_with_actual_court({
+            "rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{citation.court} {code}",
+            "kind": "COURT_CODE", "inferred_court": exclusive,
+            "reason": (f"사건부호 '{code}'는 {entry.get('case_type', '')} 부호로 {exclusive} 사건에만 붙는다"
+                       f"(근거: {basis.get('title', exclusive + ' 관할')}). 문서는 {citation.court}로 적었다"),
+            "source_url": basis.get("url")}, official_record, lambda actual: exclusive in str(actual).replace(" ", ""))]
     if not written or not inferred or written == inferred:
         return []
-    entry = (table.get("codes") or {}).get(code) or {}
     meaning = entry.get("case_type") or (table.get("constitutional_codes") or {}).get(code) or ""
     until = entry.get("supreme_court_until_year")
     if until and written == "대법원":

@@ -1,7 +1,13 @@
 # AI 응답 잔재 패턴 사전(v3 §3-6). 코드와 분리해 규칙만 고칠 수 있게 둔다.
-# objective: true  → 서면 작성 관행에 없는 객관적 흔적(보고서에 finding으로 싣는다)
-# objective: false → 사람도 쓰는 문체 신호(AI 관여 추정치에만 약하게 반영, finding 없음)
+# objective: true  → AI 작성 판단의 객관적 흔적으로 센다(작성 주체 판정에 쓴다)
+# objective: false → 사람도 쓰는 문체 신호(AI 관여 추정치에만 약하게 반영)
+# report           → 작성 주체와 무관하게 '제출 서면에 남은 초안 흔적(DRAFT_ARTIFACT)'으로 보고할지(기본값 = objective).
+#                    렌더링되지 않은 마크다운 기호, 챗봇 맺음말·면책 안내문은 사람도 쓸 수 있어 작성 주체의 근거는
+#                    아니지만, 제출 서면에 그대로 남아 있다는 사실 자체는 글자로 확인되는 서식 결함이다.
+# report_min_kinds → 보고에 필요한 서로 다른 표기 수(기본 1). min_kinds는 문체 신호로 셀 때의 최소 수다.
 # 어느 것도 AI 작성을 단정하는 근거가 아니다. 패턴은 대소문자를 가리지 않는다.
+# 문체 신호 범주(report: true, objective: false)는 서로 다른 보고 대상 범주가 이 수 이상 한 문서에 함께 있을 때만 보고한다.
+weak_report_min_categories: 2
 rules:
   - category: CHATBOT_PREFACE
     label: 대화형 응답 서두
@@ -10,10 +16,12 @@ rules:
   - category: CHATBOT_CLOSING
     label: 챗봇 맺음말
     objective: false
+    report: true
     pattern: '(도움이\s*되(?:셨|었)(?:길|기를|으면)\s*바랍니다|(?:추가로|더)\s*궁금한\s*(?:점|사항)이\s*있(?:으시|으)면|추가적인\s*질문이\s*있으시면|언제든(?:지)?\s*(?:문의|말씀)해\s*주(?:세요|십시오)|(?:말씀|알려)\s*주세요\s*!)'
   - category: DISCLAIMER
     label: AI 면책·안내문
     objective: false
+    report: true
     pattern: '(법률\s*자문을\s*대체하지|법률\s*자문이\s*아닙니다|법률적\s*조언이\s*아니며|전문\s*변호사와\s*상담하시기)'
   - category: SOURCE_TOKEN
     label: 생성 도구의 출처 표시 토큰
@@ -26,10 +34,13 @@ rules:
   - category: MARKDOWN_TABLE
     label: 렌더링되지 않은 마크다운 표
     objective: false
+    report: true
     pattern: '(\|[^|\n]+\|[^\n]*?\s*\|\s*:?-{3,}:?\s*\|)'
   - category: MARKDOWN
     label: 마크다운 문법 잔재
     objective: false
+    report: true
+    report_min_kinds: 2
     min_kinds: 3
     pattern: '(?m)(^\s*#{1,6}\s+\S[^\n]{0,40}|\*\*[^*\n]{1,40}\*\*)'
   - category: CHATBOT_SUMMARY

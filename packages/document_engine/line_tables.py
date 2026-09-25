@@ -102,7 +102,11 @@ def rebuild_line_tables(doc: NormalizedDocument, page: Page) -> List[Dict[str, A
         structure = {"table_ref": ref, "page": page.page_number, "table_index": len(built),
                      "bbox": list(bbox.as_tuple()), "cells": table_rows, "header": table_rows[0], "title": None,
                      "row_count": len(table_rows), "column_count": len(starts),
-                     "representation": "RECONSTRUCTED_FROM_LINES", "line_block_ids": [m.block_id for m in members]}
+                     "representation": "RECONSTRUCTED_FROM_LINES", "line_block_ids": [m.block_id for m in members],
+                     # 열 경계: 열 시작 x좌표로 나누고 마지막 열은 표 오른쪽 끝까지(연속 표 엔진이 열 너비 비율을 비교한다)
+                     "column_bounds": [[float(starts[i]), float(starts[i + 1] if i + 1 < len(starts) else bbox.x1)]
+                                       for i in range(len(starts))],
+                     "page_height": float(getattr(page, "height", 0) or 0)}
         doc.structure.setdefault("tables", []).append(structure)
         page.blocks.append(Block(
             block_id=new_id("B"), text="\n".join(" | ".join(r) for r in table_rows), page=page.page_number,
