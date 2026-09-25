@@ -197,6 +197,10 @@ def _statement_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     return items
 
 
+def _inline_key(name: str) -> str:
+    return _norm(re.sub(r"첨부|사본|원본|[()\[\]【】]", "", name or ""))
+
+
 def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any]] = (),
                         claims: Iterable[Any] = ()) -> Dict[str, Any]:
     """첨부 목록·본문 인용·입력 파일을 대조한 결과와 finding을 만든다."""
@@ -215,13 +219,19 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                 if target.get(field_name) is None:
                     target[field_name] = item.get(field_name)
     text = doc.visible_text
+    # 같은 파일 안에 붙은 사본('첨부 진단서(사본)' 아래 원문). 입력 파일이 따로 없어도 문서 안에서 확인할 수 있다.
+    from .fact_store import segments
+    inline = {_inline_key(name): name for name, _ in segments(doc)[1:]}
     items = []
     for key, item in merged.items():
         upload = _uploaded_match(item["name"], uploads, doc.document_id)
         stated = " ".join(m.get("stated_status") or "" for m in item["mentions"])
         table_status = next((m.get("stated_status") for m in item["mentions"] if m["source"] == "TABLE"), "")
+        copy = inline.get(_inline_key(item["name"]))
         if upload:
             status, basis = "ATTACHED", f"입력 파일 '{upload.get('filename')}'과 이름이 대응한다"
+        elif copy:
+            status, basis = "ATTACHED", f"같은 문서 안에 사본이 붙어 있다('{copy}')"
         elif any(m["source"] == "STATEMENT" for m in item["mentions"]) or (
                 table_status and MISSING_STATUS_RE.search(table_status)) or NOT_PROVIDED_RE.search(stated):
             status, basis = "NOT_PROVIDED", "문서 스스로 첨부·제출하지 않았다고 밝혔다"

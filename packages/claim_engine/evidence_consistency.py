@@ -36,6 +36,7 @@ HEADER_KEYS = {
     "date": ("작성일", "일자", "작성일자"),
     "author": ("작성자", "작성명의인", "발행"),
     "purpose": ("입증취지", "입증 취지", "증명취지"),
+    "amount": ("금액", "액수"),
 }
 # 사건 이후에 작성될 수밖에 없는 자료(그 사건을 분석·보고·진술한 문서)
 AFTER_EVENT_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|소견|조사")
@@ -95,12 +96,17 @@ def document_date(doc: NormalizedDocument) -> Optional[date]:
     """서면의 작성일: 날짜만 있는 줄 가운데 바로 뒤(3줄 안)에 서명·귀중 줄이 오는 첫 날짜.
 
     증거설명서 뒤에 진술서 등이 붙어 있으면 뒤쪽 날짜는 첨부 문서의 작성일이므로 첫 서명 날짜를 쓴다.
+    서명 줄이 바닥글(대리인 표시)에만 있는 서면은 같은 쪽 바닥글까지 본다.
     """
-    blocks = doc.prose_blocks()
+    blocks = [b for b in doc.body_blocks(include_running_heads=True) if b.block_type not in ("table", "table_line")]
     for index, block in enumerate(blocks):
-        if not STANDALONE_DATE_RE.match(block.text or ""):
+        if block.block_type == "running_head" or not STANDALONE_DATE_RE.match(block.text or ""):
             continue
-        if any(SIGNATURE_LINE_RE.search(b.text or "") for b in blocks[index + 1:index + 4]):
+        following = [b for b in blocks[index + 1:index + 6] if b.page == block.page]
+        prose = [b for b in following if b.block_type != "running_head"][:3]
+        heads = [b for b in following if b.block_type == "running_head"]
+        if any(SIGNATURE_LINE_RE.search(b.text or "") for b in prose) or (
+                len(prose) == 0 and any(SIGNATURE_LINE_RE.search(b.text or "") for b in heads)):
             parsed, _ = calendar_date(block.text)
             if parsed:
                 return parsed
@@ -236,27 +242,59 @@ def check_exhibits(doc: NormalizedDocument) -> List[Finding]:
                                 features={"exhibit": row["label"], "human_review": True}))
     out.extend(_numbering(doc, rows))
     out.extend(_attached_originals(doc, rows))
+    out.extend(_attached_amounts(doc, rows))
     return out
 
 
-EVENT_RECORD_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|소견|조사|진단서|의무기록|진료기록|진료비|영수증|"
+def _attached_amounts(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
+    """증거목록의 금액과 같은 파일에 붙은 원문 사본(첨부 … 사본)의 금액을 대조한다(v4 P4)."""
+    from .calculation import parse_amounts
+    from .fact_store import digit_transposition, segments
+
+    copies = [(re.sub(r"\s|첨부|사본|원본|[()\[\]【】]", "", name), blocks) for name, blocks in segments(doc)[1:]]
+    out: List[Finding] = []
+    for row in rows:
+        listed = parse_amounts(row.get("amount") or "")
+        name = re.sub(r"\s", "", row.get("name") or "")
+        if not listed or not name:
+            continue
+        for title, blocks in copies:
+            if not title or (title not in name and name not in title):
+                continue
+            original = parse_amounts(build_reading_text(doc, blocks).text)
+            if not original or any(a.value == listed[0].value for a in original):
+                break
+            where = f"{row['label']} {row.get('name', '')}".strip()
+            transposed = any(digit_transposition(str(listed[0].value), str(a.value)) for a in original)
+            out.append(_finding(doc, FindingType.EVIDENCE_LIST_MISMATCH, EvidenceGrade.A, Severity.HIGH,
+                                f"증거목록 금액과 첨부 원문의 금액이 다르다: {where} — 목록 {listed[0].raw}, 원문 "
+                                f"{original[0].raw}" + (" (자릿수 뒤바뀜 의심)" if transposed else ""),
+                                "같은 파일 안의 증거목록과 첨부 원문 사본이 금액을 다르게 적었다. 원본을 확인해야 한다.",
+                                f"{where} | 목록: {listed[0].raw} | 원문: {original[0].raw}", page=row.get("page"),
+                                features={"rule_id": "EVI.LIST_AMOUNT_MISMATCH", "defect_code": "LIST_AMOUNT_MISMATCH",
+                                          "exhibit": row["label"], "list_amount": str(listed[0].value),
+                                          "original_amounts": [str(a.value) for a in original[:5]],
+                                          "digit_transposition": transposed}))
+            break
+    return out
+
+
+EVENT_RECORD_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|경위서|소견|조사|진단서|의무기록|진료기록|진료비|영수증|"
                                 r"조서|증명서|사실조회|사고\s*사실")
 EVENT_WORDS = re.compile(r"사고|사건|폭행|상해|부상|피해|경위|치료|입원|발생")
-INCIDENT_SENTENCE_RE = re.compile(r"사고|사건\s*당일|발생(?:하|한|일)|폭행|상해를\s*입|부상을\s*입|추돌|충돌")
 ORG_RE = re.compile(r"[가-힣○△□A-Za-z]{1,20}(?:대학교병원|병원|의원|한의원|치과|보건소|경찰서|검찰청|법원|청|구청|시청|군청|"
                     r"센터|공단|공사|위원회|협회|주식회사|은행|보험)")
 ISSUER_LINE_RE = re.compile(r"(?:발행|발급|작성)\s*(?:기관|처|자)?\s*[:：]\s*(?P<org>[^\n]{2,40})|(?P<head>[^\n]{2,30}(?:병원|의원)장)")
 
 
 def incident_dates(doc: NormalizedDocument) -> List[date]:
-    """본문에서 사고·사건이 일어난 날로 적힌 날짜."""
-    text = build_reading_text(doc).text
-    found: List[date] = []
-    for start, end in sentence_bounds(text):
-        sentence = text[start:end]
-        if INCIDENT_SENTENCE_RE.search(sentence):
-            found.extend(_all_dates(sentence))
-    return sorted(set(found))
+    """본문이 사고·사건이 일어난 날로 적은 날짜(사실 저장소의 추출 기준과 같다).
+
+    '사고' 낱말이 든 문장의 모든 날짜를 쓰면 시효 만료일·사고경위서 작성일까지 사건일로 잡힌다. 날짜 바로 뒤에
+    사고 서술이 오거나 '사고일·범행일' 바로 뒤에 온 날짜만 쓴다.
+    """
+    from .fact_store import incident_dates as stated_incident_dates
+    return [date.fromisoformat(value) for value in stated_incident_dates(doc)]
 
 
 def _org_key(text: str) -> str:
@@ -294,6 +332,22 @@ def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> 
 
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
+    # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
+    seen: Dict[tuple, List[Dict[str, Any]]] = {}
+    for row in rows:
+        seen.setdefault((row["party"], row["number"], row.get("branch")), []).append(row)
+    for (party, number, branch), same in seen.items():
+        if len(same) < 2:
+            continue
+        label = f"{party} 제{number}호증" + (f"의 {branch}" if branch else "")
+        names = ", ".join(r.get("name") or "(이름 없음)" for r in same)
+        out.append(_finding(doc, FindingType.EVIDENCE_LIST_MISMATCH, EvidenceGrade.A, Severity.MEDIUM,
+                            f"같은 호증 번호가 두 번 쓰였다: {label} — {names}",
+                            "증거 목록에서 한 번호를 서로 다른 증거(또는 같은 증거)에 두 번 붙였다. 어느 증거를 가리키는지 "
+                            "특정할 수 없으므로 번호를 바로잡아야 한다.", f"{label}: {names}",
+                            features={"rule_id": "EVI.EVIDENCE_NUMBER_DUPLICATE",
+                                      "defect_code": "EVIDENCE_NUMBER_DUPLICATE", "exhibit": label,
+                                      "names": [r.get("name") for r in same]}))
     listed: Dict[str, set] = {}
     for row in rows:
         listed.setdefault(row["party"], set()).add(row["number"])

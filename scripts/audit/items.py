@@ -250,7 +250,7 @@ ITEMS: List[Dict[str, Any]] = [
                  D("§3-4c", "폭 0 문자", injection("폭 0")), D("§3-4d", "한글 자모 분리", injection("자모"))]},
     {"id": "§3-5", "title": "산술·기간 재계산", "code": "claim_engine/calculation.py, fact_checks.py",
      "call": ("verification_engine/pipeline.py", "check_periods"), "tests": "test_v3_j3_arithmetic.py, test_v4_s35_periods_subtotals.py",
-     "family": lambda f: str(f.type) == "ARITHMETIC_MISMATCH",
+     "family": lambda f: str(f.type) == "ARITHMETIC_MISMATCH" and not rule(f).startswith("AMOUNT."),
      "defects": [D("§3-5a", "민사 손해액 표 합계(차이 600,000원)", lambda f: str(f.type) == "ARITHMETIC_MISMATCH" and "600,000" in title(f)),
                  D("§3-5b", "민사 산식 행(80,000원 × 30일)", lambda f: rule(f) == "CALC.FORMULA"),
                  D("§3-5c", "민사 시효 만료일(2026. 9. 15.)", lambda f: str(f.type) == "ARITHMETIC_MISMATCH" and "2026" in title(f) and "만료" in title(f))]},

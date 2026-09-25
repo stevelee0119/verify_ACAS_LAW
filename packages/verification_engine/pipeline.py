@@ -67,6 +67,7 @@ from packages.claim_engine.evidence_consistency import check_document as check_e
 from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.claim_engine.fact_checks import check_periods
 from packages.claim_engine.fact_store import cross_document_facts
+from packages.claim_engine.korean_amount import words_digits_mismatches
 from packages.legal_engine.legal_rules import review_legal_rules
 from packages.legal_engine.claim_review import provision_texts, review_claims
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
@@ -563,6 +564,8 @@ class VerificationPipeline:
         result.events = [e.to_dict() for e in events]
         with manifest.stage("arithmetic", result.findings, document_id=document.document_id):
             result.findings.extend(self.calculation.verify_document(doc))
+            # 한글·숫자 병기 금액 대조(v4 P4)
+            result.findings.extend(words_digits_mismatches(doc))
         # 날짜 구간 일수·기간 경과 만료일 재계산(추가지시 G5)
         with manifest.stage("period_recalculation", result.findings, document_id=document.document_id) as stage:
             try:
