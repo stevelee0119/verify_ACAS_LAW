@@ -1,0 +1,74 @@
+name: 실연동 통합 테스트
+
+# 국가법령정보센터 실제 조회와 실제 모델 호출로 감사표의 '미확인' 항목(G1·J1·J2·R3·R4·R6·R10)을 확인한다.
+# 결과는 docs/live_integration_results.json으로 커밋되고, 감사표(scripts/implementation_audit.py)가 이를 읽는다.
+# 실행: Actions → "실연동 통합 테스트" → Run workflow, 또는 커밋 메시지에 [live-integration]을 넣어 push
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "claude/**"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: live-integration-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  live:
+    name: 실연동 통합 테스트
+    if: >-
+      github.event.repository.fork == false &&
+      (github.event_name == 'workflow_dispatch' ||
+       contains(github.event.head_commit.message, '[live-integration]'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      LV_OPENAI_MODEL: ${{ vars.LV_OPENAI_MODEL }}
+      LV_ANTHROPIC_MODEL: ${{ vars.LV_ANTHROPIC_MODEL }}
+      LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
+      LV_HTTP_TIMEOUT: "30"
+      LV_PSEUDONYM_SECRET: live-integration-only
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: 의존성 설치
+        run: |
+          sudo apt-get update && sudo apt-get install -y tesseract-ocr tesseract-ocr-kor
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 실연동 통합 테스트
+        id: live
+        continue-on-error: true
+        run: python scripts/live_integration.py --out docs/live_integration_results.json
+      - name: 결과 아티팩트
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-integration
+          path: docs/live_integration_results.json
+          retention-days: 30
+      - name: 결과 커밋(통과·실패 모두 기록)
+        if: always()
+        run: |
+          if [ ! -f docs/live_integration_results.json ]; then echo "결과 없음"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/live_integration_results.json
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: 실연동 통합 테스트 결과 기록 [skip ci]"
+          git pull --rebase origin "${GITHUB_REF_NAME}" || true
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: 실패 표시
+        if: steps.live.outcome == 'failure'
+        run: |
+          echo "실연동 통합 테스트 일부가 실패했습니다. 결과 파일의 항목별 기록을 확인하세요."
+          exit 1

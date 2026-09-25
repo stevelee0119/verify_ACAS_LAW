@@ -10,7 +10,7 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
-from typing import Any, Callable, Dict, List
+from typing import Any, Dict, List
 
 SYNTHETIC = "감사용 가상 자료. 실제 판례·법령이 아니다."
 FONT = "HYSMyeongJo-Medium"

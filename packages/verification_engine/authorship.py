@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import re
 import statistics
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (

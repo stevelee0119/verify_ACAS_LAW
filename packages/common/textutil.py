@@ -149,28 +149,9 @@ def sentences(text: str) -> List[str]:
     return [p.strip() for p in parts if p and p.strip()]
 
 
-def char_windows(text: str, size: int = 400, overlap: int = 80) -> List[Tuple[int, str]]:
-    out = []
-    i = 0
-    while i < len(text):
-        out.append((i, text[i : i + size]))
-        i += max(1, size - overlap)
-    return out
-
-
 NUMBER_RE = re.compile(r"[-+]?\d[\d,]*(?:\.\d+)?")
 
 
 def parse_number(token: str) -> float:
     return float(token.replace(",", ""))
 
-
-def find_numbers(text: str) -> List[Tuple[int, int, float, str]]:
-    """(start, end, value, raw) 목록."""
-    out = []
-    for m in NUMBER_RE.finditer(text):
-        try:
-            out.append((m.start(), m.end(), parse_number(m.group()), m.group()))
-        except ValueError:  # pragma: no cover
-            continue
-    return out

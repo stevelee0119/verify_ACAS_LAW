@@ -6,7 +6,7 @@ classifier가 문맥 feature와 결합해 최종 등급을 정한다.
 from __future__ import annotations
 
 import re
-from typing import Dict, List, Pattern, Tuple
+from typing import List, Pattern, Tuple
 
 from packages.common.enums import FindingType, InjectionIntent
 

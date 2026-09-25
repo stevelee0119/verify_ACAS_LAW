@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
@@ -13,7 +13,6 @@ from packages.common.enums import (
     EvidenceGrade,
     FindingType,
     ForensicLevel,
-    InjectionIntent,
     MetaMessageType,
     Severity,
     VerificationStatus,
@@ -421,7 +420,7 @@ class AdversarialScanner:
                         evidence_grade=EvidenceGrade.A,
                         title=f"Unicode 은닉 신호: {signal.kind}" + (f" — {signal.detail}" if signal.kind == "ZERO_WIDTH" else ""),
                         detail=f"{layer_name} 레이어. {signal.detail}"
-                        + (f" 복원된 문자열에 지시형 표현이 있다." if hidden_instruction else ""),
+                        + (" 복원된 문자열에 지시형 표현이 있다." if hidden_instruction else ""),
                         confidence=confidence_score(features),
                         confidence_features=features,
                         document_id=doc.document_id,

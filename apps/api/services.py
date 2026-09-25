@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Optional
 
 from sqlalchemy import insert as sa_insert, select
 from sqlalchemy.orm import Session

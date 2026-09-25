@@ -6,7 +6,7 @@ import re
 import time
 from datetime import datetime
 from uuid import uuid4
-from typing import List, Optional
+from typing import List
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile
 from sqlalchemy import func, select, text, update
@@ -328,7 +328,7 @@ def upload_document(
 def _store_document(project_id: str, file: UploadFile, document_kind: str,
                     is_own_document: bool, session: Session) -> DocumentOut:
     """업로드 → 검증 → SHA-256 → Immutable Original 저장 (제6장, 제15.1장)."""
-    project = require_project(session, project_id, "MEMBER")
+    require_project(session, project_id, "MEMBER")
 
     settings = get_settings()
     filename = _safe_filename(file.filename or "unnamed")

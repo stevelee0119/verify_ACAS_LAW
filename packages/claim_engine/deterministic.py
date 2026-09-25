@@ -16,9 +16,9 @@ from __future__ import annotations
 
 import calendar
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_HALF_UP
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence
 
 ENGINE_NAME = "claim_engine.deterministic"
 
@@ -182,10 +182,6 @@ def days_between(start: date, end: date, *, count_first_day: bool = False,
     return max(count, 0)
 
 
-def _end_of_month(value: date) -> date:
-    return value.replace(day=calendar.monthrange(value.year, value.month)[1])
-
-
 def months_elapsed(start: date, end: date, *, whole_only: bool = True) -> int:
     """달력월 기준 경과개월. 응당일 전날까지는 그 달이 차지 않은 것으로 본다.
 
@@ -200,26 +196,6 @@ def months_elapsed(start: date, end: date, *, whole_only: bool = True) -> int:
     if not whole_only and end.day > anniversary_day:
         pass  # 부분월은 별도 계산이 필요하며 여기서 임의로 올리지 않는다
     return max(months, 0)
-
-
-def business_days_between(start: date, end: date, *,
-                          holidays: Sequence[date] = (),
-                          count_first_day: bool = False) -> int:
-    """영업일수. 공휴일 목록은 호출자가 준다.
-
-    대한민국 공휴일표를 내장하지 않는다. 내장하면 해마다 틀리고, 틀린 줄
-    모르는 채로 기간 계산이 통과한다.
-    """
-    if end < start:
-        raise CalculationError("종기가 시기보다 앞선다")
-    holiday_set = set(holidays)
-    cursor = start if count_first_day else start + timedelta(days=1)
-    count = 0
-    while cursor <= end:
-        if cursor.weekday() < 5 and cursor not in holiday_set:
-            count += 1
-        cursor += timedelta(days=1)
-    return count
 
 
 # --- 베스팅 -------------------------------------------------------------------

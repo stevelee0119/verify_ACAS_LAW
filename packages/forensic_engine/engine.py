@@ -13,7 +13,7 @@ import hashlib
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
-from packages.common.enums import ForensicLevel, MetaMessageType, Severity
+from packages.common.enums import ForensicLevel, MetaMessageType
 from packages.common.schemas import EngineResult, Finding, NormalizedDocument
 
 from .advisory import AdvisoryContext, scan_advisory

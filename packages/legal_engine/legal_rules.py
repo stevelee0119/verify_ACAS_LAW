@@ -10,7 +10,7 @@ import json
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
 from packages.common.schemas import Evidence, Finding, NormalizedDocument

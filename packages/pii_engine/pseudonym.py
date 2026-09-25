@@ -168,7 +168,3 @@ class PseudonymStore:
     @property
     def size(self) -> int:
         return len(self._mapping)
-
-    def as_table(self) -> Dict[str, str]:
-        """감사·사용자 확인용 매핑 표. 접근 통제 하에서만 노출한다."""
-        return dict(self._originals)

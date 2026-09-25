@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_right
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # 법률 식별자 Guard — 이 패턴에 걸리는 구간은 PII로 마스킹하지 않는다
@@ -137,11 +137,6 @@ def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool
         return False
     span_start, span_end = spans[index]
     return span_start <= start and end <= span_end
-
-
-def _in_legal_identifier(text: str, start: int, end: int) -> bool:
-    """단건 조회용 호환 함수. 반복 호출에는 legal_identifier_spans를 쓴다."""
-    return _covered_by_span(legal_identifier_spans(text), start, end)
 
 
 def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> List[PIIMatch]:

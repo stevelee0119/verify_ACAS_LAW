@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import zipfile
-from typing import Dict, List, Optional
+from typing import Dict
 
 MAX_TOTAL_UNCOMPRESSED = 400 * 1024 * 1024
 MAX_RATIO = 200

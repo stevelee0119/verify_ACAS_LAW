@@ -486,13 +486,6 @@ class LLMRouter:
             used=True,
         ))
 
-    def _cost(self, provider_name: str, response: LLMResponse) -> float:
-        pricing = self.settings.pricing.get(response.model) or self.settings.pricing.get(provider_name) or {}
-        if not all(key in pricing for key in ("input", "output")):
-            raise ValueError("Cannot compute a cost without configured input/output prices")
-        return float((money(response.input_tokens) * money(pricing["input"])
-                      + money(response.output_tokens) * money(pricing["output"])) / Decimal(1000000))
-
     # -- 제12.3장 Cascade Verification --------------------------------------
     async def cascade(
         self,
@@ -704,12 +697,6 @@ class LLMRouter:
             return False
         except Exception:
             return True
-
-    def role_for_budget(self, severity: Severity) -> LLMRole:
-        if self.budget_exhausted() and severity.rank < Severity.HIGH.rank:
-            return LLMRole.LOW_COST_EXTRACTOR
-        return LLMRole.PRIMARY_REASONER
-
 
 # 한국어 JSON은 공급자마다 토큰 사용량이 크게 다르다. 기본값(1200)에서는 한
 # 모델만 잘려 형식 오류로 탈락했다. 분량 상한을 프롬프트에 두고 한도는 넉넉히 준다.

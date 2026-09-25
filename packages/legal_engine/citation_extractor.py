@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
 from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument
@@ -14,8 +14,7 @@ from packages.common.schemas import Citation, NormalizedDocument
 from packages.document_engine.reading_text import (QUOTE_SPAN_RE, build_reading_text, ensure_running_heads,
                                                     join_separator, sentence_bounds)
 
-from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix,
-                        split_case_number)
+from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix)
 
 # 스캔 OCR은 '헌법 재판소'처럼 법원명을 띄어 읽기도 한다(추가지시 G2). 법원명 안의 공백은 표준화 때 없앤다.
 COURT_RE = r"(?:대법원|헌법\s?재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
@@ -255,7 +254,6 @@ def extract_from_text(
         if overlaps(m.start(), m.end()):
             continue
         case_no = m.group("case_no")
-        parts = split_case_number(case_no)
         citations.append(
             Citation.create(
                 CitationType.CASE,

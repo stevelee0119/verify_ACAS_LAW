@@ -8,7 +8,7 @@
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 from packages.common.enums import EvidenceGrade, FindingType, VerificationStatus
 from packages.common.schemas import Evidence, Finding, NormalizedDocument

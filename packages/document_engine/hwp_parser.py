@@ -11,7 +11,7 @@ import re
 import struct
 import zlib
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from packages.common.schemas import Block, NormalizedDocument, Page, new_id
 

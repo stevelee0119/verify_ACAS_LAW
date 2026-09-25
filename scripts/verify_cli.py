@@ -18,7 +18,6 @@ from typing import Dict, List
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from packages.audit_engine import AuditChain  # noqa: E402
-from packages.common.config import get_settings  # noqa: E402
 from packages.common.enums import ExternalAIPolicy, Severity, VerificationProfile  # noqa: E402
 from packages.common.storage import sha256_file  # noqa: E402
 from packages.document_engine import ALLOWED_EXTENSIONS  # noqa: E402
@@ -76,7 +75,6 @@ def main() -> int:
 
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    settings = get_settings()
 
     audit = AuditChain()
     pipeline = VerificationPipeline(audit=audit)

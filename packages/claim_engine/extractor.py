@@ -6,9 +6,8 @@ Rule 기반으로 먼저 구조화하고, 의미 판단이 필요한 부분만 L
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from datetime import date
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from packages.common.enums import ClaimType, EntityType
 from packages.common.schemas import Claim, Citation, Entity, Event, NormalizedDocument

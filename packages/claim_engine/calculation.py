@@ -7,9 +7,9 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import date, timedelta
+from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus

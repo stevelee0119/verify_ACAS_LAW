@@ -224,22 +224,3 @@ def check_proviso_omission(quoted: str, source_text: str, citing_text: str,
         return None
     return proviso
 
-
-def proviso_finding(proviso: str, *, source_label: str = "",
-                    document_id: Optional[str] = None,
-                    page: Optional[int] = None) -> Finding:
-    """제1.2장 STATUTE_TEXT_MISMATCH(단서·예외 누락)."""
-    return Finding.create(
-        type=FindingType.STATUTE_TEXT_MISMATCH,
-        status=VerificationStatus.PARTIALLY_VERIFIED,
-        severity=Severity.HIGH,
-        evidence_grade=EvidenceGrade.A,
-        title=f"본문만 인용하고 단서를 빠뜨렸다{f': {source_label}' if source_label else ''}",
-        detail=(f"원문에는 뒤이어 단서가 있다: “{proviso[:200]}”. "
-                f"단서를 함께 보지 않으면 요건이 달라진다."),
-        confidence=0.85,
-        document_id=document_id, page=page, engine=ENGINE_NAME,
-        evidence=[Evidence.create(description=f"원문 단서({source_label or '원문'})",
-                                  grade=EvidenceGrade.A, excerpt=proviso[:300])],
-        tags=["quotation", "proviso"],
-    )

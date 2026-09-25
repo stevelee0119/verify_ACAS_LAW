@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 EXHIBIT_LABEL_RE = re.compile(
     r"(?P<party>갑|을|병|증)\s*(?:제\s*)?(?P<number>\d{1,3})\s*호\s*증"
@@ -31,13 +31,3 @@ def parse_exhibit_label(text: str) -> Optional[Dict[str, Any]]:
             "label": " ".join(match.group(0).split()), "name": " ".join(rest.split()),
             "span": match.span()}
 
-
-def exhibit_labels(text: str) -> List[Dict[str, Any]]:
-    """본문 안의 모든 호증 표기(가지번호 범위 포함)."""
-    out = []
-    clean = (text or "").translate(SPACES)
-    for match in EXHIBIT_LABEL_RE.finditer(clean):
-        parsed = parse_exhibit_label(clean[match.start():match.end()])
-        if parsed:
-            out.append(parsed)
-    return out

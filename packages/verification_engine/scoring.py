@@ -12,7 +12,6 @@ from packages.common.enums import (
     LEGAL_FINDING_TYPES,
     MM4_ADVISORY_TYPES,
     FindingType,
-    MetaMessageType,
     Severity,
     VerificationStatus,
 )

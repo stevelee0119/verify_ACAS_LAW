@@ -8,10 +8,9 @@ DB(SQLAlchemy) 모델과 분리된 순수 도메인 객체이며 엔진 계층�
 """
 from __future__ import annotations
 
-import hashlib
 import uuid
 from dataclasses import dataclass, field, asdict
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from .enums import (
@@ -34,10 +33,6 @@ from .enums import (
 
 def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 # ---------------------------------------------------------------------------

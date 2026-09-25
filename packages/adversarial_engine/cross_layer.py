@@ -13,7 +13,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Dict, List, Tuple
+from typing import Dict, List
 
 from packages.common.textutil import (contains_fuzzy_normalized, normalize_for_match,
                                       normalize_quote, sentences)

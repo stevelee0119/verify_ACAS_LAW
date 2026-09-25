@@ -11,7 +11,7 @@ import re
 import shutil
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import BinaryIO, Optional
+from typing import Optional
 
 from .config import get_settings
 
@@ -128,16 +128,6 @@ class LocalObjectStorage(ObjectStorage):
 
     def delete_project_files(self, project_id: str) -> int:
         return sum(_remove_tree(target) for target in _project_dirs(self.root, project_id))
-
-    def copy_to_temp(self, storage_key: str, suffix: str = "") -> Path:
-        """파서가 파일 경로를 요구할 때 원본을 건드리지 않도록 사본을 만든다."""
-        src = self._abs(storage_key)
-        tmp_dir = self.root / "tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        dst = tmp_dir / f"{Path(storage_key).name}{suffix}"
-        shutil.copyfile(src, dst)
-        return dst
-
 
 _storage: Optional[ObjectStorage] = None
 
@@ -260,15 +250,6 @@ class EncryptedObjectStorage(ObjectStorage):
         os.chmod(partial, 0o600)
         partial.replace(target)  # 덜 풀린 파일을 원본으로 읽지 않게 한다
         return target
-
-    def copy_to_temp(self, storage_key: str, suffix: str = "") -> Path:
-        source = self.path(storage_key)
-        tmp_dir = self.cache_root / "tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        destination = tmp_dir / f"{Path(storage_key).name}{suffix}"
-        shutil.copyfile(source, destination)
-        os.chmod(destination, 0o600)
-        return destination
 
     def delete_project_files(self, project_id: str) -> int:
         # 풀어 둔 평문 사본도 함께 지운다. 사본은 개수에 넣지 않는다.

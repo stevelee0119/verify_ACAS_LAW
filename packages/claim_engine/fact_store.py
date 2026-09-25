@@ -113,14 +113,6 @@ def document_field(doc: NormalizedDocument, case_numbers: Set[str]) -> Optional[
     return best if ranked[0] >= 2 and ranked[0] >= 2 * ranked[1] else None
 
 
-def party_names(text: str) -> Dict[str, Counter]:
-    """{역할: Counter(가명)}. 가명 표기(김○○)만 센다."""
-    out: Dict[str, Counter] = {}
-    for m in PARTY_RE.finditer(text):
-        out.setdefault(_role(m.group("role")), Counter())[m.group("name")] += 1
-    return out
-
-
 # --- 사실 튜플 ---------------------------------------------------------------------------------
 def _facts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []

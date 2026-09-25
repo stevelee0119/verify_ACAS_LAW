@@ -64,10 +64,6 @@ _SEVERITY_RANK = {
 }
 
 
-def severity_max(a: "Severity", b: "Severity") -> "Severity":
-    return a if a.rank >= b.rank else b
-
-
 def severity_cap(value: "Severity", ceiling: "Severity") -> "Severity":
     """상한을 넘지 않도록 Severity를 제한한다(예: MM-4는 MEDIUM 상한)."""
     return value if value.rank <= ceiling.rank else ceiling

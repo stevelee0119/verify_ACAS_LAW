@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, List
 
-from packages.common.schemas import BBox, Block, NormalizedDocument, Page, new_id
+from packages.common.schemas import Block, NormalizedDocument, Page, new_id
 
 from .base import DocumentParser, ParserError
 from .ocr import get_ocr_adapter

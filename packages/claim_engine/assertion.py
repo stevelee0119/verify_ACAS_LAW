@@ -11,8 +11,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from typing import List, Optional, Sequence
 
 from packages.common.enums import (
     CitationType,

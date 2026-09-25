@@ -8,8 +8,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from packages.common.enums import AuditEventType, ExternalAIPolicy
-from packages.common.schemas import Block, NormalizedDocument
+from packages.common.enums import ExternalAIPolicy
+from packages.common.schemas import NormalizedDocument
 
 from .detector import PIIMatch, detect
 from .pseudonym import PseudonymStore
@@ -86,9 +86,3 @@ class PIIEngine:
             masked.replacements.update(result.replacements)
         self.store.save()
         return masked
-
-    def scan_only(self, doc: NormalizedDocument) -> List[PIIMatch]:
-        out: List[PIIMatch] = []
-        for block in doc.blocks:
-            out.extend(detect(block.text, block_id=block.block_id, page=block.page))
-        return out

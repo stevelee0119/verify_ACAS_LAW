@@ -7,7 +7,7 @@ from typing import List, Optional
 
 from packages.common.schemas import NormalizedDocument, Page
 
-from .base import DocumentParser, ParserError
+from .base import DocumentParser
 from .docx_parser import DocxParser
 from .hwp_parser import HwpParser, HwpxParser
 from .pdf_parser import PdfParser

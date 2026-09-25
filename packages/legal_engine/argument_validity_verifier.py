@@ -19,7 +19,7 @@ from packages.common.enums import (
     Severity,
     VerificationStatus,
 )
-from packages.common.schemas import Citation, Claim, Evidence, Finding, NormalizedDocument
+from packages.common.schemas import Citation, Claim, Finding, NormalizedDocument
 from packages.legal_engine.normalize import case_number_possible
 from packages.llm_router import LLMRouter
 from packages.llm_router.providers import LLMRequest
