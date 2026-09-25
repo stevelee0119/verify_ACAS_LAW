@@ -86,11 +86,22 @@ def _risk_from(findings: List[Any]) -> str:
 
 
 def unified_authorship(document: Any) -> Dict[str, Any]:
-    """문서 하나의 AI 작성 판단. 교차판정 결과를 우선하고 문체 통계는 보조 신호로 붙인다."""
+    """문서 하나의 AI 작성 판단. 교차판정 결과를 우선하고 문체 통계는 보조 신호로 붙인다.
+    
+    객관적 본문 흔적(objective_traces)이 0건이면 미검증 메타데이터나 단순 서식만으로
+    확정적 AI 작성(AI_FULL_GENERATION_LIKELY/AI_PARTIAL_GENERATION)으로 승격되는 것을 차단하고 UNCERTAIN을 유지한다.
+    """
     detector = document.ai_detector_result or {}
     stylometry = (document.authorship or {}).get("verdict")
-    verdict = detector.get("verdict") or stylometry or "UNCERTAIN"
+    raw_verdict = detector.get("verdict") or stylometry or "UNCERTAIN"
     traces = int((detector.get("signals") or {}).get("objective_traces") or 0)
+    
+    # 객관적 본문 흔적이 없으면 확정 판정을 유보(UNCERTAIN)로 제한
+    if traces == 0 and raw_verdict in ("AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION"):
+        verdict = "UNCERTAIN"
+    else:
+        verdict = raw_verdict
+
     # 두 축을 나눈다(v4 P6): AI가 관여했다는 객관적 흔적이 있는가(관여), 있다면 문서의 어디까지인가(범위).
     # 흔적이 없다는 것은 '사람 작성'의 근거가 아니다.
     involvement = "TRACES_FOUND" if traces else "NO_OBJECTIVE_TRACES"

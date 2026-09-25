@@ -31,6 +31,7 @@ from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
 from .citation_format import code_court_family, court_family, format_violations
+from .statute_ranges import check_statute_article_range
 from .opinion_attribution import attribute_claim, direction_conflict, split_opinions, summary_direction_conflict
 from .verification_labels import citation_label
 from .quote_diff import quote_changes, quote_diff_summary, render_quote_diff
@@ -579,6 +580,42 @@ class LegalVerifier:
         if not citation.law_name:
             verdict.status = VerificationStatus.SKIPPED
             return verdict
+
+        # 조문 번호 상한 초과 검사 (LAW-NX) - DB 조회와 무관하게 정적 확정 판정
+        range_error = check_statute_article_range(citation.law_name, citation.article)
+        if range_error is not None:
+            verdict.status = VerificationStatus.NOT_FOUND
+            verdict.levels["existence"] = "VERIFIED"
+            verdict.levels["article"] = "NOT_FOUND"
+            features = {
+                "statute_range_exceeded": True,
+                "deterministic_rule": True,
+                "defect_code": "LAW-NX",
+                "max_article": range_error["max_article"],
+                "cited_article": range_error["cited_article"],
+            }
+            verdict.findings.append(
+                Finding.create(
+                    type=FindingType.STATUTE_NONEXISTENT,
+                    status=VerificationStatus.NOT_FOUND,
+                    severity=Severity.HIGH,
+                    evidence_grade=EvidenceGrade.A,
+                    title=f"존재하지 않는 법령 조문(상한 초과): {citation.raw_text}",
+                    detail=range_error["message"],
+                    confidence=confidence_score(features),
+                    confidence_features=features,
+                    document_id=citation.document_id,
+                    block_id=citation.block_id,
+                    page=citation.page,
+                    span=citation.span,
+                    engine=ENGINE_NAME,
+                    source_record_ids=[r.source_record_id for r in verdict.source_records],
+                    tags=["LEGAL", "STATUTE", "PROVISION_NOT_FOUND", "LAW-NX"],
+                )
+            )
+            verdict.notes.append(range_error["message"])
+            return verdict
+
         if any(value is not None and not legal_date(value) for value in (as_of, incident_date, current_date)):
             verdict.levels["temporal"] = "UNVERIFIED"
             verdict.notes.append("유효한 법령 기준일이 필요하다")

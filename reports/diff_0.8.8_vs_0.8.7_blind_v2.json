@@ -1,0 +1,56 @@
+{
+ "summary": {
+  "findings": [
+   78,
+   76
+  ],
+  "defect_claims": [
+   35,
+   33
+  ],
+  "release_gate": [
+   null,
+   null
+  ]
+ },
+ "warning": "회귀 비교 불가: 필수 자원 누락 (LV_LAW_GO_KR_OC(국가법령정보센터 키), AI 공급자 키(ANTHROPIC/OPENAI/GEMINI 중 최소 1개), tesseract(kor+OSD))",
+ "added": [],
+ "removed": [
+  {
+   "doc": "(문서 간)",
+   "type": "CROSS_DOCUMENT_CONTRADICTION",
+   "code": "CROSS_DOC_INCONSISTENCY",
+   "title": "문서마다 청구금액이 다르다: B-01_complaint.pdf 31,350,000원, B-04_brief2.pdf 94,050,000 원",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "B-05",
+   "type": "ARITHMETIC_MISMATCH",
+   "code": "",
+   "title": "합계가 세부 금액 합산값과 다르다 (차이 6,150,000원)",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "reworded": [],
+ "lost_defect_claims": [
+  {
+   "doc": "(문서 간)",
+   "type": "CROSS_DOCUMENT_CONTRADICTION",
+   "code": "CROSS_DOC_INCONSISTENCY",
+   "title": "문서마다 청구금액이 다르다: B-01_complaint.pdf 31,350,000원, B-04_brief2.pdf 94,050,000 원",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "B-05",
+   "type": "ARITHMETIC_MISMATCH",
+   "code": "",
+   "title": "합계가 세부 금액 합산값과 다르다 (차이 6,150,000원)",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "regression_candidates": 2
+}

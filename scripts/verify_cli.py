@@ -33,15 +33,19 @@ from packages.verification_engine import (  # noqa: E402
     DocumentInput,
     ProjectContext,
     VerificationPipeline,
+    check_and_reject_ground_truth,
+    is_ground_truth_filename,
 )
 
 FORMATS = ("pdf", "highlight", "xlsx", "csv", "json", "manifest")
 
 
 def collect_documents(input_dir: Path) -> List[Path]:
+    """검증 대상 문서를 수집한다. 정답지(00_GroundTruth.pdf 등)는 원천 제외한다."""
     files = [
         p for p in sorted(input_dir.rglob("*"))
         if p.is_file() and p.suffix.lower() in ALLOWED_EXTENSIONS
+        and not is_ground_truth_filename(p.name)
     ]
     return files
 
@@ -98,6 +102,17 @@ def main() -> int:
         for index, path in enumerate(files, start=1)
     ]
 
+    from packages.verification_engine.environment_check import check_execution_environment
+    env_info = check_execution_environment()
+    if env_info.get("warning"):
+        print("=" * 80, file=sys.stderr)
+        print(f"[경고] {env_info['warning']}", file=sys.stderr)
+        print("=" * 80, file=sys.stderr)
+
+    # 정답지 파일명 입력 거부
+    for f in files:
+        check_and_reject_ground_truth(f.name)
+
     print(f"대상 문서 {len(documents)}건 / 프로파일 {args.profile} / 외부 AI 정책 {args.ai_policy}")
     for document in documents:
         print(f"  - {document.filename}  SHA-256 {document.sha256[:16]}…")
@@ -144,8 +159,16 @@ def main() -> int:
 
     # --- 요약 -------------------------------------------------------------
     counts = result.scores.get("severity_counts", {})
-    summary_lines = [
-        "",
+    manifest_warning = result.run_manifest.get("warning") or env_info.get("warning")
+    summary_lines = []
+    if manifest_warning:
+        summary_lines.extend([
+            "=" * 80,
+            f"[경고] {manifest_warning}",
+            "=" * 80,
+            "",
+        ])
+    summary_lines.extend([
         f"상태: {result.state}",
         f"Finding: {len(result.all_findings)}건 "
         f"(CRITICAL {counts.get('CRITICAL', 0)} / HIGH {counts.get('HIGH', 0)} / "
@@ -155,7 +178,7 @@ def main() -> int:
         f"감사추적: {manifest['event_count']}건, 체인 유효={manifest['chain_valid']}",
         "",
         "축별 위험도(하나로 합산하지 않는다):",
-    ]
+    ])
     for axis, value in (result.scores.get("axes") or {}).items():
         summary_lines.append(f"  {axis:32s} {json.dumps(value, ensure_ascii=False)[:110]}")
     summary_lines += ["", "주요 Finding (CRITICAL·HIGH):"]

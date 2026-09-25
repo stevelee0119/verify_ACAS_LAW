@@ -24,10 +24,14 @@ WORD_CHARS = "영공일이삼사오육륙칠팔구십백천만억조"
 # 한글 금액(숫자 섞임 허용) 뒤에 괄호 안 숫자 금액, 또는 그 반대
 # 앞 글자가 한글이면(조사 '이' 등) 금액의 시작이 아니다. '금'·'일금' 바로 뒤는 허용한다.
 KOREAN_AMOUNT = rf"(?:(?<=금)|(?<![가-힣\d]))(?:\d[\d,]*\s*)?[{WORD_CHARS}](?:[{WORD_CHARS}\d,\s]*[{WORD_CHARS}])?"
+CURRENCY_PREFIX = r"(?:일금\s*|금\s*|[₩\\￥]\s*|KRW\s*)"
+AMOUNT_SUFFIX = r"(?:\s*원정|\s*원|\s*정)"
 NUMERIC_AMOUNT = r"\d{1,3}(?:,\d{3})+|\d+"
+
 PAIR_RE = re.compile(
-    rf"(?:일금|금)?\s*(?P<words>{KOREAN_AMOUNT})\s*원\s*(?:정)?\s*[(（]\s*(?:금\s*)?(?P<digits>{NUMERIC_AMOUNT})\s*원?\s*[)）]"
-    rf"|(?:금\s*)?(?P<digits2>{NUMERIC_AMOUNT})\s*원\s*[(（]\s*(?:일금|금)?\s*(?P<words2>{KOREAN_AMOUNT})\s*원?\s*(?:정)?\s*[)）]")
+    rf"(?:{CURRENCY_PREFIX})?\s*(?P<words>{KOREAN_AMOUNT}){AMOUNT_SUFFIX}?\s*[(（]\s*(?:{CURRENCY_PREFIX})?(?P<digits>{NUMERIC_AMOUNT}){AMOUNT_SUFFIX}?\s*[)）]"
+    rf"|(?:{CURRENCY_PREFIX})?(?P<digits2>{NUMERIC_AMOUNT}){AMOUNT_SUFFIX}?\s*[(（]\s*(?:{CURRENCY_PREFIX})?\s*(?P<words2>{KOREAN_AMOUNT}){AMOUNT_SUFFIX}?\s*[)）]"
+)
 
 
 def _small(text: str) -> Optional[int]:
@@ -57,8 +61,8 @@ def _small(text: str) -> Optional[int]:
 def parse_korean_amount(text: str) -> Optional[Decimal]:
     """'이억오천만' → 250000000. 해석할 수 없으면 None."""
     body = re.sub(r"\s+", "", text or "")
-    body = re.sub(r"^(?:일금|금)", "", body)
-    body = re.sub(r"(?:원정|원|정)$", "", body)
+    body = re.sub(r"^(?:일금|금|[₩\\￥]|KRW)+", "", body)
+    body = re.sub(r"(?:원정|원|정)+$", "", body)
     if not body or not re.fullmatch(rf"[{WORD_CHARS}\d,]+", body):
         return None
     if not re.search(rf"[{WORD_CHARS}]", body):

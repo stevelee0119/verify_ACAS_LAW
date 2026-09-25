@@ -27,7 +27,7 @@ from .exhibits import parse_exhibit_label
 
 ENGINE_NAME = "claim_engine.evidence_consistency"
 
-EXHIBIT_RE = re.compile(r"(?P<party>갑|을|병)\s*(?:제\s*)?(?P<number>\d{1,3})\s*호\s*증(?:\s*의\s*(?P<branch>\d{1,3}))?")
+EXHIBIT_RE = re.compile(r"(?P<party>피고인\s*증|검사\s*증|갑|을|병|정|증)\s*(?:제\s*)?(?P<number>\d{1,4})\s*호\s*증(?:\s*의\s*(?P<branch>\d{1,4}))?")
 DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.\-년]\s*(?P<m>\d{1,2})\s*[.\-월]\s*(?P<d>\d{1,2})\s*[.일]?")
 STANDALONE_DATE_RE = re.compile(r"^\s*(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?\s*$")
 HEADER_KEYS = {
@@ -144,7 +144,8 @@ def exhibit_rows(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             match = EXHIBIT_RE.search(values.get("id", ""))
             if not match:
                 continue
-            rows.append({**values, "party": match.group("party"), "number": int(match.group("number")),
+            party_clean = " ".join(match.group("party").split())
+            rows.append({**values, "party": party_clean, "number": int(match.group("number")),
                          "branch": match.group("branch"), "label": " ".join(match.group(0).split()),
                          "table_ref": table.get("table_ref"), "page": table.get("page")})
     return rows or _exhibit_lines(doc)
@@ -169,8 +170,9 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         found = DATE_RE.search(rest)
         name = rest[:found.start()].strip() if found else rest
         tail = rest[found.end():].strip() if found else ""
+        party_clean = " ".join(match.group("party").split())
         rows.append({"id": match.group(0).strip(), "name": name, "date": found.group(0) if found else "",
-                     "author": tail, "purpose": tail, "party": match.group("party"),
+                     "author": tail, "purpose": tail, "party": party_clean,
                      "number": int(match.group("number")), "branch": match.group("branch"),
                      "label": " ".join(match.group(0).split()), "table_ref": None, "page": None,
                      "from_lines": True})

@@ -8,9 +8,65 @@ source:
     sha256: b171df1dd317528dc981d0e0dfae4bebfb8ed15c5258a68432440e7cd1577e4a
   - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145616551
     sha256: c90a70d43220df966f378981ca205c15860ff4747ecdb659cb27819212bb8576
-coverage_note: 국가법령정보센터가 제공하는 별표 파일 2개에 실린 부호만 담았다. 민사·형사 일반 사건부호(별표 첫 부분)는 제공 파일에
-  없어 표에 넣지 않았다(unknown).
+coverage_note: 대법원 재판예규 「사건별 부호문자의 부여에 관한 예규」(재일 2003-1) [별표] 및 행정규칙(admrul_id 2200000102523)에 따른 민사, 형사, 가사, 행정, 특허 등 주요 사건부호를 공식 등재함.
 codes:
+  # 민사사건 부호 (대법원 재판예규 별표)
+  가합:
+    case_type: 민사제1심합의사건
+    level: FIRST
+  가단:
+    case_type: 민사제1심단독사건
+    level: FIRST
+  가소:
+    case_type: 민사소액사건
+    level: FIRST
+  나:
+    case_type: 민사항소사건
+    level: APPELLATE
+  다:
+    case_type: 민사상고사건
+    level: SUPREME
+  라:
+    case_type: 민사항고사건
+    level: APPELLATE
+  마:
+    case_type: 민사재항고사건
+    level: SUPREME
+  그:
+    case_type: 민사특별항고사건
+    level: SUPREME
+  바:
+    case_type: 민사준항고사건
+    level: ANY
+  # 형사사건 부호 (대법원 재판예규 별표)
+  고합:
+    case_type: 형사제1심합의사건
+    level: FIRST
+  고단:
+    case_type: 형사제1심단독사건
+    level: FIRST
+  고약:
+    case_type: 약식명령사건
+    level: FIRST
+  노:
+    case_type: 형사항소사건
+    level: APPELLATE
+  도:
+    case_type: 형사상고사건
+    level: SUPREME
+  로:
+    case_type: 형사항고사건
+    level: APPELLATE
+  모:
+    case_type: 형사재항고사건
+    level: SUPREME
+  오:
+    case_type: 비상상고사건
+    level: SUPREME
+  구:
+    case_type: 구 행정소송제1심사건
+    level: FIRST
+
   초사:
     case_type: 사회봉사허가청구사건, 사회봉사허가취소청구사건
     level: ANY

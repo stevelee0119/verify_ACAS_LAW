@@ -29,11 +29,12 @@ rules:
     pattern: '(\|[^|\n]+\|[^\n]*?\s*\|\s*:?-{3,}:?\s*\|)'
   - category: MARKDOWN
     label: 마크다운 문법 잔재
-    objective: true
+    objective: false
+    min_kinds: 3
     pattern: '(?m)(^\s*#{1,6}\s+\S[^\n]{0,40}|\*\*[^*\n]{1,40}\*\*)'
   - category: CHATBOT_SUMMARY
     label: 챗봇 답변식 요약·나열 도입구
-    objective: true
+    objective: false
     pattern: '(요약하자면|종합하자면|결론적으로\s*말씀드리면|다음과\s*같은\s*(?:점|측면|이유|법리)(?:들)?이\s*있습니다)'
   - category: CLICHE
     label: AI 답변 상투 표현

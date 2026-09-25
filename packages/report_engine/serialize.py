@@ -63,13 +63,18 @@ def dumps(payload: Any, *, indent: Optional[int] = None) -> str:
 
 
 def write_json(path: Path, payload: Any, *, limit: int = LARGE_JSON_BYTES) -> Dict[str, Any]:
-    """파일로 흘려 쓰고 크기·SHA-256을 돌려준다. limit을 넘으면 over_limit=True(호출한 쪽이 본문 대신 해시를 싣는다)."""
+    """파일로 흘려 쓰고 크기·SHA-256을 돌려준다. limit을 넘으면 over_limit=True.
+    
+    Windows/Linux 등 OS 개행 차이(CRLF/LF)로 인한 해시 불일치를 방지하기 위해
+    바이너리 모드('wb')로 정확한 바이트 스트림을 기록한다.
+    """
     value = jsonable_payload(payload) if isinstance(payload, dict) else to_jsonable(payload)
     digest, size = hashlib.sha256(), 0
-    with open(path, "w", encoding="utf-8") as fh:
+    # 바이너리 모드로 저장하여 플랫폼 독립적인 정확한 바이트 및 SHA-256 해시 보장
+    with open(path, "wb") as fh:
         for chunk in json.JSONEncoder(ensure_ascii=False, indent=2).iterencode(value):
             data = chunk.encode("utf-8")
             digest.update(data)
             size += len(data)
-            fh.write(chunk)
+            fh.write(data)
     return {"path": str(path), "bytes": size, "sha256": digest.hexdigest(), "over_limit": size > limit}

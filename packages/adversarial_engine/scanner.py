@@ -40,9 +40,11 @@ PATH_LABELS = {
     "OFF_PAGE": "페이지 밖 좌표", "INVISIBLE_RENDER_MODE": "보이지 않는 렌더모드(Tr 3)",
     "COVERED_BY_SHAPE": "흰 도형으로 덮은 글자", "COVERED_BY_IMAGE": "이미지로 덮은 글자",
     "TRANSPARENT_FILL": "투명 글자(채움 투명도 0)", "LOW_CONTRAST": "배경과 대비가 거의 없는 글자",
+    "CLIPPING_PATH": "클리핑 경로 밖 글자", "CLIPPED_TEXT": "클리핑 경로로 잘린 글자",
     "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
     "METADATA": "문서 속성(메타데이터)", "ATTACHMENT": "첨부파일 내용", "RUNNING_HEAD": "머리글·바닥글", "OTHER_HIDDEN": "기타 숨김 레이어",
     "OUTLINE": "북마크(개요)", "FORM_FIELD": "양식 필드 값", "ACTUAL_TEXT": "표시 대체 문자열(ActualText)",
+    "PAGE_LABELS": "페이지 레이블(PageLabels)",
     "ENCODED": "인코딩 문자열", **KIND_LABELS,
 }
 
@@ -54,7 +56,7 @@ def _path_label(*keys: str) -> str:
 def _injection_path(block: Block) -> str:
     reason = str(block.attributes.get("hidden_reason") or "")
     for key in ("WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE", "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE",
-                "COVERED_BY_IMAGE", "TRANSPARENT_FILL", "LOW_CONTRAST"):
+                "COVERED_BY_IMAGE", "TRANSPARENT_FILL", "LOW_CONTRAST", "CLIPPING_PATH", "CLIPPED_TEXT"):
         if reason.startswith(key):
             return key
     if block.source_layer == "ocr_layer":
@@ -348,6 +350,8 @@ class AdversarialScanner:
         entries += [("FORM_FIELD", "form_field", str(f.get("value") or ""), f.get("name"))
                     for f in doc.structure.get("form_fields") or []]
         entries += [("ACTUAL_TEXT", "actual_text", str(t), None) for t in doc.structure.get("actual_text_strings") or []]
+        if doc.structure.get("page_labels"):
+            entries.append(("PAGE_LABELS", "page_labels", str(doc.structure.get("page_labels")), None))
         for path, layer, text, name in entries:
             if len(text.strip()) < 6:
                 continue

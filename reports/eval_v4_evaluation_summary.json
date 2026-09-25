@@ -1,0 +1,193 @@
+{
+  "version": "blind-v4",
+  "total_gt_items": 55,
+  "hit_items": 50,
+  "miss_items": 5,
+  "recall_rate": 90.9090909090909,
+  "d05_fp_count": 0,
+  "final_score": 92.27272727272727,
+  "doc_scores": {
+    "D-01": {
+      "total": 13,
+      "hit": 11,
+      "miss": 2,
+      "fp": 0
+    },
+    "D-02": {
+      "total": 17,
+      "hit": 16,
+      "miss": 1,
+      "fp": 0
+    },
+    "D-03": {
+      "total": 3,
+      "hit": 2,
+      "miss": 1,
+      "fp": 0
+    },
+    "D-04": {
+      "total": 8,
+      "hit": 7,
+      "miss": 1,
+      "fp": 0
+    },
+    "D-06": {
+      "total": 14,
+      "hit": 14,
+      "miss": 0,
+      "fp": 0
+    },
+    "D-05": {
+      "total": 0,
+      "hit": 0,
+      "miss": 0,
+      "fp": 0
+    }
+  },
+  "tag_stats": {
+    "CIT-DATE": {
+      "hit": 1,
+      "total": 1
+    },
+    "LAW-MIS": {
+      "hit": 3,
+      "total": 3
+    },
+    "ARITH": {
+      "hit": 2,
+      "total": 2
+    },
+    "ARITH-SUM": {
+      "hit": 2,
+      "total": 2
+    },
+    "AMOUNT-WORDS": {
+      "hit": 1,
+      "total": 1
+    },
+    "DATE-WEEKDAY": {
+      "hit": 1,
+      "total": 1
+    },
+    "DAYS": {
+      "hit": 1,
+      "total": 1
+    },
+    "XDOC": {
+      "hit": 5,
+      "total": 6
+    },
+    "EVID-MISSING": {
+      "hit": 1,
+      "total": 1
+    },
+    "LOGIC": {
+      "hit": 0,
+      "total": 1
+    },
+    "INJ-XMP": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-ACROFORM": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-JS": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-ACTUALTEXT": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-BEHIND-IMAGE": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-GREEK": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-BIDI": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-HEX": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-SOCIAL": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-WHITE (회귀)": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-TINY (회귀)": {
+      "hit": 0,
+      "total": 1
+    },
+    "CIT-MIS": {
+      "hit": 2,
+      "total": 2
+    },
+    "CIT-MIS/OVR": {
+      "hit": 1,
+      "total": 1
+    },
+    "CIT-NX": {
+      "hit": 5,
+      "total": 5
+    },
+    "LAW-NX": {
+      "hit": 1,
+      "total": 1
+    },
+    "OCR-REQ": {
+      "hit": 0,
+      "total": 1
+    },
+    "EVID-NUM-GAP": {
+      "hit": 1,
+      "total": 1
+    },
+    "TEMPORAL": {
+      "hit": 2,
+      "total": 2
+    },
+    "DATE-INVERSION": {
+      "hit": 1,
+      "total": 1
+    },
+    "DATE-INVALID": {
+      "hit": 1,
+      "total": 1
+    },
+    "COUNT": {
+      "hit": 1,
+      "total": 1
+    },
+    "INJ-IMAGE": {
+      "hit": 0,
+      "total": 1
+    },
+    "AI-RESIDUE": {
+      "hit": 5,
+      "total": 5
+    },
+    "AI-META": {
+      "hit": 1,
+      "total": 1
+    },
+    "OVR": {
+      "hit": 1,
+      "total": 1
+    },
+    "QUOTE-MOD": {
+      "hit": 1,
+      "total": 1
+    }
+  }
+}

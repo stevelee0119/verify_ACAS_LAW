@@ -1,0 +1,113 @@
+{
+ "summary": {
+  "findings": [
+   50,
+   52
+  ],
+  "defect_claims": [
+   22,
+   24
+  ],
+  "release_gate": [
+   null,
+   null
+  ]
+ },
+ "warning": "회귀 비교 불가: 필수 자원 누락 (LV_LAW_GO_KR_OC(국가법령정보센터 키), AI 공급자 키(ANTHROPIC/OPENAI/GEMINI 중 최소 1개), tesseract(kor+OSD))",
+ "added": [
+  {
+   "doc": "C-05",
+   "type": "ARITHMETIC_MISMATCH",
+   "code": "AMOUNT_WORDS_MISMATCH",
+   "title": "한글 금액과 숫자 금액이 다르다(AMOUNT_WORDS_MISMATCH): '칠백만'=7,000,000원 / 숫자 7,500,000원",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-05",
+   "type": "EVIDENCE_DATE_INVALID",
+   "code": "",
+   "title": "증거 작성일이 달력에 없는 날짜다: 증 제3호증 변제영수증(2차) 작성일 2026. 2. 30.",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-05",
+   "type": "EVIDENCE_LIST_MISMATCH",
+   "code": "EVIDENCE_NUMBER_DUPLICATE",
+   "title": "같은 호증 번호가 두 번 쓰였다: 증 제3호증 — 변제영수증(2차), 변제영수증(3차)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-05",
+   "type": "EVIDENCE_TIMELINE_INVERSION",
+   "code": "",
+   "title": "증거 작성일이 이 서면의 작성일보다 뒤다: 증 제1호증 합의서 작성일 2026. 11. 3. (서면 작성일 2026. 9. 24.)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "PARSE_ERROR",
+   "code": "",
+   "title": "본문을 읽지 못해 내용 검증을 수행하지 못했다: C-06_settlement_scan_rotated.pdf",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "removed": [
+  {
+   "doc": "C-02",
+   "type": "OCR_LAYER_INJECTION",
+   "code": "",
+   "title": "레이어 불일치: independent_ocr vs raw_text",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "ARITHMETIC_MISMATCH",
+   "code": "AMOUNT_WORDS_MISMATCH",
+   "title": "한글 금액과 숫자 금액이 다르다(AMOUNT_WORDS_MISMATCH): '이천만'=20,000,000원 / 숫자 2,000,000원",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "SPECIMEN_DOCUMENT_DECLARED",
+   "code": "",
+   "title": "문서 스스로 예시·연습용임을 밝히고 있다",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "reworded": [],
+ "lost_defect_claims": [
+  {
+   "doc": "C-02",
+   "type": "OCR_LAYER_INJECTION",
+   "code": "",
+   "title": "레이어 불일치: independent_ocr vs raw_text",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "ARITHMETIC_MISMATCH",
+   "code": "AMOUNT_WORDS_MISMATCH",
+   "title": "한글 금액과 숫자 금액이 다르다(AMOUNT_WORDS_MISMATCH): '이천만'=20,000,000원 / 숫자 2,000,000원",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "SPECIMEN_DOCUMENT_DECLARED",
+   "code": "",
+   "title": "문서 스스로 예시·연습용임을 밝히고 있다",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "regression_candidates": 3
+}

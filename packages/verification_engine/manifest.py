@@ -28,6 +28,8 @@ class RunManifest:
     def __init__(self) -> None:
         self.engines: Dict[str, Dict[str, Any]] = {}
         self.order: List[str] = []
+        self.environment: Dict[str, Any] = {}
+        self.warning: Optional[str] = None
 
     def _record(self, name: str) -> Dict[str, Any]:
         if name not in self.engines:
@@ -91,8 +93,14 @@ class RunManifest:
             record = dict(self.engines[name])
             record["seconds"] = round(record["seconds"], 3)
             engines[name] = record
-        return {
+        out = {
             "schema": 1,
+            "warning": self.warning or self.environment.get("warning"),
+            "regression_comparable": self.environment.get("regression_comparable", True),
+            "sources": self.environment.get("sources", {}),
+            "ocr_engine_available": self.environment.get("ocr_engine_available", False),
+            "missing_resources": self.environment.get("missing_resources", []),
+            "environment": dict(self.environment),
             "versions": dict(versions or {}),
             "engines": engines,
             "not_executed": [name for name in self.order if not self.engines[name]["executed"]],
@@ -101,3 +109,4 @@ class RunManifest:
             "note": ("findings는 각 단계가 결과 목록에 더한 건수(병합·중복 제거 전)다. executed=false는 그 엔진이 "
                      "어떤 문서에서도 실행되지 않았다는 뜻이고, 사유는 skip_reasons에 있다."),
         }
+        return out

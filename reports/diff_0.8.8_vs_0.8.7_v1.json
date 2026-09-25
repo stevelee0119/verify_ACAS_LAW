@@ -1,0 +1,22 @@
+{
+ "summary": {
+  "findings": [
+   101,
+   101
+  ],
+  "defect_claims": [
+   65,
+   65
+  ],
+  "release_gate": [
+   null,
+   null
+  ]
+ },
+ "warning": "회귀 비교 불가: 필수 자원 누락 (LV_LAW_GO_KR_OC(국가법령정보센터 키), AI 공급자 키(ANTHROPIC/OPENAI/GEMINI 중 최소 1개), tesseract(kor+OSD))",
+ "added": [],
+ "removed": [],
+ "reworded": [],
+ "lost_defect_claims": [],
+ "regression_candidates": 0
+}

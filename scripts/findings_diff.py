@@ -20,6 +20,12 @@ from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 DEFECT_STATUSES = {"NOT_FOUND", "CONTRADICTED", "SUSPICIOUS", "INVALID_FORMAT", "INVALID"}
 DEFECT_SEVERITIES = {"MEDIUM", "HIGH", "CRITICAL"}
 
@@ -30,14 +36,16 @@ def run(folder: Path, root: Path) -> Dict[str, Any]:
     from packages.common.storage import sha256_file
     from packages.report_engine.exporters import to_payload
     from packages.verification_engine import DocumentInput, ProjectContext, VerificationPipeline
+    from packages.verification_engine.ground_truth_filter import is_ground_truth_filename
 
-    files = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf")
+    files = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf" and not is_ground_truth_filename(p.name))
     documents = [DocumentInput(document_id=p.stem.split("_")[0], path=str(p), filename=p.name,
                                mime_type="application/pdf", sha256=sha256_file(p)) for p in files]
     result = VerificationPipeline(audit=AuditChain()).run(f"diff_{datetime.utcnow():%Y%m%d%H%M%S}",
                                                           ProjectContext(project_id="diff"), documents)
     payload = to_payload(result)
     payload["scores"] = result.scores
+    payload["run_manifest"] = result.run_manifest
     return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
 
 
@@ -80,10 +88,15 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
     added_rows, removed_rows = rows(added), rows(removed)
     reworded = _pair_reworded(removed_rows, added_rows)
     lost_defects = [r for r in removed_rows if r["defect_claim"] and r["count"] > 0]
+    prev_manifest = previous.get("run_manifest") or {}
+    curr_manifest = current.get("run_manifest") or {}
+    warning = curr_manifest.get("warning") or prev_manifest.get("warning")
+
     return {"summary": {"findings": [sum(before.values()), sum(after.values())],
                         "defect_claims": [sum(n for k, n in before.items() if k[4]), sum(n for k, n in after.items() if k[4])],
                         "release_gate": [(previous.get("summary") or {}).get("release_gate"),
                                          (current.get("summary") or {}).get("release_gate")]},
+            "warning": warning,
             "added": [r for r in added_rows if r["count"] > 0], "removed": [r for r in removed_rows if r["count"] > 0],
             "reworded": reworded, "lost_defect_claims": lost_defects,
             "regression_candidates": sum(r["count"] for r in lost_defects)}
@@ -120,9 +133,17 @@ def _pair_reworded(removed: List[Dict[str, Any]], added: List[Dict[str, Any]]) -
 
 def render(title: str, d: Dict[str, Any]) -> str:
     s = d["summary"]
-    lines = [f"### {title}", "",
-             f"- finding {s['findings'][0]} → {s['findings'][1]}, 결함 주장 finding {s['defect_claims'][0]} → {s['defect_claims'][1]}",
-             f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**", ""]
+    lines = []
+    if d.get("warning"):
+        lines += [
+            "================================================================================",
+            f"⚠️  [경고] {d['warning']}",
+            "================================================================================",
+            "",
+        ]
+    lines += [f"### {title}", "",
+              f"- finding {s['findings'][0]} → {s['findings'][1]}, 결함 주장 finding {s['defect_claims'][0]} → {s['defect_claims'][1]}",
+              f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**", ""]
     lines += [f"**문구만 바뀐 finding(같은 결함)** ({sum(r['count'] for r in d['reworded'])}건)", ""]
     if d["reworded"]:
         lines += ["| 문서 | 유형 | 이전 제목 | 현재 제목 | 유사도 |", "|---|---|---|---|---|"]

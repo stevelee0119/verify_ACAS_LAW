@@ -29,7 +29,11 @@ from packages.claim_engine import (
     extract_entities,
     extract_events,
     resolve_entities,
+    verify_cross_document_entities,
 )
+from packages.claim_engine.korean_amount import words_digits_mismatches
+from packages.claim_engine.date_verifier import verify_dates_in_document
+from packages.claim_engine.vote_verifier import verify_vote_counts
 from packages.common.config import get_settings
 from packages.common.enums import (
     ADVERSARIAL_FINDING_TYPES,
@@ -68,8 +72,9 @@ from packages.claim_engine.evidence_consistency import check_document as check_e
 from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.claim_engine.fact_checks import check_periods
 from packages.claim_engine.fact_store import cross_document_facts
-from packages.claim_engine.korean_amount import words_digits_mismatches
 from packages.legal_engine.legal_rules import review_legal_rules
+from packages.legal_engine.precedent_verifier import verify_precedent_distortions, verify_statute_quotes
+from packages.claim_engine.cross_document_entities import verify_cross_document_entities
 from packages.legal_engine.claim_review import provision_texts, review_claims
 from packages.legal_engine.internal_citation import (build_clause_index, check_references,
                                                     internal_citation_findings)
@@ -255,6 +260,9 @@ class VerificationPipeline:
         store = PseudonymStore(project_id=context.project_id)
         pii = PIIEngine(store)
         manifest = RunManifest()
+        from .environment_check import check_execution_environment
+        manifest.environment = check_execution_environment()
+        manifest.warning = manifest.environment.get("warning")
 
         total = max(1, len(documents))
         for index, document in enumerate(documents):
@@ -336,6 +344,10 @@ class VerificationPipeline:
             context = replace(context, counterparty_document=not document.is_own_document)
         result = DocumentResult(document_id=document.document_id, filename=document.filename, role=document.role)
 
+        from .ground_truth_filter import check_and_reject_ground_truth
+        # 0) 정답지(Ground Truth) 파일명 입력 거부
+        check_and_reject_ground_truth(document.filename)
+
         # 1) PARSING
         emit(JobState.PARSING, f"{document.filename} 파싱", base + span * 0.05)
         with manifest.stage("parsing", result.findings, unit="쪽", document_id=document.document_id) as stage:
@@ -348,6 +360,9 @@ class VerificationPipeline:
             )
             stage.inputs = len(doc.pages)
             stage.note = doc.parser_name
+
+        # 문서 내용에 'ground truth' 또는 '정답지'가 포함된 경우 입력 거부
+        check_and_reject_ground_truth(document.filename, doc.visible_text)
         result.normalized = doc
         result.warnings.extend(doc.parse_warnings)
         result.engine_data["page_coverage"] = doc.structure.get("page_coverage", [])
@@ -601,11 +616,15 @@ class VerificationPipeline:
                 result.warnings.append(f"기간 재계산 경고: {exc}")
         with manifest.stage("timeline", result.findings, inputs=len(events), unit="사건(날짜)", document_id=document.document_id):
             result.findings.extend(analyze_timeline(events))
+            result.findings.extend(verify_dates_in_document(doc))
+            result.findings.extend(verify_vote_counts(doc))
         # 법리 규칙 검토: 공식 원문 근거로 청구취지·주장의 형태를 점검한다(v2 Phase 6).
         with manifest.stage("legal_rules", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
                             document_id=document.document_id) as stage:
             try:
                 result.findings.extend(review_legal_rules(doc))
+                result.findings.extend(verify_precedent_distortions(doc, citations))
+                result.findings.extend(verify_statute_quotes(doc, citations))
             except Exception as exc:  # pragma: no cover - 방어
                 stage.error = type(exc).__name__
                 result.warnings.append(f"법리 규칙 검토 경고: {exc}")
@@ -1010,6 +1029,11 @@ class VerificationPipeline:
         # 사건 단위 사실 저장소: 문서 간·문서 안 섹션 간 사실 불일치(추가지시 G5, v4 P1)
         with manifest.stage("fact_store", candidates, inputs=len(readable), unit="문서") as stage:
             candidates.extend(cross_document_facts(readable))
+        # 서면 간 엔티티 교차 일치성 검증 (v0.9.0 과제 3: XDOC)
+        with manifest.stage("cross_document_entities", candidates, inputs=len(readable), unit="문서") as stage:
+            if len(readable) < 2:
+                stage.skip_reason = "읽을 수 있는 문서가 2건 미만"
+            candidates.extend(verify_cross_document_entities(readable))
         findings, seen = [], set()
         for finding in candidates:
             features = finding.confidence_features

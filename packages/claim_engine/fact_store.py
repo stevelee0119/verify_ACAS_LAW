@@ -39,6 +39,7 @@ INCIDENT_BEFORE_RE = re.compile(r"(?:사고일|사고\s*당일|사건\s*당일|�
 RELIEF_RE = re.compile(r"청\s*구\s*취\s*지")
 GROUNDS_RE = re.compile(r"청\s*구\s*원\s*인")
 CLAIMED_RE = re.compile(r"청구\s*(?:금액|액)\s*(?:은|는|인)?\s*(?:금\s*)?")
+PROVISIONAL_RE = re.compile(r"(?:확장|변경)\s*(?:할\s*)?예정|추후\s*확장|향후\s*확장|신체감정|일부\s*청구|우선\s*청구|잠정|유보")
 ATTACHED_HEAD_RE = re.compile(r"^\s*[\[【(]?\s*첨부\s*[\]】)]?\s*\S{1,20}(?:\(\s*사본\s*\)|사본|원본)?\s*$")
 # 자기 사건번호: 뒤에 판결·결정이 붙지 않고, 앞에 법원·선고가 없는 번호
 CASE_NO_RE = re.compile(r"(?<![\d가-힣])(?P<no>(?:19|20)\d{2}\s*(?P<code>[가-힣]{1,3})\s*\d{1,7})(?![\d])")
@@ -146,7 +147,11 @@ def _facts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             amounts = parse_amounts(text[claimed.end():claimed.end() + 40]) if claimed else []
             amount = amounts[0] if amounts and amounts[0].start <= 3 else None
         if amount is not None:
+            # 주변 문맥에서 잠정·유보·확장 예정 양태 검사 (과제 6)
+            amt_window = text[max(0, amount.start - 80):min(len(text), amount.end + 80)]
+            is_provisional = bool(PROVISIONAL_RE.search(amt_window) or PROVISIONAL_RE.search(text[:min(len(text), 1500)]))
             out.append({**base, "attribute": "claim_amount", "key": "claim", "value": str(amount.value),
+                        "modality": "PROVISIONAL" if is_provisional else "DEFINITIVE",
                         "excerpt": " ".join(amount.raw.split())})
         plural = {m.group(1) for m in PLURAL_PARTY_RE.finditer(text)}
         for m in PARTY_RE.finditer(text):
@@ -325,15 +330,18 @@ def _cross_document(group: List[str], store: List[Dict[str, Any]], names: Dict[s
         if f["attribute"] == "claim_amount":
             amounts.setdefault(f["document_id"], f)
     if len({f["value"] for f in amounts.values()}) > 1:
-        values = [f["value"] for f in amounts.values()]
-        transposed = any(digit_transposition(a, b) for i, a in enumerate(values) for b in values[i + 1:])
-        label = ", ".join(f"{names[d]} {f['excerpt']}" for d, f in amounts.items())
-        out.append(_finding("CLAIM_AMOUNT", "CROSS_DOCUMENT",
-                            f"문서마다 청구금액이 다르다{'(자릿수 뒤바뀜 의심)' if transposed else ''}: {label}",
-                            ("같은 숫자의 자리만 바뀐 금액이다. 기재 오류일 가능성이 있어 확인해야 한다. " if transposed else "")
-                            + "청구취지 변경(확장·감축)인지, 기재 오류인지 사람이 확인한다.",
-                            list(amounts.values()), EvidenceGrade.C, VerificationStatus.SUSPICIOUS, names,
-                            digit_transposition=transposed))
+        # 양태가 PROVISIONAL(확장·변경 예정 등)인 문서가 포함되어 있으면 단순 모순이 아니므로 배제 (과제 6)
+        has_provisional = any(f.get("modality") == "PROVISIONAL" for f in amounts.values())
+        if not has_provisional:
+            values = [f["value"] for f in amounts.values()]
+            transposed = any(digit_transposition(a, b) for i, a in enumerate(values) for b in values[i + 1:])
+            label = ", ".join(f"{names[d]} {f['excerpt']}" for d, f in amounts.items())
+            out.append(_finding("CLAIM_AMOUNT", "CROSS_DOCUMENT",
+                                f"문서마다 청구금액이 다르다{'(자릿수 뒤바뀜 의심)' if transposed else ''}: {label}",
+                                ("같은 숫자의 자리만 바뀐 금액이다. 기재 오류일 가능성이 있어 확인해야 한다. " if transposed else "")
+                                + "청구취지 변경(확장·감축)인지, 기재 오류인지 사람이 확인한다.",
+                                list(amounts.values()), EvidenceGrade.C, VerificationStatus.SUSPICIOUS, names,
+                                digit_transposition=transposed))
 
     roles: Dict[str, Dict[str, Counter]] = {}
     for f in facts:

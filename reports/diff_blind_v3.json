@@ -1,0 +1,459 @@
+{
+ "summary": {
+  "findings": [
+   52,
+   48
+  ],
+  "defect_claims": [
+   27,
+   20
+  ],
+  "release_gate": [
+   null,
+   null
+  ]
+ },
+ "added": [
+  {
+   "doc": "C-01",
+   "type": "CASE_NOT_FOUND",
+   "code": "",
+   "title": "검증하지 못한 인용: 대법원 2007. 11. 15. 선고 2007도3061 전원합의체 판결",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 같은 법 제310조의2",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제347조제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제51조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제62조 제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제308조의2",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제311조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제358조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제361조의3 제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제368조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "CASE_CITATION_ERROR",
+   "code": "COURT_CODE_MISMATCH",
+   "title": "법원–부호 불일치(COURT_CODE_MISMATCH): 대법원 2020. 6. 11. 선고 2020노 4521 판결",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "CASE_NOT_FOUND",
+   "code": "",
+   "title": "검증하지 못한 인용: 대법원 2007. 11. 15. 선고 2007도 3061 전원합의체 판결",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제347조 제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "SYSTEM_OVERRIDE_ATTEMPT",
+   "code": "",
+   "title": "SYSTEM_OVERRIDE_ATTEMPT 후보: INSTRUCTION_OVERRIDE, VERIFICATION_SUPPRESSION — 경로: 한글 자모 분리(재조합) · 화면 표시 글자",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "CASE_NOT_FOUND",
+   "code": "",
+   "title": "검증하지 못한 인용: 대법원 2007. 12. 15. 선고 2007도3061 전원합의체 판결",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 같은 법제361조의3 제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제347조제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제51조 제4호",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제62조 제1항",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제358조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제361조의5",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형사소송법 제386조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-04",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "검증하지 못한 인용: 형법 제62조",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "PARSE_ERROR",
+   "code": "",
+   "title": "본문을 읽지 못해 내용 검증을 수행하지 못했다: C-06_settlement_scan_rotated.pdf",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "removed": [
+  {
+   "doc": "C-01",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
+   "defect_claim": false,
+   "count": 4
+  },
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조제1항 (문서 10년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "MODEL_FACT_REMARK",
+   "code": "",
+   "title": "모델이 지적한 사실 모순(재계산 대상): [gemini] 항소기간(7일) 및 항소이유서 제출기한(20일) 등 형사소송법상 기간 계산과 절차적 요건이 실무 관행에 부합하게 정확히 기재되어 있습니다.",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 가능성 판단 유보 (모델 추정치 중앙값 0.50)",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
+   "defect_claim": false,
+   "count": 2
+  },
+  {
+   "doc": "C-02",
+   "type": "CASE_NOT_FOUND",
+   "code": "",
+   "title": "조회 범위 내에서 찾지 못한 판례 인용: 대법원 2020. 6. 11. 선고 2020노 4521 판결",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조 제1항 (문서 15년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "OCR_LAYER_INJECTION",
+   "code": "",
+   "title": "레이어 불일치: independent_ocr vs raw_text",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "CASE_METADATA_MISMATCH",
+   "code": "",
+   "title": "판례 메타데이터 불일치: 대법원 2007. 12. 15. 선고 2007도3061 전원합의체 판결 — 결함 2건: 선고일 불일치(문서 2007-12-15 / 공식 2007-11-15); 인용문 변형: 원문 '원칙적으로' 삭제",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조제1항 (문서 10년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형사소송법 제358조 (문서 14일 / 조문 7일)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-04",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 가능성 판단 유보 (모델 추정치 중앙값 0.94)",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-04",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
+   "defect_claim": false,
+   "count": 4
+  },
+  {
+   "doc": "C-05",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
+   "defect_claim": false,
+   "count": 4
+  },
+  {
+   "doc": "C-05",
+   "type": "MODEL_FACT_REMARK",
+   "code": "",
+   "title": "모델이 지적한 사실 모순(재계산 대상): [anthropic] 금액 불일치도 관찰됨: 영수증 합계 2,000만원 vs 기재 합계 2,500만원, 비율 71.4%와 편취금 5,300만원의 불일치, 한글 금",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "AI_AUTHORSHIP_LIKELY",
+   "code": "",
+   "title": "AI 작성 가능성 판단 유보 (모델 추정치 중앙값 0.50)",
+   "defect_claim": false,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "OCR_LOW_QUALITY",
+   "code": "",
+   "title": "OCR 품질이 낮아 내용을 확정할 수 없는 쪽: 1면",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "reworded": [
+  {
+   "doc": "C-04",
+   "type": "UNSUPPORTED_GENERALIZATION",
+   "before": "법리 검토(전칭 일반화): 근거 없는 전칭 법리 명제 — '전문증거는 어떠한 경우에도 증거능력이 인정되지 않으므로, 참고인 진술이 담긴 모든 서류는 증거에서 배제되어야 합니다(출처: 나'",
+   "after": "법리 검토(전칭 일반화): 근거 없는 전칭 법리 명제 — '2. 증거능력에 관하여 전문증거는 어떠한 경우에도 증거능력이 인정되지 않으므로, 참고인 진술이 담긴 모든 서류는 증거에서 배제'",
+   "similarity": 0.87,
+   "count": 1,
+   "defect_claim": true
+  },
+  {
+   "doc": "C-04",
+   "type": "UNSUPPORTED_GENERALIZATION",
+   "before": "법리 검토(전칭 일반화): 근거 없는 전칭 법리 명제 — '항소심은 법률심이므로 사실오인은 항소이유가 될 수 없고, 항소심에서는 공소장 변경도 절대 허용되지 않습니다.'",
+   "after": "법리 검토(전칭 일반화): 근거 없는 전칭 법리 명제 — '3. 항소심의 심판 범위 항소심은 법률심이므로 사실오인은 항소이유가 될 수 없고, 항소심에서는 공소장 변경도 절대 허용되지 않'",
+   "similarity": 0.91,
+   "count": 1,
+   "defect_claim": true
+  }
+ ],
+ "lost_defect_claims": [
+  {
+   "doc": "C-01",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조제1항 (문서 10년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-01",
+   "type": "MODEL_FACT_REMARK",
+   "code": "",
+   "title": "모델이 지적한 사실 모순(재계산 대상): [gemini] 항소기간(7일) 및 항소이유서 제출기한(20일) 등 형사소송법상 기간 계산과 절차적 요건이 실무 관행에 부합하게 정확히 기재되어 있습니다.",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "CASE_NOT_FOUND",
+   "code": "",
+   "title": "조회 범위 내에서 찾지 못한 판례 인용: 대법원 2020. 6. 11. 선고 2020노 4521 판결",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조 제1항 (문서 15년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-02",
+   "type": "OCR_LAYER_INJECTION",
+   "code": "",
+   "title": "레이어 불일치: independent_ocr vs raw_text",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "CASE_METADATA_MISMATCH",
+   "code": "",
+   "title": "판례 메타데이터 불일치: 대법원 2007. 12. 15. 선고 2007도3061 전원합의체 판결 — 결함 2건: 선고일 불일치(문서 2007-12-15 / 공식 2007-11-15); 인용문 변형: 원문 '원칙적으로' 삭제",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형법 제347조제1항 (문서 10년 / 조문 20년)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-03",
+   "type": "LAW_CITATION_ERROR",
+   "code": "",
+   "title": "조문 본문과 수치가 다르다: 형사소송법 제358조 (문서 14일 / 조문 7일)",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-05",
+   "type": "MODEL_FACT_REMARK",
+   "code": "",
+   "title": "모델이 지적한 사실 모순(재계산 대상): [anthropic] 금액 불일치도 관찰됨: 영수증 합계 2,000만원 vs 기재 합계 2,500만원, 비율 71.4%와 편취금 5,300만원의 불일치, 한글 금",
+   "defect_claim": true,
+   "count": 1
+  },
+  {
+   "doc": "C-06",
+   "type": "OCR_LOW_QUALITY",
+   "code": "",
+   "title": "OCR 품질이 낮아 내용을 확정할 수 없는 쪽: 1면",
+   "defect_claim": true,
+   "count": 1
+  }
+ ],
+ "regression_candidates": 10
+}

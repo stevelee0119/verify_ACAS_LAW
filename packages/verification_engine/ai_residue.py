@@ -44,11 +44,44 @@ class Residue:
     matches: List[str] = field(default_factory=list)
 
 
-def scan_residue(text: str) -> List[Residue]:
+# 직접 인용구 패턴 ("...", “...”, 「...」, 『...』)
+_DIRECT_QUOTE_RE = re.compile(r'["“「『]([^"”」』]{5,500})["”」』]')
+
+
+def _mask_direct_quotes(text: str) -> str:
+    """직접 인용문구 내부 텍스트를 공백으로 치환하여 작성자 본인의 서술과 인용 대상을 구분한다."""
+    if not text:
+        return ""
+    def _repl(m: re.Match) -> str:
+        # 따옴표 기호는 유지하고 내용만 공백 치환
+        return text[m.start()] + " " * (m.end() - m.start() - 2) + text[m.end() - 1]
+    return _DIRECT_QUOTE_RE.sub(_repl, text)
+
+
+def scan_residue(
+    text: str,
+    exclude_texts: Optional[List[str]] = None,
+    mask_quotes: bool = True,
+) -> List[Residue]:
+    """텍스트에서 AI 잔재를 스캔한다.
+    
+    인용문구 내부 텍스트(mask_quotes=True) 및 공격 탐지 지시문 등 제외 텍스트는 스캔 대상에서 제외한다.
+    """
     out: List[Residue] = []
+    if not text:
+        return out
+
+    target_text = _mask_direct_quotes(text) if mask_quotes else text
+
+    # 제외 텍스트 치환 (예시, 프롬프트 지시문 등)
+    if exclude_texts:
+        for ex in exclude_texts:
+            if ex and ex in target_text:
+                target_text = target_text.replace(ex, " " * len(ex))
+
     for category, label, objective, pattern, min_kinds in load_rules():
         found = []
-        for m in pattern.finditer(text or ""):
+        for m in pattern.finditer(target_text):
             fragment = " ".join(m.group(0).split())
             if fragment not in found:
                 found.append(fragment)

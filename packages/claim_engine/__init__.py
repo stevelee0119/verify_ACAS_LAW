@@ -7,6 +7,7 @@ from .segmented_interest import (
     AllocatedPayment, InterestAssumptions, InterestScheduleRow, RatePeriod,
     SegmentedInterestResult, calculate_segmented_interest,
 )
+from .cross_document_entities import verify_cross_document_entities
 
 __all__ = [
     "extract_claims",
@@ -37,4 +38,5 @@ __all__ = [
     "RatePeriod",
     "SegmentedInterestResult",
     "calculate_segmented_interest",
+    "verify_cross_document_entities",
 ]

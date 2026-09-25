@@ -604,6 +604,18 @@ class PdfParser(DocumentParser):
                     for name, field in fields.items() if str(field.get("/V") or "").strip()][:200]
             except Exception:
                 pass
+            # PageLabels (PDF 1.3+) 페이지 레이블 구조
+            try:
+                catalog = getattr(reader, "trailer", {}).get("/Root") if hasattr(reader, "trailer") else None
+                if catalog and hasattr(catalog, "get_object"):
+                    catalog = catalog.get_object()
+                if catalog and "/PageLabels" in catalog:
+                    labels_obj = catalog["/PageLabels"]
+                    if hasattr(labels_obj, "get_object"):
+                        labels_obj = labels_obj.get_object()
+                    doc.structure["page_labels"] = str(labels_obj)[:1000]
+            except Exception:
+                pass
 
             annotations: List[Dict[str, Any]] = []
             has_signature = False
