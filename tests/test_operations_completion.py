@@ -1009,28 +1009,103 @@ def test_partial_summary_still_reads_old_checkpoint_rows(ops):
     assert _partial_summary(compact, {"d1"})["documents"][0]["finding_count"] == 3
 
 
+class ManualClock:
+    """시험용 시계. 벽시계 대신 명시적으로 시간을 흘려, 러너 속도와 무관하게 임차 판정을 검증한다."""
+
+    def __init__(self):
+        self.now = datetime.utcnow()
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += timedelta(seconds=seconds)
+
+
 def test_progress_updates_keep_the_lease_alive(ops):
     """진행 기록은 일이 나아가고 있다는 증거다. 그것으로 임차가 연장돼야 한다.
 
     갱신 스레드는 CPU 경합이나 GIL을 오래 쥐는 구간에 밀릴 수 있다. 생존
     판정을 그 스레드 하나에만 맡기면, 정상 실행 중인 작업이 회수되어
     처음부터 다시 실행된다. 실제 배포에서 그렇게 실패했다.
+
+    시간은 주입 시계로 흘린다. 벽시계(time.sleep)로 재면 러너 지연이 판정에 섞여 CI에서 실패했다
+    (run 36090264005).
     """
     from packages.common.enums import JobState
 
     run = seeded_run(ops)
-    # 진행 간격(0.5초)과 임차(1.2초) 사이에 0.7초 여유를 둔다. 0.25초/0.4초로 두었을 때는 여유가 0.15초라
-    # CI 러너의 일시 지연(파일 동기화 등)만으로 임차가 끝나 실패한 적이 있다(run 36090264005).
-    store = JobStore(ops, lease_seconds=1.2)
+    clock = ManualClock()  # 작업 등록(available_at) 뒤에서 시작한다
+    store = JobStore(ops, clock=clock, lease_seconds=0.4)
     lease = store.claim(run.id)
     for _ in range(4):
-        time.sleep(0.5)
+        clock.advance(0.25)
         store.progress(lease, JobState.VERIFYING, "분석 중", 0.5)
         assert store.recover() == [], "진행 중인 작업이 회수되면 안 된다"
-    store.check(lease)  # 2초가 지났지만 1.2초 임차는 살아 있다
+    store.check(lease)  # 1초가 지났지만 0.4초 임차는 살아 있다
 
-    time.sleep(1.5)  # 아무 진전이 없으면 종전대로 회수된다
+    clock.advance(0.5)  # 아무 진전이 없으면 종전대로 회수된다
     assert store.recover() == [run.id]
+
+
+def test_progress_after_lease_expiry_loses_ownership(ops):
+    """진행 기록이 임차 만료 뒤에 오면 연장하지 않고 소유권 상실을 알린다(만료된 작업을 되살리지 않는다)."""
+    from apps.api.job_control import JobOwnershipLost
+    from packages.common.enums import JobState
+
+    run = seeded_run(ops)
+    clock = ManualClock()  # 작업 등록(available_at) 뒤에서 시작한다
+    store = JobStore(ops, clock=clock, lease_seconds=0.4)
+    lease = store.claim(run.id)
+    clock.advance(0.41)
+    with pytest.raises(JobOwnershipLost):
+        store.progress(lease, JobState.VERIFYING, "분석 중", 0.5)
+    assert store.recover() == [run.id]
+
+
+def test_claim_lease_starts_after_the_write_lock_is_acquired(ops, monkeypatch):
+    """쓰기 잠금을 기다린 시간만큼 임차가 줄면 안 된다. 잠금을 얻은 뒤의 시각으로 만료를 정한다."""
+    from contextlib import contextmanager
+
+    from apps.api import job_control
+    from packages.common.enums import JobState
+
+    run = seeded_run(ops)
+    clock = ManualClock()  # 작업 등록(available_at) 뒤에서 시작한다
+    original = job_control.write_session
+
+    @contextmanager
+    def slow_lock(factory=None, **kwargs):
+        clock.advance(0.3)  # 다른 쓰기가 잠금을 쥐고 있어 0.3초를 기다린 상황
+        with original(factory, **kwargs) as session:
+            yield session
+
+    store = JobStore(ops, clock=clock, lease_seconds=0.4)
+    monkeypatch.setattr(job_control, "write_session", slow_lock)
+    lease = store.claim(run.id)
+    claimed_at = clock()
+    monkeypatch.setattr(job_control, "write_session", original)
+    with ops() as session:
+        expires = session.get(DurableJob, run.id).lease_expires_at
+    assert expires == claimed_at + timedelta(seconds=0.4)
+    clock.advance(0.35)  # 잠금 전 시각 기준이었다면 이미 만료(0.3 + 0.35 > 0.4)
+    store.progress(lease, JobState.VERIFYING, "분석 중", 0.5)
+
+
+def test_generic_write_session_does_not_touch_ledger_schema(tmp_path):
+    """원장 표 확인은 원장 연산에서만 한다. 작업 관리 쓰기 경로에 스키마 검사를 끼우지 않는다."""
+    from sqlalchemy import inspect
+
+    from packages.llm_router.budget import BudgetLedger, write_session
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'generic.db'}")
+    factory = sessionmaker(engine)
+    with write_session(factory):
+        pass
+    assert "budget_accounts" not in inspect(engine).get_table_names()
+    # 원장 읽기는 표를 만들고, 표가 없다는 이유로 '예산 소진'이 되지 않는다
+    assert BudgetLedger(factory).account("month:2026-01")["spent"] == 0
+    assert "budget_accounts" in inspect(engine).get_table_names()
 
 
 def test_progress_writes_are_batched_within_a_stage(ops):

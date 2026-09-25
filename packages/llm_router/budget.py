@@ -72,11 +72,15 @@ def ensure_ledger_tables(session) -> None:
 
 
 @contextmanager
-def write_session(factory=None):
-    """Take SQLite's write lock before reading; PostgreSQL uses row locks."""
+def write_session(factory=None, *, ledger=False):
+    """Take SQLite's write lock before reading; PostgreSQL uses row locks.
+
+    ledger=True는 예산 원장 연산에서만 쓴다. 원장 표 확인(스키마 검사)을 작업 관리 같은 다른 쓰기 경로에
+    끼우면 그 시간만큼 잠금 구간이 늘어난다."""
     session = (factory or get_session_factory())()
     try:
-        ensure_ledger_tables(session)
+        if ledger:
+            ensure_ledger_tables(session)
         if session.get_bind().dialect.name == "sqlite":
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         yield session
@@ -118,7 +122,7 @@ class BudgetLedger:
         month = "month:" + now.strftime("%Y-%m")
         run_account = "run:" + (budget_run_id or run_id)
         denied = None
-        with write_session(self.factory) as session:
+        with write_session(self.factory, ledger=True) as session:
             # The monthly row serializes admission across API and worker processes.
             for account_id, cap in ((month, monthly_limit), (run_account, run_limit)):
                 insert_missing(session, BudgetAccount, {
@@ -163,7 +167,7 @@ class BudgetLedger:
         return Reservation(reservation_id, amount_units * UNIT)
 
     def dispatch(self, reservation_id: str, *, guard=None) -> None:
-        with write_session(self.factory) as session:
+        with write_session(self.factory, ledger=True) as session:
             if guard:
                 guard(session)
             changed = session.execute(update(BudgetReservation).where(
@@ -180,7 +184,7 @@ class BudgetLedger:
         return self._finish(reservation_id, units(actual), detail=detail)
 
     def _finish(self, reservation_id, charged, *, release=False, detail=None):
-        with write_session(self.factory) as session:
+        with write_session(self.factory, ledger=True) as session:
             reservation = session.execute(select(BudgetReservation).where(
                 BudgetReservation.id == reservation_id).with_for_update()).scalar_one()
             if reservation.state in {"SETTLED", "RELEASED"}:
@@ -203,6 +207,8 @@ class BudgetLedger:
 
     def account(self, account_id: str):
         with (self.factory or get_session_factory())() as session:
+            # 표가 없는 DB에서 읽기가 실패하면 호출자(budget_exhausted)가 '소진'으로 판단한다. 읽기 전에도 확인한다
+            ensure_ledger_tables(session)
             row = session.get(BudgetAccount, account_id)
             return {"limit": row.limit_units * UNIT, "reserved": row.reserved_units * UNIT,
                     "spent": row.spent_units * UNIT} if row else {

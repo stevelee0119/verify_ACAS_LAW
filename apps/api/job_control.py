@@ -288,9 +288,11 @@ class JobStore:
                         run.errors = [*(run.errors or []), str(exc)]
 
     def claim(self, run_id, *, owner=None):
-        now = self.clock()
         owner = owner or uuid.uuid4().hex
         with write_session(self.factory) as session:
+            # 시각은 쓰기 잠금을 얻은 뒤에 읽는다. 잠금 대기 전에 읽으면 기다린 만큼 임차가 짧아져,
+            # 막 가져간 작업의 첫 진행 기록이 이미 만료된 임차에 부딪힌다(CI run 36090264005).
+            now = self.clock()
             changed = session.execute(update(DurableJob).where(
                 DurableJob.run_id == run_id, DurableJob.state.in_(READY),
                 DurableJob.available_at <= now, DurableJob.attempts < DurableJob.max_attempts,
