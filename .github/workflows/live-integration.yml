@@ -34,6 +34,11 @@ jobs:
       LV_GEMINI_MODEL: ${{ vars.LV_GEMINI_MODEL }}
       LV_HTTP_TIMEOUT: "30"
       LV_PSEUDONYM_SECRET: live-integration-only
+      # 모델 호출 예산. 기본값 0이면 모든 호출이 입장 단계에서 거절된다(예산 한도로 호출하지 않음).
+      # 실연동 확인용 소액 상한이며, 실제 과금은 사용량 기준이다. 저장소 Variables로 바꿀 수 있다.
+      LV_MONTHLY_BUDGET_USD: ${{ vars.LV_LIVE_MONTHLY_BUDGET_USD || '10' }}
+      LV_RUN_BUDGET_USD: ${{ vars.LV_LIVE_RUN_BUDGET_USD || '5' }}
+      LV_LLM_MAX_INPUT_TOKENS: "32768"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
