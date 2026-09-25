@@ -150,39 +150,55 @@ def test_deferred_detail_lookup_reuses_successful_search(tmp_path, monkeypatch):
     assert verdict["source_lookup"]["recovery_status"] == "RECOVERED"
 
 
-def test_consecutive_requests_to_one_source_are_paced():
+class _FakeTime:
+    """transport의 시간 함수를 대신한다. sleep은 실제로 멈추지 않고 요청된 대기를 기록하며 시계를 앞당긴다.
+    벽시계로 '0.1초 안에 끝났다'를 재면 러너가 잠깐 멈추는 것만으로 실패하므로, 대기 요청 자체를 판정한다."""
+
+    def __init__(self):
+        self.now, self.sleeps = 1000.0, []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.sleeps.append(round(seconds, 6))
+        self.now += seconds
+
+
+def test_consecutive_requests_to_one_source_are_paced(monkeypatch):
     """연속 조회가 상대 서버의 한도를 건드리면 실재하는 판례가 미확인으로 남는다.
 
     실연동 점검에서 같은 사건번호 조회가 한 번은 성공하고 한 번은 TIMEOUT으로
     갈렸다. 한도에 걸린 뒤 물러나는 것보다 처음부터 간격을 두는 편이 낫다.
     """
-    import time as _time
-
+    from packages.source_adapters import transport
     from packages.source_adapters.transport import LookupSession, _pace
 
+    clock = _FakeTime()
+    monkeypatch.setattr(transport, "time", clock)
     session = LookupSession(budget_seconds=10.0)
     session.min_interval_seconds = 0.2
 
-    started = _time.monotonic()
     _pace(session, "law_go_kr")          # 첫 요청은 기다리지 않는다
-    assert _time.monotonic() - started < 0.1
-    _pace(session, "law_go_kr")          # 두 번째는 간격을 채운다
-    assert _time.monotonic() - started >= 0.2
-    assert session.spent_seconds > 0, "대기 시간은 조회 한도에서 차감되어야 한다"
+    assert clock.sleeps == []
+    clock.now += 0.05                    # 요청 처리에 0.05초가 걸렸다
+    _pace(session, "law_go_kr")          # 두 번째는 남은 간격(0.15초)만 채운다
+    assert clock.sleeps == [0.15]
+    assert session.spent_seconds == pytest.approx(0.15), "대기 시간은 조회 한도에서 차감되어야 한다"
 
     # 다른 출처는 서로의 간격에 영향을 주지 않는다.
-    mark = _time.monotonic()
     _pace(session, "kci")
-    assert _time.monotonic() - mark < 0.1
+    assert clock.sleeps == [0.15]
 
 
-def test_pacing_never_outlasts_the_remaining_budget():
+def test_pacing_never_outlasts_the_remaining_budget(monkeypatch):
+    from packages.source_adapters import transport
     from packages.source_adapters.transport import LookupSession, _pace
 
+    clock = _FakeTime()
+    monkeypatch.setattr(transport, "time", clock)
     session = LookupSession(budget_seconds=0.05)
     session.min_interval_seconds = 5.0
     _pace(session, "law_go_kr")
-    import time as _time
-    started = _time.monotonic()
     _pace(session, "law_go_kr")
-    assert _time.monotonic() - started < 1.0, "남은 한도를 넘겨 기다리면 안 된다"
+    assert len(clock.sleeps) == 1 and clock.sleeps[0] <= 0.05, "남은 한도를 넘겨 기다리면 안 된다"

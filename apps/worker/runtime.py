@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 @contextmanager
-def heartbeat(store, lease):
+def heartbeat(store, lease, *, monotonic=time.monotonic, pause=None):
     """임차 갱신이 한 번 실패했다고 작업을 포기하지 않는다.
 
     갱신은 DB 쓰기다. SQLite 쓰기 잠금 경합, 커넥션 일시 끊김처럼
@@ -39,19 +39,24 @@ def heartbeat(store, lease):
     소유권을 실제로 잃은 경우에만 즉시 포기한다. 그 밖의 실패는 임차가
     남아 있는 동안 짧은 간격으로 다시 시도하고, 임차 기간을 통째로
     갱신하지 못했을 때 비로소 포기한다.
+
+    monotonic·pause는 시험용 주입점이다(기본: time.monotonic, 멈춤 신호를 기다리는 Event.wait).
+    pause(초)는 그만큼 기다린 뒤 멈춰야 하면 True를 돌려준다. 시험은 이것으로 갱신을 한 박자씩 진행해
+    러너 속도와 무관하게 판정한다.
     """
     stop = threading.Event()
     lost = threading.Event()
+    pause = pause or stop.wait
     interval = max(0.02, store.lease_seconds / 3)
     retry_interval = max(0.02, min(interval, store.lease_seconds / 10))
-    state = {"ok_at": time.monotonic(), "error": ""}
+    state = {"ok_at": monotonic(), "error": ""}
 
     def expired():
-        return time.monotonic() - state["ok_at"] >= store.lease_seconds
+        return monotonic() - state["ok_at"] >= store.lease_seconds
 
     def beat():
         wait = interval
-        while not stop.wait(wait):
+        while not (stop.is_set() or pause(wait)):
             try:
                 store.heartbeat(lease)
             except JobOwnershipLost:
@@ -64,7 +69,7 @@ def heartbeat(store, lease):
                 # 실패 이유를 남긴다. 메모리에만 두면 회수된 뒤에는 무엇 때문에
                 # 갱신이 끊겼는지 알 수 없고, 남는 것은 WORKER_LEASE_EXPIRED뿐이다.
                 log.warning("임차 갱신 실패(%s, 마지막 성공 %.0f초 전): %s",
-                            lease.run_id, time.monotonic() - state["ok_at"], state["error"])
+                            lease.run_id, monotonic() - state["ok_at"], state["error"])
                 if expired():
                     log.error("임차 갱신을 %.0f초 동안 하지 못해 작업을 놓습니다(%s): %s",
                               store.lease_seconds, lease.run_id, state["error"])
@@ -72,13 +77,13 @@ def heartbeat(store, lease):
                     return
                 wait = retry_interval  # 일시적 장애로 보고 더 자주 다시 시도한다
                 continue
-            late = time.monotonic() - state["ok_at"] - interval
+            late = monotonic() - state["ok_at"] - interval
             if late > interval:
                 # 예외 없이 늦었다면 스레드가 밀린 것이다. CPU 경합이나 GIL을
                 # 오래 쥐는 구간이 있다는 뜻이고, 원인이 전혀 다르다.
                 log.warning("임차 갱신이 %.0f초 늦었습니다(%s). 갱신 스레드가 밀리고 있습니다",
                             late, lease.run_id)
-            state["ok_at"], state["error"] = time.monotonic(), ""
+            state["ok_at"], state["error"] = monotonic(), ""
             wait = interval
 
     thread = threading.Thread(target=beat, daemon=True, name="lease-" + lease.run_id)
@@ -92,12 +97,12 @@ def heartbeat(store, lease):
         def check():
             if lost.is_set():
                 raise JobOwnershipLost(f"{lease.run_id}: {state['error'] or '임차 갱신 실패'}")
-            now = time.monotonic()
+            now = monotonic()
             if now - max(last_check[0], state["ok_at"]) < check_min:
                 return
             try:
                 store.check(lease)
-                last_check[0] = time.monotonic()
+                last_check[0] = monotonic()
             except JobOwnershipLost:
                 raise
             except Exception:

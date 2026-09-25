@@ -359,17 +359,29 @@ def test_late_result_after_cancellation_cannot_complete(ops, monkeypatch):
 
 
 def test_heartbeat_prevents_recovery_during_slow_work(ops):
+    """갱신 스레드가 도는 동안에는 임차 기간보다 오래 일해도 회수되지 않는다.
+
+    시간은 주입 시계로, 갱신은 한 박자씩 진행한다. 벽시계로 재면 부하 걸린 CI 러너에서 스레드가
+    잠깐 밀리는 것만으로 실패했다(임차 0.3초·0.45초 설정 모두 CI에서 실패).
+    """
     from apps.worker.runtime import heartbeat
+
     run = seeded_run(ops)
-    # 기다리는 시간은 임차보다 길어야 한다(갱신이 없으면 회수되는 조건).
-    # 임차를 0.3초로 두면 갱신 간격이 0.1초라, 부하 걸린 CI 러너에서 0.2초만
-    # 멈춰도 갱신이 늦어 실패했다. 간격을 넓혀 판정의 의미는 그대로 둔다.
-    store = JobStore(ops, lease_seconds=1.2)
+    clock = ManualClock()
+    store = JobStore(ops, clock=clock, lease_seconds=1.2)
     lease = store.claim(run.id)
-    with heartbeat(store, lease) as check:
-        time.sleep(2.0)
-        assert store.recover() == []
-        check()
+    ticker = Ticker()
+    try:
+        with heartbeat(store, lease, monotonic=clock.monotonic, pause=ticker.pause) as check:
+            for _ in range(5):  # 갱신 간격 0.4초 × 5 = 2초 > 임차 1.2초
+                clock.advance(0.4)
+                ticker.step()
+                assert store.recover() == []
+            check()
+    finally:
+        ticker.close()
+    clock.advance(1.3)  # 갱신이 멈춘 뒤 임차 기간이 지나면 회수된다
+    assert store.recover() == [run.id]
 
 
 def test_startup_recovers_expired_run_and_shuts_down(ops, monkeypatch):
@@ -866,11 +878,14 @@ def test_heartbeat_survives_a_transient_renewal_failure(ops, monkeypatch):
     이 회귀는 실제 배포에서 관찰되었다. 갱신 쓰기가 한 번 실패하면 갱신
     스레드가 끝났고, 임차가 만료되면 작업은 늘 같은 단계에서 재시도로
     되돌아갔다. 사용자에게는 특정 지점에서 반복 중단되는 것으로 보인다.
+
+    시간은 주입 시계로 진행한다(벽시계 0.45초 임차는 CI run 36092298978에서 러너 지연으로 실패).
     """
     from apps.worker.runtime import heartbeat
 
     run = seeded_run(ops)
-    store = JobStore(ops, lease_seconds=0.45)
+    clock = ManualClock()
+    store = JobStore(ops, clock=clock, lease_seconds=0.45)
     lease = store.claim(run.id)
     original, calls = store.heartbeat, []
 
@@ -881,11 +896,19 @@ def test_heartbeat_survives_a_transient_renewal_failure(ops, monkeypatch):
         return original(current)
 
     monkeypatch.setattr(store, "heartbeat", flaky)
-    with heartbeat(store, lease) as check:
-        time.sleep(0.9)
-        assert len(calls) >= 2, "갱신 스레드가 첫 실패 뒤에도 살아 있어야 한다"
-        assert store.recover() == []
-        check()
+    ticker = Ticker()
+    try:
+        with heartbeat(store, lease, monotonic=clock.monotonic, pause=ticker.pause) as check:
+            clock.advance(0.15)  # 갱신 간격(임차의 1/3)
+            ticker.step()        # 첫 갱신: 일시 오류
+            clock.advance(0.045)  # 재시도 간격(임차의 1/10)
+            ticker.step()        # 재시도: 성공 → 임차 연장
+            assert len(calls) == 2, "갱신 스레드가 첫 실패 뒤에도 살아 있어야 한다"
+            clock.advance(0.4)   # 처음 임차(0.45초)는 지났지만 재시도로 연장된 임차는 남아 있다
+            assert store.recover() == []
+            check()
+    finally:
+        ticker.close()
 
 
 def test_heartbeat_gives_up_when_ownership_is_actually_lost(ops):
@@ -894,18 +917,47 @@ def test_heartbeat_gives_up_when_ownership_is_actually_lost(ops):
     from apps.api.job_control import JobOwnershipLost
 
     run = seeded_run(ops)
-    store = JobStore(ops, lease_seconds=0.3)
+    clock = ManualClock()
+    store = JobStore(ops, clock=clock, lease_seconds=0.3)
     lease = store.claim(run.id)
-    with heartbeat(store, lease) as check:
-        store.cancel(run.id)  # fence가 올라가 이 임차는 더 이상 유효하지 않다
-        deadline = time.monotonic() + 3
-        while time.monotonic() < deadline:
-            try:
+    ticker = Ticker()
+    try:
+        with heartbeat(store, lease, monotonic=clock.monotonic, pause=ticker.pause) as check:
+            store.cancel(run.id)  # fence가 올라가 이 임차는 더 이상 유효하지 않다
+            clock.advance(0.1)
+            ticker.step(exits=Ticker.thread_for(run.id))  # 다음 갱신에서 소유권 상실을 확인하고 스레드가 끝난다
+            with pytest.raises(JobOwnershipLost):
                 check()
-            except JobOwnershipLost:
-                return
-            time.sleep(0.05)
-        raise AssertionError("소유권 상실이 check()로 전달되지 않았다")
+    finally:
+        ticker.close()
+
+
+def test_heartbeat_releases_the_job_after_a_full_lease_of_failures(ops, monkeypatch):
+    """소유권과 무관한 실패라도 임차 기간 내내 갱신하지 못하면 작업을 놓는다(무한히 붙잡지 않는다)."""
+    from apps.worker.runtime import heartbeat
+    from apps.api.job_control import JobOwnershipLost
+
+    run = seeded_run(ops)
+    clock = ManualClock()
+    store = JobStore(ops, clock=clock, lease_seconds=0.3)
+    lease = store.claim(run.id)
+
+    def always_locked(current):
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(store, "heartbeat", always_locked)
+    ticker = Ticker()
+    try:
+        with heartbeat(store, lease, monotonic=clock.monotonic, pause=ticker.pause) as check:
+            clock.advance(0.1)
+            ticker.step()  # 실패 1회: 아직 임차 기간 안이라 재시도한다
+            check()
+            clock.advance(0.25)  # 마지막 성공(시작) 뒤 0.35초 > 임차 0.3초
+            ticker.step(exits=Ticker.thread_for(run.id))
+            with pytest.raises(JobOwnershipLost):
+                check()
+    finally:
+        ticker.close()
 
 
 def test_lease_renewal_failure_schedules_the_retry_without_waiting_for_expiry(ops, monkeypatch):
@@ -1020,6 +1072,47 @@ class ManualClock:
 
     def advance(self, seconds):
         self.now += timedelta(seconds=seconds)
+
+    def monotonic(self):
+        """갱신 스레드용 단조 시계. 같은 시험 시계에서 초 단위로 읽는다."""
+        return (self.now - datetime(2000, 1, 1)).total_seconds()
+
+
+class Ticker:
+    """갱신 스레드의 대기(pause)를 대신한다. step()을 부를 때마다 스레드가 한 번 갱신하고 다시 멈춘다.
+
+    기다림의 상한(timeout)은 스레드가 멈춤 지점에 닿기를 기다리는 한도일 뿐, 판정에 쓰는 시간이 아니다.
+    """
+
+    def __init__(self, timeout=10):
+        self.ready = threading.Semaphore(0)
+        self.go = threading.Semaphore(0)
+        self.done = threading.Event()
+        self.timeout = timeout
+
+    def pause(self, seconds):
+        self.ready.release()
+        self.go.acquire()
+        return self.done.is_set()
+
+    def step(self, *, exits=None):
+        """exits: 이번 갱신에서 끝나야 하는 갱신 스레드. 주면 그 스레드가 끝날 때까지 기다린다."""
+        assert self.ready.acquire(timeout=self.timeout), "갱신 스레드가 대기 지점에 오지 않았다"
+        self.go.release()
+        if exits is not None:
+            exits.join(self.timeout)
+            assert not exits.is_alive(), "갱신 스레드가 끝나지 않았다"
+            return
+        assert self.ready.acquire(timeout=self.timeout), "갱신 뒤 스레드가 다시 대기하지 않았다"
+        self.ready.release()  # 다음 step이 쓸 대기 신호를 되돌려 둔다
+
+    @staticmethod
+    def thread_for(run_id):
+        return next(t for t in threading.enumerate() if t.name == "lease-" + run_id)
+
+    def close(self):
+        self.done.set()
+        self.go.release()
 
 
 def test_progress_updates_keep_the_lease_alive(ops):
