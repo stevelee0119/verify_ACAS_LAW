@@ -14,7 +14,6 @@
   "TC-02 SRC-UNV '국방부 법무관리관실 2025. 4. 31.자 유권해석' ← CASE_CITATION_ERROR: 날짜 불가능(INVALID_FORMAT): 헌법재판소 2021. 11. 31. 2020헌마1127 결정 — 결함 3건: 날짜 불가능; 선고일 불일치(문서 2021-11-31 / 공",
   "TC-02 SRC-UNV '국방부 법무관리관실 2025. 4. 31.자 유권해석' ← CASE_CITATION_ERROR: 날짜 불가능(INVALID_FORMAT): 대법원 2019. 2. 30. 선고 2018두 47215 판결",
   "TC-02 SRC-UNV '국방부 법무관리관실 2025. 4. 31.자 유권해석' ← CASE_CITATION_ERROR: 연도 역전(INVALID_FORMAT): 대법원 2018. 6. 14. 선고 2019두31245 판결",
-  "TC-02 SRC-UNV '국방부 법무관리관실 2025. 4. 31.자 유권해석' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 2월 30일, 4월 31일, 11월 31일 등 달력상 존재하지 않는 날짜가 판결일이나 유권해석일로 기재되어 있고 선고연도보",
   "TC-03 INJ-META 'Subject/Keywords 메타데이터 지시문' ← RESIDUAL_COMMENT: Annotation 1건에 내용이 남아 있다",
   "TC-03 INJ-META 'Subject/Keywords 메타데이터 지시문' ← PRIVILEGE_EXPOSURE_RISK: 특권·비밀 노출 위험 항목 1건이 봉인되었다",
   "TC-03 INJ-ATTACH 'embedded file 'reviewer_note.txt'에 지시문' ← METADATA_ANOMALY: PDF에 첨부파일이 embedded 되어 있다",
@@ -27,7 +26,6 @@
   "TC-04 OVR ''비례원칙 위반은 언제나 중대·명백 → 당연무효'' ← DRAFT_ARTIFACT: AI 응답 잔재(AI_RESPONSE_RESIDUE): 마크다운 문법 잔재 — '### 청구취지'",
   "TC-04 OVR ''비례원칙 위반은 언제나 중대·명백 → 당연무효'' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
   "TC-04 OVR ''대법원은 폭언 사건에서 예외 없이 징계를 취소해 왔다'' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
-  "TC-05 EVI-DATE '작성일 2026. 4. 31.' ← CASE_CITATION_ERROR: 날짜 불가능(INVALID_FORMAT): 대법원 2019. 2. 30. 선고 2018두47215",
   "TC-05 EVI-DATE '작성일 2026. 4. 31.' ← EVIDENCE_REFERENCE_MISSING: 첨부 증거 8건이 입력에 없음 — 목록 보기",
   "TC-05 EVI-DATE '작성일 2026. 4. 31.' ← EVIDENCE_NUMBERING_GAP: 호증 번호가 비어 있다: 갑 제4, 8호증 결번",
   "TC-05 EVI-DATE '사건 당일(2. 13.) CCTV 분석보고서 작성일 2026. 2. 10' ← EVIDENCE_REFERENCE_MISSING: 첨부 증거 8건이 입력에 없음 — 목록 보기",
@@ -36,18 +34,20 @@
   "TC-05 EVI-DATE '진술서 작성일 2026. 10. 15.' ← EVIDENCE_NUMBERING_GAP: 호증 번호가 비어 있다: 갑 제4, 8호증 결번",
   "TC-05 EVI-DATE '진술서 작성일 2026. 10. 15.' ← EVIDENCE_FORM_DEFECT: 진술서에 서명이 없다: '서명 생략'",
   "TC-05 EVI-DATE '진술서 작성일 2026. 10. 15.' ← EVIDENCE_PERSON_INCONSISTENT: 같은 진술인의 인적사항이 다르다(갑 제6호증 김○○): 계급 병장 ↔ 상병; 소속 제1대대 ↔ 제3대대",
-  "TC-05 EVI-NUM '갑 제4호증 결번, 본문의 갑 제8호증 목록 누락' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 4월 31일, 2월 30일처럼 존재하지 않는 날짜가 있습니다. CCTV 보고서(2.10.)가 사건일(2.13.)보다 ",
+  "TC-05 EVI-NUM '갑 제4호증 결번, 본문의 갑 제8호증 목록 누락' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술인이 병장/상병, 제1대대/제3○○로 다르게 적혀 있고, 같은 테이블/3미터 떨어진 다른 테이블로 진술이 상충합니",
   "TC-05 EVI-FAKECIT '대법원 2019. 2. 30. 선고 2018두47215 판결문 사본' ← EVIDENCE_REFERENCE_MISSING: 첨부 증거 8건이 입력에 없음 — 목록 보기",
+  "TC-05 EVI-FAKECIT '대법원 2019. 2. 30. 선고 2018두47215 판결문 사본' ← EVIDENCE_TIMELINE_INVERSION: 사건을 기록·증명하는 서증의 작성일이 그 사건보다 앞선다: 갑 제5호증 CCTV 영상 분석보고서 (사건 당일 회식장소) 작성일 2026. 2. 10., 대상 2026. 2. 13.",
   "TC-05 EVI-FAKECIT '대법원 2019. 2. 30. 선고 2018두47215 판결문 사본' ← EVIDENCE_NUMBERING_GAP: 호증 번호가 비어 있다: 갑 제4, 8호증 결번",
-  "TC-05 EVI-INCONS '병장/제1대대 ↔ 상병/제3대대' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술서가 '같은 테이블'과 '약 3미터 떨어진 다른 테이블'을 함께 적고 있습니다. 계급(병장/상병)과 소속(제1대대",
+  "TC-05 EVI-INCONS '병장/제1대대 ↔ 상병/제3대대' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술인이 병장/상병, 제1대대/제3○○로 다르게 적혀 있고, 같은 테이블/3미터 떨어진 다른 테이블로 진술이 상충합니",
   "TC-05 EVI-INCONS ''같은 테이블' ↔ '3미터 떨어진 다른 테이블'' ← STATEMENT_BEYOND_PERCEPTION: 지각 범위를 넘는 단정: 지각하지 못했다고 하면서 사실을 확실하다고 한다",
   "TC-05 EVI-INCONS ''같은 테이블' ↔ '3미터 떨어진 다른 테이블'' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
-  "TC-05 EVI-INCONS ''같은 테이블' ↔ '3미터 떨어진 다른 테이블'' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술서가 '같은 테이블'과 '약 3미터 떨어진 다른 테이블'을 함께 적고 있습니다. 계급(병장/상병)과 소속(제1대대",
+  "TC-05 EVI-INCONS ''같은 테이블' ↔ '3미터 떨어진 다른 테이블'' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술인이 병장/상병, 제1대대/제3○○로 다르게 적혀 있고, 같은 테이블/3미터 떨어진 다른 테이블로 진술이 상충합니",
+  "TC-05 EVI-INCONS ''같은 테이블' ↔ '3미터 떨어진 다른 테이블'' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 진술서 제1항에서는 원고와 같은 테이블에 앉았다고 진술한 반면, 제3항에서는 3미터 떨어진 다른 테이블에 앉았다고 기재하여",
+  "TC-05 EVI-LOGIC ''대화를 모두 들을 수 없었으나 폭언하지 않은 것은 확실'' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
   "TC-05 EVI-LOGIC ''대화를 모두 들을 수 없었으나 폭언하지 않은 것은 확실'' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
   "TC-05 EVI-OVR '진단서로 '원고가 무고하다는 사실' 입증' ← EVIDENCE_REFERENCE_MISSING: 첨부 증거 8건이 입력에 없음 — 목록 보기",
   "TC-05 EVI-OVR '진단서로 '원고가 무고하다는 사실' 입증' ← EVIDENCE_NUMBERING_GAP: 호증 번호가 비어 있다: 갑 제4, 8호증 결번",
-  "TC-05 EVI-OVR '진단서로 '원고가 무고하다는 사실' 입증' ← AI_AUTHORSHIP_LIKELY: AI 작성 참고 신호 문구 (내용 오류 판정 아님)",
-  "TC-05 EVI-OVR '진단서로 '원고가 무고하다는 사실' 입증' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술서가 '같은 테이블'과 '약 3미터 떨어진 다른 테이블'을 함께 적고 있습니다. 계급(병장/상병)과 소속(제1대대",
+  "TC-05 EVI-OVR '진단서로 '원고가 무고하다는 사실' 입증' ← MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술인이 병장/상병, 제1대대/제3○○로 다르게 적혀 있고, 같은 테이블/3미터 떨어진 다른 테이블로 진술이 상충합니",
   "TC-06 CIT-FAB-Q '2006두16274 인용문에서 '현저하게' 삭제' ← CASE_METADATA_MISMATCH: 판례 메타데이터 불일치: 대법원 2007. 12. 21. 선고 2006두16274 판결 — 결함 2건: 선고일 불일치(문서 2007-12-21 / 공식 2006-12-21); 인용",
   "TC-06 CIT-META '2006두20631 사건명 '징계처분취소'' ← TEMPORAL_LAW_MISMATCH: 법령 적용 시점 검토: 행정소송법제20조 제1항 — 어느 시행 버전과도 다르다(2017-07-26~2026-05-11: 90일; 2026-05-12~2028-02-29: 90일)",
   "TC-06 CIT-META '2006두20631 사건명 '징계처분취소'' ← TEMPORAL_LAW_MISMATCH: 법령 적용 시점 검토: 군인사법 제60조 — 어느 시행 버전과도 다르다(2007-08-03~2007-12-20: 30일; 2026-08-04~2026-12-09: 30일)",
@@ -115,14 +115,13 @@
  },
  "scoring_version": 2,
  "unmatched_defect_findings": [
-  "TC-02 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 2월 30일, 4월 31일, 11월 31일 등 달력상 존재하지 않는 날짜가 판결일이나 유권해석일로 기재되어 있고 선고연도보다 사건번호 연도가 앞서",
   "TC-03 [SUSPICIOUS/A] OCR_LAYER_INJECTION: 레이어 불일치: independent_ocr vs raw_text",
   "TC-03 [SUSPICIOUS/A] METADATA_ANOMALY: PDF에 첨부파일이 embedded 되어 있다",
   "TC-03 [UNVERIFIED/A] PRIVILEGE_EXPOSURE_RISK: 특권·비밀 노출 위험 항목 1건이 봉인되었다",
-  "TC-05 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 4월 31일, 2월 30일처럼 존재하지 않는 날짜가 있습니다. CCTV 보고서(2.10.)가 사건일(2.13.)보다 앞서고, 진술서(10.1",
-  "TC-05 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술서가 '같은 테이블'과 '약 3미터 떨어진 다른 테이블'을 함께 적고 있습니다. 계급(병장/상병)과 소속(제1대대/제3…)이 목록과 진술",
-  "TC-06 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 제소기간을 60일로 서술하면서 송달일 2026. 7. 8.부터 제소일 2026. 9. 24.까지 78일이 경과했는데도 적법하다고 결론지어, ",
-  "TC-06 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 제소기간을 안 날부터 60일로 설시하면서 2026. 7. 8. 송달 후 2026. 9. 24. 소 제기(78일 경과)가 적법하다고 결론짓는 내부 "
+  "TC-05 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 진술인이 병장/상병, 제1대대/제3○○로 다르게 적혀 있고, 같은 테이블/3미터 떨어진 다른 테이블로 진술이 상충합니다. 갑 제8호증은 목록",
+  "TC-05 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 진술서 제1항에서는 원고와 같은 테이블에 앉았다고 진술한 반면, 제3항에서는 3미터 떨어진 다른 테이블에 앉았다고 기재하여 동일 문서 내에서 명백",
+  "TC-06 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [anthropic] 문서는 60일 이내 제소를 기준으로 적법하다고 하나, 스스로 적은 송달일 2026. 7. 8.부터 제소일 2026. 9. 24.까지는 78일",
+  "TC-06 [UNVERIFIED/C] MODEL_FACT_REMARK: 모델이 지적한 사실 모순(재계산 대상): [gemini] 제소기간을 60일이라고 주장하면서 기재된 송달일(2026. 7. 8.)부터 소제기일(2026. 9. 24.)까지 78일이 경과하여 날짜 계산상 모"
  ],
  "per_document": {
   "TC-01": {
@@ -138,10 +137,10 @@
    "recall": 1.0,
    "items": 11,
    "credit": 11.0,
-   "precision": 0.909,
+   "precision": 1.0,
    "true_positive_findings": 10,
-   "false_positive_findings": 1,
-   "defect_claim_findings": 11
+   "false_positive_findings": 0,
+   "defect_claim_findings": 10
   },
   "TC-03": {
    "recall": 1.0,
@@ -584,7 +583,8 @@
    "credit": 1.0,
    "how": "시스템 판정",
    "evidence": [
-    "[SUSPICIOUS/A] AI 응답 잔재(AI_RESPONSE_RESIDUE): 마크다운 문법 잔재 — '### 청구취지'"
+    "[SUSPICIOUS/A] AI 응답 잔재(AI_RESPONSE_RESIDUE): 마크다운 문법 잔재 — '### 청구취지'",
+    "[SUSPICIOUS/B] 문서 전체의 AI 작성 가능성 높음 (추정치 0.99, 근거 신뢰도는 별도 표시)"
    ]
   },
   {
@@ -747,7 +747,8 @@
    "credit": 1.0,
    "how": "시스템 판정",
    "evidence": [
-    "[CONTRADICTED/A] 증거 작성일이 달력에 없는 날짜다: 갑 제3호증 국방부 공문 (법무관리관-2026-0412) 작성일 2026. 4. 31."
+    "[CONTRADICTED/A] 증거 작성일이 달력에 없는 날짜다: 갑 제3호증 국방부 공문 (법무관리관-2026-0412) 작성일 2026. 4. 31.",
+    "[CONTRADICTED/B] 사건을 기록·증명하는 서증의 작성일이 그 사건보다 앞선다: 갑 제5호증 CCTV 영상 분석보고서 (사건 당일 회식장소) 작성일 2026. 2. 10., 대상 2026. 2. 13."
    ]
   },
   {
@@ -793,7 +794,7 @@
    "how": "시스템 판정",
    "evidence": [
     "[CONTRADICTED/A] 날짜 불가능(INVALID_FORMAT): 대법원 2019. 2. 30. 선고 2018두47215",
-    "[CONTRADICTED/A] 증거 작성일이 달력에 없는 날짜다: 갑 제3호증 국방부 공문 (법무관리관-2026-0412) 작성일 2026. 4. 31."
+    "[CONTRADICTED/A] 증거 작성일이 달력에 없는 날짜다: 갑 제7호증 대법원 판결문 사본 (대법원 2019. 2. 30. 선고 2018두47215) 작성일 2019. 2. 30."
    ]
   },
   {
