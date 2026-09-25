@@ -33,10 +33,10 @@ DATE_GENERAL_RE = re.compile(
     r"(?P<year>\d{4})[.\s년/-]+(?P<month>\d{1,2})[.\s월/-]+(?P<day>\d{1,2})[일]?"
 )
 
-# 일수 경과 패턴: 예) "해고일로부터 76일이 지난 2026. 6. 25.", "2026. 3. 31.로부터 76일이 지난 2026. 6. 25."
+# 일수 경과 패턴: 예) "통지일로부터 N일이 지난 YYYY. M. D.", "YYYY. M. D.로부터 N일이 지난 YYYY. M. D."
 DAYS_ELAPSED_RE = re.compile(
     r"(?:(?:(?P<from_y>\d{4})[.\s년/-]+(?P<from_m>\d{1,2})[.\s월/-]+(?P<from_d>\d{1,2})[일\s.]*)|(?:해고일|퇴사일|처분일|작성일|통지일))(?:로부터|부터|에서|이후|후)\s*"
-    r"(?P<days>\d{1,4})\s*(?:일|日)(?:이\s*지난|경과한|후의?|째\s*되는)?\s*"
+    r"(?P<days>\d{1,4})\s*(?:일|日)\s*(?:이\s*지난|경과한|후의?|째\s*되는)?\s*"
     r"(?P<to_y>\d{4})[.\s년/-]+(?P<to_m>\d{1,2})[.\s월/-]+(?P<to_d>\d{1,2})[일\s.]*"
 )
 
@@ -225,7 +225,7 @@ def verify_dates_in_document(doc: NormalizedDocument) -> List[Finding]:
                     )
 
         # 3. 경과 일수 계산 검증 (DAYS)
-        # 예: "해고일로부터 76일이 지난 2026. 6. 25." -> 2026.3.31~6.25는 86일
+        # 예: "기준일로부터 N일이 지난 날짜" → 두 날짜의 실제 일수와 N을 비교한다
         for m in DAYS_ELAPSED_RE.finditer(text):
             stated_days = int(m.group("days"))
             to_y = int(m.group("to_y"))
@@ -241,7 +241,9 @@ def verify_dates_in_document(doc: NormalizedDocument) -> List[Finding]:
 
             if from_date and to_date:
                 actual_days = (to_date - from_date).days
-                if actual_days > 0 and actual_days != stated_days:
+                # 1일 차이는 초일 산입 여부(민법 제157조: 초일 불산입 원칙, 오전 0시부터 시작하면 산입)에 따라
+                # 달라질 수 있으므로 계산 오류로 보지 않는다. 2일 이상 차이만 판정한다.
+                if actual_days > 0 and abs(actual_days - stated_days) > 1:
                     matched_str = m.group(0)
                     features = {
                         "deterministic_rule": True,
@@ -285,7 +287,7 @@ def verify_dates_in_document(doc: NormalizedDocument) -> List[Finding]:
                     )
 
     # 4. 문서/통지 발송일시와 본문 과거 의결/사유일 선후 역전 검증 (DATE-INVERSION / TEMPORAL)
-    # 예: 발송일시 2026. 3. 18.인데 본문에서 "2026. 3. 20. 개최된 징계위원회의 의결에 따라" 통지하는 모순
+    # 예: 발송일시보다 뒤 날짜의 회의·의결을 "…에 개최된 …의 의결에 따라"처럼 이미 있었던 일로 인용하는 모순
     SEND_HEADER_RE = re.compile(
         r"(?:발송일시|발신일시|통지일시|작성일시|발송일|통지일|작성일)\s*[:\s]?\s*(?P<year>\d{4})[.\s년/-]+(?P<month>\d{1,2})[.\s월/-]+(?P<day>\d{1,2})"
     )

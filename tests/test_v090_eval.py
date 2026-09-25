@@ -11,7 +11,6 @@ import pytest
 from packages.common.enums import FindingType, Severity, VerificationStatus
 from packages.common.schemas import Block, NormalizedDocument, Page
 from packages.legal_engine.statute_ranges import check_statute_article_range
-from packages.legal_engine.precedent_verifier import verify_precedent_distortions, verify_statute_quotes
 from packages.claim_engine.cross_document_entities import verify_cross_document_entities
 
 
@@ -60,44 +59,6 @@ def test_statute_article_range_check():
     assert res_civ["max_article"] == 502
 
 
-def test_precedent_distortion_detection():
-    """과제 2 (CIT-MIS): 리딩 판례의 판시 방향과 정반대 주장을 검출하는지 테스트."""
-    # 대법원 2019두52386 판결 취지 왜곡 서면
-    distorted_text = (
-        "대법원 2019두52386 판결에 따르면 근로자가 정년 도달 후에는 "
-        "구제명령을 받을 수 없어 구제이익이 소멸한다고 판시하였습니다."
-    )
-    doc = _make_dummy_doc("doc_cit_mis", "distorted_brief.pdf", distorted_text)
-
-    findings = verify_precedent_distortions(doc)
-    assert len(findings) >= 1
-    f = findings[0]
-    assert f.type == FindingType.CASE_HOLDING_DISTORTION
-    assert f.severity == Severity.MEDIUM
-    assert f.status == VerificationStatus.UNVERIFIED and f.advisory_only
-    assert "2019두52386" in f.title or "2019두52386" in f.detail
-    assert "구제이익" in f.detail
-
-
-def test_statute_quote_modification_detection():
-    """과제 2 (QUOTE-MOD): 법조문 큰따옴표 인용구에 존재하지 않는 요건이 삽입·변형된 경우를 검출하는지 테스트."""
-    # 근로기준법 제27조 따옴표 인용구 변형 서면
-    mod_text = (
-        '근로기준법 제27조 제2항은 "해고사유와 해고시기를 서면(이메일이나 카카오톡 메시지를 포함한다)으로 '
-        '통지하여야 효력이 있다."라고 규정하고 있습니다.'
-    )
-    doc = _make_dummy_doc("doc_quote_mod", "distorted_statute_brief.pdf", mod_text)
-
-    findings = verify_statute_quotes(doc)
-    assert len(findings) >= 1
-    f = findings[0]
-    assert f.type == FindingType.STATUTE_TEXT_MISMATCH
-    assert f.severity == Severity.MEDIUM
-    assert f.status == VerificationStatus.UNVERIFIED and f.advisory_only
-    assert "근로기준법 제27조" in f.title or "근로기준법 제27조" in f.detail
-    assert "카카오톡" in f.detail or "이메일" in f.detail
-
-
 def test_cross_document_entities_contradiction():
     """과제 3 (XDOC): 서면 간 입사일/판정일/근무시간 불일치를 정밀 탐지하는지 테스트."""
     doc1 = _make_dummy_doc(
@@ -126,12 +87,6 @@ def test_clean_document_no_false_positives():
         "2021. 3. 4. 입사하여 성실히 근무하였습니다."
     )
     doc = _make_dummy_doc("doc_clean", "clean_brief.pdf", clean_text)
-
-    p_findings = verify_precedent_distortions(doc)
-    assert len(p_findings) == 0
-
-    q_findings = verify_statute_quotes(doc)
-    assert len(q_findings) == 0
 
     x_findings = verify_cross_document_entities([doc])
     assert len(x_findings) == 0

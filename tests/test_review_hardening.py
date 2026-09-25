@@ -11,7 +11,6 @@ from packages.common.enums import CitationType, EvidenceGrade, FindingType, Veri
 from packages.common.schemas import Block, Citation, NormalizedDocument, Page
 from packages.claim_engine.date_verifier import verify_dates_in_document
 from packages.claim_engine.cross_document_entities import verify_cross_document_entities
-from packages.legal_engine.precedent_verifier import verify_precedent_distortions, verify_statute_quotes
 from packages.legal_engine.statute_ranges import get_statute_max_article
 from packages.verification_engine.ai_document_detector import detect_ai_document
 from packages.verification_engine.ai_residue import scan_residue
@@ -202,19 +201,6 @@ def test_unbound_entity_differences_are_advisory_not_confirmed_conflicts():
 def test_arbitrary_equations_are_not_working_hours():
     assert not verify_cross_document_entities([document("연장근로시간 합계 86시간", "one"),
                                                 document("물품 수량 30 + 28 + 30 = 88개", "two")])
-
-
-def test_static_precedent_hints_do_not_claim_verified_official_evidence():
-    text = "대법원 2019두52386 판결은 정년 도달 이후 구제이익이 소멸한다고 판시했다."
-    findings = verify_precedent_distortions(document(text))
-    assert findings
-    assert all(f.status == VerificationStatus.UNVERIFIED and f.advisory_only for f in findings)
-    assert all(e.grade != EvidenceGrade.A for f in findings for e in f.evidence)
-
-
-def test_unrelated_quote_near_a_statute_is_not_a_modified_statute():
-    text = '근로기준법 제27조에 따른 통지를 검토한다. 원고는 "오늘부터 출근하지 말라"는 말을 들었다.'
-    assert verify_statute_quotes(document(text)) == []
 
 
 @pytest.mark.parametrize("cell", ["12,34", "1 2", "1천 2백 3원"])

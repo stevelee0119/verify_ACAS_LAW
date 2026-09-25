@@ -83,7 +83,7 @@ class ProviderConfig:
 @dataclass
 class Settings:
     app_name: str = "ACASia_LAW"
-    version: str = "0.9.2"
+    version: str = "0.9.3"
     database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
@@ -134,7 +134,7 @@ class Settings:
     # 공급자 수만큼 호출 비용이 늘어나므로 예산 설정과 함께 본다.
     llm_cross_check: str = field(
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
-    rule_version: str = "2026.09.26.3"
+    rule_version: str = "2026.09.26.4"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))
