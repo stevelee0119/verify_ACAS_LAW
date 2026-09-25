@@ -25,10 +25,14 @@ from .calculation import parse_amounts
 
 ENGINE_NAME = "claim_engine.fact_store"
 DEFECT_CODE = "CROSS_DOC_INCONSISTENCY"
-PARTS = (r"슬관절|무릎|견관절|어깨|수관절|손목|족관절|발목|고관절|주관절|팔꿈치|대퇴부?|허벅지|하퇴부?|종아리|정강이|"
-         r"상완부?|전완부?|손가락|수지|발가락|족지|늑골|갈비뼈|쇄골|안구|눈|귀|팔|다리")
-SIDE_PART_RE = re.compile(rf"(?P<side>좌측|우측|왼쪽|오른쪽|좌|우)\s*(?P<part>{PARTS})")
-SIDE = {"좌측": "좌", "왼쪽": "좌", "좌": "좌", "우측": "우", "오른쪽": "우", "우": "우"}
+PARTS = (r"슬관절|슬개골|무릎(?:관절)?|견관절|어깨|수관절|손목|족관절|발목|고관절|주관절|팔꿈치|대퇴골|대퇴부?|허벅지|"
+         r"경골|비골|하퇴부?|종아리|정강이|상완골|상완부?|요골|척골|전완부?|손가락|수지|수부|발가락|족지|족부|늑골|갈비뼈|"
+         r"쇄골|견갑골|안구|눈|귀|팔|다리|손|발")
+# 좌·우 표기: 한글, 진단서의 약어(Lt./Rt.), 괄호('(좌)'). 부위 뒤에는 조사만 올 수 있다('손해'·'발생'은 부위가 아니다).
+SIDE_PART_RE = re.compile(rf"(?P<side>좌측|우측|왼쪽|오른쪽|Lt\.?|Rt\.?|Left|Right|\(\s*좌\s*\)|\(\s*우\s*\)|좌|우)\s*(?:의\s*)?"
+                          rf"(?P<part>{PARTS})(?=[^가-힣]|$|(?:을|를|이|가|은|는|의|에|에서|과|와|도|만|부위|쪽|내측|외측)(?:[^가-힣]|$))")
+SIDE = {"좌측": "좌", "왼쪽": "좌", "좌": "좌", "우측": "우", "오른쪽": "우", "우": "우",
+        "lt": "좌", "lt.": "좌", "left": "좌", "rt": "우", "rt.": "우", "right": "우", "(좌)": "좌", "(우)": "우"}
 BILATERAL_RE = re.compile(r"양측|양쪽|좌\s*[·ㆍ,및]\s*우|좌우|우\s*[·ㆍ,및]\s*좌")
 DATE = r"(?P<y>(?:19|20)\d{2})\s*\.\s*(?P<m>\d{1,2})\s*\.\s*(?P<d>\d{1,2})\s*\.?"
 DATE_RE = re.compile(DATE)
@@ -72,6 +76,41 @@ def _date_value(m: "re.Match[str]") -> Optional[str]:
 def _role(role: str) -> str:
     role = re.sub(r"\s+", " ", role)
     return "환자" if role in ("위 환자", "위환자") else role
+
+
+def _side(raw: str) -> str:
+    return SIDE[re.sub(r"\s+", "", raw).lower()]
+
+
+# 사실의 양태(v5 3-4): 확정 사실끼리만 불일치로 본다. 예정·가정·상대방 주장은 비교에서 뺀다.
+CONFIRMED, PLANNED, HYPOTHETICAL, OPPONENT = "CONFIRMED", "PLANNED", "HYPOTHETICAL", "OPPONENT"
+PLANNED_RE = re.compile(r"(?:할|될|하게\s*될)\s*(?:예정|계획)|예정(?:이다|입니다|임|이며|으로)|(?:확장|감축|변경|증액|감액)(?:할|하려|하고자|될)|"
+                        r"추가(?:로)?\s*청구할|청구할\s*것|추후|향후|장차")
+
+
+def modality(sentence: str, position: int) -> str:
+    """sentence에서 position(사실 표기 끝) 뒤 절과 문장 앞머리로 양태를 정한다."""
+    from packages.legal_engine.polarity import CONDITIONAL_LEAD_RE, CONDITIONAL_TAIL_RE, OPPONENT_REPORT_RE, _clause_after
+
+    clause = _clause_after(sentence, position)
+    if PLANNED_RE.search(clause) or PLANNED_RE.search(sentence[max(0, position - 30):position]):
+        return PLANNED
+    if CONDITIONAL_LEAD_RE.search(sentence[:position]) and CONDITIONAL_TAIL_RE.search(sentence[position:] + " "):
+        return HYPOTHETICAL
+    if OPPONENT_REPORT_RE.search(sentence[position:]):
+        return OPPONENT
+    return CONFIRMED
+
+
+# 같은 의미의 금액을 묶는 문맥 낱말(v5 3-4). 금액 바로 앞(20자 안)의 낱말로 묶음을 정한다.
+AMOUNT_CONTEXT = {
+    "damage": re.compile(r"피해\s*(?:금)?액|피해\s*금(?:원|액)?|손해액"),
+    "defrauded": re.compile(r"편취(?:금|액|한\s*금원|한\s*돈)"),
+    "repaid": re.compile(r"변제(?:액|금|한\s*금(?:액|원))"),
+    "settlement": re.compile(r"합의금"),
+}
+PARTIAL_CLAIM_RE = re.compile(r"일부\s*(?:청구|로서|인)|그\s*중\s*일부|내금|우선\s*청구")
+STATEMENT_TABLE_RE = re.compile(r"계산서|청구\s*(?:금액\s*)?(?:내역|명세)|손해\s*(?:배상\s*)?(?:내역|명세|산정)|산정\s*내역")
 
 
 # --- 문서 구획과 표지 -------------------------------------------------------------------------
@@ -124,30 +163,57 @@ def _facts(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             bilateral = bool(BILATERAL_RE.search(sentence))
             sides: Dict[str, Set[str]] = {}
             for m in SIDE_PART_RE.finditer(sentence):
-                sides.setdefault(m.group("part"), set()).add(SIDE[m.group("side")])
+                sides.setdefault(m.group("part"), set()).add(_side(m.group("side")))
             for m in SIDE_PART_RE.finditer(sentence):
                 # 한 문장에서 같은 부위를 양쪽 모두 적었으면 양측 부상이다(모순이 아니다)
                 if not bilateral and len(sides[m.group("part")]) == 1:
-                    out.append({**base, "attribute": "injury_side", "key": m.group("part"), "value": SIDE[m.group("side")],
-                                "excerpt": " ".join(sentence.split())[:160]})
+                    out.append({**base, "attribute": "injury_side", "key": m.group("part"), "value": _side(m.group("side")),
+                                "modality": modality(sentence, m.end()), "excerpt": " ".join(sentence.split())[:160]})
             for m in DATE_RE.finditer(sentence):
                 value = _date_value(m)
                 if value and (INCIDENT_AFTER_RE.match(sentence[m.end():]) or INCIDENT_BEFORE_RE.search(sentence[:m.start()])):
                     out.append({**base, "attribute": "incident_date", "key": "incident", "value": value,
-                                "excerpt": " ".join(sentence.split())[:160]})
+                                "modality": modality(sentence, m.end()), "excerpt": " ".join(sentence.split())[:160]})
+            for amount in parse_amounts(sentence):
+                # '편취금 12,500,000원'에서 금액이 '금'부터 잡히므로 금액 첫 글자까지 본다
+                before = sentence[max(0, amount.start - 20):amount.start + 1]
+                for key, pattern in AMOUNT_CONTEXT.items():
+                    if pattern.search(before):
+                        out.append({**base, "attribute": "context_amount", "key": key, "value": str(amount.value),
+                                    "modality": modality(sentence, amount.end),
+                                    "excerpt": " ".join(sentence.split())[:160]})
+                        break
         relief = RELIEF_RE.search(text)
         amount = None
         if relief:
             grounds = GROUNDS_RE.search(text, relief.end())
             amounts = parse_amounts(text[relief.end():grounds.start() if grounds else relief.end() + 600])
             amount = amounts[0] if amounts else None
+        claim_modality = CONFIRMED  # 청구취지의 금액은 이 서면의 확정된 청구다
         if amount is None:
             claimed = CLAIMED_RE.search(text)
             amounts = parse_amounts(text[claimed.end():claimed.end() + 40]) if claimed else []
             amount = amounts[0] if amounts and amounts[0].start <= 3 else None
+            if amount is not None:
+                bounds = next(((a, b) for a, b in sentence_bounds(text) if a <= claimed.start() < b), (0, len(text)))
+                sentence = text[bounds[0]:bounds[1]]
+                claim_modality = modality(sentence, claimed.end() - bounds[0] + amount.end)
         if amount is not None:
             out.append({**base, "attribute": "claim_amount", "key": "claim", "value": str(amount.value),
+                        "modality": claim_modality, "partial": bool(PARTIAL_CLAIM_RE.search(text)),
                         "excerpt": " ".join(amount.raw.split())})
+        # 계산서·청구 내역의 합계(표의 합계 행). 청구취지 금액과 대조한다.
+        for table in _tables(doc) if segment == "본문" else []:
+            title = " ".join(" ".join(str(c or "") for c in row) for row in table[:1])
+            if not (STATEMENT_TABLE_RE.search(title) or STATEMENT_TABLE_RE.search(text)):
+                continue
+            for row in table[1:]:
+                cells = [" ".join(str(c or "").split()) for c in row]
+                if cells and re.fullmatch(r"(?:합\s*계|총\s*계|총\s*액|계)", cells[0]):
+                    total = next((parse_amounts(c)[-1] for c in reversed(cells[1:]) if parse_amounts(c)), None)
+                    if total is not None:
+                        out.append({**base, "attribute": "statement_total", "key": "claim", "value": str(total.value),
+                                    "modality": CONFIRMED, "excerpt": " | ".join(cells)[:160]})
         plural = {m.group(1) for m in PLURAL_PARTY_RE.finditer(text)}
         for m in PARTY_RE.finditer(text):
             role = _role(m.group("role"))
@@ -262,10 +328,15 @@ def _where(fact: Dict[str, Any], names: Dict[str, str]) -> str:
     return names.get(fact["document_id"], fact["document_id"]) + ("" if fact["segment"] == "본문" else f" {fact['segment']}")
 
 
+def _confirmed(facts: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [f for f in facts if f.get("modality", CONFIRMED) == CONFIRMED]
+
+
 def _in_document(store: List[Dict[str, Any]], names: Dict[str, str]) -> List[Finding]:
     out: List[Finding] = []
     for doc_id in dict.fromkeys(f["document_id"] for f in store):
-        facts = [f for f in store if f["document_id"] == doc_id]
+        facts = _confirmed(f for f in store if f["document_id"] == doc_id)
+        out.extend(_statement_vs_claim(facts, names, "IN_DOCUMENT"))
         # 같은 부위의 좌·우가 본문과 첨부 사본(또는 본문 안)에서 다르다
         for part in dict.fromkeys(f["key"] for f in facts if f["attribute"] == "injury_side"):
             members = [f for f in facts if f["attribute"] == "injury_side" and f["key"] == part]
@@ -293,7 +364,7 @@ def _in_document(store: List[Dict[str, Any]], names: Dict[str, str]) -> List[Fin
 
 def _cross_document(group: List[str], store: List[Dict[str, Any]], names: Dict[str, str]) -> List[Finding]:
     out: List[Finding] = []
-    facts = [f for f in store if f["document_id"] in group and f["segment"] == "본문"]
+    facts = _confirmed(f for f in store if f["document_id"] in group and f["segment"] == "본문")
 
     for part in dict.fromkeys(f["key"] for f in facts if f["attribute"] == "injury_side"):
         per_doc: Dict[str, Set[str]] = {}
@@ -335,6 +406,29 @@ def _cross_document(group: List[str], store: List[Dict[str, Any]], names: Dict[s
                             list(amounts.values()), EvidenceGrade.C, VerificationStatus.SUSPICIOUS, names,
                             digit_transposition=transposed))
 
+    # 같은 의미의 금액(피해액·편취금·변제액·합의금)이 문서마다 다르다(v5 3-4). 한 문서에 같은 묶음의 금액이 여럿이면
+    # (분할 변제 등) 그 문서는 비교하지 않는다.
+    for key in dict.fromkeys(f["key"] for f in facts if f["attribute"] == "context_amount"):
+        per_doc: Dict[str, Set[str]] = {}
+        for f in facts:
+            if f["attribute"] == "context_amount" and f["key"] == key:
+                per_doc.setdefault(f["document_id"], set()).add(f["value"])
+        single = {d: next(iter(v)) for d, v in per_doc.items() if len(v) == 1}
+        if len(single) >= 2 and len(set(single.values())) > 1:
+            values = list(single.values())
+            transposed = any(digit_transposition(a, b) for i, a in enumerate(values) for b in values[i + 1:])
+            members = [f for f in facts if f["attribute"] == "context_amount" and f["key"] == key and f["document_id"] in single]
+            label = ", ".join(f"{names[d]} {int(v):,}원" for d, v in single.items())
+            word = {"damage": "피해액", "defrauded": "편취금", "repaid": "변제액", "settlement": "합의금"}[key]
+            out.append(_finding("CONTEXT_AMOUNT", "CROSS_DOCUMENT",
+                                f"문서마다 {word}이 다르다{'(자릿수 뒤바뀜 의심)' if transposed else ''}: {label}",
+                                f"같은 사건 문서가 {word}을 서로 다르게 적었다(확정 서술끼리 비교, 예정·가정·상대방 주장 제외). "
+                                "어느 기재가 맞는지 원본으로 확인해야 한다.", members,
+                                EvidenceGrade.B if transposed else EvidenceGrade.C,
+                                VerificationStatus.CONTRADICTED if transposed else VerificationStatus.SUSPICIOUS, names,
+                                digit_transposition=transposed))
+    out.extend(_statement_vs_claim(facts, names, "CROSS_DOCUMENT"))
+
     roles: Dict[str, Dict[str, Counter]] = {}
     for f in facts:
         if f["attribute"] == "party_name" and f["key"] not in SUBJECT_ROLES and not f["plural_role"]:
@@ -347,6 +441,30 @@ def _cross_document(group: List[str], store: List[Dict[str, Any]], names: Dict[s
             out.append(_finding("PARTY_NAME", "CROSS_DOCUMENT", f"문서마다 {role} 성명 표기가 다르다: {label}",
                                 f"같은 사건 문서가 {role}을(를) 서로 다른 성명으로 적었다.", members, EvidenceGrade.B,
                                 VerificationStatus.CONTRADICTED, names))
+    return out
+
+
+def _statement_vs_claim(facts: List[Dict[str, Any]], names: Dict[str, str], scope: str) -> List[Finding]:
+    """계산서·청구 내역 표의 합계와 청구취지 금액을 대조한다(v5 3-4). 일부 청구라고 밝힌 서면은 보지 않는다.
+    같은 문서(IN_DOCUMENT)는 그 문서의 표와 청구취지를, 문서 간(CROSS_DOCUMENT)은 다른 문서의 표와 청구취지를 본다."""
+    claims = [f for f in facts if f["attribute"] == "claim_amount" and not f.get("partial")]
+    totals = [f for f in facts if f["attribute"] == "statement_total"]
+    out: List[Finding] = []
+    for claim in claims:
+        for total in totals:
+            same_doc = total["document_id"] == claim["document_id"]
+            if (scope == "IN_DOCUMENT") != same_doc or total["value"] == claim["value"]:
+                continue
+            transposed = digit_transposition(total["value"], claim["value"])
+            out.append(_finding("STATEMENT_TOTAL", scope,
+                                f"계산서 합계와 청구금액이 다르다{'(자릿수 뒤바뀜 의심)' if transposed else ''}: "
+                                f"{_where(total, names)} 합계 {int(total['value']):,}원, {_where(claim, names)} 청구 {claim['excerpt']}",
+                                "청구 내역(계산서) 표의 합계와 청구취지의 금액이 다르다. 지연손해금·과실상계 등 따로 밝힌 사정이 "
+                                "없으면 기재 오류인지 사람이 확인한다.", [total, claim],
+                                EvidenceGrade.B if transposed else EvidenceGrade.C,
+                                VerificationStatus.CONTRADICTED if transposed else VerificationStatus.SUSPICIOUS, names,
+                                digit_transposition=transposed))
+            break
     return out
 
 
