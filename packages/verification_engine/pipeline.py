@@ -68,6 +68,7 @@ from packages.claim_engine.evidence_consistency import check_document as check_e
 from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.claim_engine.fact_checks import check_periods
 from packages.claim_engine.fact_store import cross_document_facts
+from packages.claim_engine.calendar_dates import calendar_date_findings
 from packages.claim_engine.korean_amount import words_digits_mismatches
 from packages.legal_engine.legal_rules import review_legal_rules
 from packages.legal_engine.claim_review import provision_texts, review_claims
@@ -749,6 +750,14 @@ class VerificationPipeline:
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
+        # 본문의 달력에 없는 날짜(v5 3-8). 인용·증거표가 이미 판정한 날짜는 빼고, OCR 글자는 숫자 보정·신뢰도 반영.
+        with manifest.stage("calendar_dates", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
+            try:
+                result.findings.extend(calendar_date_findings(doc, result.findings))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"날짜 형식 검사 경고: {exc}")
         # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
         with manifest.stage("model_fact_reconcile", [], unit="모델의 사실 모순 지적", document_id=document.document_id) as stage:
             remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
