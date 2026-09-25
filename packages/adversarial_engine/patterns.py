@@ -33,6 +33,8 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "disregard previous"),
     (_c(r"forget\s+(everything|all\s+previous|your\s+instructions)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 0.9, "forget instructions"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s*(아래|다음|이하|본|이)\s*(의\s*)?(지시|명령|지침|규칙)[을를에]?\s*(따를\s*것|따르라|따르십시오|따라야|따르세요|따르시오)"),
+     InjectionIntent.INSTRUCTION_OVERRIDE, 0.8, "AI 수신자에게 문서 속 지시 준수 요구"),
     (_c(r"(새로운|다음의)\s*(지시|지침|규칙)[을를]?\s*(따르|우선|적용)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 0.8, "새 지시 우선 적용 요구"),
     (_c(r"new\s+instructions?\s*[:：]"), InjectionIntent.INSTRUCTION_OVERRIDE, 0.7, "new instructions 선언"),
@@ -94,6 +96,12 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"['\"‘“]?(이상\s*없음|문제\s*없음|정상|적법|진정|적합|PASS)['\"’”]?\s*(으로|로|이라고|하다고)\s*"
         r"(바꾸어|바꿔|변경하여|변경해)?\s*(보고|기재|판정|표시|결론|평가|처리)(?!받|되었|됐)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "특정 결론 강제(한국어)"),
+    # 대상 전부를 '확인된·정상인' 것으로 보고하라는 요구(v5 3-7). '확인된 사실'처럼 명사를 꾸미는 말은 제외된다.
+    (_c(r"(모든|전부|모두|각)\s*(인용|판례|조문|법령|항목|결과|사건번호|날짜)[을를은는이가]?\s*(모두|전부)?\s*"
+        r"(확인된|검증된|정상인|실존하는|유효한|이상\s*없는|문제\s*없는)\s*것으로\s*(보고|기재|표시|처리|판정|분류|출력)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "전부 확인된 것으로 보고 요구"),
+    (_c(r"(확인|검증|검토)\s*(완료|됨|필)\s*(으로|로)\s*(표시|보고|처리|기재)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.9, "검증 완료 표시 요구"),
     (_c(r"(오류|문제|의심|위험)\s*(가|이|은|는)?\s*(없다고|없음으로)\s*(보고|기재|결론|판단)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무오류 결론 강제"),
     (_c(r"(report|conclude|state|say)\s+(that\s+)?(there\s+are\s+)?no\s+(issues?|errors?|problems?|findings?)"),

@@ -190,16 +190,19 @@ class PdfParser(DocumentParser):
         # 전체에 한 번 해도 결과가 같다.
         signature_parts: List[str] = []
 
-        facts: Dict[str, set] = {"invisible": set(), "covered": set(), "transparent": set(), "image_covered": set()}
+        facts: Dict[str, set] = {"invisible": set(), "covered": set(), "transparent": set(), "image_covered": set(),
+                                 "clipped": set()}
         head = raw_bytes[:8_000_000]
         if doc.structure.get("has_invisible_render_mode") or FILLED_SHAPE_RE.search(head) \
-                or doc.structure.get("has_filled_shapes") or ALPHA_RE.search(head) or b"/Image" in head:
+                or doc.structure.get("has_filled_shapes") or doc.structure.get("has_clip_paths") \
+                or ALPHA_RE.search(head) or b"/Image" in head:
             try:
                 facts = _render_facts(path)
             except Exception as exc:  # pragma: no cover - 파서 방어
                 doc.parse_warnings.append(f"렌더모드·투명도·가림 확인 실패: {exc}")
         invisible, covered = facts["invisible"], facts["covered"]
         transparent, image_covered = facts["transparent"], facts["image_covered"]
+        clipped = facts.get("clipped") or set()
         contrast_checks: List[Tuple[int, Block, List[Dict[str, Any]]]] = []
         # 파서 대체 경로(v4 P8): pdfplumber가 열지 못하면 pypdf 글자 추출로 읽고, 그것도 안 되면 본문 없음으로 둔다.
         try:
@@ -228,6 +231,13 @@ class PdfParser(DocumentParser):
                         continue
                     bbox = self._line_bbox(line)
                     hidden_reason = self._hidden_reason(line, page)
+                    if clipped:
+                        # 클리핑 영역 밖(또는 면적 0인 클리핑)에 그린 글자는 크기와 무관하게 보이지 않는다(v5 3-7).
+                        # 작은 글자로 함께 숨긴 경우에도 실제 숨김 수단인 클리핑으로 분류한다.
+                        keys = [(index, round(float(c["x0"]), 1), round(float(c["y0"]), 1))
+                                for c in line if c["text"].strip()]
+                        if keys and sum(k in clipped for k in keys) >= max(1, 0.8 * len(keys)):
+                            hidden_reason = "CLIPPED_OUT"
                     if hidden_reason is None and (invisible or covered or transparent or image_covered):
                         keys = [(index, round(float(c["x0"]), 1), round(float(c["y0"]), 1))
                                 for c in line if c["text"].strip()]
@@ -596,6 +606,11 @@ class PdfParser(DocumentParser):
                 doc.structure["outline"] = _outline_titles(reader.outline)
             except Exception:
                 pass
+            # 쪽 번호 표시(PageLabels)의 접두 문자열 — 뷰어의 쪽 번호 칸과 추출기가 읽는다(v5 3-7)
+            try:
+                doc.structure["page_labels"] = _page_label_prefixes(reader)
+            except Exception:
+                pass
             # 양식 필드 값
             try:
                 fields = reader.get_fields() or {}
@@ -668,6 +683,7 @@ class PdfParser(DocumentParser):
         doc.structure["embedded_stream_text"] = _extract_stream_text(raw)
         doc.structure["has_invisible_render_mode"] = _has_invisible_render_mode(raw)
         doc.structure["has_filled_shapes"] = _has_filled_shapes(raw)
+        doc.structure["has_clip_paths"] = _has_clip_paths(raw)
         zero_width, strings = _actual_text_zero_width(raw, collect=True)
         if zero_width:
             doc.structure["actual_text_zero_width"] = zero_width
@@ -937,11 +953,13 @@ def _render_facts(path: str) -> Dict[str, set]:
     covered: set = set()
     transparent: set = set()
     image_covered: set = set()
+    clipped: set = set()
 
     class Device(PDFPageAggregator):
         page_number = 0
         mode = 0
         alpha = 1.0
+        clip: Optional[Tuple[float, float, float, float]] = None  # 현재 클리핑 영역(장치 좌표 경계 상자)
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, **kwargs)
@@ -959,6 +977,11 @@ def _render_facts(path: str) -> Dict[str, set]:
             advance = super().render_char(*args, **kwargs)
             item = self.cur_item._objs[-1]
             key = (self.page_number, round(item.x0, 1), round(item.y0, 1))
+            if self.clip is not None:
+                cx, cy = (item.x0 + item.x1) / 2, (item.y0 + item.y1) / 2
+                x0, y0, x1, y1 = self.clip
+                if (x1 - x0) * (y1 - y0) < CLIP_MIN_AREA or not (x0 - 0.5 <= cx <= x1 + 0.5 and y0 - 0.5 <= cy <= y1 + 0.5):
+                    clipped.add(key)
             if self.mode in (3, 7):
                 invisible.add(key)
             elif self.mode in (0, 2, 4, 6) and self.alpha <= TRANSPARENT_ALPHA:
@@ -989,15 +1012,48 @@ def _render_facts(path: str) -> Dict[str, set]:
         def init_state(self, ctm):
             super().init_state(ctm)
             self._alpha_stack: List[float] = []
+            self._clip_stack: List[Any] = []
+            self.device.clip = None
 
         def do_q(self):
             self._alpha_stack.append(self.device.alpha)
+            self._clip_stack.append(self.device.clip)
             super().do_q()
 
         def do_Q(self):
             if self._alpha_stack:
                 self.device.alpha = self._alpha_stack.pop()
+            if self._clip_stack:
+                self.device.clip = self._clip_stack.pop()
             super().do_Q()
+
+        def _clip_to_path(self):
+            """현재 경로의 경계 상자로 클리핑 영역을 좁힌다(W·W*). 경계 상자는 CTM으로 장치 좌표에 옮긴다."""
+            from pdfminer.utils import apply_matrix_pt
+
+            points = []
+            for segment in getattr(self, "curpath", []) or []:
+                values = [v for v in segment[1:] if isinstance(v, (int, float))]
+                if segment[0] == "re" and len(values) == 4:
+                    x, y, w, h = values
+                    values = [x, y, x + w, y + h]
+                points += [apply_matrix_pt(self.ctm, (values[i], values[i + 1])) for i in range(0, len(values) - 1, 2)]
+            if not points:
+                return
+            box = (min(x for x, _ in points), min(y for _, y in points), max(x for x, _ in points), max(y for _, y in points))
+            if self.device.clip is not None:
+                c = self.device.clip
+                box = (max(box[0], c[0]), max(box[1], c[1]), min(box[2], c[2]), min(box[3], c[3]))
+                box = (box[0], box[1], max(box[0], box[2]), max(box[1], box[3]))
+            self.device.clip = box
+
+        def do_W(self):
+            self._clip_to_path()
+            super().do_W()
+
+        def do_W_a(self):
+            self._clip_to_path()
+            super().do_W_a()
 
         def do_gs(self, name):
             try:
@@ -1023,7 +1079,8 @@ def _render_facts(path: str) -> Dict[str, set]:
                     covered.add(key)
                 elif any(o > order and x0 <= cx <= x1 and y0 <= cy <= y1 for o, (x0, y0, x1, y1) in device.images):
                     image_covered.add(key)   # 글자보다 나중에 그린 이미지가 글자를 덮었다
-    return {"invisible": invisible, "covered": covered, "transparent": transparent, "image_covered": image_covered}
+    return {"invisible": invisible, "covered": covered, "transparent": transparent, "image_covered": image_covered,
+            "clipped": clipped}
 
 
 def _image_coverage(page: Any) -> float:
@@ -1092,6 +1149,24 @@ def _xmp_values(xml: str) -> Dict[str, str]:
             if value.strip() and key not in ("about", "lang"):
                 values[key] = value.strip()[:2000]
     return values
+
+
+def _page_label_prefixes(reader) -> List[str]:
+    root = reader.trailer["/Root"]
+    labels = root.get("/PageLabels") if hasattr(root, "get") else None
+    if labels is None:
+        return []
+    labels = labels.get_object()
+    nums = labels.get("/Nums") or []
+    out: List[str] = []
+    for index in range(1, len(nums), 2):
+        entry = nums[index].get_object() if hasattr(nums[index], "get_object") else nums[index]
+        prefix = entry.get("/P") if hasattr(entry, "get") else None
+        if prefix and str(prefix).strip():
+            out.append(str(prefix))
+        if len(out) >= 200:
+            break
+    return out
 
 
 def _outline_titles(outline, level: int = 0, out: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
@@ -1178,6 +1253,19 @@ def _has_filled_shapes(raw: bytes) -> bool:
     for m in re.finditer(rb"stream\r?\n(.*?)endstream", raw[:8_000_000], re.S):
         header = raw[max(0, m.start() - 400) : m.start()]
         if FILLED_SHAPE_RE.search(_decode_stream(m.group(1), header.decode("latin-1", "ignore"))):
+            return True
+    return False
+
+
+CLIP_OPERATOR_RE = re.compile(rb"\bW\*?\s+n\b")
+CLIP_MIN_AREA = 1.0  # 제곱 포인트. 이보다 작은 클리핑 영역은 아무것도 보이지 않는다
+
+
+def _has_clip_paths(raw: bytes) -> bool:
+    """내용 스트림에 클리핑 경로(W n)가 있는지(압축 해제 후). 클리핑 숨김 점검을 할지 정하는 데만 쓴다."""
+    for m in re.finditer(rb"stream\r?\n(.*?)endstream", raw[:8_000_000], re.S):
+        header = raw[max(0, m.start() - 400) : m.start()]
+        if CLIP_OPERATOR_RE.search(_decode_stream(m.group(1), header.decode("latin-1", "ignore"))):
             return True
     return False
 
