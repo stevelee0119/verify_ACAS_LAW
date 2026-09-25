@@ -267,7 +267,7 @@ def test_ai_opinions_never_turn_an_unconfirmed_case_into_a_fake_one():
     assert "허위" not in finding.title
     table = result.rows[0]
     assert table.basis == "UNCONFIRMED" and table.ai_agreement == "DISAGREE"
-    assert "[AI 교차검토 참고 · 3개 모델 의견 불일치" in table.legal_reasoning
+    assert "AI 교차검증 결과 참고 : 3개 모델 의견 불일치" in table.legal_reasoning
     assert {o["provider"] for o in table.ai_opinions} == {"anthropic", "openai", "gemini"}
     assert result.ai_providers == ["anthropic", "gemini", "openai"]
     # 모델에게 '존재하지 않는 가공의 판례'라는 전제를 주지 않고, 개인정보는 가린다.

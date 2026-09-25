@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import json
 
+from packages.legal_engine.reasoning_format import row_cell_text
 from packages.common.terminology import EDITABLE_COPY_NOTICE, REVIEW_NOTICE
 from .snapshot import json_lines, technical_payload, xml_text
 from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, detail_level, evidence_summary,
@@ -196,7 +197,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
                 d.filename + " " + str(row.get("location", "")),
                 str(row.get("claim_text", "")) + f"\n({row.get('cited_authority', '')})",
                 f"[평가] {row.get('validity_verdict', '') or '확인 필요'}\n{row.get('ai_generation_basis', '')}",
-                str(row.get("legal_reasoning", "")) + f"\n[대응] {row.get('recommended_counteraction', '')}",
+                row_cell_text(row),  # 검토 결과·AI 교차검증·모델별 의견·대응 방안을 줄마다 나눈다
             ])
     if all_hallucination_rows:
         doc.add_heading("법률 인용 오류·근거 미확인 주장 대조표 (AI 작성 여부 판단과 별개)", 2)

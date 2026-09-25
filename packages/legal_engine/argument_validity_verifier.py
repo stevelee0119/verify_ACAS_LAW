@@ -21,6 +21,7 @@ from packages.common.enums import (
 )
 from packages.common.schemas import Citation, Claim, Finding, NormalizedDocument
 from packages.legal_engine.normalize import case_number_possible
+from packages.legal_engine.reasoning_format import format_counteraction, format_reasoning, reasoning_sections
 from packages.llm_router import LLMRouter
 from packages.llm_router.providers import LLMRequest
 
@@ -99,18 +100,25 @@ class HallucinationTableRow:
     # 모델별 참고 의견. 판정(basis·Finding)에는 쓰지 않는다.
     ai_opinions: List[Dict[str, Any]] = field(default_factory=list)
     ai_agreement: str = "NONE"   # AGREE / DISAGREE / SINGLE / NONE
+    # 표시용: 모델 의견을 붙이기 전의 검토 문장과 교차검증 요약. 칸 안을 항목별로 줄 나눠 그리는 데 쓴다.
+    review_text: str = ""
+    ai_label: str = ""
 
     def to_dict(self) -> Dict[str, Any]:
+        review = self.review_text or self.legal_reasoning
+        opinions = self.ai_opinions if self.ai_label else []
         return {
             "ai_opinions": self.ai_opinions,
             "ai_agreement": self.ai_agreement,
+            # 검토 결과·AI 교차검증 요약·모델별 의견을 나눈 구조(웹 화면이 항목별로 그린다)
+            "reasoning_sections": reasoning_sections(review, self.ai_label, opinions),
             "location": self.location,
             "claim_text": self.claim_text,
             "cited_authority": self.cited_authority,
             "authority_exists": self.authority_exists,
             "ai_generation_basis": self.ai_generation_basis,
             "validity_verdict": self.validity_verdict,
-            "legal_reasoning": self.legal_reasoning,
+            "legal_reasoning": format_reasoning(review, self.ai_label, opinions),
             "recommended_counteraction": self.recommended_counteraction,
             "basis": self.basis,
             # 이 표는 '법률 인용 오류'와 '근거가 확인되지 않은 주장'을 다룬다. 작성 주체(AI 사용
@@ -412,11 +420,11 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
         else:
             row.ai_agreement, label = "DISAGREE", f"{len(opinions)}개 모델 의견 불일치 — 직접 검토 필요"
             disagree += 1
-        lines = [f"{o['provider']}: {o['verdict']} — {o['reasoning']}" for o in opinions]
-        row.legal_reasoning = f"{row.legal_reasoning}\n[AI 교차검토 참고 · {label}]\n" + "\n".join(lines)
-        checks = [f"{o['provider']}: {o['check']}" for o in opinions if o["check"]]
-        if checks:
-            row.recommended_counteraction = f"{row.recommended_counteraction}\n[AI 참고] " + " / ".join(checks)
+        # 검토 결과 / AI 교차검증 요약 / 모델별 판정·근거를 줄마다 나눠 적는다(reasoning_format)
+        row.review_text = row.review_text or row.legal_reasoning
+        row.ai_label = label
+        row.legal_reasoning = format_reasoning(row.review_text, label, opinions)
+        row.recommended_counteraction = format_counteraction(row.recommended_counteraction, opinions)
 
     result.ai_providers = sorted(set(used))
     if used:

@@ -1191,13 +1191,37 @@ function renderAIVerification() {
     );
     const tdReason = node("td");
     tdReason.append(
-      node("p", r.legal_reasoning || "", "legal-reasoning"),
+      reasoningBlock(r),
       node("div", `대응 방안: ${r.recommended_counteraction || ""}`, "counteraction-box")
     );
 
     tr.append(tdLoc, tdClaim, tdBasis, tdReason);
     container.append(tr);
   }
+}
+
+// '법리적 타당성 검토 및 반박 근거' 칸: 검토 결과 / AI 교차검증 요약 / 모델별 판정·근거를 줄마다 나눈다.
+// 구조(reasoning_sections)가 없는 이전 결과는 문자열의 줄바꿈을 그대로 살려 보여 준다.
+function reasoningBlock(r) {
+  const sec = r.reasoning_sections;
+  if (!sec || !sec.review) return node("p", r.legal_reasoning || "", "legal-reasoning");
+  const box = node("div", null, "legal-reasoning-block");
+  const review = node("p", null, "reasoning-line");
+  review.append(node("strong", "타당성 검토 결과"), document.createTextNode(` : ${sec.review}`));
+  box.append(review);
+  if (sec.ai_label) {
+    const label = node("p", null, "reasoning-line");
+    label.append(node("strong", "AI 교차검증 결과 참고"), document.createTextNode(` : ${sec.ai_label}`));
+    const list = node("ul", null, "ai-opinion-list");
+    for (const o of sec.opinions || []) {
+      const item = node("li");
+      item.append(node("span", `(${o.name} : ${o.verdict})`, "ai-opinion-verdict"));
+      if (o.reasoning) item.append(node("span", o.reasoning, "ai-opinion-reason"));
+      list.append(item);
+    }
+    box.append(label, list);
+  }
+  return box;
 }
 
 function renderIssues() {
