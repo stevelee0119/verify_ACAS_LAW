@@ -53,11 +53,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: 본 테스트셋 평가
-        run: python scripts/eval_testset.py --out reports-ci --save-result reports-ci/result_main.json
+        run: python scripts/eval_testset.py --require-complete-env --out reports-ci --save-result reports-ci/result_main.json
       - name: 홀드아웃 평가
         run: |
           if [ -f tests/fixtures/holdout/ground_truth.json ]; then
-            python scripts/eval_testset.py --testset tests/fixtures/holdout --out reports-ci \
+            python scripts/eval_testset.py --require-complete-env --testset tests/fixtures/holdout --out reports-ci \
               --save-result reports-ci/result_holdout.json
           fi
       - name: 점수를 Job Summary에 기록
@@ -74,7 +74,7 @@ jobs:
       # 완전 환경(공식 DB·AI 3종·한국어 OCR) 실행 결과를 저장소에 남긴다(v5 2-1). 채점 결과(eval_*.json·md)와
       # 파이프라인 결과(result_*.json, gzip)를 docs/eval_ci/에 두어 같은 결과 JSON으로 다시 채점·비교할 수 있게 한다.
       - name: 평가 결과 기록
-        if: always() && github.event_name == 'push'
+        if: success() && github.event_name == 'push'
         run: |
           set -e
           mkdir -p docs/eval_ci

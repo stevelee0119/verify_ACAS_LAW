@@ -395,9 +395,12 @@ def test_r10_axis_uses_the_same_verdict_as_the_document_result():
     from packages.verification_engine.scoring import unified_authorship
     doc = DocumentResult(document_id="D", filename="d.pdf")
     doc.authorship = {"verdict": "ABSTAIN"}
-    doc.ai_detector_result = {"verdict": "AI_FULL_GENERATION_LIKELY", "score": 0.8}
+    doc.ai_detector_result = {"verdict": "AI_FULL_GENERATION_LIKELY", "score": 0.8,
+                              "signals": {"objective_traces": 2}}
     unified = unified_authorship(doc)
     assert unified["verdict"] == "AI_FULL_GENERATION_LIKELY" and unified["stylometry_signal"] == "ABSTAIN"
+    doc.ai_detector_result["signals"]["objective_traces"] = 0
+    assert unified_authorship(doc)["verdict"] == "UNCERTAIN"
 
 
 # --- R4/B8: 같은 값을 '재판유형 불일치'로 내지 않는다 ------------------------------------

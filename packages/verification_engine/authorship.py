@@ -24,10 +24,10 @@ from packages.common.textutil import sentences
 
 ENGINE_NAME = "verification_engine.authorship"
 
-# Provenance: 생성 metadata에 남는 대표 서명 (제13.1장, C2PA 포함)
+# Editable AI tool labels, not verified provenance or signatures.
 GENERATOR_METADATA_RE = re.compile(
     r"(chatgpt|openai|gpt-[45]|claude|anthropic|gemini|bard|copilot|llama|mistral|"
-    r"stable\s*diffusion|midjourney|c2pa|content\s*credentials)",
+    r"stable\s*diffusion|midjourney)",
     re.IGNORECASE,
 )
 
@@ -48,7 +48,7 @@ def analyze_authorship(doc: NormalizedDocument) -> AuthorshipAssessment:
     signals: Dict[str, Any] = {}
     notes: List[str] = []
 
-    # 1) Provenance — 가장 강한 객관적 흔적
+    # 1) Unverified tool labels and a separate provenance-container indicator.
     metadata_blob = " ".join(f"{k}={v}" for k, v in doc.metadata.items())
     provenance_hits = sorted(set(m.group(0).lower() for m in GENERATOR_METADATA_RE.finditer(metadata_blob)))
     signals["provenance_metadata"] = provenance_hits
@@ -90,13 +90,15 @@ def analyze_authorship(doc: NormalizedDocument) -> AuthorshipAssessment:
             verdict=AuthorshipVerdict.ABSTAIN,
             score=0.0,
             signals=signals,
-            attribution=AttributionLevel.WEAK_INDICATION,
+            attribution=AttributionLevel.WEAK_INDICATION if provenance_hits else AttributionLevel.UNDETERMINED,
             attributed_model=None,
             notes=notes
             + [
-                "문서 속성 또는 출처 기록 후보에 AI 관련 표기가 있다. 속성은 편집할 수 있고 "
+                "문서 속성에 AI 관련 표기가 있다. 속성은 편집할 수 있고 "
                 "출처 기록의 서명·자산 결합은 검증하지 않았으므로, 표기의 존재만 사실로 남기고 "
-                "작성 주체는 판단하지 않는다(설계서 제8.1장 미검증 표기).",
+                "작성 주체는 판단하지 않는다(설계서 제8.1장 미검증 표기)." if provenance_hits else
+                "C2PA 출처 기록 후보가 있으나, C2PA 존재 자체는 AI 사용을 의미하지 않는다. "
+                "서명·자산 결합과 기록 내용을 검증하지 않아 작성 주체는 판단하지 않는다.",
             ],
         )
 

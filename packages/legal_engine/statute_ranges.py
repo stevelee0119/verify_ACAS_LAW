@@ -98,9 +98,9 @@ def get_statute_max_article(law_name: str) -> Optional[int]:
     norm = normalize_statute_name(law_name)
     if norm in STATUTE_MAX_ARTICLES:
         return STATUTE_MAX_ARTICLES[norm]
-    # 부분 매칭
+    # Related statutes and implementing decrees have independent article ranges.
     for k, v in STATUTE_MAX_ARTICLES.items():
-        if k in norm or norm in k:
+        if norm and normalize_statute_name(k) == norm:
             return v
     return None
 
@@ -141,6 +141,7 @@ def check_statute_article_range(law_name: str, article: Optional[str | int]) -> 
             "excess": art_num - max_art,
             "rule_id": "LAW.PROVISION_EXCEEDS_MAX",
             "defect_code": "LAW-NX",
-            "message": f"'{law_name}'의 본칙 조문은 제{max_art}조까지 존재합니다. 인용된 제{art_num}조는 존재하지 않는 조문입니다."
+            "message": f"'{law_name}' 제{art_num}조는 정적 참고표의 상한({max_art})을 초과합니다. "
+                       "참고표는 개정·연혁을 증명하지 않으므로 공식 원문 확인 전에는 부존재를 확정하지 않습니다."
         }
     return None

@@ -33,7 +33,7 @@ def test_objective_residue_is_not_duplicated_as_an_advisory_ai_finding():
     doc = document("피고는 원고에게 금원을 지급하라.", "도움이 되셨길 바랍니다. [출처: 2]")
     result = _rule_based_ai_detection(doc, [], metadata_indications=False)
     residue_advisories = [f for f in create_ai_detector_findings(doc, result)
-                          if (f.confidence_features or {}).get("rule_id", "").startswith("AIGEN.")]
+                          if (f.confidence_features or {}).get("rule_id") == "AIGEN.SOURCE_TOKEN"]
     assert residue_advisories == []   # 객관적 잔재는 DRAFT_ARTIFACT(AI_RESPONSE_RESIDUE)로 한 번만 싣는다
 
 

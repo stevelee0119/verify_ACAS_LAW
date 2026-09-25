@@ -73,7 +73,8 @@ def test_precedent_distortion_detection():
     assert len(findings) >= 1
     f = findings[0]
     assert f.type == FindingType.CASE_HOLDING_DISTORTION
-    assert f.severity == Severity.HIGH
+    assert f.severity == Severity.MEDIUM
+    assert f.status == VerificationStatus.UNVERIFIED and f.advisory_only
     assert "2019두52386" in f.title or "2019두52386" in f.detail
     assert "구제이익" in f.detail
 
@@ -91,7 +92,8 @@ def test_statute_quote_modification_detection():
     assert len(findings) >= 1
     f = findings[0]
     assert f.type == FindingType.STATUTE_TEXT_MISMATCH
-    assert f.severity == Severity.HIGH
+    assert f.severity == Severity.MEDIUM
+    assert f.status == VerificationStatus.UNVERIFIED and f.advisory_only
     assert "근로기준법 제27조" in f.title or "근로기준법 제27조" in f.detail
     assert "카카오톡" in f.detail or "이메일" in f.detail
 

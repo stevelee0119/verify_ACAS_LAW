@@ -40,6 +40,7 @@ def test_ai_document_detector_with_chatbot_cliches_and_fake_case():
         "첫째, 피고는 계약상 의무를 모두 이행하였습니다.\n"
         "둘째, 대법원 2099다99999 판결에 따르면 이와 같은 경우 손해배상 책임이 성립하지 않습니다.\n"
         "종합하자면 피고에게는 귀책사유가 없습니다.\n"
+        "AI 언어 모델로서 학습 데이터 기준으로 작성한 답변입니다.\n"
         "도움이 되었기를 바랍니다. 추가적인 질문이 있으시면 언제든 문의해 주십시오."
     )
     doc = _make_sample_doc(text)
@@ -277,7 +278,7 @@ def test_ai_opinions_never_turn_an_unconfirmed_case_into_a_fake_one():
 
 def test_authorship_verdict_needs_agreement_and_objective_traces():
     """한 모델만 'AI 전체 작성'이라 해도 그대로 채택하던 것을 막는다."""
-    text = "원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 요약하자면 피고의 책임이 인정됩니다."
+    text = "제 지식 기준일 현재 원고는 피고에게 금 1,000만 원을 지급할 것을 청구합니다. 요약하자면 피고의 책임이 인정됩니다."
     doc = _make_sample_doc(text)
 
     def run(answers):

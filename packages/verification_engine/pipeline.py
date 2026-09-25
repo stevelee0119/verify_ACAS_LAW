@@ -263,9 +263,7 @@ class VerificationPipeline:
         store = PseudonymStore(project_id=context.project_id)
         pii = PIIEngine(store)
         manifest = RunManifest()
-        from .environment_check import check_execution_environment
-        manifest.environment = check_execution_environment()
-        manifest.warning = manifest.environment.get("warning")
+        manifest.environment = preflight(self.settings, self.registry, self.router)
 
         total = max(1, len(documents))
         for index, document in enumerate(documents):
@@ -698,9 +696,10 @@ class VerificationPipeline:
             result.authorship = assessment.to_dict()
             result.findings.extend(authorship_findings(doc, assessment))
 
-        # 메타데이터 AI 힌트: 생성 도구 이름(ChatGPT 등)·C2PA 같은 실제 AI 표기만 쓴다. '생성·저장 도구가 다름',
+        # 메타데이터 AI 힌트는 생성 도구 이름(ChatGPT 등)만 쓴다. C2PA 존재 자체는 AI 사용 증거가 아니다.
+        # '생성·저장 도구가 다름',
         # 양식 필드·첨부 같은 일반 메타데이터 이상은 AI 관여의 근거가 아니다(v4 P6: 모든 문서에 0.35가 붙던 원인).
-        metadata_hint = bool(assessment.signals.get("provenance_metadata") or assessment.signals.get("has_c2pa"))
+        metadata_hint = bool(assessment.signals.get("provenance_metadata"))
         emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
         # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
         injection_texts = [str((f.confidence_features or {}).get("observed_text") or "")
