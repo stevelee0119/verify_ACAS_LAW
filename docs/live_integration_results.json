@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-09-25T02:19:26+00:00",
-  "commit": "075cf94",
+  "generated_at": "2026-09-25T07:23:57+00:00",
+  "commit": "7d66c71",
   "note": "CI '실연동 통합 테스트'가 국가법령정보센터·모델 API를 실제로 호출한 결과다. status: passed(통과)·failed(응답을 받았으나 기준 미달)·unreachable(외부 출처 무응답으로 판정 보류, last_pass는 이전 통과 기록). 기록이 없는 항목은 실행되지 않았다.",
   "J2": {
     "prepared": 2,
     "detected": 2,
     "false_positive": 0,
-    "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 5건, 사람 확인으로 남은 지적 1건, 확인 문장의 오분류 0건",
+    "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 6건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건",
     "cases": [
       {
         "provider": "anthropic",
@@ -43,8 +43,8 @@
       "llm_failure_models": {},
       "reasons": [
         "모델 간 판단 불일치: anthropic=AI_PARTIAL_GENERATION, openai=AI_FULL_GENERATION_LIKELY, gemini=AI_FULL_GENERATION_LIKELY. 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)",
-        "[anthropic] 문서 말미에 '도움이 되셨길 바랍니다. 추가로 궁금한 점이 있으면 말씀해 주세요.'라는 챗봇 응답 상투구가 있습니다. 법률 서면에는 쓰이지 않는 표현으로, AI 응답을 옮기면서 남은 잔재로 보입니다.",
-        "[anthropic] 본문 1~3항은 짧은 사실 나열형이고 번역투나 일반론적 서술이 두드러지지 않습니다. 그래서 전체가 AI 생성인지, 일부만 AI 출력을 옮긴 것인지는 단정할 수 없습니다."
+        "[anthropic] 본문 말미의 '도움이 되셨길 바랍니다. 추가로 궁금한 점이 있으면 말씀해 주세요.'는 챗봇 응답의 맺음말이 그대로 남은 것으로 보입니다. 사람이 쓰는 법률 서면에서는 나타나지 않는 표현이어서, AI 출력물을 옮겨 붙였다는 강한 근거입니다.",
+        "[anthropic] 본문 1~3항은 짧고 사실만 나열한 형태라 AI 특유의 번역투나 일반론적 서술은 뚜렷하지 않습니다. 전체를 AI가 만들었는지, 일부만 옮겼는지는 이 표본만으로 단정하기 어렵습니다."
       ]
     },
     "tests": [
@@ -56,15 +56,15 @@
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "075cf94",
-      "at": "2026-09-25T02:19:26+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 2,
       "detected": 2,
       "false_positive": 0,
-      "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 5건, 사람 확인으로 남은 지적 1건, 확인 문장의 오분류 0건"
+      "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 6건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건"
     }
   },
   "R10": {
@@ -77,7 +77,7 @@
         "document_id": "d1",
         "verdict": "UNCERTAIN",
         "basis": "AI_DETECTOR",
-        "score": 0.84,
+        "score": 0.91,
         "stylometry_signal": "ABSTAIN",
         "involvement": "TRACES_FOUND",
         "objective_traces": 2,
@@ -97,11 +97,11 @@
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "075cf94",
-      "at": "2026-09-25T02:19:26+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
@@ -110,117 +110,138 @@
   },
   "G1": {
     "prepared": 11,
-    "detected": 0,
+    "detected": 11,
     "false_positive": 0,
-    "summary": "헌재 결정 0/11건 사건번호 정확 일치(다른 번호 기록 0건은 채택하지 않음)",
+    "summary": "헌재 결정 11/11건 사건번호 정확 일치(다른 번호 기록 0건은 채택하지 않음)",
     "cases": [
       {
         "case_number": "2004헌마554",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2004헌마554에서 사건번호 일치",
+        "returned": [
+          "2004헌마554"
+        ],
+        "decision_date": "2004-10-21"
       },
       {
         "case_number": "2016헌나1",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2016헌나1에서 사건번호 일치",
+        "returned": [
+          "2016헌나1"
+        ],
+        "decision_date": "2017-03-10"
       },
       {
         "case_number": "2004헌나1",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2004헌나1에서 사건번호 일치",
+        "returned": [
+          "2004헌나1"
+        ],
+        "decision_date": "2004-05-14"
       },
       {
         "case_number": "2017헌바127",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2017헌바127에서 사건번호 일치",
+        "returned": [
+          "2017헌바127"
+        ],
+        "decision_date": "2019-04-11"
       },
       {
         "case_number": "2008헌가23",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2008헌가23에서 사건번호 일치",
+        "returned": [
+          "2008헌가23"
+        ],
+        "decision_date": "2010-02-25"
       },
       {
         "case_number": "2011헌바379",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2011헌바379에서 사건번호 일치",
+        "returned": [
+          "2011헌바379"
+        ],
+        "decision_date": "2018-06-28"
       },
       {
         "case_number": "2009헌바17",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2009헌바17에서 사건번호 일치",
+        "returned": [
+          "2009헌바17"
+        ],
+        "decision_date": "2015-02-26"
       },
       {
         "case_number": "2013헌다1",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2013헌다1에서 사건번호 일치",
+        "returned": [
+          "2013헌다1"
+        ],
+        "decision_date": "2014-12-19"
       },
       {
         "case_number": "2015헌마236",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=2015헌마236에서 사건번호 일치",
+        "returned": [
+          "2015헌마236"
+        ],
+        "decision_date": "2016-07-28"
       },
       {
         "case_number": "96헌가2",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=96헌가2에서 사건번호 일치",
+        "returned": [
+          "96헌가2"
+        ],
+        "decision_date": "1996-02-16"
       },
       {
         "case_number": "89헌마82",
-        "status": "TIMEOUT",
-        "found": false,
-        "message": "자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다",
-        "returned": [],
-        "decision_date": null
+        "status": "READY",
+        "found": true,
+        "message": "detc 조회 방식 nb=89헌마82에서 사건번호 일치",
+        "returned": [
+          "89헌마82"
+        ],
+        "decision_date": "1990-09-10"
       }
     ],
     "diagnostics": {
       "adapter_status": "READY"
     },
-    "unreachable": "헌재 결정 조회: 무응답 11건",
     "tests": [
       {
         "test": "test_G1_constitutional_decisions_are_found_by_exact_number",
-        "outcome": "skipped",
-        "seconds": 330.0
+        "outcome": "passed",
+        "seconds": 34.2
       }
     ],
-    "passed": false,
-    "status": "unreachable",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "passed": true,
+    "status": "passed",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "b73504d",
-      "at": "2026-09-25T01:29:47+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 11,
       "detected": 11,
       "false_positive": 0,
@@ -229,9 +250,9 @@
   },
   "J1": {
     "prepared": 2,
-    "detected": 0,
+    "detected": 2,
     "false_positive": 0,
-    "summary": "병합 표기 0/2건 대표 번호로 확인",
+    "summary": "병합 표기 2/2건 대표 번호로 확인",
     "cases": [
       {
         "text": "헌법재판소 2004헌마554·566(병합) 결정",
@@ -239,45 +260,46 @@
         "merged": [
           "2004헌마566"
         ],
-        "status": "UNVERIFIED",
-        "adopted": "",
+        "status": "VERIFIED",
+        "adopted": "2004헌마554",
         "notes": [
-          "공식 Source 조회 불가(TIMEOUT): 자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다"
+          "판례 존재·메타데이터 확인과 취지·사건 적용 가능성 검토는 별도이다"
         ],
         "lookups": [
-          "TIMEOUT"
+          "READY",
+          "READY"
         ]
       },
       {
         "text": "헌법재판소 2011헌바379 등(병합) 결정",
         "lead": "2011헌바379",
         "merged": [],
-        "status": "UNVERIFIED",
-        "adopted": "",
+        "status": "VERIFIED",
+        "adopted": "2011헌바379",
         "notes": [
-          "공식 Source 조회 불가(TIMEOUT): 자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다"
+          "판례 존재·메타데이터 확인과 취지·사건 적용 가능성 검토는 별도이다"
         ],
         "lookups": [
-          "TIMEOUT"
+          "READY",
+          "READY"
         ]
       }
     ],
     "diagnostics": {},
-    "unreachable": "병합 표기 조회: 무응답 2건",
     "tests": [
       {
         "test": "test_J1_merged_notation_is_verified_through_the_lead_number",
-        "outcome": "skipped",
-        "seconds": 60.0
+        "outcome": "passed",
+        "seconds": 23.6
       }
     ],
-    "passed": false,
-    "status": "unreachable",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "passed": true,
+    "status": "passed",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "b73504d",
-      "at": "2026-09-25T01:29:47+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 2,
       "detected": 2,
       "false_positive": 0,
@@ -286,54 +308,53 @@
   },
   "R4": {
     "prepared": 3,
-    "detected": 0,
+    "detected": 3,
     "false_positive": 0,
-    "summary": "실제 조회 0/3건, 다른 번호 기록 채택 0건",
+    "summary": "실제 조회 3/3건, 다른 번호 기록 채택 0건",
     "cases": [
       {
         "case_number": "2004헌마55",
         "status": "UNVERIFIED",
         "adopted": null,
-        "lookup_ready": false,
+        "lookup_ready": true,
         "notes": [
-          "공식 Source 조회 불가(TIMEOUT): 자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다"
+          "헌재결정례 DB(detc)에서 사건번호가 일치하는 결정을 확인하지 못했다 — 사건번호 일치 없음(조회 DB detc, 시도: detc:nb=2004헌마55 3건 → detc:search=2 243건 → detc:search=2 p2 243건 → detc:search=2 p3 243건; 다른 사건 3건은 채택하지 않음). 조회 실패는 부존재 판단이 아니다."
         ]
       },
       {
         "case_number": "2011헌바37",
-        "status": "UNVERIFIED",
-        "adopted": null,
-        "lookup_ready": false,
+        "status": "VERIFIED",
+        "adopted": "2011헌바37",
+        "lookup_ready": true,
         "notes": [
-          "공식 Source 조회 불가(TIMEOUT): 자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다"
+          "판례 존재·메타데이터 확인과 취지·사건 적용 가능성 검토는 별도이다"
         ]
       },
       {
         "case_number": "2016헌나10",
         "status": "UNVERIFIED",
         "adopted": null,
-        "lookup_ready": false,
+        "lookup_ready": true,
         "notes": [
-          "공식 Source 조회 불가(TIMEOUT): 자동 재조회 후에도 외부 출처 응답을 확보하지 못했습니다"
+          "헌재결정례 DB(detc)에서 사건번호가 일치하는 결정을 확인하지 못했다 — 사건번호 일치 없음(조회 DB detc, 시도: detc:nb=2016헌나10 0건 → detc:search=2 0건; 다른 사건 0건은 채택하지 않음). 조회 실패는 부존재 판단이 아니다."
         ]
       }
     ],
     "diagnostics": {},
-    "unreachable": "헌재 결정 조회: 무응답 3건",
     "tests": [
       {
         "test": "test_R4_only_exact_number_records_are_adopted",
-        "outcome": "skipped",
-        "seconds": 90.0
+        "outcome": "passed",
+        "seconds": 41.4
       }
     ],
-    "passed": false,
-    "status": "unreachable",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "passed": true,
+    "status": "passed",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "b73504d",
-      "at": "2026-09-25T01:29:47+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 3,
       "detected": 3,
       "false_positive": 0,
@@ -342,17 +363,17 @@
   },
   "R3": {
     "prepared": 1,
-    "detected": 0,
+    "detected": 1,
     "false_positive": 0,
-    "summary": "실연동 테스트 0/1 통과",
+    "summary": "실연동 테스트 1/1 통과",
     "cases": [
       {
         "citation": {
-          "citation_id": "CIT_152fdafa28fe",
+          "citation_id": "CIT_3a0da4d63c25",
           "type": "CASE",
           "raw_text": "대법원 1996. 2. 15.\n선고 95다38677 전원합의체 판결",
           "document_id": "d1",
-          "block_id": "B_4b813cfaa050",
+          "block_id": "B_a6fde7668e60",
           "page": 1,
           "span": [
             16,
@@ -382,25 +403,24 @@
             ]
           }
         },
-        "status": "UNVERIFIED"
+        "status": "VERIFIED"
       }
     ],
     "diagnostics": {},
-    "unreachable": "대법원 판결 조회: 무응답 1건",
     "tests": [
       {
         "test": "test_R3_line_broken_court_and_date_survive_to_the_live_lookup",
-        "outcome": "skipped",
-        "seconds": 275.5
+        "outcome": "passed",
+        "seconds": 14.4
       }
     ],
-    "passed": false,
-    "status": "unreachable",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "passed": true,
+    "status": "passed",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "b73504d",
-      "at": "2026-09-25T01:29:47+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
@@ -409,35 +429,34 @@
   },
   "R6": {
     "prepared": 1,
-    "detected": 0,
+    "detected": 1,
     "false_positive": 0,
-    "summary": "실연동 테스트 0/1 통과",
+    "summary": "실연동 테스트 1/1 통과",
     "cases": [
       {
         "citations_counted": 2,
         "expected": 2,
         "statuses": [
-          "UNVERIFIED",
-          "UNVERIFIED"
+          "VERIFIED",
+          "VERIFIED"
         ]
       }
     ],
     "diagnostics": {},
-    "unreachable": "대법원 판결 조회: 무응답 1건",
     "tests": [
       {
         "test": "test_R6_running_head_citation_is_not_counted",
-        "outcome": "skipped",
-        "seconds": 277.8
+        "outcome": "passed",
+        "seconds": 20.1
       }
     ],
-    "passed": false,
-    "status": "unreachable",
-    "run_commit": "075cf94",
-    "run_at": "2026-09-25T02:19:26+00:00",
+    "passed": true,
+    "status": "passed",
+    "run_commit": "7d66c71",
+    "run_at": "2026-09-25T07:23:57+00:00",
     "last_pass": {
-      "commit": "b73504d",
-      "at": "2026-09-25T01:29:47+00:00",
+      "commit": "7d66c71",
+      "at": "2026-09-25T07:23:57+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
