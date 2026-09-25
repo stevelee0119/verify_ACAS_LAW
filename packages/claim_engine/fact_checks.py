@@ -4,7 +4,8 @@
   둘 다 N과 다를 때만 판정한다.
 - 기간 경과 주장("X부터 N년이 경과한 Y", "X부터 Y까지 N년이 경과")은 만료일을 계산해 Y가 가장 이른 만료일(초일 산입)
   이전이면 판정한다. 만료일은 민법 제160조(역에 의한 계산)처럼 연·월 단위로 더하고, 해당 일이 없는 달은 말일로 한다.
-- '약', '여', '가량' 같은 어림 표현은 보지 않는다.
+  Y 바로 뒤에 소멸·만료·완성 같은 말이 붙어 Y를 만료일로 적었는데 계산한 만료일(초일 불산입)보다 늦어도 판정한다.
+- '약', '여', '가량' 같은 어림 표현은 보지 않는다. Y 뒤에 '현재·이후·무렵'이 붙으면 만료일 주장이 아니므로 늦은 쪽은 보지 않는다.
 """
 from __future__ import annotations
 
@@ -26,6 +27,10 @@ RANGE_RE = re.compile(
 ELAPSED_RE = re.compile(
     rf"(?P<a>{DATE})\s*(?:로)?부터\s*(?P<approx>약\s*)?(?P<n>\d{{1,3}})\s*(?P<unit>년|개월|일)\s*(?:이|가)?\s*"
     rf"(?:경과한|지난|도과한)\s*{BRIDGE}(?P<b>{DATE})")
+
+# Y를 만료일로 적었다는 표지(바로 뒤)와, 만료일이 아니라 시점만 가리키는 표지
+EXPIRY_CLAIM_RE = re.compile(r"^\s*(?:에|로써|자로)?\s*(?:[가-힣]{1,10}\s+){0,2}(?:소멸|만료|완성|도과|종료|끝난)(?![가-힣]{0,6}\s*않)")
+NOT_EXPIRY_RE = re.compile(r"^\s*(?:현재|이후|무렵|경|쯤|당시|에\s*이르기까지|까지는)")
 
 
 def _date(text: str) -> Optional[date]:
@@ -108,5 +113,14 @@ def check_periods(doc: NormalizedDocument) -> List[Finding]:
                 f"{_k(a)}부터 {n}{unit}의 만료일은 {_k(expiry_incl)}(초일 산입) 또는 {_k(expiry_excl)}(초일 불산입, "
                 f"민법 제157조)이다. {_k(b)}에는 아직 {n}{unit}이 경과하지 않았다.",
                 excerpt, {"rule_id": "CALC.ELAPSED_EXPIRY", "expiry_inclusive": expiry_incl.isoformat(),
+                          "expiry_exclusive": expiry_excl.isoformat(), "claimed_date": b.isoformat()}))
+            continue
+        after = text[m.end():m.end() + 30]
+        if b > expiry_excl and EXPIRY_CLAIM_RE.search(after) and not NOT_EXPIRY_RE.search(after):
+            out.append(_finding(
+                doc, f"기간 만료일이 계산과 다르다: 문서 {_k(b)} / 계산 {_k(expiry_excl)} — {excerpt}",
+                f"{_k(a)}부터 {n}{unit}의 만료일은 {_k(expiry_excl)}(초일 불산입, 민법 제157조·제160조) 또는 "
+                f"{_k(expiry_incl)}(초일 산입)이다. 문서는 {_k(b)}를 만료(소멸·완성)일로 적었다.",
+                excerpt, {"rule_id": "CALC.EXPIRY_DATE", "expiry_inclusive": expiry_incl.isoformat(),
                           "expiry_exclusive": expiry_excl.isoformat(), "claimed_date": b.isoformat()}))
     return out

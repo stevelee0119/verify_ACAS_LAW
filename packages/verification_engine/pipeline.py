@@ -74,8 +74,9 @@ from packages.legal_engine.internal_citation import (build_clause_index, check_r
 from packages.legal_engine.omission import analyze_omissions, omission_findings
 
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document, reconcile_model_fact_remarks
+from .ai_residue import residue_findings, scan_residue
 from .finalize import finalize_document_findings
-from packages.document_engine.reading_text import SPACE_MAP
+from packages.document_engine.reading_text import SPACE_MAP, build_reading_text
 from .authorship import analyze_authorship, authorship_findings
 from .manifest import RunManifest
 from .scoring import aggregate_scores
@@ -642,6 +643,13 @@ class VerificationPipeline:
             f.type == FindingType.METADATA_ANOMALY for f in result.findings
         )
         emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
+        # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
+        injection_texts = [str((f.confidence_features or {}).get("observed_text") or "")
+                           for f in result.findings if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only]
+        with manifest.stage("ai_residue", result.findings, document_id=document.document_id) as stage:
+            residues = scan_residue(build_reading_text(doc).text)
+            stage.inputs = len(residues)
+            result.findings.extend(residue_findings(doc, residues, exclude_texts=injection_texts))
         with manifest.stage("ai_detection", result.findings, document_id=document.document_id) as stage:
             try:
               ai_detector_res = asyncio.run(
@@ -652,10 +660,7 @@ class VerificationPipeline:
                       external_ai_policy=context.external_ai_policy,
                       metadata_indications=metadata_hint,
                       mask=mask_for_models,
-                      # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
-                      exclude_texts=[str((f.confidence_features or {}).get("observed_text") or "")
-                                     for f in result.findings
-                                     if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only],
+                      exclude_texts=injection_texts,
                       exclude_block_ids=[block_id for f in result.findings
                                          if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only
                                          for block_id in ((f.confidence_features or {}).get("block_ids")
@@ -950,7 +955,6 @@ class VerificationPipeline:
         참조한 문서 자신의 조항은 대조 대상에서 뺀다.
         """
         from packages.common.enums import CitationType as _CitationType
-        from packages.document_engine.reading_text import build_reading_text
         from packages.legal_engine.citation_extractor import extract_from_text
         from packages.legal_engine.internal_citation import clause_source_eligible, source_pointers
 

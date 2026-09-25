@@ -32,7 +32,7 @@ from .ai_residue import scan_residue
 
 ENGINE_NAME = "verification_engine.ai_document_detector"
 
-# AI 응답 잔재 규칙은 ai_residue.RESIDUE_RULES에 있다.
+# AI 응답 잔재 규칙은 config/ai_residue_patterns.yaml(ai_residue.load_rules)에 있다.
 
 
 @dataclass

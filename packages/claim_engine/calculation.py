@@ -254,16 +254,37 @@ class CalculationEngine:
             if not amount_cols:
                 continue
             col = amount_cols[-1]
-            total_row = next((r for r in cells[1:] if r and TOTAL_LABEL_RE.fullmatch(r[0].replace(" ", ""))), None)
-            items, rows_used = [], []
+            # 소계 행은 바로 앞 소계(또는 표 머리) 이후 항목의 합이고, 마지막 합계 행은 최상위 항목(소계는 하나로)의 합이다.
+            total_rows = [r for r in cells[1:] if r and TOTAL_LABEL_RE.fullmatch(r[0].replace(" ", ""))]
+            grand = total_rows[-1] if total_rows else None
+            top: List[Amount] = []
+            segment: List[Tuple[Amount, str]] = []
+            grand_checked = False
             for row in cells[1:]:
-                if row is total_row or col >= len(row):
+                if col >= len(row):
                     continue
                 final, formula = row_final_amount(row[col])
                 if final is None:
                     continue
-                items.append(final)
-                rows_used.append(f"{row[0]}: {final.raw}")
+                if any(row is r for r in total_rows):
+                    rows_used = [label for _, label in segment]
+                    items = top + [a for a, _ in segment] if row is grand else [a for a, _ in segment]
+                    if row is grand:
+                        rows_used = [f"{a.raw}" for a in top] + rows_used
+                    if len(items) >= 2:
+                        check = check_sum(items, final)
+                        check.rows = rows_used
+                        if not check.matches:
+                            excerpt = "\n".join(" | ".join(r) for r in cells)
+                            label = "합계" if row is grand else f"{row[0]}"
+                            findings.append(self._mismatch_finding(doc, check, None, table.get("page"), excerpt,
+                                                                   label=label))
+                        grand_checked = grand_checked or row is grand
+                    if row is not grand:
+                        top.append(final)  # 소계는 위 단계에서 한 항목이 된다
+                        segment = []
+                    continue
+                segment.append((final, f"{row[0]}: {final.raw}"))
                 for index, cell in enumerate(row):
                     if index == col or not cell or not parse_amounts(cell):
                         continue
@@ -272,17 +293,8 @@ class CalculationEngine:
                         check = CalculationCheck(kind="FORMULA", stated=final.value, computed=value,
                                                  detail=f"'{row[0]}' 행 산식 '{cell}'의 계산값 {value:,} / 금액 칸 {final.value:,}")
                         findings.append(self._formula_finding(doc, check, None, table.get("page"), " | ".join(row)))
-            if total_row is None or len(items) < 2 or col >= len(total_row):
-                continue
-            stated, _ = row_final_amount(total_row[col])
-            if stated is None:
-                continue
-            handled.add(table.get("table_ref"))
-            check = check_sum(items, stated)
-            check.rows = rows_used
-            if not check.matches:
-                excerpt = "\n".join(" | ".join(r) for r in cells)
-                findings.append(self._mismatch_finding(doc, check, None, table.get("page"), excerpt))
+            if grand_checked:
+                handled.add(table.get("table_ref"))
         return findings, handled
 
     def _verify_table_totals(self, doc: NormalizedDocument) -> List[Finding]:
@@ -331,7 +343,8 @@ class CalculationEngine:
                                       block_id=block_id, page=page, excerpt=excerpt[:300])])
 
     @staticmethod
-    def _mismatch_finding(doc: NormalizedDocument, check: CalculationCheck, block_id, page, excerpt: str) -> Finding:
+    def _mismatch_finding(doc: NormalizedDocument, check: CalculationCheck, block_id, page, excerpt: str,
+                          label: str = "합계") -> Finding:
         difference = check.stated - check.computed
         features = {
             "arithmetic_proof": True,
@@ -348,7 +361,7 @@ class CalculationEngine:
             status=VerificationStatus.CONTRADICTED,
             severity=Severity.HIGH if abs(difference) > check.computed * Decimal("0.01") else Severity.MEDIUM,
             evidence_grade=EvidenceGrade.A,
-            title=f"합계가 세부 금액 합산값과 다르다 (차이 {difference:,}원)",
+            title=f"{label}가 세부 금액 합산값과 다르다 (차이 {difference:,}원)",
             detail=(
                 f"{check.detail}. 차액 {difference:,}원. "
                 "Python 계산엔진으로 검산한 결정론적 결과이다."
