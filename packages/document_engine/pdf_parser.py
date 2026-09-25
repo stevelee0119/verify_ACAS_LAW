@@ -486,8 +486,17 @@ class PdfParser(DocumentParser):
         independent_parts: List[str] = []
         recognized_pages = 0
         body_parts = []
+        attempted: List[int] = []
+        failures: Dict[str, str] = {}
         for raster in render_pages(path, target_pages, dpi=settings.ocr_dpi):
+            if raster.page_number in missing_pages:
+                attempted.append(raster.page_number)  # 본문 OCR만 센다(독립 OCR은 숨김 글자 대조용 별도 검사)
             lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale)
+            if not lines and getattr(adapter, "last_error", None) == "TIMEOUT":
+                # 부하로 시간이 모자란 경우다. 한도를 두 배로 늘려 한 번 더 읽는다(무응답으로 넘기지 않는다).
+                lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale,
+                                                timeout=2 * max(1.0, settings.ocr_timeout_seconds))
+            engine_error = getattr(adapter, "last_error", None) if not lines else None
             quality = page_quality(lines)
             if raster.page_number in missing_pages and (quality["low_quality"] or not lines):
                 # 돌려 스캔한 쪽: OSD로 방향을 찾고, 못 찾으면 90·180·270도를 모두 읽어 품질이 가장 좋은 쪽을 쓴다(v4 P8)
@@ -499,8 +508,11 @@ class PdfParser(DocumentParser):
             # 신뢰도 미달 라인은 버린다. 남은 것이 없으면 그 면은 인식 실패로 취급한다.
             kept = [line for line in lines if line.confidence >= settings.ocr_min_confidence]
             if not kept:
+                reason = ("OCR_TIMEOUT" if engine_error == "TIMEOUT" else "OCR_ERROR" if engine_error
+                          else "OCR_LOW_CONFIDENCE")
                 if raster.page_number in missing_pages:
-                    coverage[raster.page_number]["reason"] = "OCR_LOW_CONFIDENCE"
+                    failures[str(raster.page_number)] = reason
+                    coverage[raster.page_number]["reason"] = reason
                 continue
             recognized_pages += 1
             page = next((p for p in doc.pages if p.page_number == raster.page_number), None)
@@ -526,6 +538,10 @@ class PdfParser(DocumentParser):
                     # 읽은 글자로 검사는 계속하되, 이 쪽에서 '결함 없음'을 결론 내리지 못하게 따로 표시한다(G2).
                     coverage[raster.page_number].update(status="OCR_LOW_QUALITY", reason="OCR_LOW_QUALITY")
 
+        # OCR을 시도한 쪽과 실패 사유. 매니페스트가 '실행하지 않음'과 '실행했으나 읽지 못함'을 구분하는 근거다.
+        doc.structure["ocr_attempted_pages"] = attempted
+        if failures:
+            doc.structure["ocr_failures"] = failures
         doc.structure["body_extraction_failed"] = not has_visible_text and not body_parts
         for item in coverage.values():
             if item["status"] == "UNVERIFIED":

@@ -127,6 +127,109 @@ def fetch_scourt_codes(sink):
             emit({"kind": "scourt_case_codes", "url": url, "error": f"{type(exc).__name__}: {exc}"}, sink)
 
 
+# 사건부호 예규를 다른 경로로 받는다(v4 검토 2항). 현행 예규의 별표 파일 2개에는 민사·형사 일반 부호가 없었다.
+# 경로: ① 행정규칙 상세 응답의 별표 본문·모든 첨부 ② 행정규칙 연혁본(과거 발령본)의 별표 ③ 행정규칙 별표·서식 목록(admbyl)
+# ④ 대법원 종합법률정보(재판예규). 찾은 표에서 부호 칸을 뽑아 로그에 남길 뿐, 규칙표 반영은 원문 대조 뒤 따로 한다.
+CASE_CODE_PROBES = ["가합", "가단", "가소", "나", "다", "고합", "고단", "고정", "노", "도", "구합", "구단", "누", "두", "드", "르", "므"]
+GLAW_PAGES = ["https://glaw.scourt.go.kr/", "https://glaw.scourt.go.kr/wsjo/intesrch/sjo022.do"]
+FILE_LINK_RE = re.compile(r"(?:https?://www\.law\.go\.kr)?/LSW/flDownload\.do\?flSeq=\d+")
+
+
+def _walk_annex(node, path=""):
+    """상세 응답 JSON에서 '별표'가 들어간 키의 글을 모두 꺼낸다."""
+    if isinstance(node, dict):
+        for key, value in node.items():
+            here = f"{path}/{key}"
+            if "별표" in key and isinstance(value, str):
+                yield here, value
+            yield from _walk_annex(value, here)
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from _walk_annex(value, f"{path}[{index}]")
+
+
+def _probe_codes(tables_json, text):
+    """추출한 표·본문에서 조사 대상 부호가 부호 칸(한 칸 전체)으로 나오는 행을 찾는다."""
+    found = {}
+    try:
+        tables = json.loads(tables_json or "[]")
+    except ValueError:
+        tables = []
+    for table in tables or []:
+        for row in table or []:
+            cells = [str(c or "").replace(" ", "") for c in row]
+            for index, cell in enumerate(cells):
+                if cell in CASE_CODE_PROBES and index > 0:
+                    found.setdefault(cell, row)
+    return {"codes_in_tables": found,
+            "codes_in_text": [c for c in CASE_CODE_PROBES if re.search(rf"(?<![가-힣]){c}(?![가-힣])", text or "")]}
+
+
+def _rule_attachments(adapter, identifier, label, sink, seen_files):
+    status, detail = raw_get(adapter, SERVICE_URL, {"target": "admrul", "ID": identifier})
+    text = json.dumps(mask_oc(detail), ensure_ascii=False)
+    for key, value in _walk_annex(detail):
+        emit({"kind": "admrul_annex_text", "route": label, "id": identifier, "key": key, "text": value[:20000]}, sink)
+    for link in sorted(set(FILE_LINK_RE.findall(text))):
+        url = link if link.startswith("http") else "https://www.law.go.kr" + link
+        if url in seen_files:
+            continue
+        seen_files.add(url)
+        got = download_text(url)
+        emit({"kind": "case_code_attachment", "route": label, "rule_id": identifier, "url": url,
+              **_probe_codes(got.get("tables"), got.get("text")), **got}, sink)
+    return status
+
+
+def fetch_case_code_routes(adapter, sink):
+    name = ADMIN_RULES[0]
+    seen_ids, seen_files = set(), set()
+    # ①·② 현행·연혁 목록(nw: 1 현행, 2 연혁 — 두 값을 모두 요청해 응답을 남긴다)
+    for nw in ("1", "2"):
+        status, listing = raw_get(adapter, SEARCH_URL, {"target": "admrul", "query": name, "nw": nw, "display": 100})
+        rows = (listing.get("AdmRulSearch") or {}).get("admrul") or [] if isinstance(listing, dict) else []
+        rows = rows if isinstance(rows, list) else [rows]
+        emit({"kind": "admrul_versions", "nw": nw, "status": status, "count": len(rows),
+              "rows": [{k: r.get(k) for k in ("행정규칙일련번호", "행정규칙명", "발령일자", "시행일자", "현행연혁구분", "발령번호")}
+                       for r in rows if isinstance(r, dict)][:100]}, sink)
+        for row in rows[:40]:
+            identifier = row.get("행정규칙일련번호")
+            if not identifier or identifier in seen_ids or name.replace(" ", "") not in (row.get("행정규칙명") or "").replace(" ", ""):
+                continue
+            seen_ids.add(identifier)
+            _rule_attachments(adapter, identifier, f"admrul nw={nw} {row.get('발령일자')}", sink, seen_files)
+    # ③ 행정규칙 별표·서식 목록
+    status, listing = raw_get(adapter, SEARCH_URL, {"target": "admbyl", "query": name, "display": 100})
+    text = json.dumps(mask_oc(listing), ensure_ascii=False)
+    emit({"kind": "admbyl_list", "status": status, "payload_text": text[:20000]}, sink)
+    for link in sorted(set(FILE_LINK_RE.findall(text)))[:30]:
+        url = link if link.startswith("http") else "https://www.law.go.kr" + link
+        if url in seen_files:
+            continue
+        seen_files.add(url)
+        got = download_text(url)
+        emit({"kind": "case_code_attachment", "route": "admbyl", "url": url,
+              **_probe_codes(got.get("tables"), got.get("text")), **got}, sink)
+
+
+def fetch_glaw(sink):
+    """④ 대법원 종합법률정보. 접속 여부와 재판예규 관련 링크를 남긴다(경로 확인용)."""
+    import httpx
+
+    for url in GLAW_PAGES:
+        try:
+            response = httpx.get(url, timeout=30, follow_redirects=True,
+                                 params={"q": ADMIN_RULES[0]} if url.endswith(".do") else None,
+                                 headers={"User-Agent": "Mozilla/5.0 (official-source audit)"})
+            body = response.text
+            links = sorted(set(re.findall(r"href=[\"']([^\"']*(?:예규|sjo|gchick|rule)[^\"']*)", body)))[:60]
+            emit({"kind": "glaw_probe", "url": str(response.url), "status": response.status_code, "links": links,
+                  "tables": html_tables(body)[:10],
+                  "text_sample": re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))[:3000]}, sink)
+        except Exception as exc:
+            emit({"kind": "glaw_probe", "url": url, "error": f"{type(exc).__name__}: {exc}"}, sink)
+
+
 def _opinion_counts(record):
     from packages.legal_engine.opinion_attribution import split_opinions
 
@@ -143,12 +246,14 @@ def main() -> int:
     args = parser.parse_args()
     sink = open(args.out, "w", encoding="utf-8") if args.out else None
     fetch_scourt_codes(sink)
+    fetch_glaw(sink)
     adapter = LawGoKrAdapter()
     if not adapter.api_key:
         print("LV_LAW_GO_KR_OC가 없어 실행하지 않았다", file=sys.stderr)
         return 1
     seen_rules: set = set()
     with source_lookup_session(600):
+        fetch_case_code_routes(adapter, sink)
         for name in ADMIN_RULES:
             status, listing = raw_get(adapter, SEARCH_URL, {"target": "admrul", "query": name})
             emit({"kind": "admrul_list", "query": name, "status": status, "payload": mask_oc(listing)}, sink)

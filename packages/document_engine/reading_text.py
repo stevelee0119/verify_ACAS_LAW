@@ -101,6 +101,24 @@ def _kind(char: str) -> str:
     return "P"
 
 
+# 홀로 어절이 될 수 없는 조사·어미. 다음 줄이 이것만으로 된 어절로 시작하면 앞 줄은 어절 한가운데서 끊긴 것이다
+# ("징계권자 / 에게", "감액하 / 는", "대하 / 여"). 지시어로도 쓰이는 '이'·'그' 같은 글자는 넣지 않는다.
+MID_WORD_STARTS = frozenset({
+    "은", "는", "을", "를", "의", "에", "에게", "에게서", "에서", "에서는", "에는", "에도", "으로", "으로서", "으로써",
+    "으로는", "로서", "로써", "와", "과", "께서", "한테", "부터", "까지", "라고", "이라고", "여", "며", "으며",
+    "는데", "었다", "였다", "였고", "었고", "하여", "하였다"})
+_TRAILING_PUNCT = ".,;:)]」』”’'\""
+
+
+def starts_mid_word(prev: str, nxt: str) -> bool:
+    """앞 줄이 한글로 끝나고 다음 줄 첫 어절이 조사·어미뿐이면 어절 중간 줄바꿈이다."""
+    prev, nxt = (prev or "").translate(SPACE_MAP).rstrip(), (nxt or "").translate(SPACE_MAP).lstrip()
+    if not prev or not nxt or _kind(prev[-1]) != "H":
+        return False
+    first = nxt.split(" ", 1)[0].rstrip(_TRAILING_PUNCT)
+    return first in MID_WORD_STARTS
+
+
 def _is_full_line(block: Block, right_edge: Optional[float], width: float) -> Optional[bool]:
     """줄이 본문 오른쪽 끝까지 찼는지. 좌표가 없으면 None."""
     if block.bbox is None or right_edge is None or not width:
@@ -211,15 +229,24 @@ def _right_edges(blocks: List[Block], pages: Dict[int, Any]) -> Dict[int, float]
 
 
 def _word_wrap_pages(blocks: List[Block], pages: Dict[int, Any], right_edges: Dict[int, float]) -> set:
+    """어절 단위로 줄을 바꾸는 쪽. 오른쪽 끝 전에 다음 어절이 넘어간 줄이 2번 이상이고,
+    꽉 찬 줄이 어절 한가운데서 끊긴 증거(다음 줄이 조사·어미로 시작)가 없는 쪽이다.
+
+    글자 단위로 줄을 바꾸는 서면도 긴 사건번호·숫자는 통째로 넘기므로 짧게 넘어간 줄이 몇 번 생긴다.
+    그것만 보고 쪽 전체를 어절 단위로 보면 '(대 / 법원'이 '(대 법원'이 되어 법원·선고일이 인용에서 빠졌다
+    (0.8.x 회귀, 테스트셋 v1 TC-06)."""
     counts: Dict[int, int] = {}
+    mid_word: set = set()
     for prev, nxt in zip(blocks, blocks[1:]):
         if prev.page != nxt.page:
             continue
         page = pages.get(prev.page)
         full = _is_full_line(prev, right_edges.get(prev.page), page.width if page else 0.0)
+        if full and starts_mid_word(prev.text, nxt.text):
+            mid_word.add(prev.page)
         if full is False and _word_wrapped(prev, nxt, right_edges.get(prev.page)) and not ENUMERATOR_RE.match((nxt.text or "").lstrip()):
             counts[prev.page] = counts.get(prev.page, 0) + 1
-    return {page for page, count in counts.items() if count >= 2}
+    return {page for page, count in counts.items() if count >= 2 and page not in mid_word}
 
 
 def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]] = None) -> ReadingText:
@@ -245,7 +272,7 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
             page = pages.get(previous.page)
             width = page.width if page else 0.0
             full = _is_full_line(previous, right_edges.get(previous.page), width)
-            wrapped = previous.page == block.page and (
+            wrapped = previous.page == block.page and not starts_mid_word(previous.text, text) and (
                 (full is False and _word_wrapped(previous, block, right_edges.get(previous.page)))
                 or (full is True and previous.page in word_pages))
             separator = join_separator(previous.text, text, prev_full=full, word_wrap=wrapped)

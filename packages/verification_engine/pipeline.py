@@ -53,7 +53,8 @@ from packages.claim_engine.attachments import analyze_attachments
 from packages.claim_engine.classification import link_claim_evidence
 from packages.legal_engine.components import affected_by_unavailable
 from packages.legal_engine.reference_dates import reference_date_candidates
-from packages.legal_engine.temporal_review import criminal_context, reference_for, review_temporal_application
+from packages.legal_engine.temporal_review import (criminal_context, official_versions, reference_for,
+                                                   review_temporal_application)
 from packages.legal_engine.source_review import case_applicability_review
 from packages.legal_engine.spec_mapping import relevance_finding
 from packages.source_adapters.legal_history import today_korea
@@ -337,7 +338,7 @@ class VerificationPipeline:
 
         # 1) PARSING
         emit(JobState.PARSING, f"{document.filename} 파싱", base + span * 0.05)
-        with manifest.stage("parsing", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("parsing", result.findings, unit="쪽", document_id=document.document_id) as stage:
             doc = parse_document(
                 document.path,
                 document_id=document.document_id,
@@ -357,11 +358,17 @@ class VerificationPipeline:
         low_pages = [item for item in coverage if item["status"] == "OCR_LOW_QUALITY"]
         ocr_pages = [item for item in coverage if str(item.get("status", "")).startswith("OCR_")]
         missing_pages = [item for item in coverage if item["status"] == "UNVERIFIED"]
-        with manifest.stage("ocr", result.findings, inputs=len(ocr_pages), document_id=document.document_id) as stage:
-            if not ocr_pages:
+        attempted = doc.structure.get("ocr_attempted_pages") or []
+        failures = doc.structure.get("ocr_failures") or {}
+        with manifest.stage("ocr", result.findings, inputs=len(attempted) or len(ocr_pages), unit="쪽(본문 OCR)",
+                            document_id=document.document_id) as stage:
+            if not ocr_pages and not attempted:
                 stage.skip_reason = ("글자를 읽지 못한 쪽이 있으나 OCR을 수행하지 못함" if missing_pages
                                      else "모든 쪽에 텍스트 레이어가 있어 OCR 불필요" if coverage
                                      else "쪽 단위 문서가 아님")
+            if failures:
+                # 실행했으나 읽지 못한 쪽(시간 초과·엔진 오류·신뢰도 미달). 그 쪽은 미검증으로 남는다.
+                stage.error = "OCR 실패: " + ", ".join(f"{page}면 {reason}" for page, reason in sorted(failures.items()))
             stage.note = f"저품질 {len(low_pages)}쪽" if low_pages else None
         if low_pages:
             pages = ", ".join(str(item["page"]) for item in low_pages[:20])
@@ -432,7 +439,7 @@ class VerificationPipeline:
 
         # 2) ADVERSARIAL_SCANNING — 반드시 모든 LLM 호출보다 먼저
         emit(JobState.ADVERSARIAL_SCANNING, f"{document.filename} 적대적 콘텐츠 검사", base + span * 0.2)
-        with manifest.stage("adversarial_scan", result.findings, inputs=len([b for p in doc.pages for b in p.blocks]),
+        with manifest.stage("adversarial_scan", result.findings, unit="블록(숨김 포함)", inputs=len([b for p in doc.pages for b in p.blocks]),
                             document_id=document.document_id) as stage:
             adversarial = self.adversarial.scan(doc)
             result.findings.extend(adversarial.findings)
@@ -459,7 +466,8 @@ class VerificationPipeline:
             advisory=AdvisoryContext(requested_issues=context.requested_issues or None),
             source_path=document.path,
         )
-        with manifest.stage("forensic_scan", result.findings, document_id=document.document_id):
+        with manifest.stage("forensic_scan", result.findings, inputs=len(doc.blocks), unit="블록(숨김 포함)",
+                            document_id=document.document_id):
             forensic = self.forensic.scan(doc, forensic_context)
             result.findings.extend(forensic.findings)
         result.engine_data["forensic"] = {k: v for k, v in forensic.data.items() if k != "llm_safe_summary"}
@@ -495,17 +503,18 @@ class VerificationPipeline:
         # 비식별화 산출물에도 마스킹 실패 검사를 반복 적용한다(제7-A.2장)
         from packages.forensic_engine.redaction import scan_redaction
 
-        with manifest.stage("redaction_check", result.findings, document_id=document.document_id):
+        with manifest.stage("redaction_check", result.findings, inputs=len(doc.blocks), unit="블록(숨김 포함)",
+                            document_id=document.document_id):
             result.findings.extend(scan_redaction(doc))
 
         # 6) VERIFYING — 인용 검증(결정론 우선)
         emit(JobState.VERIFYING, f"{document.filename} 인용 항목 추출", base + span * 0.55)
-        with manifest.stage("citation_extraction", [], document_id=document.document_id) as stage:
+        with manifest.stage("citation_extraction", [], unit="본문 블록", document_id=document.document_id) as stage:
             citations = extract_citations(doc)
             result.citations = [c.to_dict() for c in citations]
             stage.inputs = len(doc.body_blocks())
             stage.note = f"인용 {len(citations)}건"
-        with manifest.stage("citation_verification", result.findings, inputs=len(citations),
+        with manifest.stage("citation_verification", result.findings, inputs=len(citations), unit="인용",
                             document_id=document.document_id) as stage:
             if not citations:
                 stage.skip_reason = "인용이 없음"
@@ -513,7 +522,7 @@ class VerificationPipeline:
                 JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
                 base + span * (0.55 + 0.20 * done / max(1, total))))
         # 형식 검사(날짜·법원–사건부호·연도)는 인용 검증 안에서 DB 조회와 무관하게 실행된다. 따로 센다.
-        with manifest.stage("citation_format_check", [], document_id=document.document_id,
+        with manifest.stage("citation_format_check", [], document_id=document.document_id, unit="판례·결정 인용",
                             inputs=sum(1 for c in citations if c.type in (CitationType.CASE, CitationType.CONSTITUTIONAL))) as stage:
             stage.findings = sum(1 for v in result.engine_data.get("legal_verdicts", [])
                                  if (v.get("review") or {}).get("format_violations"))
@@ -521,14 +530,18 @@ class VerificationPipeline:
                 stage.skip_reason = "판례·결정 인용이 없음"
         self._attach_reference_dates(result, doc, context)
         # 법령 적용 시점(행위시법): 시행 버전이 둘 이상인 조문에 대한 주장을 버전별로 대조한다(v4 P3)
-        with manifest.stage("temporal_review", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("temporal_review", result.findings, inputs=0, unit="검토한 조문 주장", document_id=document.document_id) as stage:
             found = self._temporal_reviews(doc, citations, context)
             stage.inputs = found["reviewed"]
             if not found["reviewed"]:
                 stage.skip_reason = found["reason"]
+            elif found.get("unavailable"):
+                stage.note = f"연혁 미확보 {len(found['unavailable'])}건"
+            result.engine_data["temporal_review"] = {"reviewed": found["reviewed"],
+                                                     "unavailable": found.get("unavailable", [])}
             result.findings.extend(found["findings"])
         emit(JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토", base + span * 0.75)
-        with manifest.stage("semantic_review", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("semantic_review", result.findings, inputs=0, unit="검토한 인용", document_id=document.document_id) as stage:
             self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
                 JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토 {done}/{total}건",
                 base + span * (0.75 + 0.05 * done / max(1, total))))
@@ -551,7 +564,7 @@ class VerificationPipeline:
 
         # 7) Claim / Entity / Event / 계산 검증
         emit(JobState.VERIFYING, f"{document.filename} 주장·사건·금액 분석", base + span * 0.81)
-        with manifest.stage("claim_entity_event_extraction", [], document_id=document.document_id) as stage:
+        with manifest.stage("claim_entity_event_extraction", [], unit="본문 블록", document_id=document.document_id) as stage:
             claims = extract_claims(doc, citations, project_id=context.project_id, source_run_id=source_run_id)
             entities = resolve_entities(extract_entities(doc, project_id=context.project_id),
                                         project_id=context.project_id)
@@ -561,7 +574,7 @@ class VerificationPipeline:
         # 문서가 근거로 든 첨부·증거를 입력 파일과 대조하고, 관련 주장에 그 상태를 붙인다.
         uploads = [{"document_id": d.document_id, "filename": d.filename, "sha256": d.sha256}
                    for d in (run_inputs or [document])]
-        with manifest.stage("attachment_evidence", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("attachment_evidence", result.findings, unit="증거·첨부 항목", document_id=document.document_id) as stage:
             attachments = analyze_attachments(doc, uploads, claims)
             result.findings.extend(attachments.pop("findings"))
             stage.inputs = len(attachments.get("items", []))
@@ -573,28 +586,32 @@ class VerificationPipeline:
         result.claims = [c.to_dict() for c in claims]
         result.entities = [e.to_dict() for e in entities]
         result.events = [e.to_dict() for e in events]
-        with manifest.stage("arithmetic", result.findings, document_id=document.document_id):
+        with manifest.stage("arithmetic", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록(표 포함)",
+                            document_id=document.document_id):
             result.findings.extend(self.calculation.verify_document(doc))
             # 한글·숫자 병기 금액 대조(v4 P4)
             result.findings.extend(words_digits_mismatches(doc))
         # 날짜 구간 일수·기간 경과 만료일 재계산(추가지시 G5)
-        with manifest.stage("period_recalculation", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("period_recalculation", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
             try:
                 result.findings.extend(check_periods(doc))
             except Exception as exc:  # pragma: no cover - 방어
                 stage.error = type(exc).__name__
                 result.warnings.append(f"기간 재계산 경고: {exc}")
-        with manifest.stage("timeline", result.findings, inputs=len(events), document_id=document.document_id):
+        with manifest.stage("timeline", result.findings, inputs=len(events), unit="사건(날짜)", document_id=document.document_id):
             result.findings.extend(analyze_timeline(events))
         # 법리 규칙 검토: 공식 원문 근거로 청구취지·주장의 형태를 점검한다(v2 Phase 6).
-        with manifest.stage("legal_rules", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("legal_rules", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
             try:
                 result.findings.extend(review_legal_rules(doc))
             except Exception as exc:  # pragma: no cover - 방어
                 stage.error = type(exc).__name__
                 result.warnings.append(f"법리 규칙 검토 경고: {exc}")
         # 증거 정합성: 호증 목록의 작성일·결번·인적사항, 진술서 형식(v2 R9)
-        with manifest.stage("evidence_consistency", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("evidence_consistency", result.findings, inputs=len(attachments.get("items", [])),
+                            unit="증거·첨부 항목", document_id=document.document_id) as stage:
             try:
                 result.findings.extend(check_evidence_consistency(doc))
             except Exception as exc:  # pragma: no cover - 방어
@@ -607,7 +624,7 @@ class VerificationPipeline:
 
         # 법리 주장 검토: 주장 유형 분류 → 근거 조회 → 판단(추가지시 G4). 조문 요건 대조에는 위에서 조회한
         # 공식 조문 원문을, 위헌 주장에는 헌재 결정 이력을 쓴다. 기존 규칙이 이미 판정한 문장은 다시 보지 않는다.
-        with manifest.stage("claim_review", result.findings, inputs=len(claims), document_id=document.document_id) as stage:
+        with manifest.stage("claim_review", result.findings, inputs=len(claims), unit="주장", document_id=document.document_id) as stage:
             try:
                 judged = [str((f.confidence_features or {}).get("claim") or "") for f in result.findings
                           if f.engine == "legal_engine.legal_rules"]
@@ -621,7 +638,7 @@ class VerificationPipeline:
 
         # 8) 허위 판례 인용 기반 법률적 주장 타당성 검토 및 AI 임의 생성 대조표 생성
         emit(JobState.VERIFYING, f"{document.filename} 법률 주장 타당성 검토", base + span * 0.85)
-        with manifest.stage("argument_validity", result.findings, inputs=len(citations), document_id=document.document_id) as stage:
+        with manifest.stage("argument_validity", result.findings, inputs=len(citations), unit="인용", document_id=document.document_id) as stage:
             try:
               arg_validity = asyncio.run(
                   verify_argument_validity(
@@ -647,7 +664,7 @@ class VerificationPipeline:
 
         # 9) 작성자 분석 및 AI 문서 전체 생성 여부 심층 판별
         emit(JobState.VERIFYING, f"{document.filename} 작성 이력 분석", base + span * 0.9)
-        with manifest.stage("authorship", result.findings, document_id=document.document_id):
+        with manifest.stage("authorship", result.findings, inputs=1, unit="문서", document_id=document.document_id):
             assessment = analyze_authorship(doc)
             result.authorship = assessment.to_dict()
             result.findings.extend(authorship_findings(doc, assessment))
@@ -659,11 +676,12 @@ class VerificationPipeline:
         # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
         injection_texts = [str((f.confidence_features or {}).get("observed_text") or "")
                            for f in result.findings if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only]
-        with manifest.stage("ai_residue", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("ai_residue", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
             residues = scan_residue(build_reading_text(doc).text)
-            stage.inputs = len(residues)
+            stage.note = f"잔재 후보 {len(residues)}건" if residues else None
             result.findings.extend(residue_findings(doc, residues, exclude_texts=injection_texts))
-        with manifest.stage("ai_detection", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("ai_detection", result.findings, inputs=1, unit="문서", document_id=document.document_id) as stage:
             try:
               ai_detector_res = asyncio.run(
                   detect_ai_document(
@@ -684,7 +702,7 @@ class VerificationPipeline:
               result.engine_data["ai_detector_result"] = result.ai_detector_result
               result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
               opinions = (result.ai_detector_result or {}).get("model_opinions") or []
-              stage.inputs = len(opinions)
+              stage.note = f"모델 의견 {len(opinions)}건"
               if not any(o.get("available", True) for o in opinions if isinstance(o, dict)) and opinions:
                   stage.note = "AI 모델 의견 없음(규칙 기반 신호만)"
             except Exception as e:
@@ -695,7 +713,8 @@ class VerificationPipeline:
         #     확신 표현 자체는 결함이 아니다. 원문을 확보하지 못한 채 그렇게 쓴 것이
         #     결함이므로, 미검증 인용 목록을 함께 넘긴다.
         emit(JobState.VERIFYING, f"{document.filename} 표현·검토 누락 검사", base + span * 0.96)
-        with manifest.stage("assertions_omissions", result.findings, document_id=document.document_id) as stage:
+        with manifest.stage("assertions_omissions", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
             try:
               # 불확실성 미고지는 최종 판정이 NOT_FOUND·UNVERIFIED인 인용에만 낸다(v3 D5). 원문을 조회해 불일치까지
               # 판정한 인용에 "원문 미확보 상태에서 확정적으로 서술"을 함께 내면 서로 모순된다.
@@ -723,7 +742,7 @@ class VerificationPipeline:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
         # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
-        with manifest.stage("model_fact_reconcile", [], document_id=document.document_id) as stage:
+        with manifest.stage("model_fact_reconcile", [], unit="모델의 사실 모순 지적", document_id=document.document_id) as stage:
             remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
             stage.inputs = len(remarks)
             result.findings = reconcile_model_fact_remarks(result.findings)
@@ -756,31 +775,49 @@ class VerificationPipeline:
             if item.get("type") == "STATUTE":
                 item["reference_date_candidates"] = usable[:5]
 
+    OFFICIAL_HISTORY_LIMIT = 5  # 문서당 공식 연혁을 조회할 조문 수 상한(요청 수를 묶는다)
+
     def _temporal_reviews(self, doc, citations, context) -> Dict[str, Any]:
-        """시행 버전 연혁을 가진 출처(내부 Mirror)에서 조문 버전들을 받아 행위시법 검토를 한다."""
+        """조문 내용을 주장한 법령 인용마다 적용 기준일을 정하고(입력·문서 서술·문서 추정), 시행 버전별 조문과 대조한다.
+
+        버전은 내부 Mirror 연혁을 먼저 쓰고, 없으면 국가법령정보 법령 연혁(eflaw)에서 기준일 시행본(구법)과
+        현행본을 받는다(v4 검토 4항). 연혁을 확보하지 못한 조문은 사유와 함께 남기고 판정하지 않는다.
+        """
         statutes = [c for c in citations if c.type == CitationType.STATUTE and c.article
                     and (c.attributes or {}).get("claim_text")]
-        versions_of = getattr(getattr(self.registry.law, "mirror", None), "all_versions", None)
         if not statutes:
             return {"reviewed": 0, "reason": "조문 내용을 주장한 법령 인용이 없음", "findings": []}
-        if versions_of is None:
-            return {"reviewed": 0, "reason": "시행 버전 연혁을 제공하는 출처가 없음(공식 연혁 조회는 기준일이 있을 때 "
-                                            "인용 검증 단계에서 한다)", "findings": []}
+        mirror_versions = getattr(getattr(self.registry.law, "mirror", None), "all_versions", None)
         text = build_reading_text(doc).text  # 줄바꿈으로 끊긴 문장을 이어 읽는다
         blocks = {b.block_id: b.text for b in doc.blocks}
         criminal = criminal_context(text)
-        findings, reviewed = [], 0
+        findings, reviewed, unavailable, cache, official_calls = [], 0, [], {}, 0
+        today = today_korea()
         for citation in statutes:
-            versions = versions_of(citation.law_name, citation.article)
+            sentence = blocks.get(citation.block_id) or ""
+            reference = reference_for(citation, sentence, text, context.case_date, criminal=criminal)
+            versions = mirror_versions(citation.law_name, citation.article) if mirror_versions else []
+            for version in versions:
+                version.setdefault("source", "MIRROR")
+            if len(versions) < 2:
+                if official_calls >= self.OFFICIAL_HISTORY_LIMIT:
+                    unavailable.append({"citation": citation.raw_text, "reason": "문서당 공식 연혁 조회 상한 초과"})
+                    continue
+                official_calls += 1
+                fetched = official_versions(self.registry.law, citation, reference.get("date"), today, cache)
+                if fetched["status"] != "READY":
+                    unavailable.append({"citation": citation.raw_text, "reason": fetched["reason"]})
+                    continue
+                versions = fetched["versions"]
             if len(versions) < 2:
                 continue
             reviewed += 1
-            sentence = blocks.get(citation.block_id) or ""
-            reference = reference_for(citation, sentence, text, context.case_date)
             finding = review_temporal_application(citation, versions, reference, criminal=criminal)
             if finding is not None:
                 findings.append(finding)
-        return {"reviewed": reviewed, "reason": "시행 버전이 둘 이상인 조문이 없음", "findings": findings}
+        reason = ("시행 버전이 둘 이상인 조문이 없음" if not unavailable
+                  else "법령 연혁을 확보하지 못함: " + "; ".join(f"{u['citation']}({u['reason']})" for u in unavailable[:3]))
+        return {"reviewed": reviewed, "reason": reason, "findings": findings, "unavailable": unavailable}
 
     def _legal_reviews(self, result, citations, context, *, progress=None):
         """Keep the incident-date review and every issue-date review distinct."""
@@ -957,21 +994,21 @@ class VerificationPipeline:
         manifest = manifest or RunManifest()
         readable = [d.normalized for d in result.documents if not d.quarantined and d.normalized is not None]
         candidates: List[Finding] = []
-        with manifest.stage("claim_contradiction", candidates, inputs=len(claims)):
+        with manifest.stage("claim_contradiction", candidates, inputs=len(claims), unit="주장"):
             candidates.extend(claim_contradictions(claims, project_id=result.project_id))
-        with manifest.stage("cross_document_events", candidates,
+        with manifest.stage("cross_document_events", candidates, unit="사건(날짜)",
                             inputs=sum(len(v) for v in events_by_document.values())) as stage:
             if len(events_by_document) < 2:
                 stage.skip_reason = "사건(날짜)을 추출한 문서가 2건 미만"
             candidates.extend(cross_document_contradictions(events_by_document))
-        with manifest.stage("internal_citation", candidates, inputs=len(readable)):
+        with manifest.stage("internal_citation", candidates, inputs=len(readable), unit="문서"):
             candidates.extend(self._internal_citation_check(result))
-        with manifest.stage("cross_document_copies", candidates, inputs=len(readable)) as stage:
+        with manifest.stage("cross_document_copies", candidates, inputs=len(readable), unit="문서") as stage:
             if len(readable) < 2:
                 stage.skip_reason = "읽을 수 있는 문서가 2건 미만"
             candidates.extend(cross_document_copies(readable))
         # 사건 단위 사실 저장소: 문서 간·문서 안 섹션 간 사실 불일치(추가지시 G5, v4 P1)
-        with manifest.stage("fact_store", candidates, inputs=len(readable)) as stage:
+        with manifest.stage("fact_store", candidates, inputs=len(readable), unit="문서") as stage:
             candidates.extend(cross_document_facts(readable))
         findings, seen = [], set()
         for finding in candidates:

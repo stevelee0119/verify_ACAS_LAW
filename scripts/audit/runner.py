@@ -14,13 +14,17 @@ def _sha(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def run_synthetic(workdir: Path | None = None) -> Dict[str, Any]:
+def run_synthetic(workdir: Path | None = None, *, models: bool = False) -> Dict[str, Any]:
+    """models=True면 네트워크를 열어 설정된 AI 공급자를 실제로 호출한다(키가 있는 CI 전용).
+    법령·판례는 합성 미러에서 먼저 찾으므로, 합성 인용이 외부 DB 조회로 판정이 바뀌지 않는다."""
     workdir = Path(workdir or tempfile.mkdtemp(prefix="lv-audit-"))
     os.environ.setdefault("LV_DATA_DIR", str(workdir / "data"))
     os.environ.setdefault("LV_DATABASE_URL", f"sqlite:///{workdir}/audit.db")
     os.environ.setdefault("LV_STORAGE_ROOT", str(workdir / "storage"))
     os.environ.setdefault("LV_PSEUDONYM_SECRET", "audit-secret")
-    os.environ["LV_ALLOW_NETWORK"] = "0"
+    os.environ["LV_ALLOW_NETWORK"] = "1" if models else "0"
+    from packages.common.config import reset_settings
+    reset_settings()
 
     from packages.pii_engine import PseudonymStore
     from packages.source_adapters import SourceRegistry

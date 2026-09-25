@@ -83,7 +83,7 @@ class ProviderConfig:
 @dataclass
 class Settings:
     app_name: str = "ACASia_LAW"
-    version: str = "0.8.5"
+    version: str = "0.8.6"
     database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
@@ -135,7 +135,7 @@ class Settings:
     llm_cross_check: str = field(
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
     """auto: 브로커가 설정되면 Celery, 아니면 인프로세스 / celery / inprocess."""
-    rule_version: str = "2026.09.25.2"
+    rule_version: str = "2026.09.25.3"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

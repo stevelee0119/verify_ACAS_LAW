@@ -56,12 +56,20 @@ jobs:
         # 테스트 단계만 제한해 결과 기록·커밋 단계는 항상 실행되게 한다
         timeout-minutes: 35
         run: python scripts/live_integration.py --out docs/live_integration_results.json
+      - name: AI 공급자를 켠 합성 코퍼스 실행 매니페스트
+        if: always()
+        continue-on-error: true
+        timeout-minutes: 20
+        # semantic_review·model_fact_reconcile의 실제 실행 여부와 결과를 매니페스트로 남긴다(v4 검토 5항)
+        run: python scripts/audit_models_manifest.py --out docs/run_manifest_with_models.json
       - name: 결과 아티팩트
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-integration
-          path: docs/live_integration_results.json
+          path: |
+            docs/live_integration_results.json
+            docs/run_manifest_with_models.json
           retention-days: 30
       - name: 결과 커밋(통과·실패 모두 기록)
         if: always()
@@ -70,6 +78,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add docs/live_integration_results.json
+          [ -f docs/run_manifest_with_models.json ] && git add docs/run_manifest_with_models.json
           git diff --cached --quiet && exit 0
           git commit -m "docs: 실연동 통합 테스트 결과 기록 [skip ci]"
           git pull --rebase origin "${GITHUB_REF_NAME}" || true

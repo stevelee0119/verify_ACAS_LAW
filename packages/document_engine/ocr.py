@@ -169,8 +169,15 @@ class TesseractOCRAdapter(OCRAdapter):
         rotate = int(osd.get("rotate") or 0) % 360
         return rotate if float(osd.get("orientation_conf") or 0) >= 1.0 else None
 
-    def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0) -> List[OCRLine]:
-        """라인 단위로 그룹핑해 텍스트·bbox·평균 신뢰도를 만든다."""
+    last_error: Optional[str] = None
+
+    def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0,
+                        timeout: Optional[float] = None) -> List[OCRLine]:
+        """라인 단위로 그룹핑해 텍스트·bbox·평균 신뢰도를 만든다.
+
+        인식 실패는 빈 목록을 돌려주되 사유를 last_error에 남긴다('TIMEOUT' 또는 예외 이름). 빈 결과만으로는
+        '글자가 없는 쪽'과 '시간 초과로 읽지 못한 쪽'을 구분할 수 없어, 시간 초과가 신뢰도 미달로 기록됐다."""
+        self.last_error = None
         if not self.available:
             return []
         import pytesseract
@@ -178,9 +185,11 @@ class TesseractOCRAdapter(OCRAdapter):
         try:
             data = pytesseract.image_to_data(
                 image, lang=self.lang, config=self.config, output_type=pytesseract.Output.DICT,
-                timeout=max(1, get_settings().ocr_timeout_seconds),
+                timeout=max(1, timeout or get_settings().ocr_timeout_seconds),
             )
-        except Exception:
+        except Exception as exc:
+            # pytesseract는 시간 초과를 RuntimeError('Tesseract process timeout')로 알린다
+            self.last_error = "TIMEOUT" if "timeout" in str(exc).lower() else type(exc).__name__
             return []
 
         grouped: dict = defaultdict(list)

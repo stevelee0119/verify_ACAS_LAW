@@ -71,3 +71,30 @@ def test_manifest_records_program_and_rule_versions(audit_run):
 def test_manifest_without_versions_stays_valid():
     data = RunManifest().to_dict()
     assert data["versions"] == {} and data["schema"] == 1
+
+
+def test_every_engine_records_its_input_count_and_unit(audit_run):
+    """inputs가 비어 있는 엔진이 없어야 한다(v4 검토 3항). 건수마다 단위(쪽·블록·인용·문서 …)를 함께 적는다."""
+    manifest = audit_run["result"].run_manifest
+    assert manifest["inputs_missing"] == []
+    for name, record in manifest["engines"].items():
+        assert record["input_unit"], name
+        for entry in record["documents"]:
+            assert entry["inputs"] is not None, (name, entry)
+
+
+def test_residue_and_detection_inputs_are_what_was_examined(audit_run):
+    """AI 잔재 검사의 입력은 찾은 잔재 수가 아니라 검사한 본문 블록 수, AI 판별의 입력은 문서 수다."""
+    engines = audit_run["result"].run_manifest["engines"]
+    assert engines["ai_residue"]["input_unit"] == "본문 블록" and engines["ai_residue"]["inputs"] > engines["ai_residue"]["findings"]
+    assert engines["ai_detection"]["input_unit"] == "문서" and engines["ai_detection"]["inputs"] == engines["ai_detection"]["runs"]
+
+
+def test_stage_without_inputs_is_reported_as_missing():
+    manifest = RunManifest()
+    with manifest.stage("x", [], document_id="d1"):
+        pass
+    with manifest.stage("y", [], inputs=0, unit="문서", document_id="d1"):
+        pass
+    data = manifest.to_dict()
+    assert data["inputs_missing"] == ["x"] and data["engines"]["y"]["input_unit"] == "문서"
