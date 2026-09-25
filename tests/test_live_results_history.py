@@ -51,3 +51,12 @@ def test_items_not_run_this_time_are_kept():
     first = R.merge({}, {"R3": _entry("passed")}, "aaa1111", "t1")
     second = R.merge(first, {"J2": _entry("failed", detected=0)}, "ddd4444", "t2")
     assert second["R3"]["passed"] is True and second["J2"]["status"] == "failed"
+
+
+def test_repeated_writes_in_one_run_keep_the_original_pass_commit():
+    legacy = {"generated_at": "t0", "commit": "b73504d", "R3": {**_entry("passed"), "passed": True}}
+    # 같은 실행에서 테스트마다 파일을 다시 쓴다: 먼저 다른 항목이 쓰여 머리 commit이 바뀐 뒤 R3가 무응답으로 끝난다
+    first = R.merge(legacy, {"J2": _entry("passed")}, "075cf94", "t1")
+    assert first["commit"] == "075cf94" and first["R3"]["run_commit"] == "b73504d"
+    second = R.merge(first, {"J2": _entry("passed"), "R3": _entry("skipped", detected=0)}, "075cf94", "t2")
+    assert second["R3"]["last_pass"]["commit"] == "b73504d" and second["R3"]["last_pass"]["at"] == "t0"

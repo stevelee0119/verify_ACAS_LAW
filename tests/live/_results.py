@@ -43,7 +43,15 @@ def merge(previous: dict, results: dict, commit: str, now: str) -> dict:
     - 판정 보류(무응답)·실패: 이전 통과 기록을 last_pass로 남긴다. 실패는 감사표에서 last_pass와 관계없이 미확인이다.
     - 이번에 실행하지 않은 항목은 이전 기록을 그대로 둔다.
     """
-    items = {k: v for k, v in previous.items() if isinstance(v, dict)}
+    items = {}
+    for key, value in previous.items():
+        if isinstance(value, dict):
+            # 이번에 다시 쓰지 않는 항목도 원래 실행의 커밋·시각을 지닌다. 같은 실행 중 여러 번 쓰면 파일 머리의
+            # commit이 이번 커밋으로 바뀌므로, 머리 값에 기대면 이전 통과가 이번 커밋으로 잘못 찍힌다.
+            value = dict(value)
+            value.setdefault("run_commit", previous.get("commit"))
+            value.setdefault("run_at", previous.get("generated_at"))
+            items[key] = value
     for item_id, entry in results.items():
         entry = dict(entry)
         tests = entry.get("tests") or []
@@ -63,8 +71,7 @@ def merge(previous: dict, results: dict, commit: str, now: str) -> dict:
             last = old.get("last_pass")
             source = None
             if last is None and old.get("passed"):
-                last = {"commit": old.get("run_commit") or previous.get("commit"),
-                        "at": old.get("run_at") or previous.get("generated_at")}
+                last = {"commit": old.get("run_commit"), "at": old.get("run_at")}
                 source = old
         if source is not None:
             last.update({k: source.get(k) for k in ("prepared", "detected", "false_positive", "summary")})
