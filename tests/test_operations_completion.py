@@ -1019,15 +1019,17 @@ def test_progress_updates_keep_the_lease_alive(ops):
     from packages.common.enums import JobState
 
     run = seeded_run(ops)
-    store = JobStore(ops, lease_seconds=0.4)
+    # 진행 간격(0.5초)과 임차(1.2초) 사이에 0.7초 여유를 둔다. 0.25초/0.4초로 두었을 때는 여유가 0.15초라
+    # CI 러너의 일시 지연(파일 동기화 등)만으로 임차가 끝나 실패한 적이 있다(run 36090264005).
+    store = JobStore(ops, lease_seconds=1.2)
     lease = store.claim(run.id)
     for _ in range(4):
-        time.sleep(0.25)
+        time.sleep(0.5)
         store.progress(lease, JobState.VERIFYING, "분석 중", 0.5)
         assert store.recover() == [], "진행 중인 작업이 회수되면 안 된다"
-    store.check(lease)  # 1초가 지났지만 0.4초 임차는 살아 있다
+    store.check(lease)  # 2초가 지났지만 1.2초 임차는 살아 있다
 
-    time.sleep(0.5)  # 아무 진전이 없으면 종전대로 회수된다
+    time.sleep(1.5)  # 아무 진전이 없으면 종전대로 회수된다
     assert store.recover() == [run.id]
 
 
