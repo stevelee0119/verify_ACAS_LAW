@@ -21,6 +21,8 @@ from typing import Any, Dict, List, Tuple
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFECT_STATUSES = {"NOT_FOUND", "CONTRADICTED", "SUSPICIOUS", "INVALID_FORMAT", "INVALID"}
+# 문서 내용에 대한 결함 주장이 아니라 처리 실패 알림이다. 없어지면 '읽기 실패 해소'로 따로 보고한다.
+PROCESSING_NOTICES = {"PARSE_ERROR", "OCR_LOW_QUALITY"}
 DEFECT_SEVERITIES = {"MEDIUM", "HIGH", "CRITICAL"}
 
 
@@ -79,14 +81,39 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
 
     added_rows, removed_rows = rows(added), rows(removed)
     reworded = _pair_reworded(removed_rows, added_rows)
-    lost_defects = [r for r in removed_rows if r["defect_claim"] and r["count"] > 0]
+    resolved = [r for r in removed_rows if r["count"] > 0 and r["type"].split(".")[-1] in PROCESSING_NOTICES]
+    merged = _merged_into_current(removed_rows, current, resolved)
+    lost_defects = [r for r in removed_rows if r["defect_claim"] and r["count"] > 0
+                    and r not in resolved and r not in merged]
     return {"summary": {"findings": [sum(before.values()), sum(after.values())],
                         "defect_claims": [sum(n for k, n in before.items() if k[4]), sum(n for k, n in after.items() if k[4])],
                         "release_gate": [(previous.get("summary") or {}).get("release_gate"),
                                          (current.get("summary") or {}).get("release_gate")]},
             "added": [r for r in added_rows if r["count"] > 0], "removed": [r for r in removed_rows if r["count"] > 0],
-            "reworded": reworded, "lost_defect_claims": lost_defects,
+            "reworded": reworded, "resolved_processing_failures": resolved, "merged_into_current": merged,
+            "lost_defect_claims": lost_defects,
             "regression_candidates": sum(r["count"] for r in lost_defects)}
+
+
+def _excerpt(title: str) -> str:
+    match = re.search(r"'([^']{10,})'?", title or "")
+    return re.sub(r"\s+", "", match.group(1)) if match else ""
+
+
+def _merged_into_current(removed: List[Dict[str, Any]], current: Dict[str, Any], skip) -> List[Dict[str, Any]]:
+    """없어진 결함 주장의 발췌문이 같은 문서·같은 유형의 현재 finding 제목에 그대로 들어 있으면, 같은 결함이
+    다른 finding에 합쳐진 것이다(예: 소제목 줄과 본문 줄이 하나로 이어짐). 발췌문이 없으면 판단하지 않는다."""
+    titles: Dict[Tuple[str, str], List[str]] = {}
+    for k in finding_keys(current):
+        titles.setdefault((k[0], k[1]), []).append(re.sub(r"\s+", "", k[3]))
+    out = []
+    for r in removed:
+        if not r["count"] or not r["defect_claim"] or r in skip:
+            continue
+        piece = _excerpt(r["title"])[:25]
+        if piece and any(piece in t for t in titles.get((r["doc"], r["type"]), [])):
+            out.append(r)
+    return out
 
 
 def _similar(a: str, b: str) -> float:
@@ -122,7 +149,9 @@ def render(title: str, d: Dict[str, Any]) -> str:
     s = d["summary"]
     lines = [f"### {title}", "",
              f"- finding {s['findings'][0]} → {s['findings'][1]}, 결함 주장 finding {s['defect_claims'][0]} → {s['defect_claims'][1]}",
-             f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**", ""]
+             f"- **회귀 후보(없어진 결함 주장) {d['regression_candidates']}건**",
+             f"- 해소된 처리 실패 알림(본문을 읽게 됨 등) {sum(r['count'] for r in d.get('resolved_processing_failures', []))}건",
+             f"- 현재 finding에 합쳐진 결함 주장(발췌문 포함 확인) {sum(r['count'] for r in d.get('merged_into_current', []))}건", ""]
     lines += [f"**문구만 바뀐 finding(같은 결함)** ({sum(r['count'] for r in d['reworded'])}건)", ""]
     if d["reworded"]:
         lines += ["| 문서 | 유형 | 이전 제목 | 현재 제목 | 유사도 |", "|---|---|---|---|---|"]

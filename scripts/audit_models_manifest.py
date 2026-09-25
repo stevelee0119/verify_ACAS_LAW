@@ -29,10 +29,19 @@ def main() -> int:
     manifest = result.run_manifest or {}
     engines = manifest.get("engines") or {}
     executions = [to_jsonable(e) for e in (result.model_executions or [])]
-    semantic = [{"document": d.filename, "reviews": len(d.engine_data.get("semantic_reviews", []))}
-                for d in result.documents]
+    semantic = [{"document": d.filename, "reviews": [
+        {"citation": next((c.get("raw_text") for c in d.citations if c.get("citation_id") == r.get("citation_id")), r.get("citation_id")),
+         "model_executed": r.get("model_executed", False), "source_quotes_validated": r.get("source_quotes_validated", False),
+         "reason": str(r.get("reason") or "")[:300], "evidence_quotes": [q[:200] for q in r.get("evidence_quotes") or []][:3]}
+        for r in d.engine_data.get("semantic_reviews", [])]} for d in result.documents]
+    # 결정론 판정으로 확인된 지적(그 판정의 근거로 붙음)과 사람 확인으로 남은 지적을 나눠 적는다.
+    confirmed = [{"document": d.filename, "rule_id": (f.confidence_features or {}).get("rule_id"), "verdict": f.title,
+                  "model_remarks": list((f.confidence_features or {}).get("model_remarks") or [])}
+                 for d in result.documents for f in d.findings if (f.confidence_features or {}).get("model_remarks")]
     remarks = [{"document": d.filename, "title": f.title, "status": str(f.status),
-                "reconciled": (f.confidence_features or {}).get("reconciled")}
+                "reconciled": (f.confidence_features or {}).get("reconciled"),
+                "confirmed_by": (f.confidence_features or {}).get("confirmed_by"),
+                "unconfirmed_sentences": (f.confidence_features or {}).get("unconfirmed_sentences")}
                for d in result.documents for f in d.findings if str(f.type).endswith("MODEL_FACT_REMARK")]
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -45,10 +54,16 @@ def main() -> int:
                                    for e in executions if isinstance(e, dict) and e.get("error")][:20]},
         "semantic_review": {**{k: engines.get("semantic_review", {}).get(k) for k in
                                ("executed", "runs", "inputs", "input_unit", "findings", "skip_reasons", "errors")},
+                            "notes": [e.get("note") for e in engines.get("semantic_review", {}).get("documents", [])
+                                      if e.get("note")],
                             "per_document": semantic},
         "model_fact_reconcile": {**{k: engines.get("model_fact_reconcile", {}).get(k) for k in
                                     ("executed", "runs", "inputs", "input_unit", "findings", "skip_reasons", "errors")},
-                                 "remarks": remarks},
+                                 "per_document": [{k: e.get(k) for k in ("document_id", "inputs", "findings", "note",
+                                                                         "skipped")}
+                                                  for e in engines.get("model_fact_reconcile", {}).get("documents", [])],
+                                 "confirmed_by_deterministic": confirmed,
+                                 "left_for_human_review": remarks},
         "manifest": manifest,
     }
     Path(args.out).write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")

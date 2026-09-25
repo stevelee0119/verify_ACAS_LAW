@@ -547,6 +547,12 @@ class VerificationPipeline:
                 base + span * (0.75 + 0.05 * done / max(1, total))))
             reviews = result.engine_data.get("semantic_reviews", [])
             stage.inputs = len(reviews)
+            if reviews:
+                # 의미·적용 검토는 참고 의견이라 finding을 만들지 않는다. 결과는 검토 결과 구분으로 남긴다.
+                grounded = sum(1 for r in reviews if r.get("source_quotes_validated"))
+                ran = sum(1 for r in reviews if r.get("model_executed"))
+                stage.note = (f"공식 전문 근거가 확인된 AI 의견 {grounded}건, 모델 실행했으나 근거 미확인 {ran - grounded}건, "
+                              f"모델 미실행 {len(reviews) - ran}건")
             if not reviews:
                 stage.skip_reason = "공식 원문으로 확인된 판례 인용이 없음"
             elif not any(r.get("model_executed") for r in reviews):
@@ -745,10 +751,14 @@ class VerificationPipeline:
         with manifest.stage("model_fact_reconcile", [], unit="모델의 사실 모순 지적", document_id=document.document_id) as stage:
             remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
             stage.inputs = len(remarks)
-            result.findings = reconcile_model_fact_remarks(result.findings)
-            stage.findings = sum(1 for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK
-                                 and f.status == VerificationStatus.CONTRADICTED)
-            if not remarks:
+            counts: Dict[str, int] = {}
+            result.findings = reconcile_model_fact_remarks(result.findings, counts)
+            # 결과 건수 = 결정론 판정으로 확인된 지적(전부·일부). 확인하지 못한 지적은 사람 확인 항목으로 남는다.
+            stage.findings = counts.get("confirmed", 0) + counts.get("partial", 0)
+            if remarks:
+                stage.note = (f"확인 {counts.get('confirmed', 0)}건, 일부 확인 {counts.get('partial', 0)}건, "
+                              f"사람 확인 {counts.get('unconfirmed', 0)}건")
+            else:
                 stage.skip_reason = "AI 모델의 사실 모순 지적이 없음"
         statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
         result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)

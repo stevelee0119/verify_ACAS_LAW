@@ -88,8 +88,12 @@ def _court_code_violations(citation: Any, code: str, year: int,
                  "kind": "COURT_CODE", "inferred_court": inferred,
                  "reason": f"대법원 사건부호로 '{code}'는 {until}년까지 접수된 사건에만 쓰였다"
                            f"(현행 예규상 '{code}'는 {meaning})", "source_url": source.get("url")}]
+    if entry.get("source") == "SUPPLEMENT":
+        # 현행 별표 제공 파일에 없어 연혁본 별표에서 보충한 부호: 근거로 그 연혁본 버전을 적는다
+        source = table.get("supplement_source") or source
+    basis = source.get("title", "사건부호표") + (f", {source['version']}" if source.get("version") else "")
     reason = (f"사건부호 '{code}'는 {meaning or inferred + ' 사건'} 부호로 {inferred} 사건에 붙는다. "
-              f"문서는 {citation.court}로 적었다(근거: {source.get('title', '사건부호표')})")
+              f"문서는 {citation.court}로 적었다(근거: {basis})")
     violation = {"rule_id": "FMT.COURT_CODE_MISMATCH", "field": "court", "value": f"{citation.court} {code}",
                  "kind": "COURT_CODE", "inferred_court": inferred, "reason": reason,
                  "source_url": source.get("url")}

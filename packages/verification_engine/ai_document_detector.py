@@ -463,17 +463,71 @@ def _fact_remark_finding(doc: NormalizedDocument, reason: str, category: str) ->
         document_id=doc.document_id, engine=ENGINE_NAME, tags=["MODEL_REMARK", category])
 
 
-def reconcile_model_fact_remarks(findings: List[Finding]) -> List[Finding]:
+# 모델 지적과 결정론 판정을 잇는 값 표지: 날짜(YYYY. M. D.), 원 단위 금액, 법령 조문(○○법 제N조).
+_ANCHOR_DATE = re.compile(r"(\d{4})\.\s*(\d{1,2})\.\s*(\d{1,2})\.")
+_ANCHOR_AMOUNT = re.compile(r"(?<![\d,])(\d{1,3}(?:,\d{3})+|\d{5,})(?=\s*원)")
+_ANCHOR_ARTICLE = re.compile(r"([가-힣]+법)\s*제\s*(\d+)\s*조")
+# 표지가 없는 문장 중에서도 모순을 주장하는 문장은 사람 확인으로 남긴다(예: '성명이 서로 다르다').
+_CONTRADICTION_WORDS = re.compile(r"다르|다름|다릅|혼재|상충|불일치|모순|어긋|맞지 않")
+
+
+def value_anchors(text: str) -> set:
+    anchors = {f"D:{int(y)}-{int(m)}-{int(d)}" for y, m, d in _ANCHOR_DATE.findall(text or "")}
+    anchors |= {f"A:{a.replace(',', '')}" for a in _ANCHOR_AMOUNT.findall(text or "")}
+    anchors |= {f"L:{law}:{int(n)}" for law, n in _ANCHOR_ARTICLE.findall(text or "")}
+    return anchors
+
+
+def _remark_sentences(reason: str) -> List[str]:
+    body = re.sub(r"^\[[^\]]+\]\s*", "", reason or "")
+    return [s.strip() for s in re.split(r"(?<=[가-힣])\.\s+", body) if s.strip()]
+
+
+def _anchor_cover(remark: Finding, candidates: List[Finding]) -> tuple:
+    """지적 문장마다 값 표지를 결정론 판정 제목의 표지와 맞춘다. → (확인에 쓴 판정들, 확인하지 못한 문장들)
+
+    한 문장의 표지가 모두 판정 제목들에서 확인되어야 그 문장이 확인된 것이다. 표지가 없는 문장은 모순을 주장하는
+    문장일 때만 '확인하지 못함'으로 남기고, 설명 문장(예: '오기 가능성')은 판단 대상에서 뺀다."""
+    titles = [(f, value_anchors(f.title)) for f in candidates]
+    used: List[Finding] = []
+    unresolved: List[str] = []
+    for sentence in _remark_sentences(remark.confidence_features.get("model_remark") or ""):
+        anchors = value_anchors(sentence)
+        if not anchors:
+            if _CONTRADICTION_WORDS.search(sentence):
+                unresolved.append(sentence)
+            continue
+        remaining, picked = set(anchors), []
+        for finding, own in sorted(titles, key=lambda t: -len(t[1] & anchors)):
+            if remaining & own:
+                picked.append(finding)
+                remaining -= own
+        if remaining:
+            unresolved.append(sentence)
+            continue
+        used += [f for f in picked if f not in used]
+    return used, unresolved
+
+
+def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[str, int]] = None) -> List[Finding]:
     """모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(J2).
 
-    같은 종류의 결정론 판정(재계산·작성일 대조)이 있으면 지적을 그 판정의 근거로 붙이고 지적 항목은 뺀다.
-    없으면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
+    1) 같은 종류의 결정론 판정(재계산·작성일 대조)이 있으면 지적을 그 판정의 근거로 붙이고 지적 항목은 뺀다.
+    2) 없으면 지적에 적힌 값(날짜·금액·조문)을 결정론 판정(CONTRADICTED) 제목의 값과 맞춘다. 지적의 모순 문장이
+       모두 확인되면 그 판정들의 근거로 붙이고 지적 항목은 뺀다. 일부만 확인되면 확인된 판정에 붙이되, 지적 항목은
+       확인하지 못한 문장과 함께 사람 확인으로 남긴다.
+    3) 어느 것으로도 확인하지 못하면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
+    stats가 주어지면 confirmed / partial / unconfirmed 건수를 채운다(실행 매니페스트용).
     """
+    counts = {"confirmed": 0, "partial": 0, "unconfirmed": 0}
+    if stats is not None:
+        stats.update(counts)
     remarks = [f for f in findings if f.type == FindingType.MODEL_FACT_REMARK]
     if not remarks:
         return findings
     out = [f for f in findings if f.type != FindingType.MODEL_FACT_REMARK]
     for remark in remarks:
+        text = remark.confidence_features["model_remark"]
         category = remark.confidence_features.get("category")
         prefixes = CONFIRMING_RULES.get(category, ())
         match = next((f for f in out if f.status == VerificationStatus.CONTRADICTED and f.document_id == remark.document_id
@@ -484,10 +538,32 @@ def reconcile_model_fact_remarks(findings: List[Finding]) -> List[Finding]:
                           and f.document_id == remark.document_id
                           and str((f.confidence_features or {}).get("rule_id", "")).startswith(prefixes)), None)
         if match is not None:
-            match.confidence_features.setdefault("model_remarks", []).append(remark.confidence_features["model_remark"])
+            match.confidence_features.setdefault("model_remarks", []).append(text)
+            counts["confirmed"] += 1
             continue
-        remark.detail += " 결정론 재계산으로 확인하지 못했으므로 사람이 원문을 확인한다."
+        candidates = [f for f in out if f.status == VerificationStatus.CONTRADICTED
+                      and f.document_id == remark.document_id and (f.confidence_features or {}).get("rule_id")]
+        used, unresolved = _anchor_cover(remark, candidates)
+        for finding in used:
+            finding.confidence_features.setdefault("model_remarks", []).append(text)
+        if used and not unresolved:
+            counts["confirmed"] += 1
+            continue
+        rules = [str(f.confidence_features.get("rule_id")) for f in used]
+        if used:
+            counts["partial"] += 1
+            remark.confidence_features.update({"reconciled": "PARTIAL", "confirmed_by": rules,
+                                               "unconfirmed_sentences": unresolved})
+            remark.detail += (f" 지적 가운데 값이 결정론 판정({', '.join(rules)})으로 확인된 부분은 그 판정에 근거로 붙였다. "
+                              f"확인하지 못한 부분('{' / '.join(unresolved)[:160]}')은 결정론 재계산으로 확인하지 못했으므로 "
+                              "사람이 원문을 확인한다.")
+        else:
+            counts["unconfirmed"] += 1
+            remark.confidence_features["reconciled"] = "UNCONFIRMED"
+            remark.detail += " 결정론 재계산으로 확인하지 못했으므로 사람이 원문을 확인한다."
         out.append(remark)
+    if stats is not None:
+        stats.update(counts)
     return out
 
 
