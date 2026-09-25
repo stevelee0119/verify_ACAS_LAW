@@ -13,7 +13,7 @@ from packages.common.enums import ClaimType, EntityType
 from packages.common.schemas import Claim, Citation, Entity, Event, NormalizedDocument
 from packages.common.textutil import sentences
 
-from .calculation import AMOUNT_RE, parse_amounts
+from .calculation import parse_amounts
 from .classification import classify_sentence, document_kind, segment_kind
 from .entity_resolution import resolve_entities
 from .structure import extract_evidence_references, structure_claim_text
@@ -95,7 +95,7 @@ def classify_claim(sentence: str) -> ClaimType:
         return ClaimType.LEGAL_RULE
     if DOCUMENT_EXISTENCE_RE.search(sentence):
         return ClaimType.DOCUMENT_EXISTENCE
-    if CALCULATION_RE.search(sentence) and AMOUNT_RE.search(sentence):
+    if CALCULATION_RE.search(sentence) and parse_amounts(sentence):
         return ClaimType.CALCULATION
     if FACT_RE.search(sentence):
         return ClaimType.FACT

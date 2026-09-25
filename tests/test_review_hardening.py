@@ -215,3 +215,44 @@ def test_static_precedent_hints_do_not_claim_verified_official_evidence():
 def test_unrelated_quote_near_a_statute_is_not_a_modified_statute():
     text = '근로기준법 제27조에 따른 통지를 검토한다. 원고는 "오늘부터 출근하지 말라"는 말을 들었다.'
     assert verify_statute_quotes(document(text)) == []
+
+
+@pytest.mark.parametrize("cell", ["12,34", "1 2", "1천 2백 3원"])
+def test_ambiguous_table_amounts_are_not_silently_reinterpreted(cell):
+    from packages.claim_engine.calculation import parse_cell_amount
+    assert parse_cell_amount(cell) is None
+
+
+@pytest.mark.parametrize("net", ["105", "106"])
+def test_payroll_uses_subtraction_for_net_pay(net):
+    from packages.claim_engine.calculation import CalculationEngine
+    doc = document("")
+    doc.structure["tables"] = [{"page": 1, "table_ref": "payroll", "cells": [
+        ["구분", "금액"], ["기본급", "100"], ["수당", "20"], ["지급총액", "120"],
+        ["세금", "10"], ["보험", "5"], ["공제계", "15"], ["실지급액", net]]}]
+    findings = CalculationEngine().verify_document(doc)
+    assert len(findings) == (0 if net == "105" else 1)
+    if findings:
+        assert findings[0].confidence_features["computed"] == "105"
+
+
+@pytest.mark.parametrize("wrong", [False, True])
+def test_independent_tables_are_not_combined_or_deduplicated_by_amount(wrong):
+    from packages.claim_engine.calculation import CalculationEngine
+    doc = document("")
+    doc.structure["tables"] = [
+        {"page": 1, "table_ref": "A", "cells": [["구분", "금액"], ["A1", "10"], ["A2", "20"], ["합계", "40" if wrong else "30"]]},
+        {"page": 1, "table_ref": "B", "cells": [["구분", "금액"], ["B1", "5"], ["B2", "5"], ["합계", "40" if wrong else "10"]]},
+    ]
+    findings = CalculationEngine().verify_document(doc)
+    assert len(findings) == (2 if wrong else 0)
+
+
+def test_running_header_notice_remains_advisory():
+    from packages.forensic_engine.specimen import scan_specimen
+    header = Block(block_id="header", text="검증 프로그램 테스트용 가상 문서", page=1,
+                   block_type="running_head", source_layer="visible_text")
+    body = Block(block_id="body", text="원고의 청구를 기각한다.", page=1)
+    findings = scan_specimen(document("", blocks=[header, body]))
+    declared = [f for f in findings if f.type == FindingType.SPECIMEN_DOCUMENT_DECLARED]
+    assert declared and all(f.advisory_only for f in declared)

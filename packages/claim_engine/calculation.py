@@ -76,6 +76,8 @@ def parse_amounts(text: str, *, block_id: Optional[str] = None, page: Optional[i
             prefix = text[:m.start()]
             if re.search(r"(?:\d[\d,.]*\s*(?:조|경|백|십)|USD|EUR|JPY|[$€¥])\s*$", prefix, re.I):
                 continue
+            if re.match(r"\s*(?:조|경|백|십)(?=\s*(?:\d|[억만천백십원]|$))", text[m.end():]):
+                continue
             units = [UNIT_MULTIPLIER.get(unit or None, 1) for _, unit in parts]
             if any(a <= b for a, b in zip(units, units[1:])):
                 continue
@@ -152,10 +154,9 @@ def parse_cell_amount(text: str, *, block_id: Optional[str] = None, page: Option
     amounts = parse_amounts(t, block_id=block_id, page=page)
     if amounts:
         return amounts[0]
-    clean = t.replace(",", "").replace(" ", "")
-    if re.fullmatch(r"[-−+]?\d+(?:\.\d+)?", clean):
+    if re.fullmatch(r"[-−+]?(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", t):
         try:
-            val = Decimal(clean.replace("−", "-"))
+            val = Decimal(t.replace(",", "").replace("−", "-"))
             return Amount(val, t, 0, len(t), block_id=block_id, page=page)
         except InvalidOperation:
             return None
@@ -208,7 +209,7 @@ class CalculationEngine:
         findings: List[Finding] = []
         seen_blocks: set = set()
         for block in doc.body_blocks():
-            if block.block_type == "table":
+            if block.block_type == "table" or block.attributes.get("table_ref"):
                 continue  # 표는 _verify_table_totals에서 행 단위로 검산한다
             found = self._verify_block(doc, block)
             if found:
@@ -251,6 +252,8 @@ class CalculationEngine:
 
             duplicate = False
             for existing in kept:
+                if _calculation_scope(cand) != _calculation_scope(existing):
+                    continue
                 ex_feat = existing.confidence_features or {}
                 ex_stated = ex_feat.get("stated")
                 ex_page = existing.page
@@ -275,7 +278,7 @@ class CalculationEngine:
         """비율(%) 열을 금액 열로 다시 계산한다(v5 3-3). 비율은 합계에서 나온 파생 수치이므로, 틀린 비율이 기재 합계
         기준으로는 맞으면 원인을 합계 칸 오류로 연결하고, 어느 기준으로도 맞지 않으면 비율 자체의 계산 오류로 본다."""
         out: List[Finding] = []
-        for table in doc.structure.get("tables") or []:
+        for table_index, table in enumerate(doc.structure.get("tables") or []):
             cells = [[str(c or "").strip() for c in row] for row in table.get("cells") or []]
             if len(cells) < 3:
                 continue
@@ -324,7 +327,10 @@ class CalculationEngine:
                     wrong.append(f"{label}: 기재 {raw}% / 계산 {by_sum:.2f}%")
             if not (wrong or derived):
                 continue
-            cause = next((f for f in totals if f.confidence_features.get("stated") == str(stated)), None) if derived else None
+            table_ref = table.get("table_ref") or f"table-{table_index}"
+            cause = next((f for f in totals if f.confidence_features.get("stated") == str(stated)
+                          and f.confidence_features.get("table_ref") == table_ref
+                          and f.confidence_features.get("table_column") == col), None) if derived else None
             if cause is not None:
                 cause.confidence_features.setdefault("derived_effects", []).extend(derived)
             features = {"arithmetic_proof": True, "deterministic_rule": True, "rule_id": "CALC.PERCENT_MISMATCH",
@@ -357,6 +363,7 @@ class CalculationEngine:
             blocks = [
                 b for b in page.blocks
                 if b.visible and b.block_type != "table" and b.text.strip()
+                and not b.attributes.get("table_ref")
                 and b.source_layer in ("visible_text", "ocr_layer")
             ]
             run: List[Amount] = []
@@ -424,28 +431,14 @@ class CalculationEngine:
         if not raw_tables:
             return findings, handled
 
-        # 표 목록 구성: 개별 표 + 인접 페이지의 동일 열 수 연속 표 결합
+        # Equal column counts do not establish that two tables are continuations.
         tables_to_check = []
-        for t in raw_tables:
+        for index, t in enumerate(raw_tables):
             tables_to_check.append({
                 "page": t.get("page"),
-                "table_ref": t.get("table_ref"),
+                "table_ref": t.get("table_ref") or f"table-{index}",
                 "cells": [[str(c or "").strip() for c in row] for row in t.get("cells") or []],
             })
-
-        # 연속 표 결합 (예: 1페이지 하단 표와 2페이지 상단 표가 같은 열 개수를 가질 때)
-        for i in range(len(raw_tables) - 1):
-            t1, t2 = raw_tables[i], raw_tables[i + 1]
-            c1 = [[str(c or "").strip() for c in row] for row in t1.get("cells") or []]
-            c2 = [[str(c or "").strip() for c in row] for row in t2.get("cells") or []]
-            if c1 and c2 and len(c1[0]) == len(c2[0]) and len(c1[0]) >= 2:
-                # 2페이지 표의 첫 행이 헤더가 아니거나 연속 데이터인 경우 결합
-                combined_cells = c1 + c2
-                tables_to_check.append({
-                    "page": t1.get("page"),
-                    "table_ref": f"{t1.get('table_ref')}_combined_{t2.get('table_ref')}",
-                    "cells": combined_cells,
-                })
 
         for table in tables_to_check:
             cells = table.get("cells") or []
@@ -465,6 +458,7 @@ class CalculationEngine:
                 continue
 
             for col in candidate_cols:
+                first_finding = len(findings)
                 col_header_name = header[col] if col < len(header) else f"열 {col}"
                 total_rows = [r for r in cells[1:] if r and TOTAL_LABEL_RE.search(r[0].replace(" ", ""))]
                 grand = total_rows[-1] if total_rows else None
@@ -511,6 +505,9 @@ class CalculationEngine:
                                         doc, chk_net, None, table.get("page"),
                                         "\n".join(" | ".join(r) for r in cells), label=f"{col_header_name} {row_label}"
                                     ))
+                            # Net pay is a subtraction, not a sum of the preceding subtotals.
+                            grand_checked = grand_checked or row is grand
+                            continue
 
                         rows_used = [label for _, label in segment]
                         items = top + [a for a, _ in segment] if row is grand else [a for a, _ in segment]
@@ -535,6 +532,8 @@ class CalculationEngine:
 
                 if grand_checked:
                     handled.add(table.get("table_ref"))
+                for finding in findings[first_finding:]:
+                    finding.confidence_features.update(table_ref=table["table_ref"], table_column=col)
 
         return findings, handled
 
@@ -632,6 +631,12 @@ class CalculationEngine:
         )
 
 
+def _calculation_scope(finding: Finding) -> tuple:
+    features = finding.confidence_features or {}
+    return (finding.document_id, finding.page, features.get("table_ref") or finding.block_id,
+            features.get("table_column"))
+
+
 def merge_same_total(findings: List[Finding]) -> List[Finding]:
     """같은 합계(기재 금액이 같은 합계 칸)에 대한 합산 판정은 하나만 남긴다(v5 3-5).
 
@@ -646,7 +651,7 @@ def merge_same_total(findings: List[Finding]) -> List[Finding]:
                 or features.get("rule_id") not in (None, "CALC.SUM"):
             order.append(finding)
             continue
-        key = features["stated"]
+        key = (*_calculation_scope(finding), features["stated"])
         if key in groups:
             groups[key].append(finding)
             continue
@@ -654,7 +659,7 @@ def merge_same_total(findings: List[Finding]) -> List[Finding]:
         order.append(finding)
     out: List[Finding] = []
     for finding in order:
-        group = groups.get((finding.confidence_features or {}).get("stated"))
+        group = groups.get((*_calculation_scope(finding), (finding.confidence_features or {}).get("stated")))
         if not group or group[0] is not finding:
             out.append(finding)
             continue

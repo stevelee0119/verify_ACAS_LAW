@@ -50,6 +50,17 @@
    keeping contradictory summary fields. Evaluation requires complete resources;
    failed runs keep diagnostic artifacts but do not publish success-labelled
    evaluation commits.
+10. Full CI exposed additional incoming regressions: PDF page-label prefixes
+    were overwritten with a raw dictionary string, preventing instruction
+    scanning; unsupported compound amounts were partially parsed; percentage
+    rhetoric was classified as financial calculation. These paths are corrected.
+11. Net pay uses subtraction and is not rechecked as a sum of gross pay and
+    deductions. Independent tables are not combined solely by column count.
+    Deduplication is scoped to document/page/table/column or block, not just the
+    stated amount. Malformed numeric separators are rejected, not stripped.
+12. A body declaration that a document is fictional is not downgraded merely
+    because it also says it is for testing. Actual running-header notices retain
+    their advisory status.
 
 ## Verification
 
@@ -75,5 +86,7 @@
   authenticity as cryptographically established. Metadata alone cannot do this.
 - Bind cross-document entities to parties, events and effective dates before
   upgrading heuristic differences to confirmed contradictions.
+- Add explicit multi-page table continuation identity before combining separate
+  parser tables. Independent per-table checks remain available.
 - Keep deployment on Render. This change adds no infrastructure, service,
   dependency, database migration, or new recurring paid-model execution.

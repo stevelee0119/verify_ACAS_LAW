@@ -149,7 +149,8 @@ def _search_units(doc: NormalizedDocument) -> List[Tuple[str, Any]]:
     # 개별 단위는 머리글·바닥글도 포함해 검사한다.
     for block in doc.body_blocks(include_running_heads=True):
         units.append((compact(block.text), block))
-        if getattr(block, "block_type", "") != "running_head":
+        if (getattr(block, "block_type", "") != "running_head"
+                and getattr(block, "source_layer", "") not in ("running_head", "header", "footer")):
             pages.setdefault(block.page, []).append(block)
     # 두 줄 이상 걸친 본문 고지는 머리글·바닥글을 뺀 본문 블록끼리만 합쳐서 검사한다.
     for blocks in pages.values():
@@ -218,8 +219,7 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
             if match:
                 declared.setdefault((label, match.group(0)), block)
                 is_running = getattr(block, "block_type", "") == "running_head" or getattr(block, "source_layer", "") in ("running_head", "header", "footer")
-                is_test_watermark = ("검증프로그램" in text or "테스트용" in text or "시험용" in text or "평가용" in text)
-                if not (is_running or is_test_watermark):
+                if not is_running:
                     testbed_watermark_only = False
 
     if declared:
