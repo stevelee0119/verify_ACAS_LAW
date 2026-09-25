@@ -1,12 +1,12 @@
 {
-  "generated_at": "2026-09-25T07:23:57+00:00",
-  "commit": "7d66c71",
+  "generated_at": "2026-09-25T09:26:27+00:00",
+  "commit": "0f79bda",
   "note": "CI '실연동 통합 테스트'가 국가법령정보센터·모델 API를 실제로 호출한 결과다. status: passed(통과)·failed(응답을 받았으나 기준 미달)·unreachable(외부 출처 무응답으로 판정 보류, last_pass는 이전 통과 기록). 기록이 없는 항목은 실행되지 않았다.",
   "J2": {
     "prepared": 2,
     "detected": 2,
     "false_positive": 0,
-    "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 6건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건",
+    "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 4건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건",
     "cases": [
       {
         "provider": "anthropic",
@@ -20,11 +20,9 @@
       },
       {
         "provider": "openai",
-        "verdict": "AI_FULL_GENERATION_LIKELY",
+        "verdict": "AI_PARTIAL_GENERATION",
         "kinds": [
-          "style",
-          "contradiction",
-          "contradiction"
+          "style"
         ]
       },
       {
@@ -42,9 +40,9 @@
       "llm_failures": {},
       "llm_failure_models": {},
       "reasons": [
-        "모델 간 판단 불일치: anthropic=AI_PARTIAL_GENERATION, openai=AI_FULL_GENERATION_LIKELY, gemini=AI_FULL_GENERATION_LIKELY. 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)",
-        "[anthropic] 본문 말미의 '도움이 되셨길 바랍니다. 추가로 궁금한 점이 있으면 말씀해 주세요.'는 챗봇 응답의 맺음말이 그대로 남은 것으로 보입니다. 사람이 쓰는 법률 서면에서는 나타나지 않는 표현이어서, AI 출력물을 옮겨 붙였다는 강한 근거입니다.",
-        "[anthropic] 본문 1~3항은 짧고 사실만 나열한 형태라 AI 특유의 번역투나 일반론적 서술은 뚜렷하지 않습니다. 전체를 AI가 만들었는지, 일부만 옮겼는지는 이 표본만으로 단정하기 어렵습니다."
+        "모델 간 판단 불일치: anthropic=AI_PARTIAL_GENERATION, openai=AI_PARTIAL_GENERATION, gemini=AI_FULL_GENERATION_LIKELY. 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)",
+        "[anthropic] 본문 말미에 '도움이 되셨길 바랍니다. 추가로 궁금한 점이 있으면 말씀해 주세요.'라는 챗봇 응답 종결 상투구가 그대로 남아 있음. 실무 준비서면에서는 쓰지 않는 표현으로, AI 출력물을 옮기면서 정리하지 않은 흔적으로 보임.",
+        "[anthropic] 본문은 짧고 개조식이라 문체만으로는 전부를 AI가 썼는지 판별하기 어려움. 응답 잔재를 근거로 AI 출력이 적어도 일부 전재된 것으로 보는 데 그치며, 전체 생성이라고 단정하지는 않음."
       ]
     },
     "tests": [
@@ -56,15 +54,15 @@
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 2,
       "detected": 2,
       "false_positive": 0,
-      "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 6건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건"
+      "summary": "모델 3개 응답, 결정론 재계산 2건, 모델 지적 연결 4건, 사람 확인으로 남은 지적 0건, 확인 문장의 오분류 0건"
     }
   },
   "R10": {
@@ -77,7 +75,7 @@
         "document_id": "d1",
         "verdict": "UNCERTAIN",
         "basis": "AI_DETECTOR",
-        "score": 0.91,
+        "score": 0.88,
         "stylometry_signal": "ABSTAIN",
         "involvement": "TRACES_FOUND",
         "objective_traces": 2,
@@ -97,11 +95,11 @@
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
@@ -232,16 +230,16 @@
       {
         "test": "test_G1_constitutional_decisions_are_found_by_exact_number",
         "outcome": "passed",
-        "seconds": 34.2
+        "seconds": 33.7
       }
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 11,
       "detected": 11,
       "false_positive": 0,
@@ -290,16 +288,16 @@
       {
         "test": "test_J1_merged_notation_is_verified_through_the_lead_number",
         "outcome": "passed",
-        "seconds": 23.6
+        "seconds": 9.5
       }
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 2,
       "detected": 2,
       "false_positive": 0,
@@ -336,7 +334,7 @@
         "adopted": null,
         "lookup_ready": true,
         "notes": [
-          "헌재결정례 DB(detc)에서 사건번호가 일치하는 결정을 확인하지 못했다 — 사건번호 일치 없음(조회 DB detc, 시도: detc:nb=2016헌나10 0건 → detc:search=2 0건; 다른 사건 0건은 채택하지 않음). 조회 실패는 부존재 판단이 아니다."
+          "헌재결정례 DB(detc)에서 사건번호가 일치하는 결정을 확인하지 못했다 — 사건번호 일치 없음(조회 DB detc, 시도: detc:nb=2016헌나10 0건; 다른 사건 0건은 채택하지 않음). 조회 실패는 부존재 판단이 아니다."
         ]
       }
     ],
@@ -345,16 +343,16 @@
       {
         "test": "test_R4_only_exact_number_records_are_adopted",
         "outcome": "passed",
-        "seconds": 41.4
+        "seconds": 64.1
       }
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 3,
       "detected": 3,
       "false_positive": 0,
@@ -369,11 +367,11 @@
     "cases": [
       {
         "citation": {
-          "citation_id": "CIT_3a0da4d63c25",
+          "citation_id": "CIT_42c8847a060d",
           "type": "CASE",
           "raw_text": "대법원 1996. 2. 15.\n선고 95다38677 전원합의체 판결",
           "document_id": "d1",
-          "block_id": "B_a6fde7668e60",
+          "block_id": "B_a9f3968c21da",
           "page": 1,
           "span": [
             16,
@@ -411,16 +409,16 @@
       {
         "test": "test_R3_line_broken_court_and_date_survive_to_the_live_lookup",
         "outcome": "passed",
-        "seconds": 14.4
+        "seconds": 9.6
       }
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
@@ -447,16 +445,16 @@
       {
         "test": "test_R6_running_head_citation_is_not_counted",
         "outcome": "passed",
-        "seconds": 20.1
+        "seconds": 11.1
       }
     ],
     "passed": true,
     "status": "passed",
-    "run_commit": "7d66c71",
-    "run_at": "2026-09-25T07:23:57+00:00",
+    "run_commit": "0f79bda",
+    "run_at": "2026-09-25T09:26:27+00:00",
     "last_pass": {
-      "commit": "7d66c71",
-      "at": "2026-09-25T07:23:57+00:00",
+      "commit": "0f79bda",
+      "at": "2026-09-25T09:26:27+00:00",
       "prepared": 1,
       "detected": 1,
       "false_positive": 0,
