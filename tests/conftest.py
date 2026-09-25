@@ -23,10 +23,10 @@ def isolated_environment():
     os.environ["LV_DATABASE_URL"] = os.getenv("LV_TEST_DATABASE_URL") or f"sqlite:///{tmp}/test.db"
     os.environ["LV_STORAGE_ROOT"] = f"{tmp}/storage"
     os.environ["LV_PSEUDONYM_SECRET"] = "test-secret"
-    os.environ.pop("LV_LAW_GO_KR_OC", None)
-    os.environ.pop("OPENAI_API_KEY", None)
-    os.environ.pop("ANTHROPIC_API_KEY", None)
-    os.environ.pop("GEMINI_API_KEY", None)
+    # 실연동 통합 테스트(tests/live, LV_LIVE_TESTS=1)는 주입된 키로 실제 조회·호출을 해야 하므로 키를 남긴다.
+    if os.getenv("LV_LIVE_TESTS") != "1":
+        for key in ("LV_LAW_GO_KR_OC", "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY"):
+            os.environ.pop(key, None)
 
     from packages.common import config, storage
 
