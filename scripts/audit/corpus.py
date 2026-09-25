@@ -327,7 +327,12 @@ def _append_scan_page(path: Path, lines: List[str], rotate: int = 0) -> None:
         Image.open(png).rotate(rotate, expand=True).save(png)
     scan = path.with_suffix(f".scan{rotate}.pdf")
     c = canvas.Canvas(str(scan), pagesize=A4)
-    c.drawImage(ImageReader(str(png)), 0, 0, width=A4[0], height=A4[1])
+    # 스캔 이미지의 가로세로 비율을 지킨 채 쪽에 맞춘다(돌린 쪽을 늘려 붙이면 실제 스캔과 달라진다)
+    from PIL import Image as _Image
+    with _Image.open(png) as im:
+        w, h = im.size
+    ratio = min(A4[0] / w, A4[1] / h)
+    c.drawImage(ImageReader(str(png)), (A4[0] - w * ratio) / 2, (A4[1] - h * ratio) / 2, width=w * ratio, height=h * ratio)
     c.save()
     writer = PdfWriter(clone_from=PdfReader(str(path)))
     writer.add_page(PdfReader(str(scan)).pages[0])

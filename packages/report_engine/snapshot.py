@@ -155,7 +155,8 @@ def technical_payload(run_result):
     """One complete JSON representation used by PDF, Word and spreadsheet appendices."""
     from .exporters import to_payload
     # 날짜·열거형을 JSON과 같은 문자열로 맞추되, 들여쓰기 없이 한 번만 직렬화한다.
-    result = json.loads(json.dumps(to_payload(run_result), ensure_ascii=False, default=str))
+    from .serialize import jsonable_payload
+    result = jsonable_payload(to_payload(run_result))
     # The static glossary is versioned separately; retain every execution/review field.
     result.pop("terminology", None)
     result.get("review_snapshot", {}).pop("terminology", None)

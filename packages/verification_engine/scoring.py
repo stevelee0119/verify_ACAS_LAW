@@ -280,6 +280,11 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                                                   if s.get("impact", "AFFECTS_VERIFICATION") != "NOT_NEEDED"],
                 "ratio": round(len(unverified_only) / citation_total, 3) if citation_total else None,
                 "unreadable_documents": [d for d in unreadable if d],
+                # 복구해 읽은 손상 PDF·파서 간 추출 불일치(v4 P8). 읽기는 했으나 빠진 글자가 있을 수 있다.
+                "malformed_documents": sorted({f.document_id for f in findings
+                                               if (f.confidence_features or {}).get("defect_code") == "MALFORMED_PDF"}),
+                "parser_disagreements": sum(1 for f in findings
+                                            if (f.confidence_features or {}).get("defect_code") == "PARSER_DISAGREEMENT"),
                 "analyzed_documents": len(analyzed_documents),
                 "total_documents": len(result.documents),
             },

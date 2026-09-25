@@ -9,6 +9,7 @@ from typing import Any, Dict, List
 
 from packages.common.enums import MM4_ADVISORY_TYPES, spec_code
 from packages.common.terminology import TERMINOLOGY_VERSION, terminology_catalog, EDITABLE_COPY_NOTICE
+from .serialize import dumps, jsonable_payload
 from .snapshot import compact_claim_rows, json_lines, xml_text
 
 FINDING_COLUMNS = [
@@ -33,8 +34,7 @@ def findings_to_rows(findings: List[Any], *, reveal_sealed: bool = False) -> Lis
 
 def to_json(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     """제20.2장 JSON 전체 검증결과(바이트)."""
-    return json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed),
-                      ensure_ascii=False, indent=2, default=str).encode("utf-8")
+    return dumps(to_payload(run_result, reveal_sealed=reveal_sealed), indent=2).encode("utf-8")
 
 
 def to_payload(run_result: Any, *, reveal_sealed: bool = False) -> dict:
@@ -250,7 +250,7 @@ def to_xlsx(run_result: Any, *, reveal_sealed: bool = False) -> bytes:
     else:
         technical = workbook.create_sheet("기술부록")
         append(technical, ["JSON path", "part", "value"])
-        appendix = json.loads(json.dumps(to_payload(run_result, reveal_sealed=reveal_sealed), ensure_ascii=False, default=str))
+        appendix = jsonable_payload(to_payload(run_result, reveal_sealed=reveal_sealed))
         for path, value in json_lines(compact_claim_rows(appendix)):
             for part, offset in enumerate(range(0, max(1, len(value)), 29000), start=1):
                 append(technical, [path, part, value[offset:offset + 29000]])

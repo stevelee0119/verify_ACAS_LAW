@@ -427,6 +427,8 @@ class VerificationPipeline:
                 {"kind": "document", "document_id": doc.document_id, "reason": "본문 추출 실패"}
             )
 
+        result.findings.extend(parser_integrity_findings(doc))
+
         # 2) ADVERSARIAL_SCANNING — 반드시 모든 LLM 호출보다 먼저
         emit(JobState.ADVERSARIAL_SCANNING, f"{document.filename} 적대적 콘텐츠 검사", base + span * 0.2)
         with manifest.stage("adversarial_scan", result.findings, inputs=len([b for p in doc.pages for b in p.blocks]),
@@ -1043,6 +1045,38 @@ def annotate_unavailable_sources(sources: List[Dict[str, Any]], documents: List[
                     "affected_citation_types": affected_types or [], "affected_citation_ids": ids,
                     "impact_note": (f"이번 실행의 인용 {len(ids)}건 검증에 영향" if ids else
                                     "이번 문서에 이 출처로 확인할 인용이 없어 검증 결과에 영향 없음")})
+    return out
+
+
+def parser_integrity_findings(doc) -> List[Finding]:
+    """PDF 구조 손상(MALFORMED_PDF)과 파서 간 추출 불일치(PARSER_DISAGREEMENT)를 알린다(v4 P8).
+
+    복구해 읽은 본문으로 검사는 계속하지만, 손상 사실과 어느 파서로 읽었는지를 보고서에 남긴다.
+    """
+    out: List[Finding] = []
+    chain = " → ".join(doc.structure.get("parser_chain") or [doc.parser_name])
+    problems = doc.structure.get("malformed") or []
+    if problems:
+        out.append(Finding.create(
+            type=FindingType.PARSE_ERROR, status=VerificationStatus.SUSPICIOUS, severity=Severity.LOW,
+            evidence_grade=EvidenceGrade.A,
+            title=f"PDF 구조가 손상되어 복구 읽기로 처리했다(MALFORMED_PDF): {doc.filename}",
+            detail=("손상 내용: " + "; ".join(problems) + f". 읽은 경로: {chain}. 복구해 읽은 본문으로 검사를 계속했으나, "
+                    "손상된 부분의 글자가 빠졌을 수 있으므로 원본 파일을 확인해야 한다."),
+            confidence=0.9, confidence_features={"deterministic_rule": True, "defect_code": "MALFORMED_PDF",
+                                                 "rule_id": "PARSE.MALFORMED_PDF", "problems": problems,
+                                                 "parser_chain": doc.structure.get("parser_chain")},
+            document_id=doc.document_id, engine=ENGINE_NAME, tags=["PARSER", "MALFORMED_PDF"]))
+    for item in doc.structure.get("parser_disagreement") or []:
+        out.append(Finding.create(
+            type=FindingType.PARSE_ERROR, status=VerificationStatus.SUSPICIOUS, severity=Severity.LOW,
+            evidence_grade=EvidenceGrade.B,
+            title=f"{item['page']}쪽의 글자 추출 결과가 파서마다 다르다(PARSER_DISAGREEMENT)",
+            detail=(f"pdfplumber {item['pdfplumber_chars']}자, pypdf {item['pypdf_chars']}자, 글자 구성 겹침 "
+                    f"{item['overlap']:.0%}. 글자층 손상이나 조작일 수 있으므로 화면과 대조해야 한다."),
+            confidence=0.6, confidence_features={"deterministic_rule": True, "defect_code": "PARSER_DISAGREEMENT",
+                                                 "rule_id": "PARSE.PARSER_DISAGREEMENT", **item},
+            document_id=doc.document_id, page=item["page"], engine=ENGINE_NAME, tags=["PARSER"]))
     return out
 
 

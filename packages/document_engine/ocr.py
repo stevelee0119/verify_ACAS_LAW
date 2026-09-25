@@ -155,6 +155,20 @@ class TesseractOCRAdapter(OCRAdapter):
         except Exception:
             return []
 
+    def detect_rotation(self, image: Any) -> Optional[int]:
+        """Tesseract OSD로 바로 세우는 데 필요한 회전 각도(시계 방향, 0·90·180·270). 판단하지 못하면 None."""
+        if not self.available:
+            return None
+        import pytesseract
+
+        try:
+            osd = pytesseract.image_to_osd(image, config="--psm 0", output_type=pytesseract.Output.DICT,
+                                           timeout=max(1, get_settings().ocr_timeout_seconds))
+        except Exception:
+            return None
+        rotate = int(osd.get("rotate") or 0) % 360
+        return rotate if float(osd.get("orientation_conf") or 0) >= 1.0 else None
+
     def recognize_image(self, image: Any, *, page: int = 1, scale: float = 1.0) -> List[OCRLine]:
         """라인 단위로 그룹핑해 텍스트·bbox·평균 신뢰도를 만든다."""
         if not self.available:

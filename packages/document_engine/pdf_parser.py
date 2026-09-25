@@ -201,11 +201,21 @@ class PdfParser(DocumentParser):
         invisible, covered = facts["invisible"], facts["covered"]
         transparent, image_covered = facts["transparent"], facts["image_covered"]
         contrast_checks: List[Tuple[int, Block, List[Dict[str, Any]]]] = []
+        # 파서 대체 경로(v4 P8): pdfplumber가 열지 못하면 pypdf 글자 추출로 읽고, 그것도 안 되면 본문 없음으로 둔다.
+        try:
+            pdfplumber.open(path).close()
+            doc.structure["parser_chain"] = ["pdfplumber"]
+        except Exception as exc:
+            doc.structure["parser_chain"] = [f"pdfplumber:실패({type(exc).__name__})"]
+            _parse_with_pypdf(raw_bytes, doc)
+            return doc
+        page_texts: Dict[int, str] = {}
         with pdfplumber.open(path) as pdf:
             doc.metadata.update({k: str(v) for k, v in (pdf.metadata or {}).items()})
             for index, page in enumerate(pdf.pages, start=1):
                 p = Page(page_number=index, width=float(page.width), height=float(page.height))
                 chars = page.chars or []
+                page_texts[index] = "".join(str(c.get("text") or "") for c in chars)
                 lines = self._group_chars_to_lines(chars)
                 # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.
                 scan_like = _image_coverage(page) >= 0.5
@@ -365,6 +375,11 @@ class PdfParser(DocumentParser):
                 )
 
         # 스캔 PDF 본문 OCR 및 독립 OCR 교차검증 (제6장, 제7.3장)
+        # 두 파서의 글자 추출이 크게 다른 쪽(PARSER_DISAGREEMENT). 글자층이 손상·조작된 신호일 수 있다.
+        disagreement = parser_disagreement(raw_bytes, page_texts)
+        if disagreement:
+            doc.structure["parser_disagreement"] = disagreement
+            doc.structure["parser_chain"].append("pypdf(대조)")
         self._apply_ocr(doc, path, rendered_parts)
 
         doc.raw_layers["rendered_text"] = "\n".join(rendered_parts)
@@ -474,6 +489,13 @@ class PdfParser(DocumentParser):
         for raster in render_pages(path, target_pages, dpi=settings.ocr_dpi):
             lines = adapter.recognize_image(raster.image, page=raster.page_number, scale=raster.scale)
             quality = page_quality(lines)
+            if raster.page_number in missing_pages and (quality["low_quality"] or not lines):
+                # 돌려 스캔한 쪽: OSD로 방향을 찾고, 못 찾으면 90·180·270도를 모두 읽어 품질이 가장 좋은 쪽을 쓴다(v4 P8)
+                rotated = _reoriented(adapter, raster, quality)
+                if rotated is not None:
+                    lines, quality, angle = rotated
+                    coverage[raster.page_number]["rotation_corrected"] = angle
+                    doc.structure.setdefault("ocr_rotation", {})[str(raster.page_number)] = angle
             # 신뢰도 미달 라인은 버린다. 남은 것이 없으면 그 면은 인식 실패로 취급한다.
             kept = [line for line in lines if line.confidence >= settings.ocr_min_confidence]
             if not kept:
@@ -527,6 +549,10 @@ class PdfParser(DocumentParser):
         """incremental update, annotation, XMP, 첨부파일, 서명 정보를 수집한다."""
         eof_count = raw.count(b"%%EOF")
         startxref_count = raw.count(b"startxref")
+        problems = _structure_problems(raw)
+        if problems:
+            doc.structure["malformed"] = problems
+            doc.parse_warnings.append("PDF 구조 손상(복구 읽기): " + "; ".join(problems))
         doc.structure["eof_markers"] = eof_count
         doc.structure["startxref_count"] = startxref_count
         doc.structure["incremental_updates"] = max(0, eof_count - 1)
@@ -631,6 +657,102 @@ class PdfParser(DocumentParser):
             doc.structure["actual_text_zero_width"] = zero_width
         if strings:
             doc.structure["actual_text_strings"] = strings[:50]
+
+
+def _structure_problems(raw: bytes) -> List[str]:
+    """교차참조표·트레일러 손상. 파서가 복구해 읽더라도 손상 사실은 남긴다(MALFORMED_PDF)."""
+    problems: List[str] = []
+    tail = raw[-2048:]
+    if b"%%EOF" not in tail:
+        problems.append("파일 끝 표지(%%EOF)가 없다")
+    at = raw.rfind(b"startxref")
+    if at < 0:
+        problems.append("startxref가 없다")
+        return problems
+    match = re.match(rb"startxref\s+(\d+)", raw[at:at + 40])
+    if not match:
+        problems.append("startxref 값이 없다")
+        return problems
+    offset = int(match.group(1))
+    if offset >= len(raw):
+        problems.append(f"startxref 위치({offset})가 파일 크기({len(raw)})를 넘는다")
+    elif not re.match(rb"\s*(?:xref|\d+\s+\d+\s+obj)", raw[offset:offset + 32]):
+        problems.append(f"startxref 위치({offset})에 교차참조표가 없다")
+    if b"xref" not in raw and b"/XRef" not in raw:
+        problems.append("교차참조표(xref)가 없다")
+    return problems
+
+
+def _parse_with_pypdf(raw: bytes, doc: NormalizedDocument) -> None:
+    """pdfplumber가 열지 못한 파일을 pypdf 글자 추출로 읽는다. 글자 위치·색은 없으므로 숨김 판정은 하지 않는다."""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(raw), strict=False)
+        parts = []
+        for index, page in enumerate(reader.pages, start=1):
+            p = Page(page_number=index)
+            for line in (page.extract_text() or "").splitlines():
+                if line.strip():
+                    p.blocks.append(Block(block_id=new_id("B"), text=line.strip(), page=index,
+                                          source_layer="visible_text", attributes={"parser": "pypdf"}))
+                    parts.append(line.strip())
+            doc.pages.append(p)
+        doc.raw_layers["rendered_text"] = "\n".join(parts)
+        doc.structure["parser_chain"].append("pypdf")
+        doc.parse_warnings.append("pdfplumber로 열지 못해 pypdf 글자 추출로 읽었다(글자 색·위치 기반 숨김 검사는 하지 못함)")
+    except Exception as exc:
+        doc.structure["parser_chain"].append(f"pypdf:실패({type(exc).__name__})")
+        doc.structure["parse_error"] = True
+        doc.parse_warnings.append(f"PDF를 읽지 못했다: {exc}")
+
+
+def parser_disagreement(raw: bytes, page_texts: Dict[int, str], *, max_pages: int = 30) -> List[Dict[str, Any]]:
+    """pdfplumber와 pypdf가 같은 쪽에서 뽑은 글자가 크게 다른 쪽(글자 구성 겹침 60% 미만)."""
+    from collections import Counter
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(io.BytesIO(raw), strict=False)
+    except Exception:
+        return []
+    out = []
+    for number, text in list(page_texts.items())[:max_pages]:
+        mine = Counter(_text_signature(text))
+        if sum(mine.values()) < 50 or number > len(reader.pages):
+            continue
+        try:
+            other = Counter(_text_signature(reader.pages[number - 1].extract_text() or ""))
+        except Exception:
+            continue
+        overlap = sum((mine & other).values()) / max(sum(mine.values()), sum(other.values()), 1)
+        if overlap < 0.6:
+            out.append({"page": number, "overlap": round(overlap, 3), "pdfplumber_chars": sum(mine.values()),
+                        "pypdf_chars": sum(other.values())})
+    return out
+
+
+def _quality_key(quality: Dict[str, Any]):
+    return (not quality["low_quality"], quality.get("hangul_ratio") or 0.0, quality["confidence"], quality["lines"])
+
+
+def _reoriented(adapter, raster, quality):
+    """방향을 바로잡아 다시 읽은 결과 (lines, quality, 각도). 나아지지 않으면 None. 좌표(bbox)는 돌린 이미지 기준이다."""
+    detect = getattr(adapter, "detect_rotation", None)
+    angle = detect(raster.image) if detect else None
+    candidates = [angle] if angle else [90, 180, 270]
+    best = None
+    for candidate in candidates:
+        # OSD의 rotate는 시계 방향 각도다. PIL rotate는 반시계 방향이므로 음수로 돌린다.
+        image = raster.image.rotate(-candidate, expand=True)
+        lines = adapter.recognize_image(image, page=raster.page_number, scale=raster.scale)
+        found = page_quality(lines)
+        if best is None or _quality_key(found) > _quality_key(best[1]):
+            best = (lines, found, candidate)
+    if best is None or _quality_key(best[1]) <= _quality_key(quality):
+        return None
+    return best
 
 
 def _decode_stream(chunk: bytes, filters: str) -> bytes:
