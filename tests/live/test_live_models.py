@@ -11,7 +11,7 @@ import os
 import pytest
 
 from packages.common.enums import FindingType
-from tests.live.conftest import record
+from tests.live._results import record
 from tests.live.test_live_sources import _pdf, _run
 
 KEYS = [k for k in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "GEMINI_API_KEY") if os.getenv(k)]
@@ -52,7 +52,11 @@ def test_J2_model_remarks_are_reconciled_with_deterministic_recalculation(analys
            summary=(f"모델 {len(opinions)}개 응답, 결정론 재계산 {len(deterministic)}건, 모델 지적 연결 {attached}건, "
                     f"사람 확인으로 남은 지적 {len(open_remarks)}건, 확인 문장의 오분류 {len(leaked)}건"),
            cases=[{"provider": o.get("provider"), "verdict": o.get("verdict"),
-                   "kinds": [r.get("kind") for r in o.get("structured_reasons") or []]} for o in opinions])
+                   "kinds": [r.get("kind") for r in o.get("structured_reasons") or []]} for o in opinions],
+           diagnostics={"used_llm": detector.get("used_llm"),
+                        "llm_failures": (detector.get("signals") or {}).get("llm_failures"),
+                        "llm_failure_models": (detector.get("signals") or {}).get("llm_failure_models"),
+                        "reasons": (detector.get("reasons") or [])[:3]})
     assert opinions and kinds_ok and len(deterministic) >= 2 and not leaked
     assert all("재계산으로 확인하지 못했" in f.detail for f in open_remarks)
 
@@ -66,9 +70,11 @@ def test_R10_axis_verdict_matches_document_verdict(analysed):
     ai_findings = [f for f in analysed.findings if f.type in (FindingType.AI_AUTHORSHIP_LIKELY,
                                                               FindingType.AI_FULL_GENERATION_SUSPECTED)
                    and not f.advisory_only]
-    consistent = unified["verdict"] == detector.get("verdict") and (
+    # 모델을 실제로 호출한 판정이어야 실연동 확인이다
+    consistent = bool(detector.get("used_llm")) and unified["verdict"] == detector.get("verdict") and (
         (unified["verdict"] == "UNCERTAIN") == (not ai_findings))
     record("R10", prepared=1, detected=int(consistent),
            summary=f"문서 판정 {detector.get('verdict')} / 축 판정 {unified['verdict']} / 관여 {unified['involvement']}",
-           cases=[unified])
+           cases=[unified], diagnostics={"used_llm": detector.get("used_llm"),
+                                         "llm_failures": (detector.get("signals") or {}).get("llm_failures")})
     assert consistent

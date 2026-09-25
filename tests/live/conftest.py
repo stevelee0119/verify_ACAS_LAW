@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 LIVE = os.getenv("LV_LIVE_TESTS") == "1"
-RESULTS: dict = {}
+from tests.live._results import RESULTS, record  # noqa: F401  (테스트 모듈도 같은 객체를 쓴다)
 
 
 def pytest_configure(config):
@@ -29,13 +29,6 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         if "tests/live/" in str(item.fspath).replace("\\", "/"):
             item.add_marker(skip)
-
-
-def record(item_id: str, *, prepared: int, detected: int, false_positive: int = 0, summary: str = "",
-           cases: list | None = None) -> None:
-    """테스트가 항목별 준비·탐지·오탐 수를 남긴다(통과 여부는 테스트 결과로 정한다)."""
-    RESULTS.setdefault(item_id, {}).update({"prepared": prepared, "detected": detected, "false_positive": false_positive,
-                        "summary": summary, "cases": cases or []})
 
 
 @pytest.hookimpl(hookwrapper=True)
