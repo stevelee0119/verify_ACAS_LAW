@@ -141,6 +141,20 @@ def test_model_agreement_does_not_promote_only_style_or_metadata():
     assert result.verdict == "UNCERTAIN"
 
 
+@pytest.mark.parametrize("marker", ["C2PA", "Content Credentials"])
+def test_provenance_container_labels_are_not_ai_tool_labels(marker):
+    from packages.common.enums import AttributionLevel
+    from packages.verification_engine.authorship import analyze_authorship
+
+    doc = document("원고의 청구를 기각한다.")
+    doc.metadata = {"Producer": marker}
+    doc.structure["c2pa"] = True
+    assessment = analyze_authorship(doc)
+    assert assessment.signals["has_c2pa"]
+    assert not assessment.signals["provenance_metadata"]
+    assert assessment.attribution == AttributionLevel.UNDETERMINED
+
+
 def test_manifest_uses_one_environment_for_both_summary_and_details():
     manifest = RunManifest()
     manifest.environment = {"complete": True, "resources": {"korean_ocr": True}}
