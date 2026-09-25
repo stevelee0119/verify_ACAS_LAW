@@ -23,7 +23,7 @@ jobs:
       (github.event_name == 'workflow_dispatch' ||
        contains(github.event.head_commit.message, '[live-integration]'))
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       LV_LAW_GO_KR_OC: ${{ secrets.LV_LAW_GO_KR_OC }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -48,6 +48,8 @@ jobs:
       - name: 실연동 통합 테스트
         id: live
         continue-on-error: true
+        # 테스트 단계만 제한해 결과 기록·커밋 단계는 항상 실행되게 한다
+        timeout-minutes: 35
         run: python scripts/live_integration.py --out docs/live_integration_results.json
       - name: 결과 아티팩트
         if: always()
