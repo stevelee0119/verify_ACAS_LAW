@@ -24,7 +24,8 @@ WEEKDAY_MAP = {name: idx for idx, name in enumerate(KOREAN_WEEKDAYS)}
 
 # 날짜 + 요일 병기 패턴: 예) 2026. 3. 20.(목), 2026년 3월 20일(목요일)
 DATE_WEEKDAY_RE = re.compile(
-    r"(?P<year>\d{4})[.\s년/-]+(?P<month>\d{1,2})[.\s월/-]+(?P<day>\d{1,2})[일\s.]*\(?(?P<weekday>[월화수목금토일])(?:요일)?\)?"
+    r"(?P<year>\d{4})[.\s년/-]+(?P<month>\d{1,2})[.\s월/-]+(?P<day>\d{1,2})(?:일)?[\s.]*"
+    r"(?:\((?P<weekday>[월화수목금토일])(?:요일)?\)|(?P<weekday_word>[월화수목금토일])요일(?![가-힣]))"
 )
 
 # 일반 날짜 패턴: 예) 2026. 2. 29., 2026년 2월 29일
@@ -74,7 +75,7 @@ def verify_dates_in_document(doc: NormalizedDocument) -> List[Finding]:
             y = int(m.group("year"))
             month = int(m.group("month"))
             day = int(m.group("day"))
-            weekday_str = m.group("weekday")
+            weekday_str = m.group("weekday") or m.group("weekday_word")
 
             d_obj = _parse_valid_date(y, month, day)
             if d_obj is not None:
@@ -175,12 +176,12 @@ def verify_dates_in_document(doc: NormalizedDocument) -> List[Finding]:
                     )
 
         # 2) 블록 내 선행 연도(예: 2026.) 아래 "2. 29." 또는 "2월 29일" 매칭
-        year_ctx_m = re.search(r"(?P<year>20\d{2})[.\s년/-]", text)
-        block_year = int(year_ctx_m.group("year")) if year_ctx_m else (context_incident_date.year if context_incident_date else 2026)
-        if not calendar.isleap(block_year):
+        m_feb29 = re.search(r"(?<!\d)(?:2|02)(?:\s*월\s*|[./-]\s*)29(?:일|(?=\D|$))", text)
+        years = list(re.finditer(r"(?<!\d)([12]\d{3})(?:년|\s*\.)", text[:m_feb29.start()])) if m_feb29 else []
+        block_year = int(years[-1].group(1)) if years else None
+        if block_year is not None and not calendar.isleap(block_year):
             # 평년인데 2. 29. 또는 2월 29일이 있는 경우
-            m_feb29 = re.search(r"(?:(?:2|02)[.\s월/-]+29[일\s.]*|\b29[일\s.]*\(?(?:월|화|수|목|금|토|일)?\)?|\b2\.\s*29\.)", text)
-            if m_feb29 and "2" in text and "29" in text:
+            if m_feb29 and not any(m.start() <= m_feb29.start() < m.end() for m in DATE_GENERAL_RE.finditer(text)):
                 # 이미 1)에서 찾은 것이 아닌 경우
                 if not any(f.type == FindingType.EVIDENCE_DATE_INVALID and "29" in f.title for f in findings if f.block_id == block.block_id):
                     matched_str = m_feb29.group(0)

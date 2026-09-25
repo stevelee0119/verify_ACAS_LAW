@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
 from packages.common.schemas import Citation, Evidence, Finding, NormalizedDocument
 from packages.common.confidence import score as confidence_score
+from packages.document_engine.reading_text import build_reading_text
 
 ENGINE_NAME = "legal_engine.precedent_verifier"
 
@@ -31,14 +32,15 @@ LEADING_PRECEDENTS: List[Dict[str, Any]] = [
     },
     {
         "case_number_pattern": r"2020다247190",
-        "title": "대법원 2024. 1. 11. 선고 2020다247190 전원합의체 판결",
-        "topic": "경영성과급 등의 통상임금성 판단 기준",
-        "true_holding": "경영성과급 등 성과급은 소정근로의 대가성, 정기성, 일률성, 고정성 요건을 엄격히 갖춘 경우에만 통상임금에 해당하며, 경영실적에 따라 지급 여부나 지급률이 달라지는 성과급은 원칙적으로 통상임금에서 제외된다.",
+        "title": "대법원 2024. 12. 19. 선고 2020다247190 전원합의체 판결",
+        "topic": "재직조건부 정기상여금과 통상임금 판단 기준",
+        "reference_url": "https://www.scourt.go.kr/sjudge/1734594587787_164947.pdf",
+        "true_holding": "통상임금의 판단 기준에서 고정성을 제외하고 소정근로 대가성·정기성·일률성을 기준으로 판단한다. 순수한 실적 성과급과 소정근로의 대가인 임금을 구별하며, 판례 변경의 적용 시점도 별도로 검토해야 한다.",
         "distortion_patterns": [
             re.compile(r"(?:성과급|경영성과급|인센티브)[^.\n]{0,40}(?:모든\s*금품|일체의\s*급여|예외\s*없이)[^.\n]{0,30}(?:통상임금에\s*해당|통상임금에\s*포함|통상임금으로\s*인정)"),
             re.compile(r"(?:성과급|경영성과급)[^.\n]{0,40}(?:무조건|당연히|원칙적으로)[^.\n]{0,20}(?:통상임금)"),
         ],
-        "explanation": "대법원 2020다247190 전원합의체 판결은 성과에 따라 지급 여부가 변동되는 성과급은 통상임금성이 부정된다고 보았습니다. '모든 금품이 예외 없이 통상임금에 해당한다'는 주장은 판시를 왜곡한 것입니다.",
+        "explanation": "임금 항목의 명칭만으로 통상임금성을 일률적으로 판단하지 않고 지급 조건·소정근로 대가성과 판례 적용 시점을 확인해야 합니다.",
     },
     {
         "case_number_pattern": r"2015두41401",
@@ -71,13 +73,7 @@ _QUOTE_EXTRACT_RE = re.compile(r'["“]([^"”]{5,200})["”]')
 
 def _get_doc_text(doc: NormalizedDocument) -> str:
     """NormalizedDocument에서 텍스트를 안전하게 추출한다."""
-    if hasattr(doc, "text") and doc.text:
-        return doc.text
-    if doc.raw_layers:
-        for k in ("rendered_text", "raw_text", "ocr_layer"):
-            if doc.raw_layers.get(k):
-                return doc.raw_layers[k]
-    return "\n".join(b.text for b in doc.blocks)
+    return build_reading_text(doc).text
 
 
 def verify_precedent_distortions(doc: NormalizedDocument, citations: Optional[List[Citation]] = None) -> List[Finding]:
@@ -105,15 +101,18 @@ def verify_precedent_distortions(doc: NormalizedDocument, citations: Optional[Li
                         "case_number_pattern": pat,
                         "defect_code": "CIT-MIS",
                         "topic": rule["topic"],
+                        "source_verified": False,
                     }
                     findings.append(
                         Finding.create(
                             type=FindingType.CASE_HOLDING_DISTORTION,
-                            status=VerificationStatus.CONTRADICTED,
-                            severity=Severity.HIGH,
-                            evidence_grade=EvidenceGrade.A,
-                            title=f"판례 판시 취지 왜곡 인용(CIT-MIS): {rule['title']} — '{claim_snippet[:50]}'",
-                            detail=f"{rule['explanation']}\n[공식 판시 요지] {rule['true_holding']}",
+                            status=VerificationStatus.UNVERIFIED,
+                            severity=Severity.MEDIUM,
+                            evidence_grade=EvidenceGrade.C,
+                            advisory_only=True,
+                            title=f"판례 취지 대조 필요(CIT-MIS): {rule['title']} — '{claim_snippet[:50]}'",
+                            detail=(f"'{claim_snippet}'에 해당하는 검토 후보를 찾았습니다. 공식 원문과 적용 시점을 "
+                                    f"확인하지 않아 왜곡을 확정하지 않습니다. 검토 주제: {rule['topic']}"),
                             confidence=confidence_score(features),
                             confidence_features=features,
                             document_id=doc.document_id,
@@ -128,8 +127,8 @@ def verify_precedent_distortions(doc: NormalizedDocument, citations: Optional[Li
                                     supports=False,
                                 ),
                                 Evidence.create(
-                                    description="공식 판례 판시 요지",
-                                    grade=EvidenceGrade.A,
+                                    description="정적 참고 요약(공식 원문 미검증)",
+                                    grade=EvidenceGrade.C,
                                     excerpt=rule["true_holding"][:300],
                                 ),
                             ],
@@ -159,7 +158,7 @@ def verify_statute_quotes(doc: NormalizedDocument, citations: Optional[List[Cita
 
         std_dict = None
         for k, v in STANDARD_STATUTE_TEXTS.items():
-            if k in law_clean or law_clean in k:
+            if k == law_clean:
                 std_dict = v
                 break
 
@@ -176,7 +175,12 @@ def verify_statute_quotes(doc: NormalizedDocument, citations: Optional[List[Cita
         else:
             window = text
 
-        for m in _QUOTE_EXTRACT_RE.finditer(window):
+        # Only a quote attached to this citation can be compared with its text.
+        quoted_text = cit.quoted_text
+        if not quoted_text:
+            attached = re.search(re.escape(cit.raw_text) + r'\s*(?:은|는|에\s*따르면)?\s*["“]([^"”]{8,200})["”]', window)
+            quoted_text = attached.group(1) if attached else None
+        for m in _QUOTE_EXTRACT_RE.finditer('"' + quoted_text + '"' if quoted_text else ""):
             quoted = m.group(1).strip()
             if len(quoted) < 8:
                 continue
@@ -191,15 +195,18 @@ def verify_statute_quotes(doc: NormalizedDocument, citations: Optional[List[Cita
                     "defect_code": "QUOTE-MOD",
                     "law_name": cit.law_name,
                     "article": cit.article,
+                    "source_verified": False,
                 }
                 findings.append(
                     Finding.create(
                         type=FindingType.STATUTE_TEXT_MISMATCH,
-                        status=VerificationStatus.CONTRADICTED,
-                        severity=Severity.HIGH,
-                        evidence_grade=EvidenceGrade.A,
-                        title=f"법조문 인용문구 임의 변형(QUOTE-MOD): {cit.law_name} 제{cit.article}조",
-                        detail=f"서면에서 큰따옴표로 인용한 문구 '{quoted[:60]}'는 실제 법조문 표준 문구와 상이하게 변형되었습니다.\n[실제 조문] {std_text}",
+                        status=VerificationStatus.UNVERIFIED,
+                        severity=Severity.MEDIUM,
+                        evidence_grade=EvidenceGrade.C,
+                        advisory_only=True,
+                        title=f"법조문 인용문구 대조 필요(QUOTE-MOD): {cit.law_name} 제{cit.article}조",
+                        detail=(f"인용문구 '{quoted[:60]}'가 정적 참고문구와 다릅니다. 해당 시점의 공식 조문을 "
+                                "확보하지 않아 변형 여부를 확정하지 않습니다."),
                         confidence=confidence_score(features),
                         confidence_features=features,
                         document_id=doc.document_id,
@@ -214,8 +221,8 @@ def verify_statute_quotes(doc: NormalizedDocument, citations: Optional[List[Cita
                                 supports=False,
                             ),
                             Evidence.create(
-                                description="공식 법조문 표준 원문",
-                                grade=EvidenceGrade.A,
+                                description="정적 참고문구(공식 원문 미검증)",
+                                grade=EvidenceGrade.C,
                                 excerpt=std_text[:300],
                             ),
                         ],

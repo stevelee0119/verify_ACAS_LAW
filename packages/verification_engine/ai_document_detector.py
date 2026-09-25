@@ -1,8 +1,8 @@
 """AI 법률문서 생성 여부 심층 판별 모듈 (제13장 확장).
 
 법률문서(답변서, 소장, 준비서면 등) 전체가 AI(ChatGPT, Gemini 등)에 의해 임의로
-작성되었는지, 또는 일부 내용에 AI가 관여하였는지를 메타데이터, 가짜 판례/조문 환각 빈도,
-구조적 특징 및 LLM(OpenAI/Gemini) 심층 분석을 결합하여 판정한다.
+작성되었는지, 또는 일부 내용에 AI가 관여하였는지를 본문의 응답 잔재와
+LLM 교차검토로 추정한다. 인용 오류는 작성 주체의 근거로 사용하지 않는다.
 """
 from __future__ import annotations
 
@@ -60,13 +60,15 @@ def _rule_based_ai_detection(
     citation_findings: List[Finding],
     metadata_indications: bool,
     exclude_texts: Optional[List[str]] = None,
+    exclude_block_ids: Optional[List[str]] = None,
 ) -> AIDetectorResult:
-    """LLM이 없을 때 휴리스틱, 가짜 판례 정황, 메타데이터 등을 바탕으로 결정론적 검출 수행.
+    """LLM이 없을 때 본문 응답 잔재를 바탕으로 제한적인 정황 검출 수행.
     
     서식(마크다운), 직접 인용문구, 단순 메타데이터 힌트만으로는 AI 작성을 단정하지 않으며,
-    대화형 서두/맺음말/출처토큰/지식기준일 등 객관적 잔재가 본문에서 명확히 확인될 때에만 판정한다.
+    대화형 서두/출처토큰/지식기준일 등 객관적 잔재가 본문에서 명확히 확인될 때에만 판정한다.
     """
-    text = doc.visible_text
+    dropped = set(exclude_block_ids or [])
+    text = build_reading_text(doc, blocks=[b for b in doc.body_blocks() if b.block_id not in dropped]).text
     sents = sentences(text)
     signals: Dict[str, Any] = {}
     reasons: List[str] = []
@@ -80,11 +82,10 @@ def _rule_based_ai_detection(
         reasons.append("문서 메타데이터(Producer/Creator 등)에 AI 생성 도구 표기 힌트가 감지됨(미검증 힌트)")
 
     # 2. AI 응답 잔재(ai_residue):
-    #    대화형 서두·면책 안내·지식 기준일·출처토큰은 객관적 흔적(objective),
-    #    마크다운·상투 표현·영문 병기는 문체 신호(style)로만 다룬다.
+    #    대화형 서두·지식 기준일·출처토큰은 객관적 흔적(objective),
+    #    맺음말·면책 안내·마크다운·상투 표현은 문체 신호(style)로만 다룬다.
     #    직접 인용문구("...") 내부와 지시문/예시문은 스캔에서 제외한다.
-    reading_raw = build_reading_text(doc).text
-    residues = scan_residue(reading_raw, exclude_texts=exclude_texts, mask_quotes=True)
+    residues = scan_residue(text, exclude_texts=exclude_texts, mask_quotes=True)
     signals["residues"] = [{"category": r.category, "label": r.label, "objective": r.objective,
                             "matches": r.matches} for r in residues]
     objective_hits = sum(len(r.matches) for r in residues if r.objective)
@@ -123,9 +124,7 @@ def _rule_based_ai_detection(
     # 단순 메타데이터 힌트나 마크다운 서식만으로는 AI 작성을 단정하지 않는다.
     score = min(1.0, score)
     signals["objective_traces"] = objective_hits
-    if score >= 0.70 and objective_hits >= 2:
-        verdict = "AI_FULL_GENERATION_LIKELY"
-    elif score >= 0.40 and objective_hits >= 1:
+    if score >= 0.40 and objective_hits >= 1:
         verdict = "AI_PARTIAL_GENERATION"
     else:
         verdict = "UNCERTAIN"
@@ -174,7 +173,8 @@ async def detect_ai_document(
         )
 
     # 1차 규칙 기반 특징 추출 (제외 텍스트 필터 적용)
-    rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications, exclude_texts=exclude_texts)
+    rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications,
+                                        exclude_texts=exclude_texts, exclude_block_ids=exclude_block_ids)
 
     # LLM을 사용할 수 없거나 정책이 LOCAL_ONLY인 경우 규칙 기반 결과 반환
     can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
@@ -182,29 +182,25 @@ async def detect_ai_document(
                        and router.has_available_provider(policy=external_ai_policy))
 
     if not can_use_llm:
+        rule_res.signals["coverage"] = {"total_chars": len(text), "inspected_chars": 0,
+                                        "sampling_mode": "not_run", "is_full_coverage": False,
+                                        "omitted_chars": len(text), "model_executed": False}
         return rule_res
 
     # 모델에게는 작성 주체 판단에 쓸 수 있는 것만 준다. 인용 오류나 문서 속 지시문을
     # 넘기면 모델이 그것을 AI 작성의 근거로 삼아 같은 사실이 두 번 계산된다.
     hide = mask or (lambda value: value)
+    from .ai_residue import _mask_direct_quotes
     excluded = 0
-    if exclude_block_ids:
-        # 여러 줄에 걸친 지시문은 문장 단위로 탐지되므로 줄 문자열 치환으로는 일부가 남는다. 블록째 뺀다.
-        dropped = set(exclude_block_ids)
-        kept = []
-        for block in doc.body_blocks():
-            if block.block_id in dropped:
-                if not kept or kept[-1] != "[문서 내 지시문 — 작성 주체 판단에서 제외]":
-                    kept.append("[문서 내 지시문 — 작성 주체 판단에서 제외]")
-                    excluded += 1
-            else:
-                kept.append(block.text)
-        text = "\n".join(kept)
+    dropped = set(exclude_block_ids or [])
+    text = build_reading_text(doc, blocks=[b for b in doc.body_blocks() if b.block_id not in dropped]).text
+    excluded += sum(b.block_id in dropped for b in doc.body_blocks())
     for fragment in sorted({t.strip() for t in (exclude_texts or []) if t and len(t.strip()) >= 8}, key=len, reverse=True):
         if fragment in text:
             text = text.replace(fragment, "[문서 내 지시문 — 작성 주체 판단에서 제외]")
             excluded += 1
     rule_res.signals["excluded_instruction_segments"] = excluded
+    text = _mask_direct_quotes(text)
 
     # 긴 문서(6000자 초과)에 대한 대표 표본화(앞 2500자 + 중간 2000자 + 뒤 1500자) 및 커버리지 기록
     total_chars = len(text)
@@ -220,7 +216,7 @@ async def detect_ai_document(
         )
         sampling_info = {
             "total_chars": total_chars,
-            "inspected_chars": len(sample_text),
+            "inspected_chars": 2500 + (mid_end - mid_start) + 1500,
             "sampling_mode": "head_middle_tail",
             "is_full_coverage": False,
             "omitted_chars": max(0, total_chars - (2500 + (mid_end - mid_start) + 1500)),
@@ -235,6 +231,8 @@ async def detect_ai_document(
             "omitted_chars": 0,
         }
     rule_res.signals["coverage"] = sampling_info
+    sampling_info["requested_chars"] = sampling_info["inspected_chars"]
+    sampling_info["model_executed"] = False
 
     system_prompt = (
         "당신은 법률 문서의 작성 경위를 감정하는 대한민국 법률 포렌식 전문가입니다.\n"
@@ -247,6 +245,7 @@ async def detect_ai_document(
         "가린 부분 포함, 공격 탐지에서 따로 다룸).\n"
         "확신할 근거가 부족하면 UNCERTAIN으로 답하십시오. suspicious_excerpts의 snippet은 본문에 있는 "
         "문장을 그대로 옮기십시오.\n"
+        "document_coverage.is_full_coverage가 false이면 문서 전체 작성 여부를 판정하지 마십시오.\n"
         "reasons의 kind: style은 작성 흔적(문체·응답 잔재 등) 근거, contradiction은 문서 안의 날짜·금액·기간 모순 "
         "지적, confirmation은 모순이 없음을 확인한 내용입니다. 모순 지적과 확인은 작성 주체의 근거로 쓰지 마십시오.\n"
         "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
@@ -282,9 +281,16 @@ async def detect_ai_document(
     try:
         answers = await router.consult_all(LLMRole.PRIMARY_REASONER, req, policy=external_ai_policy,
                                            expected_task="AI 작성 여부 판별")
-    except Exception:
+    except Exception as exc:
+        sampling_info.update(inspected_chars=0, omitted_chars=total_chars, is_full_coverage=False)
+        rule_res.signals["llm_error"] = type(exc).__name__
+        rule_res.reasons.append("AI 교차검토 호출 실패로 규칙 기반 결과만 사용함")
         return rule_res  # LLM 호출 실패 시 규칙 기반 결과
-    return _combine_model_verdicts(rule_res, answers, sample)
+    combined = _combine_model_verdicts(rule_res, answers, sample)
+    sampling_info["model_executed"] = combined.used_llm
+    if not combined.used_llm:
+        sampling_info.update(inspected_chars=0, omitted_chars=total_chars, is_full_coverage=False)
+    return combined
 
 
 REASON_KINDS = ("style", "contradiction", "confirmation")
@@ -399,6 +405,9 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         # AI 흔적을 찾지 못했다는 것은 사람이 썼다는 근거가 아니다. '사람 작성 유력'으로 단정하지 않는다(v2 Phase 8).
         verdict, held_reason = "UNCERTAIN", (
             "모델이 사람 작성 쪽으로 판단했으나 AI 흔적이 없다는 사실만으로 사람 작성을 단정하지 않으므로 판단을 유보함")
+    incomplete_coverage = verdict == "AI_FULL_GENERATION_LIKELY" and (rule_res.signals.get("coverage") or {}).get("is_full_coverage") is False
+    if incomplete_coverage:
+        verdict, held_reason = "UNCERTAIN", "문서 일부만 모델이 검토했으므로 전체 작성 범위의 판단을 유보함"
 
     reasons = []
     if agreement == "DISAGREE":
@@ -453,6 +462,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "model_score_median": round(model_median, 3),
                  "verdict_distribution": {v: sum(o["verdict"] == v for o in opinions) for v in _VERDICT_RANK},
                  "decision_rule": ("UNANIMOUS_WITH_OBJECTIVE_TRACE" if agreement == "AGREE" and not held_reason
+                                   else "HELD_INCOMPLETE_COVERAGE" if incomplete_coverage
                                    else "HELD_NO_OBJECTIVE_TRACE" if held_reason
                                    else "HELD_DISAGREEMENT" if agreement == "DISAGREE"
                                    else "SINGLE_MODEL_CAPPED_BY_RULES"),

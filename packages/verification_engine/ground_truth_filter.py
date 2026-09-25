@@ -1,7 +1,7 @@
 """정답지(Ground Truth) 배제 및 입력 거부 모듈.
 
 검증 파이프라인과 CLI에서 정답지(00_GroundTruth.pdf 등)를 입력 대상에서 원천 배제하고,
-파일명이나 본문 내용에 'ground truth'·'정답지'가 포함된 경우 입력을 명시적으로 거부한다.
+명시적인 정답지 파일명·표제·선언을 거부하되, 정답지를 언급하는 일반 사건 문서는 허용한다.
 """
 from __future__ import annotations
 
@@ -9,22 +9,21 @@ import re
 from pathlib import Path
 from typing import Optional
 
-# 파일명 정규화용 패턴 (특수기호 및 공백 제거)
-_CLEAN_FILENAME_RE = re.compile(r"[\s_\-]+")
-
 # 내용 내 정답지 표기 패턴 (문서 서두 또는 주요 헤더에 등장하는 ground truth / 정답지 / 정답명세서)
 _GROUND_TRUTH_CONTENT_RE = re.compile(
-    r"(?i)\bground\s*truth\b|정\s*답\s*(?:지|명세|표)"
+    r"(?im)^\s*(?:#{1,6}\s*)?(?:이\s*문서는\s*)?"
+    r"(?:ground\s*truth(?:\s+verification\s+document)?|정\s*답\s*(?:지|명세서?|표))"
+    r"(?:\s*입니다[.!]?|\s*[:：]|\s*$)"
 )
 
 
 def is_ground_truth_filename(path_or_name: str | Path) -> bool:
     """파일명에 'ground truth', '정답지', '정답명세' 등이 포함되어 있는지 확인한다."""
-    name = Path(path_or_name).name.lower()
-    norm = _CLEAN_FILENAME_RE.sub("", name)
-    if "groundtruth" in norm or "정답지" in name or "정답명세" in name:
-        return True
-    return False
+    stem = Path(path_or_name).stem
+    return bool(re.search(
+        r"(?:^|[\s_-])(?:ground[\s_-]*truth|정답지|정답명세서?)"
+        r"(?:$|[\s_-]v?\d+(?:[.\d]*))$", stem, re.IGNORECASE,
+    ))
 
 
 def is_ground_truth_content(text: str) -> bool:

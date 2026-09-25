@@ -7,12 +7,14 @@
 from __future__ import annotations
 
 import re
+from datetime import date
 from typing import Any, Dict, List, Optional, Tuple
 from collections import defaultdict
 
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.common.confidence import score as confidence_score
+from packages.document_engine.reading_text import build_reading_text
 
 ENGINE_NAME = "claim_engine.cross_document_entities"
 
@@ -50,7 +52,7 @@ def _norm_date(date_str: str) -> Optional[str]:
         if m:
             y, mth, d = m.groups()
             try:
-                return f"{int(y):04d}-{int(mth):02d}-{int(d):02d}"
+                return date(int(y), int(mth), int(d)).isoformat()
             except ValueError:
                 return None
     return None
@@ -58,13 +60,7 @@ def _norm_date(date_str: str) -> Optional[str]:
 
 def _get_doc_text(doc: NormalizedDocument) -> str:
     """NormalizedDocument에서 텍스트를 안전하게 추출한다."""
-    if hasattr(doc, "text") and doc.text:
-        return doc.text
-    if doc.raw_layers:
-        for k in ("rendered_text", "raw_text", "ocr_layer"):
-            if doc.raw_layers.get(k):
-                return doc.raw_layers[k]
-    return "\n".join(b.text for b in doc.blocks)
+    return build_reading_text(doc).text
 
 
 def extract_document_entities(doc: NormalizedDocument) -> Dict[str, List[Dict[str, Any]]]:
@@ -75,7 +71,7 @@ def extract_document_entities(doc: NormalizedDocument) -> Dict[str, List[Dict[st
 
     # 출퇴근기록부/근무시간 합계 특별 추출 (예: 30 + 28 + 30 = 88)
     time_sum_match = re.search(r"(\d+)\s*\+\s*(\d+)(?:\s*\+\s*(\d+))?\s*=\s*(\d+)", text)
-    if time_sum_match:
+    if time_sum_match and re.search(r"(?:연장|초과|휴일)\s*근로", text[max(0, time_sum_match.start() - 40):time_sum_match.end() + 20]):
         calc_total = int(time_sum_match.group(4) or time_sum_match.group(3) or time_sum_match.group(2))
         entities["연장근로시간"].append({
             "raw": f"{calc_total}시간 (산출합계)",
@@ -154,6 +150,9 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
                 by_doc[item["document_id"]].append(item)
 
             if len(by_doc) >= 2:
+                value_sets = [{item["norm"] for item in items} for items in by_doc.values()]
+                if all(values == value_sets[0] for values in value_sets[1:]):
+                    continue
                 # 불일치 발생!
                 docs_involved = list(by_doc.keys())
                 primary_doc_id = docs_involved[0]
@@ -165,12 +164,14 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
                     vals = ", ".join(f"'{it['raw']}'(맥락: {it['context'][:30]})" for it in items)
                     details_list.append(f"[{fn}] {vals}")
 
-                detail_msg = f"문서 간 '{key}' 기재가 상이합니다: " + " vs ".join(details_list)
+                detail_msg = (f"문서 간 '{key}' 기재가 상이합니다: " + " vs ".join(details_list)
+                              + ". 같은 당사자·사건·기간의 사실인지는 확인되지 않았으므로 모순을 확정하지 않습니다.")
                 
                 features = {
                     "cross_document_inconsistency": True,
                     "entity_type": key,
                     "defect_code": "XDOC",
+                    "same_subject_confirmed": False,
                     "documents": [items[0]["filename"] for items in by_doc.values()],
                 }
 
@@ -180,7 +181,7 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
                     evidence_items.append(
                         Evidence.create(
                             description=f"{it['filename']} 기재",
-                            grade=EvidenceGrade.A,
+                            grade=EvidenceGrade.C,
                             document_id=it["document_id"],
                             excerpt=it["context"][:300],
                             supports=False,
@@ -190,10 +191,11 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
                 findings.append(
                     Finding.create(
                         type=FindingType.CROSS_DOCUMENT_CONTRADICTION,
-                        status=VerificationStatus.CONTRADICTED,
-                        severity=Severity.HIGH,
-                        evidence_grade=EvidenceGrade.A,
-                        title=f"문서 간 사실관계 불일치(XDOC): '{key}' 상이",
+                        status=VerificationStatus.SUSPICIOUS,
+                        severity=Severity.MEDIUM,
+                        evidence_grade=EvidenceGrade.C,
+                        advisory_only=True,
+                        title=f"문서 간 기재 차이 확인 필요(XDOC): '{key}' 상이",
                         detail=detail_msg,
                         confidence=confidence_score(features),
                         confidence_features=features,

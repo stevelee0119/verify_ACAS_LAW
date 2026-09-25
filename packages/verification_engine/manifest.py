@@ -94,17 +94,19 @@ class RunManifest:
             record = dict(self.engines[name])
             record["seconds"] = round(record["seconds"], 3)
             engines[name] = record
+        from .environment import incomplete_banner
+        effective_environment = dict(environment if environment is not None else self.environment)
+        complete = bool(effective_environment.get("complete", False))
         out = {
             "schema": 1,
-            "warning": self.warning or self.environment.get("warning"),
-            "regression_comparable": self.environment.get("regression_comparable", True),
-            "sources": self.environment.get("sources", {}),
-            "ocr_engine_available": self.environment.get("ocr_engine_available", False),
-            "missing_resources": self.environment.get("missing_resources", []),
-            "environment": dict(self.environment),
+            "warning": incomplete_banner(effective_environment),
+            "regression_comparable": complete,
+            "sources": effective_environment.get("sources", {}),
+            "ocr_engine_available": bool((effective_environment.get("resources") or {}).get("korean_ocr")),
+            "missing_resources": effective_environment.get("missing_required", []),
             "versions": dict(versions or {}),
             # 실행 환경 점검 결과와 환경 지문(v5 2-1). 두 실행의 지문이 같아야 결과를 곧바로 비교할 수 있다.
-            "environment": dict(environment or {}),
+            "environment": effective_environment,
             "engines": engines,
             "not_executed": [name for name in self.order if not self.engines[name]["executed"]],
             # 입력 건수를 적지 않은 엔진(있으면 결함). inputs 0은 '검사 대상 없음'이고 누락과 다르다.

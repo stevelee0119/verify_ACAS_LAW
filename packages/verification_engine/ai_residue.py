@@ -71,13 +71,16 @@ def scan_residue(
     if not text:
         return out
 
-    target_text = _mask_direct_quotes(text) if mask_quotes else text
+    target_text = text
 
     # 제외 텍스트 치환 (예시, 프롬프트 지시문 등)
     if exclude_texts:
         for ex in exclude_texts:
             if ex and ex in target_text:
                 target_text = target_text.replace(ex, " " * len(ex))
+
+    if mask_quotes:
+        target_text = _mask_direct_quotes(target_text)
 
     for category, label, objective, pattern, min_kinds in load_rules():
         found = []

@@ -9,11 +9,12 @@ def categories(text):
 
 
 def test_objective_residues_are_found_with_their_text():
-    text = ("물론입니다! 요청하신 내용으로 소장을 작성해 드리겠습니다.\n### 청구취지\n**1. 사건의 개요**\n"
+    text = ("물론입니다! 요청하신 내용으로 소장을 작성해 드리겠습니다.\n### 청구취지\n**1. 사건의 개요**\n**2. 법리 검토**\n"
             "제 지식 기준일 현재 관련 판례는 다음과 같습니다.\n이 답변은 법률 자문을 대체하지 않습니다. 궁금한 점은 말씀해 주세요!")
     found = categories(text)
     assert {"CHATBOT_PREFACE", "MARKDOWN", "KNOWLEDGE_CUTOFF", "DISCLAIMER"} <= set(found)
-    assert all(found[k].objective for k in ("CHATBOT_PREFACE", "MARKDOWN", "KNOWLEDGE_CUTOFF", "DISCLAIMER"))
+    assert all(found[k].objective for k in ("CHATBOT_PREFACE", "KNOWLEDGE_CUTOFF"))
+    assert not found["MARKDOWN"].objective and not found["DISCLAIMER"].objective
     assert "### 청구취지" in found["MARKDOWN"].matches
 
 
