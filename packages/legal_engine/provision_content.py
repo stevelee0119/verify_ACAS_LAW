@@ -19,9 +19,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 FRACTION_RE = re.compile(r"(?P<den>\d+)\s*분\s*의\s*(?P<num>\d+)")
 # 기한으로 주장된 기간: "90일 이내", "30일 안에", "7일 전까지", "(…날부터 30일)"
+# 기간의 성격으로 주장된 기간: "10년의 소멸시효", "3년간", "징역 5년"
+# 조문 나열의 첫머리: "제1항은 3년, 같은 조 제2항은 …"(주장 글의 맨 앞에 조사와 기간만 온다)
 PERIOD_CLAIM_RE = re.compile(
     r"(?:부터|로부터)\s*(?P<a>\d+)\s*(?P<ua>일|개월|년)|"
-    r"(?P<b>\d+)\s*(?P<ub>일|개월|년)\s*(?:이내|안에|내에|내|이상|이하|전까지|전에|을\s*경과|이\s*지나)"
+    r"(?P<b>\d+)\s*(?P<ub>일|개월|년)\s*(?:이내|안에|내에|내|이상|이하|전까지|전에|을\s*경과|이\s*지나)|"
+    r"(?P<c>\d+)\s*(?P<uc>일|개월|년)\s*(?:간|의\s*(?:소멸\s*)?(?:시효|제척\s*기간|기간|징역|금고|자격정지))|"
+    r"(?:징역|금고|자격정지)\s*(?P<d>\d+)\s*(?P<ud>일|개월|년)|"
+    r"^\s*(?:은|는|이|가|도)\s*(?P<e>\d+)\s*(?P<ue>일|개월|년)\s*(?=[,，]|이다|으로|$)"
 )
 PERIOD_ANY_RE = re.compile(r"(?P<n>\d+)\s*(?P<u>일|개월|년)(?!\s*[.월])")
 # 날짜 속 숫자("2026년 7월 8일")는 기간이 아니다.
@@ -43,7 +48,7 @@ def _fractions(text: str) -> List[Tuple[int, int]]:
 def _claimed_periods(text: str) -> List[Tuple[int, str]]:
     out = []
     for m in PERIOD_CLAIM_RE.finditer(text or ""):
-        key = "a" if m.group("a") else "b"
+        key = next(k for k in "abcde" if m.group(k))
         number, unit = m.group(key), m.group("u" + key)
         if DATE_CONTEXT_RE.search(text[max(0, m.start(key) - 12):m.start(key)]):
             continue  # "2026년 7월 8일"의 8일은 기간이 아니다

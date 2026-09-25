@@ -140,7 +140,10 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
     status_counts = {str(s): sum(1 for f in findings if f.status == s) for s in VerificationStatus}
 
     adversarial = [f for f in findings if f.type in ADVERSARIAL_FINDING_TYPES]
-    legal = [f for f in findings if f.type in LEGAL_FINDING_TYPES]
+    # 확인(VERIFIED) 결과를 담은 안내(예: 행위시 버전과 일치)는 이슈가 아니다.
+    legal = [f for f in findings if f.type in LEGAL_FINDING_TYPES and f.status != VerificationStatus.VERIFIED]
+    temporal = [str((f.confidence_features or {}).get("rule_id")) for f in findings
+                if str((f.confidence_features or {}).get("rule_id") or "").startswith("TEMPORAL.")]
     consistency = [f for f in findings if f.type in CONSISTENCY_TYPES]
     authenticity = [f for f in findings if f.type in AUTHENTICITY_TYPES]
     forgery = [f for f in findings if f.type in FORGERY_TYPES]
@@ -223,6 +226,8 @@ def aggregate_scores(result: Any) -> Dict[str, Any]:
                 "content_confirmed": _sum_components(result.documents).get("content_confirmed", 0),
                 "issue_count": len(legal),
                 "risk": content_risk(legal),
+                # 법령 적용 시점(행위시법) 검토 결과별 건수(v4 P3)
+                "temporal_reviews": {rule.split(".", 1)[1]: temporal.count(rule) for rule in sorted(set(temporal))},
                 # 법리 주장 검토(규칙·주장 유형). 인용 정확성과 섞지 않고 따로 센다.
                 "reasoning_issues": len(reasoning),
                 "reasoning_by_type": {str(t): sum(1 for f in reasoning if f.type == t)

@@ -633,6 +633,7 @@ class LegalVerifier:
         # 가공 조문이 법령만 맞다는 이유로 VERIFIED가 된다.
         if citation.article:
             verdict.levels["article"] = self._verify_article(citation, official, verdict)
+        content_level = self._mirror_content(citation, official, mirrored, verdict)
 
         # 제9.4장 기준시점 검증
         if as_of:
@@ -700,7 +701,7 @@ class LegalVerifier:
             verdict.notes.append("법령 적용 기준일이 입력되지 않았다")
             if verdict.status == VerificationStatus.VERIFIED:
                 verdict.status = VerificationStatus.PARTIALLY_VERIFIED
-        verdict.levels["content"] = "UNVERIFIED"
+        verdict.levels["content"] = content_level
         verdict.levels["applicability"] = "REVIEW_NEEDED"
         verdict.review["version"] = {key: official.get(key) for key in (
             "law_id", "version_id", "effective_from", "effective_to", "temporal_scope")}
@@ -714,6 +715,27 @@ class LegalVerifier:
         if verdict.status == VerificationStatus.VERIFIED:
             verdict.status = VerificationStatus.PARTIALLY_VERIFIED
         return verdict
+
+    @staticmethod
+    def _mirror_content(citation: Citation, official: Dict[str, Any], versions: List[Dict[str, Any]],
+                        verdict: "CitationVerdict") -> str:
+        """조문 단위 기록(내부 Mirror)의 본문과 문서가 조문 내용으로 적은 주장을 대조한다(v2 R5).
+
+        시행 버전마다 결과가 다르면 여기서 판정하지 않고 법령 적용 시점 검토(temporal_review)로 넘긴다.
+        """
+        from .source_review import _compare_asserted_content
+        from .temporal_review import paragraph_text, version_outcomes
+
+        if (verdict.levels.get("article") != "VERIFIED" or citation.quoted_text or not official.get("text")
+                or not (citation.attributes or {}).get("claim_text")):
+            return "UNVERIFIED"
+        outcomes = version_outcomes(citation, versions) if len(versions) > 1 else []
+        if len({o["outcome"]["status"] for o in outcomes}) > 1:
+            verdict.review["temporal_review_needed"] = True
+            verdict.notes.append("시행 버전마다 조문 내용이 달라 법령 적용 시점 검토로 판단한다")
+            return "VERSION_DEPENDENT"
+        _compare_asserted_content(verdict, {"text": paragraph_text(official["text"], citation.paragraph)})
+        return verdict.levels.get("content", "UNVERIFIED")
 
     def _verify_article(self, citation: Citation, official: Dict[str, Any], verdict: "CitationVerdict") -> str:
         """인용된 조문 번호가 해당 법령에 실재하는지 확인한다."""

@@ -54,6 +54,7 @@ from packages.claim_engine.attachments import analyze_attachments
 from packages.claim_engine.classification import link_claim_evidence
 from packages.legal_engine.components import affected_by_unavailable
 from packages.legal_engine.reference_dates import reference_date_candidates
+from packages.legal_engine.temporal_review import criminal_context, reference_for, review_temporal_application
 from packages.legal_engine.source_review import case_applicability_review
 from packages.legal_engine.spec_mapping import relevance_finding
 from packages.source_adapters.legal_history import today_korea
@@ -516,6 +517,13 @@ class VerificationPipeline:
             if not stage.inputs:
                 stage.skip_reason = "판례·결정 인용이 없음"
         self._attach_reference_dates(result, doc, context)
+        # 법령 적용 시점(행위시법): 시행 버전이 둘 이상인 조문에 대한 주장을 버전별로 대조한다(v4 P3)
+        with manifest.stage("temporal_review", result.findings, document_id=document.document_id) as stage:
+            found = self._temporal_reviews(doc, citations, context)
+            stage.inputs = found["reviewed"]
+            if not found["reviewed"]:
+                stage.skip_reason = found["reason"]
+            result.findings.extend(found["findings"])
         emit(JobState.VERIFYING, f"{document.filename} 판례 의미·적용 검토", base + span * 0.75)
         with manifest.stage("semantic_review", result.findings, document_id=document.document_id) as stage:
             self._semantic_review(result, citations, context, pii, progress=lambda done, total: emit(
@@ -745,6 +753,32 @@ class VerificationPipeline:
         for item in result.unverified_items:
             if item.get("type") == "STATUTE":
                 item["reference_date_candidates"] = usable[:5]
+
+    def _temporal_reviews(self, doc, citations, context) -> Dict[str, Any]:
+        """시행 버전 연혁을 가진 출처(내부 Mirror)에서 조문 버전들을 받아 행위시법 검토를 한다."""
+        statutes = [c for c in citations if c.type == CitationType.STATUTE and c.article
+                    and (c.attributes or {}).get("claim_text")]
+        versions_of = getattr(getattr(self.registry.law, "mirror", None), "all_versions", None)
+        if not statutes:
+            return {"reviewed": 0, "reason": "조문 내용을 주장한 법령 인용이 없음", "findings": []}
+        if versions_of is None:
+            return {"reviewed": 0, "reason": "시행 버전 연혁을 제공하는 출처가 없음(공식 연혁 조회는 기준일이 있을 때 "
+                                            "인용 검증 단계에서 한다)", "findings": []}
+        text = build_reading_text(doc).text  # 줄바꿈으로 끊긴 문장을 이어 읽는다
+        blocks = {b.block_id: b.text for b in doc.blocks}
+        criminal = criminal_context(text)
+        findings, reviewed = [], 0
+        for citation in statutes:
+            versions = versions_of(citation.law_name, citation.article)
+            if len(versions) < 2:
+                continue
+            reviewed += 1
+            sentence = blocks.get(citation.block_id) or ""
+            reference = reference_for(citation, sentence, text, context.case_date)
+            finding = review_temporal_application(citation, versions, reference, criminal=criminal)
+            if finding is not None:
+                findings.append(finding)
+        return {"reviewed": reviewed, "reason": "시행 버전이 둘 이상인 조문이 없음", "findings": findings}
 
     def _legal_reviews(self, result, citations, context, *, progress=None):
         """Keep the incident-date review and every issue-date review distinct."""
