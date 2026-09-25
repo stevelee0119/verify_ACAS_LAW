@@ -95,6 +95,21 @@ def _covered_by(line_signature: str, rows: List[List[str]]) -> bool:
     return all(c in line_signature for c in meaningful)
 
 
+def _cells_run_together(blocks, table_bbox, rows: List[List[str]]) -> bool:
+    """표 영역의 줄 글자에서 이웃한 칸이 공백 없이 붙어 있는지("진단서2023. 2. 30.").
+
+    붙어 있으면 줄 블록으로는 칸 경계를 알 수 없으므로 진짜 여러 칸 표로 보고 칸 단위로 읽어야 한다.
+    문단을 표로 잘못 잡은 경우에는 칸 경계가 어절 사이(공백)에 놓이므로 붙지 않는다.
+    """
+    texts = [b.text for b in blocks if _inside(b.bbox, table_bbox)]
+    multi = [[c.strip() for c in row if c and c.strip()] for row in rows]
+    multi = [row for row in multi if len(row) >= 2]
+    if not multi or not texts:
+        return False
+    joined = [sum(1 for a, b in zip(row, row[1:]) if any((a + b) in t for t in texts)) for row in multi]
+    return sum(1 for n in joined if n) * 2 >= len(multi)
+
+
 def _inside(bbox, area, margin: float = 2.0) -> bool:
     if not bbox or not area:
         return False
@@ -269,7 +284,7 @@ class PdfParser(DocumentParser):
                                      "cells": rows, "header": rows[0] if rows else [],
                                      "title": _table_title(p.blocks, table_bbox),
                                      "row_count": len(rows), "column_count": max((len(r) for r in rows), default=0)}
-                        if _covered_by(line_signature, rows):
+                        if _covered_by(line_signature, rows) and not _cells_run_together(p.blocks, table_bbox, rows):
                             # 같은 글자는 줄 블록으로 이미 있다. 표 블록을 따로 만들어 중복 표시하지
                             # 않되, 행·열 구조는 버리지 않고 남겨 줄 블록과 연결한다. 첨부 목록처럼
                             # "자료명"과 "첨부 여부"의 대응이 의미를 갖는 표가 있기 때문이다.
@@ -529,6 +544,22 @@ class PdfParser(DocumentParser):
                 xmp = reader.xmp_metadata
                 if xmp is not None and getattr(xmp, "stream", None) is not None:
                     doc.structure["xmp"] = xmp.stream.get_data().decode("utf-8", "replace")
+                    # 표준 키로 한정하지 않고 XMP의 모든 값을 문서 속성으로 싣는다(v3 §3-3).
+                    for key, value in _xmp_values(doc.structure["xmp"]).items():
+                        doc.metadata.setdefault(f"XMP:{key}", value)
+            except Exception:
+                pass
+            # 북마크(Outline) 제목 — 화면 본문에는 없지만 뷰어·추출기가 읽는 글자다.
+            try:
+                doc.structure["outline"] = _outline_titles(reader.outline)
+            except Exception:
+                pass
+            # 양식 필드 값
+            try:
+                fields = reader.get_fields() or {}
+                doc.structure["form_fields"] = [
+                    {"name": str(name), "value": str(field.get("/V") or "")}
+                    for name, field in fields.items() if str(field.get("/V") or "").strip()][:200]
             except Exception:
                 pass
 
@@ -595,9 +626,11 @@ class PdfParser(DocumentParser):
         doc.structure["embedded_stream_text"] = _extract_stream_text(raw)
         doc.structure["has_invisible_render_mode"] = _has_invisible_render_mode(raw)
         doc.structure["has_filled_shapes"] = _has_filled_shapes(raw)
-        zero_width = _actual_text_zero_width(raw)
+        zero_width, strings = _actual_text_zero_width(raw, collect=True)
         if zero_width:
             doc.structure["actual_text_zero_width"] = zero_width
+        if strings:
+            doc.structure["actual_text_strings"] = strings[:50]
 
 
 def _decode_stream(chunk: bytes, filters: str) -> bytes:
@@ -895,9 +928,84 @@ ZERO_WIDTH_NAMES = {"\u200b": "ZERO WIDTH SPACE", "\u200c": "ZERO WIDTH NON-JOIN
                     "\u2060": "WORD JOINER", "\ufeff": "ZERO WIDTH NO-BREAK SPACE"}
 
 
-def _actual_text_zero_width(raw: bytes) -> Dict[str, int]:
-    """표시 글자 대신 쓰일 문자열(ActualText)에 들어 있는 폭 0 문자. 추출기는 이 문자를 버리는 경우가 많다."""
+def _xmp_values(xml: str) -> Dict[str, str]:
+    """XMP 패킷의 모든 값(요소 글자·속성). 키는 '접두어:이름'."""
+    import xml.etree.ElementTree as ET
+
+    values: Dict[str, str] = {}
+    try:
+        root = ET.fromstring(xml.strip().split("?>", 1)[-1] if xml.lstrip().startswith("<?xpacket") else xml)
+    except ET.ParseError:
+        return values
+
+    def name(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+    for element in root.iter():
+        text = (element.text or "").strip()
+        tag = name(element.tag)
+        if text and tag not in ("li", "Seq", "Bag", "Alt", "Description", "RDF", "xmpmeta"):
+            values[tag] = (values.get(tag, "") + " " + text).strip()[:2000]
+        elif text and tag == "li":
+            parent = "value"
+            values[parent] = (values.get(parent, "") + " " + text).strip()[:2000]
+        for key, value in element.attrib.items():
+            key = name(key)
+            if value.strip() and key not in ("about", "lang"):
+                values[key] = value.strip()[:2000]
+    return values
+
+
+def _outline_titles(outline, level: int = 0, out: Optional[List[Dict[str, Any]]] = None) -> List[Dict[str, Any]]:
+    out = [] if out is None else out
+    for item in outline or []:
+        if isinstance(item, list):
+            _outline_titles(item, level + 1, out)
+        else:
+            title = str(getattr(item, "title", "") or (item.get("/Title") if hasattr(item, "get") else "") or "")
+            if title.strip():
+                out.append({"title": title, "level": level})
+        if len(out) >= 500:
+            break
+    return out
+
+
+PDF_ESCAPES = {b"n": b"\n", b"r": b"\r", b"t": b"\t", b"b": b"\b", b"f": b"\f"}
+
+
+def _pdf_literal(body: bytes) -> str:
+    """PDF 리터럴 문자열(괄호 문자열)의 이스케이프(\\ddd 8진수 등)를 풀고 UTF-16(BOM) 또는 Latin-1로 읽는다."""
+    out = bytearray()
+    i = 0
+    while i < len(body):
+        ch = body[i:i + 1]
+        if ch != b"\\" or i + 1 >= len(body):
+            out += ch
+            i += 1
+            continue
+        nxt = body[i + 1:i + 2]
+        octal = re.match(rb"[0-7]{1,3}", body[i + 1:i + 4])
+        if octal:
+            out.append(int(octal.group(0), 8) & 0xFF)
+            i += 1 + len(octal.group(0))
+        elif nxt in (b"\r", b"\n"):  # 줄 이어쓰기
+            i += 2 + (1 if body[i + 1:i + 3] == b"\r\n" else 0)
+        else:
+            out += PDF_ESCAPES.get(nxt, nxt)
+            i += 2
+    data = bytes(out)
+    if data.startswith(b"\xfe\xff"):
+        return data[2:].decode("utf-16-be", "ignore")
+    return data.decode("latin-1", "ignore")
+
+
+def _actual_text_zero_width(raw: bytes, collect: bool = False):
+    """표시 글자 대신 쓰일 문자열(ActualText)에 들어 있는 폭 0 문자. 추출기는 이 문자를 버리는 경우가 많다.
+
+    collect=True면 ActualText 문자열 자체도 돌려준다(화면 글자와 다른 문자열을 숨기는 경로이므로 폭 0 문자를 지우고 지시문인지 분류한다).
+    """
     counts: Dict[str, int] = {}
+    strings: List[str] = []
     body = raw[:8_000_000]
     stream_re = re.compile(rb"stream\r?\n(.*?)endstream", re.S)
     chunks = [stream_re.sub(b"", body)]  # 스트림 밖(구조 트리 등)
@@ -915,12 +1023,16 @@ def _actual_text_zero_width(raw: bytes) -> Dict[str, int]:
                 except ValueError:
                     continue
             else:
-                text = m.group(2).decode("latin-1", "ignore")
+                text = _pdf_literal(m.group(2))
+            found = False
             for ch, name in ZERO_WIDTH_NAMES.items():
                 if ch in text:
                     key = f"U+{ord(ch):04X} {name}"
                     counts[key] = counts.get(key, 0) + text.count(ch)
-    return counts
+                    found = True
+            if collect and (found or len(text.strip()) >= 8):
+                strings.append(text[:2000])
+    return (counts, strings) if collect else counts
 
 
 def _has_filled_shapes(raw: bytes) -> bool:

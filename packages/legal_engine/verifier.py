@@ -718,6 +718,10 @@ class LegalVerifier:
     def _verify_article(self, citation: Citation, official: Dict[str, Any], verdict: "CitationVerdict") -> str:
         """인용된 조문 번호가 해당 법령에 실재하는지 확인한다."""
         articles = official.get("articles")
+        if articles is None and official.get("article") is not None and official.get("text"):
+            # 조문 단위로 받은 기록(내부 Mirror 등)은 그 조문 자체가 실존한다는 확인이다. 다른 조문의 부존재는
+            # 이 기록으로 판단하지 않는다(조회한 조문 하나만 목록에 둔다).
+            articles = [str(official["article"])]
         if articles is None:
             fetch = getattr(self.registry.law, "fetch_articles", None)
             articles = fetch(official) if fetch is not None else None

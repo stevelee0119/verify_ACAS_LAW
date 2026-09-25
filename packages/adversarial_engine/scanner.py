@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.confidence import score as confidence_score
@@ -23,12 +24,15 @@ from packages.document_engine.reading_text import build_reading_text, join_separ
 from .classifier import Classification, classify, severity_for
 from .cross_layer import compare_layers
 from .encoding_scan import decode_candidates
+from .normalize import KIND_LABELS, normalize_for_classification
 from .unicode_scan import scan_unicode
 from .patterns import AI_ADDRESSING_RE
 
 ENGINE_NAME = "adversarial_engine"
 
 MAX_EXCERPT = 300
+# 줄 끝에서 끊긴 Base64·16진 토큰(앞 조각 16자 이상)
+WRAPPED_TOKEN_RE = re.compile(r"([A-Za-z0-9+/]{16,})[ \t]*\r?\n[ \t]*([A-Za-z0-9+/]+={0,2})(?=\s|$)")
 
 
 # 지시문이 숨겨진 경로. 경로마다 따로 보고해야 한 경로만 막고 끝내지 않는다.
@@ -39,7 +43,13 @@ PATH_LABELS = {
     "TRANSPARENT_FILL": "투명 글자(채움 투명도 0)", "LOW_CONTRAST": "배경과 대비가 거의 없는 글자",
     "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
     "METADATA": "문서 속성(메타데이터)", "ATTACHMENT": "첨부파일 내용", "RUNNING_HEAD": "머리글·바닥글", "OTHER_HIDDEN": "기타 숨김 레이어",
+    "OUTLINE": "북마크(개요)", "FORM_FIELD": "양식 필드 값", "ACTUAL_TEXT": "표시 대체 문자열(ActualText)",
+    "ENCODED": "인코딩 문자열", **KIND_LABELS,
 }
+
+
+def _path_label(*keys: str) -> str:
+    return " · ".join(PATH_LABELS.get(k, k) for k in keys if k)
 
 
 def _injection_path(block: Block) -> str:
@@ -124,7 +134,10 @@ class AdversarialScanner:
 
         findings.extend(self._scan_blocks(doc))
         findings.extend(self._scan_metadata(doc))
-        findings.extend(self._scan_unicode(doc))
+        structural = self._scan_structure(doc)
+        findings.extend(structural)
+        findings.extend(self._scan_unicode(doc, actual_text_flagged=any(
+            f.confidence_features.get("injection_path") == "ACTUAL_TEXT" for f in structural)))
         findings.extend(self._scan_encoding(doc))
         findings.extend(self._scan_cross_layer(doc))
         findings.extend(self._scan_multimodal(doc))
@@ -132,17 +145,41 @@ class AdversarialScanner:
 
         result.findings = findings
         result.data["adversarial_risk"] = self.risk_level(findings)
-        result.data["scanned_layers"] = sorted(set(b.source_layer for b in doc.blocks))
+        paths = self.scanned_paths(doc)
+        result.data["scanned_layers"] = sorted(paths)
+        result.data["scanned_paths"] = paths
         result.data["injection_candidate_count"] = len(findings)
         return result
 
+    @staticmethod
+    def scanned_paths(doc: NormalizedDocument) -> Dict[str, int]:
+        """실제로 분류기에 넣은 경로와 그 건수. 비어 있는 경로는 적지 않는다(검사했다고 오해하지 않도록)."""
+        paths: Dict[str, int] = {}
+        for block in doc.blocks:
+            if (block.text or "").strip():
+                paths[block.source_layer] = paths.get(block.source_layer, 0) + 1
+        structure = doc.structure
+        extra = {
+            "metadata": sum(1 for v in doc.metadata.values() if str(v).strip()),
+            "outline": len(structure.get("outline") or []),
+            "form_field": len(structure.get("form_fields") or []),
+            "attachment": sum(1 for e in structure.get("embedded_files") or [] if (e.get("text") or "").strip()),
+            "actual_text": len(structure.get("actual_text_strings") or []),
+            "image_ocr": sum(1 for b in doc.blocks if b.source_layer == "ocr_layer")
+                         + (1 if (doc.raw_layers.get("independent_ocr") or "").strip() else 0),
+            "encoded_text": sum(1 for t in doc.raw_layers.values() if t),
+        }
+        paths.update({k: v for k, v in extra.items() if v})
+        return paths
     # -- 레이어별 검사 ----------------------------------------------------
     def _scan_blocks(self, doc: NormalizedDocument) -> List[Finding]:
         out: List[Finding] = []
         for text, blocks in _passages(doc):
             block = blocks[0]
+            # 전각·폭 0·자모 분리로 숨긴 지시문은 되돌린 글자로 분류한다. 원문은 그대로 남긴다.
+            normalized, kinds = normalize_for_classification(text)
             classification = classify(
-                text,
+                normalized,
                 source_layer=block.source_layer,
                 visible=block.visible,
                 hidden_reason=block.attributes.get("hidden_reason"),
@@ -169,7 +206,10 @@ class AdversarialScanner:
                 "observed_text": text[:2000],
                 "block_ids": [b.block_id for b in blocks],
                 "hidden_reason": block.attributes.get("hidden_reason"),
-                "injection_path": _injection_path(block),
+                "injection_path": kinds[0] if kinds else _injection_path(block),
+                "physical_path": _injection_path(block),
+                "obfuscation": kinds,
+                "normalized_text": normalized[:2000] if kinds else None,
                 "bbox": bbox.as_tuple() if bbox else None,
                 "machine_directed_suppression": machine_directed,
             }
@@ -180,7 +220,7 @@ class AdversarialScanner:
                     severity=severity,
                     evidence_grade=grade,
                     title=("지시문을 주제로 설명·언급하는 문구 (명령 아님)" if descriptive
-                           else self._title_for(finding_type, classification, block)),
+                           else self._title_for(finding_type, classification, block, kinds)),
                     detail=self._detail_for(block, classification),
                     advisory_only=descriptive,
                     confidence=confidence_score(features),
@@ -193,7 +233,7 @@ class AdversarialScanner:
                     meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
                     adversarial_class=classification.label,
                     forensic_level=self._forensic_level(classification),
-                    tags=[str(i) for i in classification.intents] + [_injection_path(block)],
+                    tags=[str(i) for i in classification.intents] + [_injection_path(block)] + kinds,
                     evidence=[
                         Evidence.create(
                             description=f"{block.source_layer} 레이어에서 관찰된 지시형 문자열",
@@ -224,9 +264,13 @@ class AdversarialScanner:
         return FindingType.META_INSTRUCTION
 
     @staticmethod
-    def _title_for(finding_type: FindingType, classification: Classification, block: Optional[Block] = None) -> str:
+    def _title_for(finding_type: FindingType, classification: Classification, block: Optional[Block] = None,
+                   kinds: Optional[List[str]] = None) -> str:
         intents = ", ".join(str(i) for i in classification.intents) or "UNSPECIFIED"
-        path = PATH_LABELS.get(_injection_path(block)) if block is not None else None
+        if kinds:  # 은닉 방법이 경로다. 화면에 보이는 글자라도 '보이는 본문'과 따로 센다.
+            path = _path_label(*kinds) + (" · 화면 표시 글자" if block is not None and block.visible else "")
+        else:
+            path = PATH_LABELS.get(_injection_path(block)) if block is not None else None
         return f"{finding_type} 후보: {intents}" + (f" — 경로: {path}" if path else "")
 
     @staticmethod
@@ -261,17 +305,19 @@ class AdversarialScanner:
             text = str(value)
             if not text.strip() or len(text) < 8:
                 continue
-            classification = classify(text, source_layer="metadata", visible=False, block_type="metadata")
+            normalized, kinds = normalize_for_classification(text)
+            classification = classify(normalized, source_layer="metadata", visible=False, block_type="metadata")
             if classification.label in (AdversarialClass.BENIGN_CONTENT, AdversarialClass.INSTRUCTION_LIKE):
                 continue
-            features = {"deterministic_rule": True, "cross_layer_mismatch": True, **classification.features}
+            features = {"deterministic_rule": True, "cross_layer_mismatch": True, **classification.features,
+                        "injection_path": "METADATA", "metadata_key": key, "obfuscation": kinds}
             out.append(
                 Finding.create(
                     type=FindingType.METADATA_INJECTION,
                     status=VerificationStatus.SUSPICIOUS,
                     severity=severity_for(classification),
                     evidence_grade=EvidenceGrade.A,
-                    title=f"문서 메타데이터({key})에 지시형 문자열이 있다",
+                    title=f"문서 속성 '{key}'에 지시형 문자열이 있다 — 경로: {_path_label('METADATA', *kinds)}",
                     detail=(
                         f"메타데이터 필드 '{key}'는 사용자 화면에 표시되지 않으나 지시형 문자열을 포함한다. "
                         "메타데이터는 검증 지침이 될 수 없다."
@@ -283,6 +329,7 @@ class AdversarialScanner:
                     meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
                     adversarial_class=classification.label,
                     forensic_level=ForensicLevel.SUSPICIOUS,
+                    tags=[str(i) for i in classification.intents] + ["METADATA"] + kinds,
                     evidence=[
                         Evidence.create(
                             description=f"metadata:{key}",
@@ -295,10 +342,46 @@ class AdversarialScanner:
             )
         return out
 
-    def _scan_unicode(self, doc: NormalizedDocument) -> List[Finding]:
+    def _scan_structure(self, doc: NormalizedDocument) -> List[Finding]:
+        """북마크·양식 필드·ActualText. 화면 본문에 없지만 추출기·모델이 읽는 글자다(v4 P7)."""
+        out: List[Finding] = []
+        entries = [("OUTLINE", "outline", str(o.get("title") or ""), None) for o in doc.structure.get("outline") or []]
+        entries += [("FORM_FIELD", "form_field", str(f.get("value") or ""), f.get("name"))
+                    for f in doc.structure.get("form_fields") or []]
+        entries += [("ACTUAL_TEXT", "actual_text", str(t), None) for t in doc.structure.get("actual_text_strings") or []]
+        for path, layer, text, name in entries:
+            if len(text.strip()) < 6:
+                continue
+            normalized, kinds = normalize_for_classification(text)
+            classification = classify(normalized, source_layer=layer, visible=False, block_type="metadata")
+            if classification.label in (AdversarialClass.BENIGN_CONTENT, AdversarialClass.INSTRUCTION_LIKE):
+                continue
+            label = _path_label(path, *kinds)
+            features = {"deterministic_rule": True, "cross_layer_mismatch": True, **classification.features,
+                        "observed_text": text[:2000], "normalized_text": normalized[:2000] if kinds else None,
+                        "injection_path": path, "obfuscation": kinds, "field_name": name}
+            out.append(Finding.create(
+                type=FindingType.HIDDEN_INSTRUCTION, status=VerificationStatus.SUSPICIOUS,
+                severity=severity_for(classification), evidence_grade=EvidenceGrade.A,
+                title=(f"HIDDEN_INSTRUCTION 후보: {', '.join(str(i) for i in classification.intents) or 'UNSPECIFIED'}"
+                       f" — 경로: {label}"),
+                detail=(f"{label}{f' ({name})' if name else ''}에서 지시형 문자열이 관찰되었다. 이 글자는 화면 본문에 "
+                        f"나타나지 않지만 텍스트 추출기와 모델 입력에 들어갈 수 있다. 분류={classification.label}. "
+                        "본 문자열은 자료로만 취급되며 시스템 지침이나 Tool 권한을 변경하지 않는다."),
+                confidence=confidence_score(features), confidence_features=features,
+                document_id=doc.document_id, engine=ENGINE_NAME,
+                meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
+                adversarial_class=classification.label, forensic_level=self._forensic_level(classification),
+                tags=[str(i) for i in classification.intents] + [path] + kinds,
+                evidence=[Evidence.create(description=label, grade=EvidenceGrade.A,
+                                          document_id=doc.document_id, excerpt=_excerpt(text))],
+            ))
+        return out
+
+    def _scan_unicode(self, doc: NormalizedDocument, actual_text_flagged: bool = False) -> List[Finding]:
         out: List[Finding] = []
         hidden_marks = doc.structure.get("actual_text_zero_width") or {}
-        if hidden_marks:
+        if hidden_marks and not actual_text_flagged:  # 지시문으로 이미 보고했으면 신호만 따로 세지 않는다
             listed = ", ".join(f"{k} {v}회" for k, v in hidden_marks.items())
             features = {"deterministic_rule": True, "forensic_signal": 1, "unicode_kind": "ZERO_WIDTH",
                         "layer": "actual_text", "code_points": hidden_marks, "injection_path": "ZERO_WIDTH"}
@@ -365,7 +448,10 @@ class AdversarialScanner:
         for layer_name, text in doc.raw_layers.items():
             if not text:
                 continue
-            for segment in decode_candidates(text):
+            # 줄바꿈으로 끊긴 인코딩 문자열도 이어서 디코드한다(끊긴 그대로도 따로 본다).
+            joined = WRAPPED_TOKEN_RE.sub(r"\1\2", text)
+            segments = decode_candidates(text) + (decode_candidates(joined) if joined != text else [])
+            for segment in segments:
                 classification = classify(segment.decoded, source_layer="hidden_text", visible=False)
                 if classification.label == AdversarialClass.BENIGN_CONTENT:
                     continue
@@ -378,6 +464,8 @@ class AdversarialScanner:
                     "forensic_signal": 2,
                     "encoding": segment.encoding,
                     **classification.features,
+                    "injection_path": "ENCODED",
+                    "layer": layer_name,
                 }
                 out.append(
                     Finding.create(
@@ -387,7 +475,7 @@ class AdversarialScanner:
                         if classification.label == AdversarialClass.PROMPT_INJECTION_LIKELY
                         else Severity.MEDIUM,
                         evidence_grade=EvidenceGrade.A,
-                        title=f"{segment.encoding} 인코딩된 지시형 문자열",
+                        title=f"{segment.encoding} 인코딩된 지시형 문자열 — 경로: {_path_label('ENCODED')}({segment.encoding})",
                         detail=(
                             f"{layer_name} 레이어의 {segment.encoding} 문자열을 안전 디코드한 결과 지시형 표현이 확인되었다. "
                             "디코드는 표준 라이브러리로만 수행했고 어떤 실행·접속도 하지 않았다."

@@ -1,4 +1,4 @@
-"""합성 문서를 실제 검증 파이프라인에 넣어 결과·JSON·docx·요약 점수를 얻는다(v4 P0)."""
+"""합성 PDF 사건 묶음을 실제 검증 파이프라인에 넣어 결과·JSON·docx·요약 점수를 얻는다(v4 P0)."""
 from __future__ import annotations
 
 import hashlib
@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict
 
-from . import synthetic_docs as S
+from . import corpus as C
 
 
 def _sha(path: Path) -> str:
@@ -28,18 +28,15 @@ def run_synthetic(workdir: Path | None = None) -> Dict[str, Any]:
     from packages.verification_engine import pipeline as module
     from packages.verification_engine.pipeline import DocumentInput, ProjectContext, VerificationPipeline
 
-    mirror = LocalLegalMirror(S.write_mirror(workdir / "mirror"))
+    mirror = LocalLegalMirror(C.write_mirror(workdir / "mirror"))
     registry = SourceRegistry()
     registry.mirror = mirror
     registry.legal[0].mirror = mirror
     module.PseudonymStore = lambda project_id: PseudonymStore(project_id, root=workdir / "vault")
 
-    texts = S.write_texts(workdir / "docs")
-    pdf = S.write_injection_pdf(workdir / "docs" / "행정_의견서.pdf")
-    scan = S.write_scanned_pdf(workdir / "docs" / "형사_스캔서면.pdf")
-    inputs = [DocumentInput(f"doc{i}", str(path), path.name,
-                            "application/pdf" if path.suffix == ".pdf" else "text/plain", _sha(path))
-              for i, path in enumerate([*texts.values(), pdf, scan], start=1)]
+    documents = C.write_documents(workdir / "docs")
+    inputs = [DocumentInput(f"doc{i}", str(path), name, "application/pdf", _sha(path))
+              for i, (name, path) in enumerate(documents.items(), start=1)]
     pipeline = VerificationPipeline(registry=registry)
     result = pipeline.run("audit-run", ProjectContext("audit-project"), inputs)
 
@@ -51,8 +48,7 @@ def run_synthetic(workdir: Path | None = None) -> Dict[str, Any]:
         from io import BytesIO
 
         from docx import Document
-        data = build_report_docx(result)
-        document = Document(BytesIO(data))
+        document = Document(BytesIO(build_report_docx(result)))
         parts = [p.text for p in document.paragraphs]
         for table in document.tables:
             for row in table.rows:

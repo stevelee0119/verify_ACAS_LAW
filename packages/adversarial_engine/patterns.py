@@ -18,6 +18,10 @@ def _c(pattern: str) -> Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 
+# 기계(AI·모델·검토 도구·시스템)를 수신자로 부르는 말. 사람 수신자(피고·원고·귀하)와 구분한다.
+MACHINE_ADDRESSEE = (r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|(?:검증|검토|분석)\s*(?:모델|도구|시스템|엔진|AI|프로그램)|"
+                     r"(?:AI|인공지능)\s*검토자|모델|시스템|reviewer|assistant)")
+
 INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # --- Instruction Override -------------------------------------------
     (_c(r"(이전|앞의|앞선|위의|기존|종전|지금까지)\s*(의\s*)?(모든\s*)?(지시|명령|지침|규칙|프롬프트)[을를]?\s*"
@@ -170,6 +174,24 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.VERIFICATION_SUPPRESSION, 0.8, "인용 확인 완료 주장(영어)"),
     (_c(r"(지시|지침|요청)[를을]?\s*(최우선|우선)\s*(으로|적으로)?\s*(따를|따르|적용|준수)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 0.9, "지시 최우선 적용 요구"),
+    # --- 기계 수신자 + 검증·보고·결론 동사 + 명령형(v4 P7) ----------------------------------------
+    # 사람에게 하는 요청(피고는 … 하라)과 구분하려고 AI·모델·검토 도구 같은 수신자를 요구한다. 특정 문장이 아니라
+    # '수신자 → 검증·보고 대상 → 금지·생략·변경 명령'의 구조로 판단한다.
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:확인|검사|검증|검토|조회|점검|대조|검산|계산|분석)[을를]?\s*"
+        r"(?:하지\s*(?:말|마)|(?:생략|무시|중단)(?:하라|해라|하십시오|하세요|할\s*것)|건너뛰(?:어라|라|십시오|세요))"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "기계 수신 검증 생략·금지 명령"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:보고|기재|표시|출력|언급)(?:하)?지\s*(?:말|마)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 보고 금지 명령"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:오류|결함|문제|경고|위반|지시)[을를]?\s*무시(?:하라|해라|하십시오|할\s*것)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "기계 수신 오류 무시 명령"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:결론|결과|판정|평가|등급)[을를]?\s*(?:바꿔|바꾸어|변경하|수정하|조정하)"
+        r"(?:라|어라|여라|십시오|세요|\s*것)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 변경 명령"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:신뢰할\s*수\s*있다고|정확하다고|적법하다고|진정하다고|문제(?:가)?\s*없다고|"
+        r"이상(?:이)?\s*없다고)\s*(?:보고|기재|결론|판정|평가)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 강제"),
+    (_c(r"(?:보고서|결과|요약|검증\s*결과)\s*(?:에서|에)\s*[^.\n]{0,10}?(?:제외|빼|누락)(?:하라|해라|시켜라|하십시오|할\s*것)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 제외 명령"),
 ]
 
 # LLM·검증 시스템을 명시적으로 호명하는 표현 (메타 지시어 강한 신호)

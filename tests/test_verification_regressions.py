@@ -338,10 +338,25 @@ def test_pdf_table_structure_survives_line_deduplication(tmp_path):
                             sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     tables = doc.structure["tables"]
     assert tables and tables[0]["cells"][1] == ["1", "Recording file", "No"]
-    assert tables[0]["representation"] == "LINES_WITH_STRUCTURE" and tables[0]["line_block_ids"]
     assert tables[0]["title"] == "Attachment list"
-    assert not [b for b in doc.blocks if b.block_type == "table"]  # 같은 글자를 두 벌 만들지 않는다
     assert any(b.attributes.get("table_ref") == tables[0]["table_ref"] for b in doc.blocks)
+    # 줄 글자에서 칸이 붙어 버렸으므로("1Recording fileNo") 칸 단위 표 블록으로 읽고, 줄은 표의 줄로 뺀다.
+    # 같은 글자가 본문(문단)과 표에 두 벌 남지 않는다.
+    assert tables[0]["representation"] == "TABLE_BLOCK"
+    assert not [b for b in doc.prose_blocks() if "Recording" in b.text]
+
+
+def test_cells_run_together_separates_real_tables_from_paragraphs():
+    from packages.common.schemas import BBox, Block
+    from packages.document_engine.pdf_parser import _cells_run_together
+    area = (0, 0, 500, 500)
+    line = lambda text: Block(block_id=text[:4], text=text, page=1, bbox=BBox(10, 10, 400, 20))
+    # 민사 증거표·가사 재산목록·행정 처분 목록: 칸 경계에 공백이 없다
+    assert _cells_run_together([line("갑 제1호증진단서2023. 2. 30.")], area, [["갑 제1호증", "진단서", "2023. 2. 30."]])
+    assert _cells_run_together([line("아파트3억 원")], area, [["아파트", "3억 원"]])
+    assert _cells_run_together([line("영업정지 1개월2024. 2. 1.")], area, [["영업정지 1개월", "2024. 2. 1."]])
+    # 문단을 표로 잘못 잡은 경우: 칸 경계가 어절 사이라 공백이 남는다
+    assert not _cells_run_together([line("피고는 원고에게 금원을 지급하라")], area, [["피고는 원고에게", "금원을 지급하라"]])
 
 
 def test_hash_format_problem_is_not_a_mismatch_without_the_file():

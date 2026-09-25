@@ -108,9 +108,34 @@ def _is_full_line(block: Block, right_edge: Optional[float], width: float) -> Op
     return block.bbox.x1 >= right_edge - FULL_LINE_SLACK * width
 
 
-def join_separator(prev: str, nxt: str, *, prev_full: Optional[bool] = True) -> str:
-    """앞 줄과 다음 줄 사이에 넣을 문자. '' = 단어 안 줄바꿈, ' ' = 단어 경계, '\\n' = 문단 경계."""
+def _word_wrapped(block: Block, nxt: Block, right_edge: Optional[float]) -> bool:
+    """왼쪽 맞춤(오른쪽이 들쭉날쭉한) 줄바꿈. 다음 줄 첫 어절이 앞 줄 남은 폭에 들어가지 않아 넘어간 경우다.
+
+    이런 줄은 오른쪽 끝까지 차지 않아도 문단의 끝이 아니며, 어절 경계에서 끊겼으므로 공백으로 잇는다.
+    """
+    if block.bbox is None or right_edge is None or nxt.bbox is None:
+        return False
+    text = (block.text or "").strip()
+    if not text:
+        return False
+    char_width = (block.bbox.x1 - block.bbox.x0) / max(1, len(text))
+    first = (nxt.text or "").strip().split(" ")[0]
+    if not first or abs(nxt.bbox.x0 - block.bbox.x0) > 2 * char_width + 1:
+        return False  # 다음 줄이 들여쓰기·내어쓰기로 시작하면 새 문단으로 본다
+    remaining = right_edge - block.bbox.x1
+    return remaining < char_width * (len(first) + 1)
+
+
+def join_separator(prev: str, nxt: str, *, prev_full: Optional[bool] = True, word_wrap: bool = False) -> str:
+    """앞 줄과 다음 줄 사이에 넣을 문자. '' = 단어 안 줄바꿈, ' ' = 단어 경계, '\\n' = 문단 경계.
+
+    word_wrap: 왼쪽 맞춤 줄이 다음 어절이 들어가지 않아 넘어간 경우(어절 경계 줄바꿈, 공백으로 잇는다).
+    """
     prev, nxt = prev.rstrip(), nxt.lstrip()
+    if word_wrap and prev and nxt:
+        if ENUMERATOR_RE.match(nxt):
+            return "\n"
+        return "" if prev[-1] in _OPENERS or nxt[0] in _CLOSERS else " "
     if not prev or not nxt:
         return "\n"
     last, first = prev[-1], nxt[0]
@@ -185,12 +210,27 @@ def _right_edges(blocks: List[Block], pages: Dict[int, Any]) -> Dict[int, float]
     return edges
 
 
+def _word_wrap_pages(blocks: List[Block], pages: Dict[int, Any], right_edges: Dict[int, float]) -> set:
+    counts: Dict[int, int] = {}
+    for prev, nxt in zip(blocks, blocks[1:]):
+        if prev.page != nxt.page:
+            continue
+        page = pages.get(prev.page)
+        full = _is_full_line(prev, right_edges.get(prev.page), page.width if page else 0.0)
+        if full is False and _word_wrapped(prev, nxt, right_edges.get(prev.page)) and not ENUMERATOR_RE.match((nxt.text or "").lstrip()):
+            counts[prev.page] = counts.get(prev.page, 0) + 1
+    return {page for page, count in counts.items() if count >= 2}
+
+
 def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]] = None) -> ReadingText:
     """본문 블록(표·머리글 제외)을 읽는 순서대로 이어 하나의 본문으로 만든다."""
     chosen = list(blocks) if blocks is not None else [
         b for b in doc.body_blocks() if b.block_type not in ("table", "table_line", RUNNING_HEAD)]
     pages = {p.page_number: p for p in doc.pages}
     right_edges = _right_edges(chosen, pages)
+    # 왼쪽 맞춤 쪽: 오른쪽 끝에 닿지 않은 채 다음 어절이 넘어간 줄이 2번 이상이면 그 쪽은 어절 단위로 줄을 바꾼다.
+    # 그런 쪽에서는 오른쪽 끝까지 찬 줄도 어절 경계에서 끊긴 것이므로 공백으로 잇는다.
+    word_pages = _word_wrap_pages(chosen, pages, right_edges)
     parts: List[str] = []
     segments: List[Segment] = []
     cursor = 0
@@ -205,7 +245,10 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
             page = pages.get(previous.page)
             width = page.width if page else 0.0
             full = _is_full_line(previous, right_edges.get(previous.page), width)
-            separator = join_separator(previous.text, text, prev_full=full)
+            wrapped = previous.page == block.page and (
+                (full is False and _word_wrapped(previous, block, right_edges.get(previous.page)))
+                or (full is True and previous.page in word_pages))
+            separator = join_separator(previous.text, text, prev_full=full, word_wrap=wrapped)
             parts.append(separator)
             cursor += len(separator)
         segments.append(Segment(cursor, cursor + len(text), block))
