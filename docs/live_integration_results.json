@@ -1,0 +1,75 @@
+{
+  "generated_at": "2026-09-25T01:24:18+00:00",
+  "commit": "765d36c",
+  "note": "CI '실연동 통합 테스트'가 국가법령정보센터·모델 API를 실제로 호출한 결과다.",
+  "J2": {
+    "tests": [
+      {
+        "test": "test_J2_model_remarks_are_reconciled_with_deterministic_recalculation",
+        "outcome": "failed"
+      }
+    ],
+    "passed": false,
+    "summary": "실연동 테스트 0/1 통과"
+  },
+  "R10": {
+    "tests": [
+      {
+        "test": "test_R10_axis_verdict_matches_document_verdict",
+        "outcome": "passed"
+      }
+    ],
+    "passed": true,
+    "summary": "실연동 테스트 1/1 통과"
+  },
+  "G1": {
+    "tests": [
+      {
+        "test": "test_G1_constitutional_decisions_are_found_by_exact_number",
+        "outcome": "failed"
+      }
+    ],
+    "passed": false,
+    "summary": "실연동 테스트 0/1 통과"
+  },
+  "J1": {
+    "tests": [
+      {
+        "test": "test_J1_merged_notation_is_verified_through_the_lead_number",
+        "outcome": "failed"
+      }
+    ],
+    "passed": false,
+    "summary": "실연동 테스트 0/1 통과"
+  },
+  "R4": {
+    "tests": [
+      {
+        "test": "test_R4_only_exact_number_records_are_adopted",
+        "outcome": "passed"
+      }
+    ],
+    "passed": true,
+    "summary": "실연동 테스트 1/1 통과"
+  },
+  "R3": {
+    "tests": [
+      {
+        "test": "test_R3_line_broken_court_and_date_survive_to_the_live_lookup",
+        "outcome": "passed"
+      }
+    ],
+    "passed": true,
+    "summary": "실연동 테스트 1/1 통과"
+  },
+  "R6": {
+    "tests": [
+      {
+        "test": "test_R6_running_head_citation_is_not_counted",
+        "outcome": "passed"
+      }
+    ],
+    "passed": true,
+    "summary": "실연동 테스트 1/1 통과"
+  }
+}
