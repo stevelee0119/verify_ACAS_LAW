@@ -11,6 +11,8 @@
    다수의견보다 뚜렷이 가까우면 MISATTRIBUTED_OPINION이다.
 3. 결론 방향: 판시사항·판결요지의 "…인지 여부(적극)/(소극)/(원칙적 소극)" 쟁점 가운데 서면 문장과 같은 쟁점을
    고르고, 서면이 그 쟁점에 대해 판결과 반대 방향으로 단정하는지 부정 표현의 짝수·홀수로 비교한다.
+4. 서술형 판결요지("사용자는 … 보호의무를 부담한다.")는 쟁점 표지가 없으므로, 서면 절과 거의 같은 말로 된 판결요지
+   문장을 찾아(겹침 SUMMARY_MATCH 이상) 끝 서술어의 긍정·부정이 반대인지 본다(v4 P5 HOLDING_REVERSED).
 """
 from __future__ import annotations
 
@@ -35,6 +37,8 @@ FINAL_WINDOW = 7  # 절 끝 서술어(압축 글자 수)만 보고 긍정·부�
 NEGATION_RE = re.compile(r"않|아니|없|불요|못")
 ISSUE_RE = re.compile(r"(?P<issue>[^\[\]]+?)\s*여부\s*\(\s*(?P<principled>원칙적\s*)?(?P<direction>적극|소극)\s*\)")
 
+SUMMARY_MATCH = 0.6          # 서술형 판결요지 문장과 이만큼 겹치고, 끝 서술어가 같은 말이어야 같은 명제로 본다
+SUMMARY_SENTENCE_RE = re.compile(r"(?<=[다음함])\s*\.\s*|\n+")
 MISATTRIBUTION_MARGIN = 0.1   # 반대의견이 다수의견보다 이만큼 더 가까워야 한다
 MISATTRIBUTION_FLOOR = 0.5    # 그리고 반대의견과 절반 이상 겹쳐야 한다
 ISSUE_MATCH_FLOOR = 0.3       # 서면 절이 판시사항 쟁점과 이만큼 겹쳐야 같은 쟁점으로 본다
@@ -187,3 +191,55 @@ def direction_conflict(claim: str, holding: str) -> Optional[Dict[str, Any]]:
     if not found:
         return None
     return sorted(found, key=lambda f: (not f["strong"], f["principled"], -f["issue_similarity"]))[0]
+
+
+# 끝 서술어 비교에서 건너뛸 부정·보조 용언(있다·없다·한다·된다 등)
+AUXILIARY_RE = re.compile(r"^(?:않|아니|없|못|수|것|있|한다|하다|된다|된|되|필요)")
+
+
+def _predicate(text: str) -> str:
+    """끝 서술어 첫 음절의 초성·중성('부담하지 않는다' → '부담'의 ㅂ+ㅜ). 활용형(진다·지지)의 받침 차이는 무시한다."""
+    words = [w for w in re.findall(r"[가-힣]+", text or "") if not AUXILIARY_RE.match(w)]
+    if not words:
+        return ""
+    code = ord(words[-1][0]) - 0xAC00
+    return f"{code // 588}-{(code % 588) // 28}"
+
+
+def _positive(text: str) -> str:
+    """부정 보조용언 어절을 뺀 글(겹침 계산용)."""
+    return " ".join(w for w in re.findall(r"[가-힣]+", text or "") if not re.match(r"^(?:않|아니|없|못)", w))
+
+
+def _predicate(text: str) -> str:
+    """끝 서술어의 어간 두 글자('보호의무를 부담하지 않는다' → '부담'). 부정 보조용언은 건너뛴다."""
+    words = [w for w in re.findall(r"[가-힣]+", text or "") if not AUXILIARY_RE.match(w)]
+    return words[-1][:2] if words else ""
+
+
+LEAD_RE = re.compile(r"^\s*(?:\d{1,3}\s*[.)]\s*)?(?:은|는|이|가|도)?\s+")
+
+
+def summary_direction_conflict(claim: str, summary: str) -> Optional[Dict[str, Any]]:
+    """서술형 판결요지와 같은 명제를 반대 방향(긍정↔부정)으로 요약했는지. 쟁점 표지('여부(적극)')가 있으면 쓰지 않는다.
+
+    겹침은 부정 보조용언(않·아니·없·못)을 빼고 잰다. 방향은 끝 서술어로 따로 비교한다.
+    """
+    if not summary or ISSUE_RE.search(summary):
+        return None
+    sentences = [s.strip() for s in SUMMARY_SENTENCE_RE.split(summary) if len(_compact(s)) >= 8]
+    found = []
+    core = LEAD_RE.sub("", _claim_core(claim))  # 번호("16.")와 인용 뒤 조사("은")를 뗀다
+    for clause in _clauses(core):
+        ranked = sorted(sentences, key=lambda s: _overlap(clause, s), reverse=True)
+        if not ranked:
+            continue
+        best = ranked[0]
+        similarity = _overlap(_positive(clause), _positive(best))
+        if (similarity < SUMMARY_MATCH or _predicate(clause) != _predicate(best) or not _predicate(clause)
+                or _clause_negated(clause) == _clause_negated(best)):
+            continue
+        found.append({"issue": best, "holding_direction": "부정" if _clause_negated(best) else "긍정",
+                      "claim_direction": "부정" if _clause_negated(clause) else "긍정", "principled": False,
+                      "issue_similarity": round(similarity, 3), "clause": clause, "strong": True, "declarative": True})
+    return max(found, key=lambda f: f["issue_similarity"]) if found else None

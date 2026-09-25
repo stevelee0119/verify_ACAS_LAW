@@ -39,6 +39,27 @@ STOP_TERMS = {"따르면", "따라", "의하면", "규정", "규정하고", "정
               "경우", "그리고", "또한", "이는", "원고", "피고", "원고는", "피고는", "이러한", "해당"}
 MIN_TERMS = 3
 TERM_OVERLAP = 0.6
+# 조문의 양태: 의무('하여야 한다')와 재량('할 수 있다'). 행위 명사(통지·제기 등)를 함께 잡아 같은 행위끼리만 비교한다.
+MANDATE_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?(?:하여야|해야|하여야만)\s*(?:한다|하며|하고|함|할\s*것)")
+DISCRETION_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?할\s*수\s*있(?:다|으며|고|음|을\s*뿐)")
+NO_DUTY_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?할\s*(?:의무가|의무는)\s*(?:없|아니)")
+
+
+def _acts(pattern: "re.Pattern[str]", text: str) -> set:
+    return {m.group("act")[-2:] for m in pattern.finditer(text or "")}
+
+
+def modality_conflict(claim: str, body: str) -> Optional[Dict[str, str]]:
+    """문서가 조문의 재량을 의무로(또는 의무를 재량으로) 적었는지. 같은 행위(명사 끝 두 글자)끼리만 본다."""
+    claim_mandate, claim_optional = _acts(MANDATE_RE, claim), _acts(DISCRETION_RE, claim) | _acts(NO_DUTY_RE, claim)
+    body_mandate, body_optional = _acts(MANDATE_RE, body), _acts(DISCRETION_RE, body)
+    for act in sorted(claim_mandate & body_optional - body_mandate):
+        return {"kind": "DISCRETION_AS_MANDATE", "act": act, "claimed": f"의무('{act}하여야')",
+                "official": f"재량('{act}할 수 있다')"}
+    for act in sorted(claim_optional & body_mandate - body_optional):
+        return {"kind": "MANDATE_AS_DISCRETION", "act": act, "claimed": f"재량('{act}할 수 있다'·의무 없음)",
+                "official": f"의무('{act}하여야 한다')"}
+    return None
 
 
 def _fractions(text: str) -> List[Tuple[int, int]]:
@@ -121,6 +142,10 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
             mismatches.append({"claimed": label, "official": ", ".join(f"{n}{unit}" for n in same_unit)})
     if mismatches:
         return {"status": "CONTRADICTED", "basis": "NUMERIC", "mismatches": mismatches, "matched": matched}
+    modality = None if numbers_only else modality_conflict(claim, scoped)
+    if modality:
+        return {"status": "CONTRADICTED", "basis": "MODALITY", "modality": modality,
+                "mismatches": [{"claimed": modality["claimed"], "official": modality["official"]}], "matched": matched}
     if matched:
         return {"status": "VERIFIED", "basis": "NUMERIC", "matched": matched}
     terms = list(dict.fromkeys(_terms(claim)))

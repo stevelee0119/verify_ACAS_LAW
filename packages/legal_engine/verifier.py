@@ -31,7 +31,7 @@ from packages.source_adapters import SourceRegistry
 
 from .components import citation_components, component_summary, identity_confirmed
 from .citation_format import code_court_family, court_family, format_violations
-from .opinion_attribution import attribute_claim, direction_conflict, split_opinions
+from .opinion_attribution import attribute_claim, direction_conflict, split_opinions, summary_direction_conflict
 from .verification_labels import citation_label
 from .quote_diff import quote_changes, quote_diff_summary, render_quote_diff
 from .normalize import canonical_article, case_number_possible, same_case_number, split_case_number
@@ -963,15 +963,16 @@ class LegalVerifier:
                                                     "defect_summary": "반대의견 취지를 판시로 요약"}))
         if claim and holding.strip() and not any(f.confidence_features["verdict_label"] == "MISATTRIBUTED_OPINION"
                                                  for f in out):
-            conflict = direction_conflict(claim, holding)
+            conflict = direction_conflict(claim, holding) or summary_direction_conflict(claim, summary)
             if conflict:
                 principled = conflict["principled"]
-                # 쟁점 대응이 뚜렷하고(유사도 높음) '원칙적' 판단이 아니면 확정(B), 아니면 사람 확인(C)
+                # 쟁점 대응이 뚜렷하고(유사도 높음) '원칙적' 판단이 아니면 확정(B), 아니면 사람 확인(C).
+                # 서술형 판결요지와 거의 같은 문장을 부정만 바꿔 적었으면 원문 대조로 확정된다(A).
                 firm = conflict.get("strong", True) and not principled
                 out.append(make(
                     "HOLDING_DIRECTION_REVERSED",
                     VerificationStatus.CONTRADICTED if firm else VerificationStatus.SUSPICIOUS,
-                    EvidenceGrade.B if firm else EvidenceGrade.C,
+                    EvidenceGrade.A if conflict.get("declarative") else EvidenceGrade.B if firm else EvidenceGrade.C,
                     f"판시사항과 결론 방향이 반대(판결: {'원칙적 ' if principled else ''}{conflict['holding_direction']}, "
                     f"서면: {conflict['claim_direction']})",
                     f"판시사항의 쟁점 '{conflict['issue']}'에 대해 판결은 "

@@ -57,9 +57,14 @@ INJECTION_TYPES = {"HIDDEN_INSTRUCTION", "META_INSTRUCTION", "PROMPT_INJECTION_S
                    "OUTPUT_MANIPULATION_ATTEMPT", "TOOL_MANIPULATION_ATTEMPT", "DATA_EXFILTRATION_INSTRUCTION"}
 
 
+def is_injection(f) -> bool:
+    """경로별 지시문 finding. 레이어 전체 대조 요약('레이어 불일치: A vs B')은 경로가 아니라 요약이므로 뺀다."""
+    return str(f.type) in INJECTION_TYPES and not title(f).startswith("레이어 불일치")
+
+
 def injection(label: str):
     """인젝션 finding 중 경로 표기에 label이 들어 있는 것."""
-    return lambda f: str(f.type) in INJECTION_TYPES and label in title(f)
+    return lambda f: is_injection(f) and label in title(f)
 
 
 def cited(number: str) -> Pred:
@@ -367,14 +372,14 @@ ITEMS: List[Dict[str, Any]] = [
                  D("P4-5", "민사 서면 작성일 이후 작성 증거(사실확인서)", lambda f: str(f.type) == "EVIDENCE_TIMELINE_INVERSION" and "사실확인서" in title(f)),
                  D("P4-6", "민사 사건일 전 작성 증거(사고경위서)", lambda f: str(f.type) == "EVIDENCE_TIMELINE_INVERSION" and "사고경위서" in title(f))],
      "fp_check": concatenated_cells},
-    {"id": "P5", "title": "법리 검토 확장(재량↔의무·판례 방향 반대·절차 규칙·양형 사유 혼동)", "code": "legal_engine/claim_review.py, opinion_attribution.py",
+    {"id": "P5", "title": "법리 검토 확장(재량↔의무·판례 방향 반대·절차 규칙·양형 사유 혼동)", "code": "legal_engine/provision_content.py, opinion_attribution.py, config/legal_rules/rules.json",
      "call": ("verification_engine/pipeline.py", "review_claims"), "tests": "test_v4_p5_legal_rules.py",
-     "family": lambda f: rule(f) in {"CLAIM.DISCRETION_AS_MANDATE", "CLAIM.MANDATE_AS_DISCRETION", "CLAIM.SENTENCING_AS_ELEMENT",
-                                     "CLAIM.PROCEDURAL_RULE", "OPINION.HOLDING_DIRECTION_REVERSED"},
+     "family": lambda f: rule(f) in {"CLAIM.DISCRETION_AS_MANDATE", "CLAIM.MANDATE_AS_DISCRETION", "CRIM.RESTITUTION_AS_ELEMENT",
+                                     "CRIM.REFORMATIO_IN_PEIUS_SCOPE", "OPINION.HOLDING_DIRECTION_REVERSED"},
      "defects": [D("P5-1", "행정: '할 수 있다' 조문을 의무로 주장", lambda f: rule(f) == "CLAIM.DISCRETION_AS_MANDATE"),
                  D("P5-2", "민사: 판결 취지 방향 반대 요약(2014다90011)", lambda f: rule(f) == "OPINION.HOLDING_DIRECTION_REVERSED" and "2014다90011" in title(f)),
-                 D("P5-3", "형사: 불이익변경금지 적용 범위 오인", lambda f: rule(f) == "CLAIM.PROCEDURAL_RULE"),
-                 D("P5-4", "형사: 사후 변제를 범죄 불성립 사유로 주장", lambda f: rule(f) == "CLAIM.SENTENCING_AS_ELEMENT")]},
+                 D("P5-3", "형사: 불이익변경금지 적용 범위 오인", lambda f: rule(f) == "CRIM.REFORMATIO_IN_PEIUS_SCOPE"),
+                 D("P5-4", "형사: 사후 변제를 범죄 불성립 사유로 주장", lambda f: rule(f) == "CRIM.RESTITUTION_AS_ELEMENT")]},
     {"id": "P6", "title": "AI 판별 집계(관여 여부·범위 분리, 약한 신호는 참고 부록)", "code": "verification_engine/ai_document_detector.py",
      "call": ("verification_engine/pipeline.py", "create_ai_detector_findings"), "tests": "test_v4_p6_ai_aggregation.py",
      "family": lambda f: str(f.type) == "AI_AUTHORSHIP_LIKELY" and not f.advisory_only,
@@ -382,7 +387,7 @@ ITEMS: List[Dict[str, Any]] = [
      "fp_doc_exclude": ["민사_준비서면.pdf"]},
     {"id": "P7", "title": "인젝션 경로 전수 검사·경로별 개별 finding", "code": "adversarial_engine/scanner.py, document_engine/pdf_parser.py",
      "call": ("verification_engine/pipeline.py", "self.adversarial.scan"), "tests": "test_v4_p7_injection_paths.py",
-     "family": lambda f: str(f.type) in INJECTION_TYPES,
+     "family": is_injection,
      "defects": [D(f"P7-{i}", label, injection(key)) for i, (label, key) in enumerate((
          ("흰 글자", "흰 글자"), ("투명 글자", "투명 글자"), ("저대비", "대비"), ("이미지로 덮은 글자", "이미지로 덮은"),
          ("렌더모드 3", "렌더모드"), ("초소형 글자", "작은 글자"), ("페이지 밖", "페이지 밖"), ("문서 속성", "문서 속성"),

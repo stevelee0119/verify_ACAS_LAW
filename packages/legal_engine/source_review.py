@@ -152,6 +152,10 @@ def _compare_asserted_content(verdict, provision):
     # '같은 조 제2항'처럼 앞 인용을 가리킨 표현은 푼 이름으로 적는다(추가지시 G3).
     compared = compared_label(citation)
     ids = [r.source_record_id for r in verdict.source_records]
+    if outcome.get("basis") == "MODALITY":
+        verdict.findings.append(_modality_finding(verdict, provision, claim, outcome["modality"], compared, ids,
+                                                  exact_version))
+        return
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.CONTRADICTED,
         severity=Severity.HIGH, evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
@@ -169,6 +173,32 @@ def _compare_asserted_content(verdict, provision):
                                   document_id=citation.document_id, block_id=citation.block_id,
                                   excerpt=claim or "")],
     ))
+
+
+def _modality_finding(verdict, provision, claim, modality, compared, ids, exact_version):
+    """조문의 재량('할 수 있다')을 의무로, 또는 의무('하여야 한다')를 재량으로 적은 주장(v4 P5)."""
+    citation = verdict.citation
+    kind = modality["kind"]
+    heading = ("조문은 재량('할 수 있다')인데 의무로 주장했다" if kind == "DISCRETION_AS_MANDATE"
+               else "조문은 의무('하여야 한다')인데 재량·의무 없음으로 주장했다")
+    return Finding.create(
+        type=FindingType.LEGAL_ARGUMENT_INVALID, status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH,
+        evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
+        title=f"{heading}: {compared} — 문서 {modality['claimed']} / 조문 {modality['official']}",
+        detail=(f"비교 대상 조문: {compared}. 문서는 '{modality['act']}'을(를) {modality['claimed']}로 적었으나 조회한 조문 본문은 "
+                f"{modality['official']}로 정한다. 재량과 의무의 차이는 처분의 위법성 판단 등 결론을 바꿀 수 있다. "
+                + ("" if exact_version else "기준일이 없어 조회(현행) 버전과 비교했다. ")
+                + "사건에 대한 적용 결론은 내리지 않는다."),
+        document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+        engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "SOURCE_TEXT", "MODALITY"],
+        confidence=0.85 if exact_version else 0.75,
+        confidence_features={"deterministic_rule": True, "rule_id": f"CLAIM.{kind}", "modality": modality,
+                             "claim_text": claim, "compared_version": (verdict.review.get("version") or {}).get("version_id")},
+        evidence=[Evidence.create(description="조회한 공식 버전의 조문 본문", grade=EvidenceGrade.A,
+                                  excerpt=(provision.get("text") or "")[:400], source_record_ids=ids),
+                  Evidence.create(description="문서의 주장", grade=EvidenceGrade.B, document_id=citation.document_id,
+                                  block_id=citation.block_id, excerpt=claim or "")],
+    )
 
 
 def _law_absent(verdict, response):

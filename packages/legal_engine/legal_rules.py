@@ -61,6 +61,8 @@ def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources:
     grade = rule.get("grade", "C")
     features = {"deterministic_rule": True, "rule_id": rule["rule_id"], "verdict": rule["verdict"],
                 "claim": claim[:300], "basis": basis, "human_review": bool(rule.get("human_review")),
+                # 공식 원문을 아직 받지 못한 근거 조문. 원문 없이 근거로 싣지 않고 이름만 알린다.
+                "basis_pending": list(rule.get("basis_pending") or []),
                 "confidence": CONFIDENCE.get(grade, 0.5)}
     kind = FindingType.OVERCLAIM if rule["rule_id"].startswith("GEN.") else FindingType.LEGAL_ARGUMENT_INVALID
     evidence = [Evidence.create(description="서면의 주장", grade=EvidenceGrade.B, document_id=doc.document_id,
@@ -73,7 +75,9 @@ def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources:
         severity=Severity.HIGH if grade in ("A", "B") and not rule.get("human_review") else Severity.MEDIUM,
         evidence_grade=GRADES.get(grade, EvidenceGrade.C),
         title=f"법리 검토: {rule['verdict']} — '{claim[:70]}'" + (" (사람 판단 필요)" if rule.get("human_review") else ""),
-        detail=rule.get("explanation", "") + (" 근거: " + "; ".join(b["name"] for b in basis) if basis else ""),
+        detail=rule.get("explanation", "") + (" 근거: " + "; ".join(b["name"] for b in basis) if basis else "")
+        + (f" 근거 조문({', '.join(rule['basis_pending'])})의 공식 원문은 아직 수집하지 않았으므로 원문 대조는 사람이 한다."
+           if rule.get("basis_pending") else ""),
         confidence=CONFIDENCE.get(grade, 0.5), confidence_features=features, document_id=doc.document_id,
         engine=ENGINE_NAME, tags=["LEGAL_RULE", rule["rule_id"]] + (["HUMAN_REVIEW"] if rule.get("human_review") else []),
         evidence=evidence,
