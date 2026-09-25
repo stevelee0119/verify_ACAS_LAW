@@ -40,7 +40,7 @@ PATH_LABELS = {
     "OFF_PAGE": "페이지 밖 좌표", "INVISIBLE_RENDER_MODE": "보이지 않는 렌더모드(Tr 3)",
     "COVERED_BY_SHAPE": "흰 도형으로 덮은 글자", "COVERED_BY_IMAGE": "이미지로 덮은 글자",
     "TRANSPARENT_FILL": "투명 글자(채움 투명도 0)", "LOW_CONTRAST": "배경과 대비가 거의 없는 글자",
-    "CLIPPING_PATH": "클리핑 경로 밖 글자", "CLIPPED_TEXT": "클리핑 경로로 잘린 글자",
+    "CLIPPED_OUT": "클리핑 영역 밖 글자", "CLIPPING_PATH": "클리핑 경로 밖 글자", "CLIPPED_TEXT": "클리핑 경로로 잘린 글자", "PAGE_LABEL": "쪽 번호 표시(PageLabels)",
     "OCR_LAYER": "OCR 글자층", "ANNOTATION": "주석",
     "METADATA": "문서 속성(메타데이터)", "ATTACHMENT": "첨부파일 내용", "RUNNING_HEAD": "머리글·바닥글", "OTHER_HIDDEN": "기타 숨김 레이어",
     "OUTLINE": "북마크(개요)", "FORM_FIELD": "양식 필드 값", "ACTUAL_TEXT": "표시 대체 문자열(ActualText)",
@@ -55,8 +55,8 @@ def _path_label(*keys: str) -> str:
 
 def _injection_path(block: Block) -> str:
     reason = str(block.attributes.get("hidden_reason") or "")
-    for key in ("WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE", "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE",
-                "COVERED_BY_IMAGE", "TRANSPARENT_FILL", "LOW_CONTRAST", "CLIPPING_PATH", "CLIPPED_TEXT"):
+    for key in ("CLIPPED_OUT", "CLIPPING_PATH", "CLIPPED_TEXT", "WHITE_ON_WHITE", "TINY_FONT", "OFF_PAGE",
+                "INVISIBLE_RENDER_MODE", "COVERED_BY_SHAPE", "COVERED_BY_IMAGE", "TRANSPARENT_FILL", "LOW_CONTRAST"):
         if reason.startswith(key):
             return key
     if block.source_layer == "ocr_layer":
@@ -163,6 +163,7 @@ class AdversarialScanner:
         extra = {
             "metadata": sum(1 for v in doc.metadata.values() if str(v).strip()),
             "outline": len(structure.get("outline") or []),
+            "page_labels": len(structure.get("page_labels") or []),
             "form_field": len(structure.get("form_fields") or []),
             "attachment": sum(1 for e in structure.get("embedded_files") or [] if (e.get("text") or "").strip()),
             "actual_text": len(structure.get("actual_text_strings") or []),
@@ -346,19 +347,26 @@ class AdversarialScanner:
     def _scan_structure(self, doc: NormalizedDocument) -> List[Finding]:
         """북마크·양식 필드·ActualText. 화면 본문에 없지만 추출기·모델이 읽는 글자다(v4 P7)."""
         out: List[Finding] = []
-        entries = [("OUTLINE", "outline", str(o.get("title") or ""), None) for o in doc.structure.get("outline") or []]
+        titles = [str(o.get("title") or "") for o in doc.structure.get("outline") or []]
+        entries = [("OUTLINE", "outline", title, None) for title in titles]
+        if len(titles) > 1:
+            # 지시문을 여러 북마크 제목에 나눠 넣어도 뷰어·추출기는 이어서 읽는다(v5 3-7). 이어 붙인 글도 분류기에 넣는다.
+            entries.append(("OUTLINE", "outline", " ".join(t.strip() for t in titles if t.strip()), "북마크 제목 이어 읽기"))
+        entries += [("PAGE_LABEL", "page_label", str(t), None) for t in doc.structure.get("page_labels") or []]
         entries += [("FORM_FIELD", "form_field", str(f.get("value") or ""), f.get("name"))
                     for f in doc.structure.get("form_fields") or []]
         entries += [("ACTUAL_TEXT", "actual_text", str(t), None) for t in doc.structure.get("actual_text_strings") or []]
-        if doc.structure.get("page_labels"):
-            entries.append(("PAGE_LABELS", "page_labels", str(doc.structure.get("page_labels")), None))
+        flagged_paths: set = set()
         for path, layer, text, name in entries:
             if len(text.strip()) < 6:
                 continue
+            if name == "북마크 제목 이어 읽기" and "OUTLINE" in flagged_paths:
+                continue  # 제목 하나로 이미 보고했다
             normalized, kinds = normalize_for_classification(text)
             classification = classify(normalized, source_layer=layer, visible=False, block_type="metadata")
             if classification.label in (AdversarialClass.BENIGN_CONTENT, AdversarialClass.INSTRUCTION_LIKE):
                 continue
+            flagged_paths.add(path)
             label = _path_label(path, *kinds)
             features = {"deterministic_rule": True, "cross_layer_mismatch": True, **classification.features,
                         "observed_text": text[:2000], "normalized_text": normalized[:2000] if kinds else None,

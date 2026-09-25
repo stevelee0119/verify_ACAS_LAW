@@ -23,21 +23,22 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, join_separator, sentence_bounds
 
-from .exhibits import parse_exhibit_label
+from .exhibits import exhibit_keys, parse_exhibits, split_items
 
 ENGINE_NAME = "claim_engine.evidence_consistency"
 
-EXHIBIT_RE = re.compile(r"(?P<party>피고인\s*증|검사\s*증|갑|을|병|정|증)\s*(?:제\s*)?(?P<number>\d{1,4})\s*호\s*증(?:\s*의\s*(?P<branch>\d{1,4}))?")
+
 DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.\-년]\s*(?P<m>\d{1,2})\s*[.\-월]\s*(?P<d>\d{1,2})\s*[.일]?")
 STANDALONE_DATE_RE = re.compile(r"^\s*(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?\s*$")
 HEADER_KEYS = {
-    "id": ("호증", "증거번호", "번호"),
-    "name": ("서증명", "증거명", "자료명", "문서명", "표목"),
-    "date": ("작성일", "일자", "작성일자"),
-    "author": ("작성자", "작성명의인", "발행"),
-    "purpose": ("입증취지", "입증 취지", "증명취지"),
+    "id": ("호증", "증거번호", "증번", "번호", "순번"),
+    "name": ("서증명", "증거명", "자료명", "문서명", "표목", "증거방법", "제출자료", "자료"),
+    "date": ("작성일", "작성일자", "발급일", "발행일", "일자", "날짜"),
+    "author": ("작성자", "작성명의인", "발행", "발급기관", "발급처", "제출자"),
+    "purpose": ("입증취지", "입증 취지", "증명취지", "입증사항", "요지"),
     "amount": ("금액", "액수"),
 }
+MIN_ID_SHARE = 0.6  # 열 내용으로 증거표를 찾을 때: 호증 참조가 있는 행의 비율
 # 사건 이후에 작성될 수밖에 없는 자료(그 사건을 분석·보고·진술한 문서)
 AFTER_EVENT_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|소견|조사")
 MEDICAL_KINDS = re.compile(r"진단서|소견서|의무기록|진료기록")
@@ -123,8 +124,21 @@ def _cell(value: Any) -> str:
     return " ".join(text.split())
 
 
+def _row(values: Dict[str, Any], ref: Dict[str, Any], **extra: Any) -> Dict[str, Any]:
+    branches = ref.get("branches") or []
+    return {**values, "party": ref["party"], "number": ref["number"], "branches": branches,
+            "branch": str(branches[0]) if len(branches) == 1 else None,
+            "label": f"{ref['party']} 제{ref['number']}호증" + (f"의 {branches[0]}" if len(branches) == 1 else
+                                                              f"의 {branches[0]} 내지 {branches[-1]}" if branches else ""),
+            **extra}
+
+
 def exhibit_rows(doc: NormalizedDocument) -> List[Dict[str, Any]]:
-    """문서의 표 가운데 호증 목록을 찾아 행마다 {id, party, number, branch, name, date, author, purpose}."""
+    """문서의 호증 목록을 증거마다 한 행으로 읽는다: {id, party, number, branches, name, date, author, purpose}.
+
+    표는 머리글 칸(호증·서증명·작성일…)으로 찾는다. 한 칸에 여러 증거가 묶인 표기('갑 제2, 3호증',
+    '갑 제5호증의 1 내지 3')는 호증 문법(exhibits.py)으로 풀어 증거마다 행을 만든다(v5 3-1).
+    """
     rows: List[Dict[str, Any]] = []
     for table in doc.structure.get("tables") or []:
         cells = table.get("cells") or []
@@ -137,45 +151,94 @@ def exhibit_rows(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                 if any(name in title.replace(" ", "") for name in names) and index not in columns.values():
                     columns[key] = index
                     break
+        body = cells[1:]
         if "id" not in columns or len(columns) < 3:
-            continue
-        for row in cells[1:]:
-            values = {key: _cell(row[index]) if index < len(row) else "" for key, index in columns.items()}
-            match = EXHIBIT_RE.search(values.get("id", ""))
-            if not match:
+            # 표 제목·머리글이 표준과 달라도(양형자료 제출서 등) 열 내용으로 증거표를 알아본다(v5 3-3)
+            columns, body = _columns_by_content(cells), cells
+            if not columns:
                 continue
-            party_clean = " ".join(match.group("party").split())
-            rows.append({**values, "party": party_clean, "number": int(match.group("number")),
-                         "branch": match.group("branch"), "label": " ".join(match.group(0).split()),
-                         "table_ref": table.get("table_ref"), "page": table.get("page")})
+        for row in body:
+            values = {key: _cell(row[index]) if index < len(row) else "" for key, index in columns.items()}
+            for ref in parse_exhibits(values.get("id", "")):
+                rows.append(_row(values, ref, table_ref=table.get("table_ref"), page=table.get("page")))
     return rows or _exhibit_lines(doc)
 
 
-LINE_ITEM_RE = re.compile(r"^\s*" + EXHIBIT_RE.pattern)
+def _columns_by_content(cells: List[List[Any]]) -> Dict[str, int]:
+    """머리글 없이 열 내용으로 증거표 열을 정한다. 호증 참조가 칸 첫머리에 오는 행이 60% 이상인 열을 번호 열로,
+    날짜가 가장 많은 열을 작성일 열로, 번호 열 뒤 첫 글 열을 서증명, 마지막 글 열을 입증취지로 본다."""
+    rows = [[_cell(c) for c in row] for row in cells if any(str(c or "").strip() for c in row)]
+    if len(rows) < 2:
+        return {}
+    width = max(len(r) for r in rows)
+
+    def share(index, test):
+        values = [r[index] for r in rows if index < len(r) and r[index]]
+        return (sum(1 for v in values if test(v)) / len(rows)) if values else 0.0
+
+    def is_ref(value):
+        refs = parse_exhibits(value)
+        return bool(refs) and refs[0]["span"][0] == 0
+
+    id_col = max(range(width), key=lambda i: share(i, is_ref))
+    if share(id_col, is_ref) < MIN_ID_SHARE:
+        return {}
+    columns = {"id": id_col}
+    dates = [(share(i, lambda v: bool(DATE_RE.search(v))), i) for i in range(width) if i != id_col]
+    if dates and max(dates)[0] >= 0.5:
+        columns["date"] = max(dates)[1]
+    text_cols = [i for i in range(width) if i not in columns.values()
+                 and share(i, lambda v: bool(re.search(r"[가-힣]{2,}", v))) >= 0.5]
+    if not text_cols:
+        return {}
+    columns["name"] = text_cols[0]
+    if len(text_cols) >= 2:
+        columns["purpose"] = text_cols[-1]
+    if len(text_cols) >= 3:
+        columns["author"] = text_cols[1]
+    amount = [i for i in range(width) if i not in columns.values() and share(i, lambda v: bool(re.search(r"\d[\d,]{3,}\s*원", v))) >= 0.5]
+    if amount:
+        columns["amount"] = amount[0]
+    return columns
+
+
+# 목록 줄이 아닌 것: 날짜만 있는 줄, 서명·첨부·당사자 줄, 번호 머리말로 시작하는 새 항목
+_NOT_CONTINUATION_RE = re.compile(r"^\s*(?:(?:19|20)\d{2}\s*\.|첨\s*부|위\s|원\s*고|피\s*고|대\s*리\s*인|귀\s*중|"
+                                  r"\d{1,2}\s*[.)]|[가-하]\s*[.)]|[①-⑳]|[■□▶-]|입\s*증\s*방\s*법|증\s*거\s*목\s*록)")
 
 
 def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """표가 없을 때: 문단 첫머리가 호증 번호인 목록(입증방법·증거설명 목록)을 행으로 읽는다.
 
-    칸 구분이 없으므로 호증 번호 뒤부터 첫 날짜 앞까지를 서증명, 첫 날짜를 작성일, 나머지를
-    작성자·입증취지(합쳐서)로 본다.
+    - 두 단으로 짠 목록은 한 줄에 증거가 여럿 이어져 읽힌다('갑 제2호증항고장 접수증 갑 제3호증항고결정서'). 줄 안의
+      참조마다 나눈다(v5 3-1).
+    - 칸 구분이 없으므로 참조 뒤부터 첫 날짜 앞까지를 서증명, 첫 날짜를 작성일, 나머지를 작성자·입증취지로 본다.
+    - 긴 서증명이 다음 줄로 넘어가면(참조·날짜 없는 짧은 줄) 앞 행의 서증명에 잇는다.
     """
     rows: List[Dict[str, Any]] = []
     reading = build_reading_text(doc)
-    for paragraph in reading.text.split("\n"):
-        match = LINE_ITEM_RE.match(paragraph)
-        if not match:
+    previous_was_item = False
+    for paragraph_index, paragraph in enumerate(reading.text.split("\n")):
+        stripped = paragraph.strip()
+        items = split_items(stripped) if parse_exhibits(stripped[:24]) and parse_exhibits(stripped)[0]["span"][0] == 0 else []
+        if not items:
+            if (previous_was_item and rows and stripped and len(stripped) <= 40 and not DATE_RE.search(stripped)
+                    and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped)):
+                group = rows[-1].get("line_group")
+                for row in rows:
+                    if row.get("line_group") == group and not row.get("date"):
+                        row["name"] = (row["name"] + join_separator(row["name"], stripped) + stripped).strip()
+                continue
+            previous_was_item = False
             continue
-        rest = paragraph[match.end():].strip()
-        found = DATE_RE.search(rest)
-        name = rest[:found.start()].strip() if found else rest
-        tail = rest[found.end():].strip() if found else ""
-        party_clean = " ".join(match.group("party").split())
-        rows.append({"id": match.group(0).strip(), "name": name, "date": found.group(0) if found else "",
-                     "author": tail, "purpose": tail, "party": party_clean,
-                     "number": int(match.group("number")), "branch": match.group("branch"),
-                     "label": " ".join(match.group(0).split()), "table_ref": None, "page": None,
-                     "from_lines": True})
+        previous_was_item = True
+        for index, (ref, rest) in enumerate(items):
+            found = DATE_RE.search(rest)
+            name = rest[:found.start()].strip() if found else rest
+            tail = rest[found.end():].strip() if found else ""
+            rows.append(_row({"id": ref["label"], "name": name, "date": found.group(0) if found else "",
+                              "author": tail, "purpose": tail}, ref, table_ref=None, page=None, from_lines=True,
+                             line_group=(paragraph_index, ref["span"])))
     return rows
 
 
@@ -337,7 +400,9 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
     # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
     seen: Dict[tuple, List[Dict[str, Any]]] = {}
     for row in rows:
-        seen.setdefault((row["party"], row["number"], row.get("branch")), []).append(row)
+        keys = [(row["party"], row["number"], b) for b in row.get("branches") or []] or [(row["party"], row["number"], None)]
+        for key in keys:
+            seen.setdefault(key, []).append(row)
     for (party, number, branch), same in seen.items():
         if len(same) < 2:
             continue
@@ -356,9 +421,8 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
     # 가지번호: '의 2'만 있고 '의 1'이 없으면 결번이다(G5). 범위 표기('의 1 내지 3')는 모두 있는 것으로 본다.
     branches: Dict[tuple, set] = {}
     for row in rows:
-        parsed = parse_exhibit_label(row.get("id") or row.get("label") or "")
-        if parsed and parsed["branches"]:
-            branches.setdefault((parsed["party"], parsed["number"]), set()).update(parsed["branches"])
+        if row.get("branches"):
+            branches.setdefault((row["party"], row["number"]), set()).update(row["branches"])
     for (party, number), present in sorted(branches.items()):
         missing = [b for b in range(1, max(present) + 1) if b not in present]
         if missing:
@@ -377,7 +441,7 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
                                 ", ".join(f"{party} 제{n}호증" for n in sorted(numbers)),
                                 features={"party": party, "missing": gaps}))
     text = build_reading_text(doc).text
-    mentioned = {(m.group("party"), int(m.group("number"))) for m in EXHIBIT_RE.finditer(text)}
+    mentioned = exhibit_keys(text)
     missing = sorted((p, n) for p, n in mentioned if p in listed and n not in listed[p])
     if missing:
         labels = ", ".join(f"{p} 제{n}호증" for p, n in missing)
@@ -389,15 +453,34 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
 
 
 # --- 진술서 ------------------------------------------------------------------------
+# 사람 이름: 가명 표기(성 + ○○) 또는 2~4글자 실명. 목록의 작성자 칸에서 사람 이름 하나만 있을 때 쓴다.
+PERSON_NAME_RE = re.compile(r"(?<![가-힣])([가-힣])([○△□＊*]{1,3})(?![가-힣○△□＊*])")
+
+
 def _statement_fields(text: str) -> List[Dict[str, Any]]:
     out = []
     for m in NAME_FIELD_RE.finditer(text):
         window = text[m.end():m.end() + 160]
         affiliation = AFFILIATION_FIELD_RE.search(window)
         value = affiliation.group("value") if affiliation else ""
+        # 진술서 앞 300자 안의 가장 가까운 호증 표시('[갑 제6호증]')로 목록의 어느 행인지 정한다
+        before = parse_exhibits(text[max(0, m.start() - 300):m.start()])
         out.append({"name": m.group("name"), "ranks": set(RANK_RE.findall(value)),
-                    "units": {(n, u) for n, u in UNIT_RE.findall(value)}, "raw": value.strip()})
+                    "units": {(n, u) for n, u in UNIT_RE.findall(value)}, "raw": value.strip(),
+                    "exhibit": (before[-1]["party"], before[-1]["number"]) if before else None})
     return out
+
+
+def _surname_conflict(listed_author: str, stated_name: str) -> Optional[str]:
+    """목록 작성자 칸의 가명(성 + ○○)과 진술서 성명의 성이 다르면 두 표기를 돌려준다. 같은 가림 길이만 비교한다."""
+    listed = PERSON_NAME_RE.findall(listed_author or "")
+    stated = PERSON_NAME_RE.fullmatch(stated_name or "")
+    if len(listed) != 1 or not stated:
+        return None
+    surname, mask = listed[0]
+    if len(mask) != len(stated.group(2)) or surname == stated.group(1):
+        return None
+    return f"{surname}{mask} ↔ {stated_name}"
 
 
 def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]] = ()) -> List[Finding]:
@@ -439,6 +522,17 @@ def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]]
                                       "statements": [proximity[0][:200], distance[0][:200]]}))
     for fields in _statement_fields(text):
         for row in exhibits:
+            # 같은 호증(진술서 앞 호증 표시)인데 성이 다르면 작성 명의가 다르다(v5 3-3)
+            if fields.get("exhibit") == (row["party"], row["number"]):
+                conflict = _surname_conflict(row.get("author", ""), fields["name"])
+                if conflict:
+                    out.append(_finding(doc, FindingType.EVIDENCE_PERSON_INCONSISTENT, EvidenceGrade.B, Severity.HIGH,
+                                        f"증거 목록의 작성자와 첨부 문서의 성명이 다르다({row['label']}): {conflict}",
+                                        "같은 호증의 작성자를 증거 목록과 첨부 문서가 서로 다른 사람으로 적었다(성이 다름).",
+                                        f"목록: {row.get('author')} / 첨부: 성명 {fields['name']}",
+                                        features={"rule_id": "EVI.PERSON_NAME_MISMATCH", "exhibit": row["label"],
+                                                  "listed": row.get("author"), "stated": fields["name"]}))
+                    continue
             if fields["name"] not in row.get("author", "") or not re.search(r"진술|확인서", row.get("name", "")):
                 continue
             listed_ranks = set(RANK_RE.findall(row.get("author", "")))

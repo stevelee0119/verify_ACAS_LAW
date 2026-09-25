@@ -26,6 +26,7 @@ AMOUNT_PART_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(억|천만|백만|만|천)
 TOTAL_LABEL_RE = re.compile(r"(합계|총액|총\s*금액|계|소계|합\s*계|총\s*계|지급총액|지급계|지급\s*총액|공제계|공제총액|공제\s*합계|실지급액|차인지급액|총수령액)")
 ITEM_LABEL_RE = re.compile(r"(항목|내역|세부|명세)")
 PERCENT_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*%")
+PERCENT_HEADER_RE = re.compile(r"비율|구성비|점유율|%|퍼센트")
 
 UNIT_MULTIPLIER = {None: 1, "천": 1_000, "만": 10_000, "백만": 1_000_000, "천만": 10_000_000, "억": 100_000_000}
 
@@ -216,8 +217,9 @@ class CalculationEngine:
         findings.extend(self._verify_table_totals(doc))
         # 실무 서면은 항목이 줄마다 나뉘므로 줄 단위 내역-합계도 검산한다
         findings.extend(self._verify_line_items(doc, seen_blocks))
-        # 중복·부분 판정 없이 가장 정확한 한 건만 채택 (과제 7)
-        return self._deduplicate_totals(findings)
+        findings = self._deduplicate_totals(merge_same_total(findings))
+        findings.extend(self._verify_percentages(doc, findings))
+        return findings
 
     def _deduplicate_totals(self, findings: List[Finding]) -> List[Finding]:
         """합계 검산 중복 제거: 중복·부분 판정 없이 가장 정확하고 포괄적인 한 건만 채택한다(과제 7)."""
@@ -268,6 +270,80 @@ class CalculationEngine:
                 kept.append(cand)
 
         return other_findings + kept
+
+    def _verify_percentages(self, doc: NormalizedDocument, totals: List[Finding]) -> List[Finding]:
+        """비율(%) 열을 금액 열로 다시 계산한다(v5 3-3). 비율은 합계에서 나온 파생 수치이므로, 틀린 비율이 기재 합계
+        기준으로는 맞으면 원인을 합계 칸 오류로 연결하고, 어느 기준으로도 맞지 않으면 비율 자체의 계산 오류로 본다."""
+        out: List[Finding] = []
+        for table in doc.structure.get("tables") or []:
+            cells = [[str(c or "").strip() for c in row] for row in table.get("cells") or []]
+            if len(cells) < 3:
+                continue
+            header = cells[0]
+            width = max(len(r) for r in cells)
+            pct_share = [sum(1 for r in cells[1:] if i < len(r) and PERCENT_RE.search(r[i])) for i in range(width)]
+            pct_cols = [i for i, h in enumerate(header) if PERCENT_HEADER_RE.search(h)] or \
+                       [i for i in range(width) if pct_share[i] >= max(2, (len(cells) - 1) // 2)]
+            if not pct_cols:
+                continue
+            pct_col = pct_cols[0]
+            amount_cols = [i for i, h in enumerate(header) if AMOUNT_HEADER_RE.search(h) and i != pct_col]
+            if not amount_cols:
+                counts = [sum(1 for r in cells[1:] if i < len(r) and parse_amounts(r[i])) if i != pct_col else -1
+                          for i in range(width)]
+                amount_cols = [max(range(width), key=lambda i: (counts[i], i))] if max(counts) > 0 else []
+            if not amount_cols:
+                continue
+            col = amount_cols[-1]
+            items, stated = [], None
+            for row in cells[1:]:
+                if col >= len(row) or pct_col >= len(row):
+                    continue
+                amount = parse_amounts(row[col])
+                if not amount:
+                    continue
+                if row and TOTAL_LABEL_RE.fullmatch(row[0].replace(" ", "")):
+                    stated = amount[-1].value
+                    continue
+                pct = PERCENT_RE.search(row[pct_col])
+                if pct:
+                    items.append((row[0], amount[-1].value, Decimal(pct.group("num")), pct.group("num")))
+            computed = sum((value for _, value, _, _ in items), Decimal(0))
+            if len(items) < 2 or computed <= 0:
+                continue
+            wrong, derived = [], []
+            for label, value, pct, raw in items:
+                decimals = len(raw.split(".")[1]) if "." in raw else 0
+                tolerance = Decimal("0.5") * (Decimal(10) ** -decimals) + Decimal("0.001")
+                by_sum = value / computed * 100
+                if abs(pct - by_sum) <= tolerance:
+                    continue
+                if stated and stated != computed and abs(pct - value / stated * 100) <= tolerance:
+                    derived.append(f"{label}: {raw}% (기재 합계 기준 {value / stated * 100:.2f}%, 세부 합산 기준 {by_sum:.2f}%)")
+                else:
+                    wrong.append(f"{label}: 기재 {raw}% / 계산 {by_sum:.2f}%")
+            if not (wrong or derived):
+                continue
+            cause = next((f for f in totals if f.confidence_features.get("stated") == str(stated)), None) if derived else None
+            if cause is not None:
+                cause.confidence_features.setdefault("derived_effects", []).extend(derived)
+            features = {"arithmetic_proof": True, "deterministic_rule": True, "rule_id": "CALC.PERCENT_MISMATCH",
+                        "rows": wrong + derived, "computed_total": str(computed),
+                        "stated_total": str(stated) if stated is not None else None,
+                        "cause": "STATED_TOTAL" if derived and not wrong else "PERCENT_CALCULATION",
+                        "cause_finding": cause.finding_id if cause is not None else None}
+            title = ("비율(%)이 틀린 합계를 기준으로 계산되었다(원인: 합계 칸 오류)" if derived and not wrong
+                     else "비율(%)이 금액으로 다시 계산한 값과 다르다")
+            out.append(Finding.create(
+                type=FindingType.ARITHMETIC_MISMATCH, status=VerificationStatus.CONTRADICTED, severity=Severity.MEDIUM,
+                evidence_grade=EvidenceGrade.A, title=title,
+                detail=("비율 열을 금액 열로 다시 계산했다(세부 합산 " + f"{computed:,}원). " + "; ".join((wrong + derived)[:6])
+                        + (f". 비율은 기재 합계 {stated:,}원 기준으로 맞으므로 원인은 합계 칸이다." if derived and not wrong else "")),
+                confidence=confidence_score(features), confidence_features=features, document_id=doc.document_id,
+                page=table.get("page"), engine=ENGINE_NAME, tags=["CALCULATION", "PERCENT"],
+                evidence=[Evidence.create(description="비율 열", grade=EvidenceGrade.A, document_id=doc.document_id,
+                                          page=table.get("page"), excerpt="; ".join(wrong + derived)[:300])]))
+        return out
 
     def _verify_line_items(self, doc: NormalizedDocument, seen_blocks: set) -> List[Finding]:
         """연속된 금액 줄 다음에 오는 합계 줄을 검산한다.
@@ -554,3 +630,39 @@ class CalculationEngine:
                 ),
             ],
         )
+
+
+def merge_same_total(findings: List[Finding]) -> List[Finding]:
+    """같은 합계(기재 금액이 같은 합계 칸)에 대한 합산 판정은 하나만 남긴다(v5 3-5).
+
+    표를 칸 단위로 읽은 판정과 줄 단위로 읽은 판정이 함께 나오면, 줄 단위 쪽은 표 일부만 더해 차액이 틀린다.
+    세부 항목을 가장 많이 포함한 판정을 남기고, 나머지는 근거(merged_partial_checks)로만 붙인다.
+    """
+    groups: dict = {}
+    order: List[Finding] = []
+    for finding in findings:
+        features = finding.confidence_features or {}
+        if finding.type != FindingType.ARITHMETIC_MISMATCH or features.get("kind") == "FORMULA" or "stated" not in features \
+                or features.get("rule_id") not in (None, "CALC.SUM"):
+            order.append(finding)
+            continue
+        key = features["stated"]
+        if key in groups:
+            groups[key].append(finding)
+            continue
+        groups[key] = [finding]
+        order.append(finding)
+    out: List[Finding] = []
+    for finding in order:
+        group = groups.get((finding.confidence_features or {}).get("stated"))
+        if not group or group[0] is not finding:
+            out.append(finding)
+            continue
+        best = max(group, key=lambda f: int(f.confidence_features.get("item_count") or 0))
+        others = [f for f in group if f is not best]
+        if others:
+            best.confidence_features["merged_partial_checks"] = [
+                {"computed": f.confidence_features.get("computed"), "item_count": f.confidence_features.get("item_count"),
+                 "title": f.title} for f in others]
+        out.append(best)
+    return out

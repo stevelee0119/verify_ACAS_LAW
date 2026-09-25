@@ -25,6 +25,7 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
 from .legal_rules import load_rules
+from .polarity import ASSERTED, NEGATED, polarity
 
 ENGINE_NAME = "legal_engine.claim_review"
 
@@ -54,7 +55,8 @@ LEGAL_EFFECT_RE = re.compile(
     r"무효|위법|위헌|취소(?:되어야|하여야|사유|된다)|책임(?:을|이)\s*(?:진다|지게|있|부담)|배상(?:하여야|할\s*책임|책임)|"
     r"인정(?:된다|되어야|되지\s*않|될\s*수\s*없)|허용(?:된다|되지|될\s*수)|금지(?:된다|되)|할\s*수\s*없|하여야\s*한다|해야\s*한다|"
     r"적용(?:된다|되지)|성립(?:한다|하지|된다)|소멸(?:한다|하지|된다)|효력(?:이|을)|의무(?:가|를)|권리(?:가|를)|"
-    r"정당화(?:된다|될)|면책(?:된다|되지)|징계(?:할|하여야|사유)|"
+    r"정당화(?:된다|될)|면책(?:된다|되지)|징계(?:할|하여야|사유)|권리\s*남용|해당(?:한다|합니다|하지|된다)|"
+    r"(?:될|받을|볼|감액될|거절될|취소될|배제될)\s*수\s*(?:없|있)|배상(?:하여야|해야)|지급(?:하여야|할\s*의무)|"
     # 법원의 판단 경향을 전칭으로 말하는 서술('항상 원고 승소 판결을 해 왔다')
     r"(?:판결|판단|결정|인용|기각|취소)(?:을|를)?\s*(?:해|하여)\s*왔|승소|패소")
 QUALIFIER_RE = re.compile(r"특별한\s*사정이\s*없는\s*한|원칙적으로|대체로|일반적으로\s*(?:는|은)?\s*(?:[가-힣]+\s*){0,2}한다고\s*보|"
@@ -369,12 +371,42 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
                       lambda s: _remedy(s, in_relief, criminal_doc), _unsourced_standard,
                       lambda s: _requirement_exclusion(s, previous)):
             match = check(sentence)
+            if match and not in_relief and not _author_asserts(match, previous):
+                continue  # 부정·전달·가정으로 쓴 문장은 작성자의 주장이 아니다(v5 3-2)
             if match:
                 match.start = start
                 out.append(match)
                 break  # 한 문장은 가장 앞선 유형 하나로만 판정한다(같은 문장 이중 판정 방지)
         previous = sentence
     return out
+
+
+# 유형마다 '명제'로 볼 부분: (앞 부분, 명제 끝을 정하는 뒷부분). 극성은 명제 끝 뒤의 글로 판별한다.
+_CLAIM_SPANS = {
+    "UNCONSTITUTIONALITY": (UNCON_RE, None),
+    "UNSUPPORTED_GENERALIZATION": (QUANTIFIER_RE, LEGAL_EFFECT_RE),
+    "NO_BASIS_REMEDY": (PUNITIVE_RE, None),
+    "UNSOURCED_STANDARD": (STANDARD_NOUN_RE, RELIANCE_RE),
+    "LITIGATION_REQUIREMENT_EXCLUSION": (EXCLUSION_RE, None),
+}
+
+
+def _author_asserts(match: ClaimMatch, previous: str) -> bool:
+    """이 문장의 명제를 작성자가 단정했는가. 출처 불명 기준은 내용의 긍정·부정과 무관하게 그 기준에 기댄 것이
+    문제이므로 부정은 보지 않고 전달·가정만 본다."""
+    head, tail = _CLAIM_SPANS.get(match.claim_type, (None, None))
+    found = head.search(match.sentence) if head else None
+    if not found:
+        return True
+    end = found.end()
+    if tail is not None:
+        after = tail.search(match.sentence, found.start())
+        if after:
+            end = max(end, after.end())
+    result = polarity(match.sentence, (found.start(), end), previous=previous)
+    if match.claim_type == "UNSOURCED_STANDARD" and result == NEGATED:
+        return True
+    return result == ASSERTED
 
 
 def _to_finding(doc: NormalizedDocument, match: ClaimMatch) -> Finding:

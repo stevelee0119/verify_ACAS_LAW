@@ -16,6 +16,8 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
+from .polarity import asserted
+
 ENGINE_NAME = "legal_engine.legal_rules"
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "rules.json"
 RELIEF_HEAD_RE = re.compile(r"청\s*구\s*취\s*지")
@@ -141,14 +143,19 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
         else:
             body = sections["BODY"]
             units = [body[s:e].strip() for s, e in sentence_bounds(body)]
+        previous = ""
         for unit in units:
+            prior, previous = previous, unit
             if not unit:
                 continue
             m = pattern.search(unit)
             if not m:
                 continue
-            # 부정 표현('아니다', '않는다', '대상이 아니라고' 등) 처리 (과제 4)
+            # 부정 표현('아니다', '않는다', '대상이 아니라고' 등) 처리 (과제 4 및 v5 극성 검사)
             if _is_negated_expression(rule, unit, m):
+                continue
+            # 부정·전달(판례·상대방 주장)·가정으로 쓴 명제는 작성자의 주장이 아니다(v5 3-2). 청구취지·당사자 칸은 제외.
+            if scope == "BODY" and not asserted(unit, pattern, previous=prior):
                 continue
             if rule.get("requires_no_citation") and CITATION_HINT_RE.search(unit):
                 continue

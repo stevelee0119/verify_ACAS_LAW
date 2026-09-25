@@ -72,6 +72,8 @@ from packages.claim_engine.evidence_consistency import check_document as check_e
 from packages.claim_engine.evidence_consistency import cross_document_copies
 from packages.claim_engine.fact_checks import check_periods
 from packages.claim_engine.fact_store import cross_document_facts
+from packages.claim_engine.calendar_dates import calendar_date_findings
+from packages.claim_engine.korean_amount import words_digits_mismatches
 from packages.legal_engine.legal_rules import review_legal_rules
 from packages.legal_engine.precedent_verifier import verify_precedent_distortions, verify_statute_quotes
 from packages.claim_engine.cross_document_entities import verify_cross_document_entities
@@ -80,6 +82,7 @@ from packages.legal_engine.internal_citation import (build_clause_index, check_r
                                                     internal_citation_findings)
 from packages.legal_engine.omission import analyze_omissions, omission_findings
 
+from .environment import preflight
 from .ai_document_detector import create_ai_detector_findings, detect_ai_document, reconcile_model_fact_remarks
 from .ai_residue import residue_findings, scan_residue
 from .finalize import finalize_document_findings
@@ -297,7 +300,8 @@ class VerificationPipeline:
         result.scores = aggregate_scores(result)
         result.run_manifest = manifest.to_dict(versions={
             "program": self.settings.version, "rule": self.settings.rule_version,
-            "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()})
+            "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()},
+            environment=preflight(self.settings, self.registry, self.router))
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )
@@ -562,6 +566,12 @@ class VerificationPipeline:
                 base + span * (0.75 + 0.05 * done / max(1, total))))
             reviews = result.engine_data.get("semantic_reviews", [])
             stage.inputs = len(reviews)
+            if reviews:
+                # 의미·적용 검토는 참고 의견이라 finding을 만들지 않는다. 결과는 검토 결과 구분으로 남긴다.
+                grounded = sum(1 for r in reviews if r.get("source_quotes_validated"))
+                ran = sum(1 for r in reviews if r.get("model_executed"))
+                stage.note = (f"공식 전문 근거가 확인된 AI 의견 {grounded}건, 모델 실행했으나 근거 미확인 {ran - grounded}건, "
+                              f"모델 미실행 {len(reviews) - ran}건")
             if not reviews:
                 stage.skip_reason = "공식 원문으로 확인된 판례 인용이 없음"
             elif not any(r.get("model_executed") for r in reviews):
@@ -760,14 +770,26 @@ class VerificationPipeline:
         for finding in result.findings:
             finding.document_id = finding.document_id or doc.document_id
         # 인용마다 최종 판정 하나, 모든 finding에 필수 필드(v2 Phase 1)
+        # 본문의 달력에 없는 날짜(v5 3-8). 인용·증거표가 이미 판정한 날짜는 빼고, OCR 글자는 숫자 보정·신뢰도 반영.
+        with manifest.stage("calendar_dates", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
+                            document_id=document.document_id) as stage:
+            try:
+                result.findings.extend(calendar_date_findings(doc, result.findings))
+            except Exception as exc:  # pragma: no cover - 방어
+                stage.error = type(exc).__name__
+                result.warnings.append(f"날짜 형식 검사 경고: {exc}")
         # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
         with manifest.stage("model_fact_reconcile", [], unit="모델의 사실 모순 지적", document_id=document.document_id) as stage:
             remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
             stage.inputs = len(remarks)
-            result.findings = reconcile_model_fact_remarks(result.findings)
-            stage.findings = sum(1 for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK
-                                 and f.status == VerificationStatus.CONTRADICTED)
-            if not remarks:
+            counts: Dict[str, int] = {}
+            result.findings = reconcile_model_fact_remarks(result.findings, counts)
+            # 결과 건수 = 결정론 판정으로 확인된 지적(전부·일부). 확인하지 못한 지적은 사람 확인 항목으로 남는다.
+            stage.findings = counts.get("confirmed", 0) + counts.get("partial", 0)
+            if remarks:
+                stage.note = (f"확인 {counts.get('confirmed', 0)}건, 일부 확인 {counts.get('partial', 0)}건, "
+                              f"사람 확인 {counts.get('unconfirmed', 0)}건")
+            else:
                 stage.skip_reason = "AI 모델의 사실 모순 지적이 없음"
         statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
         result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)

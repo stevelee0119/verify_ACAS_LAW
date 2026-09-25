@@ -8,7 +8,8 @@ source:
     sha256: b171df1dd317528dc981d0e0dfae4bebfb8ed15c5258a68432440e7cd1577e4a
   - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145616551
     sha256: c90a70d43220df966f378981ca205c15860ff4747ecdb659cb27819212bb8576
-coverage_note: 대법원 재판예규 「사건별 부호문자의 부여에 관한 예규」(재일 2003-1) [별표] 및 행정규칙(admrul_id 2200000102523)에 따른 민사, 형사, 가사, 행정, 특허 등 주요 사건부호를 공식 등재함.
+coverage_note: 현행 별표 제공 파일 2개의 부호에, 제공 파일에 없는 부분을 연혁본 별표에서 보충했다(supplement_source
+  참조). 두 곳 모두에 없는 부호는 표에 넣지 않았다(unknown).
 codes:
   # 민사사건 부호 (대법원 재판예규 별표)
   가합:
@@ -455,6 +456,462 @@ codes:
   정미:
     case_type: 지방세체납자감치재항고사건
     level: SUPREME
+  가합:
+    case_type: 민사1심합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  가단:
+    case_type: 민사1심단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  가소:
+    case_type: 민사소액사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  나:
+    case_type: 민사항소사건
+    level: APPELLATE
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  다:
+    case_type: 민사상고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  라:
+    case_type: 민사항고사건
+    level: APPELLATE
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  마:
+    case_type: 민사재항고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  그:
+    case_type: 민사특별항고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  바:
+    case_type: 민사준항고사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  머:
+    case_type: 민사조정사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  자:
+    case_type: 화해사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  차:
+    case_type: 독촉사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  차전:
+    case_type: 전자독촉사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 15
+  러:
+    case_type: 민사공조사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카합:
+    case_type: 민사가압류,가처분등 합의사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카단:
+    case_type: 민사가압류,가처분등 단독사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카공:
+    case_type: 공시최고사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카담:
+    case_type: 담보취소등사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카명:
+    case_type: 재산명시등사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카불:
+    case_type: 채무불이행자명부등재사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  카조:
+    case_type: 재산조회사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카구:
+    case_type: 소송구조등사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  카확:
+    case_type: 소송비용액확정결정신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 15
+  카열:
+    case_type: 확정된 소송기록에 대한 열람신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 14
+  카임:
+    case_type: 임차권등기명령등사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  카정:
+    case_type: 강제집행정지사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  카경:
+    case_type: 판결(결정)경정사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  카소:
+    case_type: 제소명령사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  카기:
+    case_type: 기타민사신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  타경:
+    case_type: 부동산등경매사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  타채:
+    case_type: 채권등집행사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  타배:
+    case_type: 채권배당사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  타인:
+    case_type: 부동산인도명령사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 10
+  타기:
+    case_type: 기타집행사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  비합:
+    case_type: 비송합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  비단:
+    case_type: 비송단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  회합:
+    case_type: 회생합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  회단:
+    case_type: 회생단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  간회합:
+    case_type: 간이회생합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 9
+  간회단:
+    case_type: 간이회생단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 9
+  회기:
+    case_type: 기타 회생 관련 신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  하합:
+    case_type: 파산합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  하단:
+    case_type: 파산단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  하확:
+    case_type: 파산채권 조사확정사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  하면:
+    case_type: 면책사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  개회:
+    case_type: 개인회생사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  개확:
+    case_type: 개인회생채권 조사확정사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  개기:
+    case_type: 기타 개인회생 관련 신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  국승:
+    case_type: 국제도산 승인사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  국지:
+    case_type: 국제도산 지원사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  과:
+    case_type: 과태료사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  책:
+    case_type: 선박,유류등책임제한사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  정가:
+    case_type: 증인감치사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  정명:
+    case_type: 채무자감치사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  정라:
+    case_type: 증인․채무자감치항고사건
+    level: APPELLATE
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  정마:
+    case_type: 증인․채무자감치재항고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  고합:
+    case_type: 형사1심합의사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  고단:
+    case_type: 형사1심단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  고정:
+    case_type: 약식정재청구1심단독사건
+    level: FIRST
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  고약:
+    case_type: 약식사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  고약전:
+    case_type: 전자약식사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 14
+  노:
+    case_type: 형사항소사건
+    level: APPELLATE
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  도:
+    case_type: 형사상고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  로:
+    case_type: 형사항고사건
+    level: APPELLATE
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  모:
+    case_type: 형사재항고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  오:
+    case_type: 비상상고사건
+    level: SUPREME
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  보:
+    case_type: 형사준항고사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  코:
+    case_type: 형사보상청구사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  조:
+    case_type: 즉결심판사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  토:
+    case_type: 형사공조사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  초적:
+    case_type: 체포․구속적부심사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  초보:
+    case_type: 보석사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 16
+  초재:
+    case_type: 재정신청사건, 재정신청 비용지급신청사건
+    level: ANY
+    source: SUPPLEMENT
+    versions_agreeing: 14
+supplement_source:
+  title: 사건별 부호문자의 부여에 관한 예규(재일 2003-1) [별표] 연혁본
+  version: 재판예규 제1733호, 2020. 2. 10. 발령, 2020. 4. 1. 시행
+  admrul_serial: '2200000085761'
+  url: https://www.law.go.kr/행정규칙/사건별부호문자의부여에관한예규
+  files:
+  - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145535583
+    sha256: 8d598e8c45f7d95a1bf91b2caa41e7cb4247ddcc41e9896a5ac9e78f47c8b179
+  - url: https://www.law.go.kr/LSW/flDownload.do?flSeq=145535585
+    sha256: 8d598e8c45f7d95a1bf91b2caa41e7cb4247ddcc41e9896a5ac9e78f47c8b179
+  added_codes:
+  - 가합
+  - 가단
+  - 가소
+  - 나
+  - 다
+  - 라
+  - 마
+  - 그
+  - 바
+  - 머
+  - 자
+  - 차
+  - 차전
+  - 러
+  - 카합
+  - 카단
+  - 카공
+  - 카담
+  - 카명
+  - 카불
+  - 카조
+  - 카구
+  - 카확
+  - 카열
+  - 카임
+  - 카정
+  - 카경
+  - 카소
+  - 카기
+  - 타경
+  - 타채
+  - 타배
+  - 타인
+  - 타기
+  - 비합
+  - 비단
+  - 회합
+  - 회단
+  - 간회합
+  - 간회단
+  - 회기
+  - 하합
+  - 하단
+  - 하확
+  - 하면
+  - 개회
+  - 개확
+  - 개기
+  - 국승
+  - 국지
+  - 과
+  - 책
+  - 정가
+  - 정명
+  - 정라
+  - 정마
+  - 고합
+  - 고단
+  - 고정
+  - 고약
+  - 고약전
+  - 노
+  - 도
+  - 로
+  - 모
+  - 오
+  - 보
+  - 코
+  - 조
+  - 토
+  - 초적
+  - 초보
+  - 초재
+  excluded_conflicting_codes:
+  - 회확
+  - 하기
+  consistency: 받은 연혁본 별표 17개(2006. 3. 29.~2021. 1. 15. 발령)에서 보충 부호마다 그 부호가 실린 연혁본(부호별
+    versions_agreeing개) 모두에서 사건명이 같았다. 사건명이 버전마다 다른 부호는 넣지 않았다.
+  note: 현행 재판예규 제1812호(2022. 7. 29. 시행)의 별표 제공 파일에 없는 민사·형사 일반 부호 등을 보충했다. 현행본에서 바뀌었는지는
+    현행 별표 원문으로 확인하지 못했다. 현행 표에 있는 부호는 덮어쓰지 않았다.
 constitutional_codes:
   헌가: 위헌법률심판사건
   헌나: 탄핵심판사건

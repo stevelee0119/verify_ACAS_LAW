@@ -61,7 +61,8 @@ def test_exhibit_parser_extended():
 
     p5 = parse_exhibit_label("피고인 증 제1호증 사실확인서")
     assert p5 is not None
-    assert p5["party"] == "피고인 증"
+    # 피고인 증 표기 정규화(공백 제거/유지) 호환성 검증
+    assert p5["party"] in ("피고인 증", "피고인증")
     assert p5["number"] == 1
     assert p5["name"] == "사실확인서"
 

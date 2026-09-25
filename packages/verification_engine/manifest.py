@@ -85,7 +85,8 @@ class RunManifest:
         with self.stage(name, [], inputs=0, document_id=document_id) as handle:
             handle.skip_reason = reason
 
-    def to_dict(self, versions: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    def to_dict(self, versions: Optional[Dict[str, str]] = None,
+                environment: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """versions: 이 실행에 쓰인 프로그램·규칙·프롬프트·모델 설정 버전. 같은 문서의 결과가 달라졌을 때
         어느 버전 변화 때문인지 매니페스트만으로 추적할 수 있게 함께 남긴다."""
         engines = {}
@@ -102,6 +103,8 @@ class RunManifest:
             "missing_resources": self.environment.get("missing_resources", []),
             "environment": dict(self.environment),
             "versions": dict(versions or {}),
+            # 실행 환경 점검 결과와 환경 지문(v5 2-1). 두 실행의 지문이 같아야 결과를 곧바로 비교할 수 있다.
+            "environment": dict(environment or {}),
             "engines": engines,
             "not_executed": [name for name in self.order if not self.engines[name]["executed"]],
             # 입력 건수를 적지 않은 엔진(있으면 결함). inputs 0은 '검사 대상 없음'이고 누락과 다르다.
