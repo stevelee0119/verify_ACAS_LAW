@@ -21,9 +21,13 @@ from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
-
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+if sys.stdout and hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr and hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
 DEFECT_STATUSES = {"NOT_FOUND", "CONTRADICTED", "SUSPICIOUS", "INVALID_FORMAT", "INVALID"}
 # 문서 내용에 대한 결함 주장이 아니라 처리 실패 알림이다. 없어지면 '읽기 실패 해소'로 따로 보고한다.
 PROCESSING_NOTICES = {"PARSE_ERROR", "OCR_LOW_QUALITY"}
@@ -36,14 +40,16 @@ def run(folder: Path, root: Path) -> Dict[str, Any]:
     from packages.common.storage import sha256_file
     from packages.report_engine.exporters import to_payload
     from packages.verification_engine import DocumentInput, ProjectContext, VerificationPipeline
+    from packages.verification_engine.ground_truth_filter import is_ground_truth_filename
 
-    files = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf")
+    files = sorted(p for p in folder.iterdir() if p.suffix.lower() == ".pdf" and not is_ground_truth_filename(p.name))
     documents = [DocumentInput(document_id=p.stem.split("_")[0], path=str(p), filename=p.name,
                                mime_type="application/pdf", sha256=sha256_file(p)) for p in files]
     result = VerificationPipeline(audit=AuditChain()).run(f"diff_{datetime.utcnow():%Y%m%d%H%M%S}",
                                                           ProjectContext(project_id="diff"), documents)
     payload = to_payload(result)
     payload["scores"] = result.scores
+    payload["run_manifest"] = result.run_manifest
     return json.loads(json.dumps(payload, ensure_ascii=False, default=str))
 
 
@@ -111,6 +117,9 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
     merged = _merged_into_current(removed_rows, current, resolved)
     lost_defects = [r for r in removed_rows if r["defect_claim"] and r["count"] > 0
                     and r not in resolved and r not in merged]
+    prev_manifest = previous.get("run_manifest") or {}
+    curr_manifest = current.get("run_manifest") or {}
+    warning = curr_manifest.get("warning") or prev_manifest.get("warning")
     verdicts = _verdicts(current)
     fp_candidates = []
     for r in added_rows:
@@ -123,6 +132,7 @@ def diff(previous: Dict[str, Any], current: Dict[str, Any]) -> Dict[str, Any]:
                         "defect_claims": [sum(n for k, n in before.items() if k[4]), sum(n for k, n in after.items() if k[4])],
                         "release_gate": [(previous.get("summary") or {}).get("release_gate"),
                                          (current.get("summary") or {}).get("release_gate")]},
+            "warning": warning,
             "added": [r for r in added_rows if r["count"] > 0], "removed": [r for r in removed_rows if r["count"] > 0],
             "reworded": reworded, "resolved_processing_failures": resolved, "merged_into_current": merged,
             "lost_defect_claims": lost_defects,
@@ -183,7 +193,15 @@ def _pair_reworded(removed: List[Dict[str, Any]], added: List[Dict[str, Any]]) -
 def render(title: str, d: Dict[str, Any]) -> str:
     s = d["summary"]
     env = d.get("environment") or {}
-    lines = [f"### {title}", ""]
+    lines = []
+    if d.get("warning"):
+        lines += [
+            "================================================================================",
+            f"⚠️  [경고] {d['warning']}",
+            "================================================================================",
+            "",
+        ]
+    lines += [f"### {title}", ""]
     if not env.get("same_environment"):
         lines += [f"**환경 지문이 다르거나 기록되지 않았다({env.get('fingerprints')}). 아래 영역은 비교할 수 없다:**", ""]
         lines += [f"- {a}" for a in env.get("incomparable_areas") or ["(환경 기록 없음)"]] + [""]

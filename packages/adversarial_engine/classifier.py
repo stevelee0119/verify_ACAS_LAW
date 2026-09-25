@@ -50,10 +50,20 @@ class Classification:
         return INTENT_TO_FINDING.get(self.intents[0], FindingType.PROMPT_INJECTION_SUSPECTED)
 
 
+WORKPLACE_SUPERVISOR_RE = re.compile(
+    r"(?:팀장|상사|회사|사용자|업무|직장|관리자|인사권자|대표이사|대표|부서장|선임|감독자|원고|피고)(?:의|\s*)\s*$"
+)
+
+
 def find_pattern_hits(text: str) -> List[PatternHit]:
     hits: List[PatternHit] = []
     for regex, intent, weight, description in INSTRUCTION_PATTERNS:
         for m in regex.finditer(text):
+            # 직장·업무상 지시(팀장의 지시, 상사의 명령 등) 사실관계 서술은 프롬프트 인젝션이 아니다
+            if intent == InjectionIntent.INSTRUCTION_OVERRIDE:
+                prefix = text[max(0, m.start() - 30) : m.start()]
+                if WORKPLACE_SUPERVISOR_RE.search(prefix):
+                    continue
             hits.append(PatternHit(intent, m.group(0), description, weight, m.start(), m.end()))
     return hits
 

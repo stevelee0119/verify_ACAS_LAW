@@ -146,10 +146,12 @@ def _search_units(doc: NormalizedDocument) -> List[Tuple[str, Any]]:
     """
     units: List[Tuple[str, Any]] = []
     pages: Dict[Any, List[Any]] = {}
-    # 시험·예시 문서 고지는 바닥글에 있는 경우가 많다. 문서 성격 판단이므로 머리글·바닥글도 본다.
+    # 개별 단위는 머리글·바닥글도 포함해 검사한다.
     for block in doc.body_blocks(include_running_heads=True):
         units.append((compact(block.text), block))
-        pages.setdefault(block.page, []).append(block)
+        if getattr(block, "block_type", "") != "running_head":
+            pages.setdefault(block.page, []).append(block)
+    # 두 줄 이상 걸친 본문 고지는 머리글·바닥글을 뺀 본문 블록끼리만 합쳐서 검사한다.
     for blocks in pages.values():
         if len(blocks) > 1:
             units.append((compact("".join(b.text for b in blocks)), blocks[0]))
@@ -209,11 +211,17 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
 
     # --- 1) 예시 고지 문구 ------------------------------------------------
     declared: Dict[Tuple[str, str], Any] = {}
+    testbed_watermark_only = True
     for text, block in units:
         for pattern, label in SPECIMEN_PATTERNS:
             match = pattern.search(text)
             if match:
                 declared.setdefault((label, match.group(0)), block)
+                is_running = getattr(block, "block_type", "") == "running_head" or getattr(block, "source_layer", "") in ("running_head", "header", "footer")
+                is_test_watermark = ("검증프로그램" in text or "테스트용" in text or "시험용" in text or "평가용" in text)
+                if not (is_running or is_test_watermark):
+                    testbed_watermark_only = False
+
     if declared:
         labels = sorted({label for label, _ in declared})
         (first_label, first_excerpt), first_block = next(iter(declared.items()))
@@ -221,14 +229,19 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
             "deterministic_rule": True,
             "forensic_signal": len(declared),
             "declared_labels": labels,
+            "testbed_watermark_only": testbed_watermark_only,
         }
+        severity = Severity.INFO if testbed_watermark_only else Severity.HIGH
         findings.append(
             _finding(
                 finding_type=FindingType.SPECIMEN_DOCUMENT_DECLARED,
-                severity=Severity.HIGH,
-                grade=EvidenceGrade.A,
-                title="문서 스스로 예시·연습용임을 밝히고 있다",
+                severity=severity,
+                grade=EvidenceGrade.A if not testbed_watermark_only else EvidenceGrade.C,
+                title=("테스트 환경 워터마크 표기 확인" if testbed_watermark_only
+                       else "문서 스스로 예시·연습용임을 밝히고 있다"),
                 detail=(
+                    f"검증 및 시험 환경 헤더 표기가 확인된다 ({', '.join(labels)})."
+                    if testbed_watermark_only else
                     f"{', '.join(labels)} 표기가 확인된다. "
                     "문서 내부의 명시적 고지이므로 추정이 아니라 기재사실이다. "
                     f"이 문서를 실제 {_with_ro(_document_label(doc))} 취급해서는 안 된다."
@@ -238,9 +251,11 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
                 excerpt=first_excerpt,
                 block_id=first_block.block_id,
                 page=first_block.page,
-                level=ForensicLevel.CRITICAL,
+                level=ForensicLevel.NOTABLE if testbed_watermark_only else ForensicLevel.CRITICAL,
             )
         )
+        if testbed_watermark_only:
+            findings[-1].advisory_only = True
 
     # --- 2) 주민등록번호 검증부호 ----------------------------------------
     invalid_rrns: Dict[str, Any] = {}

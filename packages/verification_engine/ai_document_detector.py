@@ -59,8 +59,13 @@ def _rule_based_ai_detection(
     doc: NormalizedDocument,
     citation_findings: List[Finding],
     metadata_indications: bool,
+    exclude_texts: Optional[List[str]] = None,
 ) -> AIDetectorResult:
-    """LLM이 없을 때 휴리스틱, 가짜 판례 정황, 메타데이터 등을 바탕으로 결정론적 검출 수행."""
+    """LLM이 없을 때 휴리스틱, 가짜 판례 정황, 메타데이터 등을 바탕으로 결정론적 검출 수행.
+    
+    서식(마크다운), 직접 인용문구, 단순 메타데이터 힌트만으로는 AI 작성을 단정하지 않으며,
+    대화형 서두/맺음말/출처토큰/지식기준일 등 객관적 잔재가 본문에서 명확히 확인될 때에만 판정한다.
+    """
     text = doc.visible_text
     sents = sentences(text)
     signals: Dict[str, Any] = {}
@@ -69,32 +74,31 @@ def _rule_based_ai_detection(
 
     score = 0.0
 
-    # 1. 메타데이터 표기
+    # 1. 메타데이터 표기 (편집 가능한 힌트이므로 단독으로는 작성 주체 확정 불가)
     if metadata_indications:
         score += 0.35
-        reasons.append("문서 메타데이터(Producer/Creator 등)에 AI 생성 도구(ChatGPT/Claude/Gemini 등) 표기가 확인됨")
+        reasons.append("문서 메타데이터(Producer/Creator 등)에 AI 생성 도구 표기 힌트가 감지됨(미검증 힌트)")
 
-    # 2. AI 응답 잔재(ai_residue): 대화형 서두·면책 안내·지식 기준일·마크다운은 객관적 흔적,
-    #    상투 표현·영문 병기는 문체 신호로만 센다.
-    # 줄바꿈으로 갈린 문구("드리겠습 / 니다")를 잇기 위해 읽기 본문에서 찾는다.
-    residues = scan_residue(build_reading_text(doc).text)
+    # 2. AI 응답 잔재(ai_residue):
+    #    대화형 서두·면책 안내·지식 기준일·출처토큰은 객관적 흔적(objective),
+    #    마크다운·상투 표현·영문 병기는 문체 신호(style)로만 다룬다.
+    #    직접 인용문구("...") 내부와 지시문/예시문은 스캔에서 제외한다.
+    reading_raw = build_reading_text(doc).text
+    residues = scan_residue(reading_raw, exclude_texts=exclude_texts, mask_quotes=True)
     signals["residues"] = [{"category": r.category, "label": r.label, "objective": r.objective,
                             "matches": r.matches} for r in residues]
-    cliche_hits = sum(len(r.matches) for r in residues if r.objective)
+    objective_hits = sum(len(r.matches) for r in residues if r.objective)
     style_hits = sum(1 for r in residues if not r.objective)
-    if cliche_hits > 0:
-        score += min(0.60, 0.20 * cliche_hits)
+
+    if objective_hits > 0:
+        score += min(0.60, 0.25 * objective_hits)
         reasons.append("AI 챗봇의 전형적인 관용구·면책·대화형 응답 잔재(" + ", ".join(
-            r.label for r in residues if r.objective) + f")가 {cliche_hits}건 발견됨")
+            r.label for r in residues if r.objective) + f")가 {objective_hits}건 발견됨")
     if style_hits:
-        score += 0.05 * style_hits
+        score += min(0.15, 0.03 * style_hits)
         signals["style_signals"] = [r.label for r in residues if not r.objective]
 
     # 3. 판례 인용 오류는 작성 주체의 근거로 쓰지 않는다.
-    #
-    # 가공·오류 인용은 '법률 인용 오류' 축에서 다룬다. 사람도 사건번호를 잘못 적고,
-    # 검증용 자료는 일부러 가공 인용을 넣는다. 예전에는 성립 불가 사건번호가 있으면
-    # AI 점수에 0.30을 더해, 인용 오류가 AI 작성 판정으로 두 번 계산됐다.
     unconfirmed = [f for f in citation_findings
                    if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND]
     impossible = [f for f in unconfirmed
@@ -109,25 +113,28 @@ def _rule_based_ai_detection(
     # 4. 구조적 특징 (단락별 지나치게 기계적인 번호 매기기, 대칭적 서술)
     list_markers = len(re.findall(r"^\s*(?:\d+\.|\([0-9]\)|첫째|둘째|셋째|넷째|마지막으로)", text, re.MULTILINE))
     if list_markers >= 5 and len(sents) >= 15:
-        score += 0.10
+        score += 0.05
         signals["heavy_listing"] = True
         reasons.append("기계적인 나열식 번호 체계와 전형적인 개조식 설명문 구조가 두드러짐")
 
     # 종합 판정 도출
     #
-    # 객관적 작성 흔적(도구 표기·챗봇 응답 잔재)이 있어야 AI 판정을 낸다. 서식·나열 구조는
-    # 사람이 쓴 법률 서면에도 흔하다. 흔적이 없다는 사실은 '사람이 썼다'는 근거도 아니다.
+    # 객관적 본문 작성 흔적(objective_hits >= 1)이 실존해야만 AI 판정을 도출한다.
+    # 단순 메타데이터 힌트나 마크다운 서식만으로는 AI 작성을 단정하지 않는다.
     score = min(1.0, score)
-    objective_traces = cliche_hits + (1 if metadata_indications else 0)
-    signals["objective_traces"] = objective_traces
-    if score >= 0.65 and objective_traces:
+    signals["objective_traces"] = objective_hits
+    if score >= 0.70 and objective_hits >= 2:
         verdict = "AI_FULL_GENERATION_LIKELY"
-    elif score >= 0.35 and objective_traces:
+    elif score >= 0.40 and objective_hits >= 1:
         verdict = "AI_PARTIAL_GENERATION"
     else:
         verdict = "UNCERTAIN"
-        reasons.append("문서 분량이 너무 적어 판정을 유보함" if len(sents) < 5 else
-                       "객관적 작성 흔적을 찾지 못해 판단을 유보함(흔적이 없다는 것이 사람 작성의 근거는 아님)")
+        if len(sents) < 5:
+            reasons.append("문서 분량이 너무 적어 판정을 유보함")
+        elif metadata_indications and objective_hits == 0:
+            reasons.append("메타데이터 힌트가 있으나 본문 내 객관적 AI 작성 흔적이 확인되지 않아 판정을 유보함")
+        else:
+            reasons.append("객관적 작성 흔적을 찾지 못해 판단을 유보함(흔적이 없다는 것이 사람 작성의 근거는 아님)")
 
     return AIDetectorResult(
         verdict=verdict,
@@ -166,8 +173,8 @@ async def detect_ai_document(
             reasons=["문서 본문이 비어 있어 분석할 수 없음"],
         )
 
-    # 1차 규칙 기반 특징 추출
-    rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications)
+    # 1차 규칙 기반 특징 추출 (제외 텍스트 필터 적용)
+    rule_res = _rule_based_ai_detection(doc, citation_findings, metadata_indications, exclude_texts=exclude_texts)
 
     # LLM을 사용할 수 없거나 정책이 LOCAL_ONLY인 경우 규칙 기반 결과 반환
     can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
@@ -199,6 +206,36 @@ async def detect_ai_document(
             excluded += 1
     rule_res.signals["excluded_instruction_segments"] = excluded
 
+    # 긴 문서(6000자 초과)에 대한 대표 표본화(앞 2500자 + 중간 2000자 + 뒤 1500자) 및 커버리지 기록
+    total_chars = len(text)
+    if total_chars > 6000:
+        mid_start = max(2500, (total_chars // 2) - 1000)
+        mid_end = min(total_chars - 1500, mid_start + 2000)
+        sample_text = (
+            text[:2500]
+            + f"\n\n[... 중간 본문 생략: 약 {max(0, mid_start - 2500)}자 ...]\n\n"
+            + text[mid_start:mid_end]
+            + f"\n\n[... 후반 본문 생략: 약 {max(0, total_chars - 1500 - mid_end)}자 ...]\n\n"
+            + text[-1500:]
+        )
+        sampling_info = {
+            "total_chars": total_chars,
+            "inspected_chars": len(sample_text),
+            "sampling_mode": "head_middle_tail",
+            "is_full_coverage": False,
+            "omitted_chars": max(0, total_chars - (2500 + (mid_end - mid_start) + 1500)),
+        }
+    else:
+        sample_text = text
+        sampling_info = {
+            "total_chars": total_chars,
+            "inspected_chars": total_chars,
+            "sampling_mode": "full_text",
+            "is_full_coverage": True,
+            "omitted_chars": 0,
+        }
+    rule_res.signals["coverage"] = sampling_info
+
     system_prompt = (
         "당신은 법률 문서의 작성 경위를 감정하는 대한민국 법률 포렌식 전문가입니다.\n"
         "제공된 법률 서면 텍스트를 분석하여, 이 문서가 LLM(ChatGPT, Gemini 등)에 의해 전체 작성되었는지, "
@@ -226,11 +263,12 @@ async def detect_ai_document(
         "}"
     )
 
-    sample = hide(text[:6000])  # 상위 6000자 검토
+    sample = hide(sample_text)
     user_payload = {
         "document_filename": hide(doc.filename),
         "metadata_ai_hint": metadata_indications,
         "document_sample_text": sample,
+        "document_coverage": sampling_info,
     }
     req = LLMRequest(
         system=system_prompt,

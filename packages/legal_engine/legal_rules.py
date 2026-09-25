@@ -86,6 +86,37 @@ def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources:
     )
 
 
+NEGATION_WORDS_RE = re.compile(
+    r"(?:대상이\s*아니(?:다|라고|라|며|었던|면)?|해당하지\s*않(?:는다|았다|고|으며|을)?|"
+    r"볼\s*수\s*없(?:다|으며|고|어서)?|인정되지\s*않(?:는다|았다|고)?|"
+    r"아니(?:다|라고|라|며|었)|않(?:는다|았다|고|으며)|"
+    r"이유\s*없(?:다|어|으므로)?|배척되어야|배제되어야|적용되지\s*않(?:는다|았다)?)"
+)
+
+
+def _is_negated_expression(rule: Dict[str, Any], unit: str, match: re.Match) -> bool:
+    """문장이 규칙의 명제를 긍정 주장하는 것이 아니라 부정·배척하는 표현인지 검사한다(과제 4)."""
+    pat_str = rule.get("pattern", "")
+    rule_targets_negation = bool(re.search(r"않|아니|없|불가|배제", pat_str))
+    end_pos = match.end()
+    following_text = unit[end_pos:end_pos + 60].strip()
+
+    if not rule_targets_negation:
+        # 규칙이 긍정 명제(예: '책임을 진다', '처벌을 구한다')를 잡는 규칙인 경우:
+        # 매칭부 바로 뒤에 '는 것은 아니다', '라 볼 수 없다', '대상이 아니라고', '않는다' 등 부정어가 이어지면 배척
+        if NEGATION_WORDS_RE.search(following_text):
+            return True
+        if NEGATION_WORDS_RE.search(unit[-30:]):
+            return True
+    else:
+        # 규칙 자체가 이미 부정 명제(예: '적용되지 않는다', '필요 없다')인 경우:
+        # '…라는 주장은 이유 없다', '배척되어야', '…적용되지 않는 것은 아니다' 등 이중 부정/상대방 주장 배척 검사
+        if re.search(r"이유\s*없|배척|타당하지\s*않|것은\s*아니", following_text) or re.search(r"이유\s*없|배척|타당하지\s*않", unit[-30:]):
+            return True
+
+    return False
+
+
 def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
     table = load_rules()
     sources = table.get("sources") or {}
@@ -115,7 +146,13 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
         previous = ""
         for unit in units:
             prior, previous = previous, unit
-            if not unit or not pattern.search(unit):
+            if not unit:
+                continue
+            m = pattern.search(unit)
+            if not m:
+                continue
+            # 부정 표현('아니다', '않는다', '대상이 아니라고' 등) 처리 (과제 4 및 v5 극성 검사)
+            if _is_negated_expression(rule, unit, m):
                 continue
             # 부정·전달(판례·상대방 주장)·가정으로 쓴 명제는 작성자의 주장이 아니다(v5 3-2). 청구취지·당사자 칸은 제외.
             if scope == "BODY" and not asserted(unit, pattern, previous=prior):

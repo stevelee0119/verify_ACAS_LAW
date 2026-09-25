@@ -17,9 +17,13 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 
 ENGINE_NAME = "claim_engine.calculation"
 
-AMOUNT_RE = re.compile(r"(?<![\d.,])(?:금\s*)?(?P<sign>[-−+]?)\s*(?P<amount>(?:\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)\s*)*\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)?)\s*원")
+AMOUNT_RE = re.compile(
+    r"(?<![\d.,])(?P<cur>일금\s*|금\s*|[₩\\￥]\s*|KRW\s*)?(?P<sign>[-−+]?)\s*"
+    r"(?P<amount>(?:\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)\s*)*\d[\d,]*(?:\.\d+)?\s*(?:억|천만|백만|만|천)?)"
+    r"(?:\s*(?P<unit>원정|원))?"
+)
 AMOUNT_PART_RE = re.compile(r"(\d[\d,]*(?:\.\d+)?)\s*(억|천만|백만|만|천)?")
-TOTAL_LABEL_RE = re.compile(r"(합계|총액|총\s*금액|계|소계|합\s*계|총\s*계)")
+TOTAL_LABEL_RE = re.compile(r"(합계|총액|총\s*금액|계|소계|합\s*계|총\s*계|지급총액|지급계|지급\s*총액|공제계|공제총액|공제\s*합계|실지급액|차인지급액|총수령액)")
 ITEM_LABEL_RE = re.compile(r"(항목|내역|세부|명세)")
 PERCENT_RE = re.compile(r"(?P<num>\d+(?:\.\d+)?)\s*%")
 PERCENT_HEADER_RE = re.compile(r"비율|구성비|점유율|%|퍼센트")
@@ -62,6 +66,11 @@ def parse_amounts(text: str, *, block_id: Optional[str] = None, page: Optional[i
         try:
             parts = AMOUNT_PART_RE.findall(m.group("amount"))
             if any(not re.fullmatch(r"(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d+)?", number) for number, _ in parts):
+                continue
+            has_cur = bool(m.group("cur"))
+            has_unit = bool(m.group("unit"))
+            has_mult = any(bool(unit) for _, unit in parts)
+            if not (has_cur or has_unit or has_mult):
                 continue
             # Do not silently parse the tail of an unsupported compound/currency.
             prefix = text[:m.start()]
@@ -135,6 +144,24 @@ def evaluate_expression(text: str) -> Optional[Decimal]:
     return total
 
 
+def parse_cell_amount(text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> Optional[Amount]:
+    """표 셀의 금액 파싱: '원'이나 '₩'이 붙은 경우뿐만 아니라 '3,200,000'이나 '0' 같은 순수 숫자도 금액으로 인식한다."""
+    t = text.strip()
+    if not t:
+        return None
+    amounts = parse_amounts(t, block_id=block_id, page=page)
+    if amounts:
+        return amounts[0]
+    clean = t.replace(",", "").replace(" ", "")
+    if re.fullmatch(r"[-−+]?\d+(?:\.\d+)?", clean):
+        try:
+            val = Decimal(clean.replace("−", "-"))
+            return Amount(val, t, 0, len(t), block_id=block_id, page=page)
+        except InvalidOperation:
+            return None
+    return None
+
+
 def row_final_amount(text: str) -> Tuple[Optional[Amount], Optional[CalculationCheck]]:
     """행의 최종 금액과(있으면) 그 행 산식의 검산 결과. '=' 뒤 금액을 최종 금액으로 본다."""
     amounts = parse_amounts(text)
@@ -156,6 +183,24 @@ def row_final_amount(text: str) -> Tuple[Optional[Amount], Optional[CalculationC
     return None, None
 
 
+def row_cell_final_amount(text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> Tuple[Optional[Amount], Optional[CalculationCheck]]:
+    """표 셀의 최종 금액과 산식 검증. 단위가 생략된 천 단위 콤마 숫자도 지원한다."""
+    if "=" in text:
+        left, _, right = text.rpartition("=")
+        right_amt = parse_cell_amount(right, block_id=block_id, page=page)
+        value = evaluate_expression(left[left.rfind(":") + 1:] if ":" in left else left)
+        if right_amt:
+            check = None
+            if value is not None:
+                check = CalculationCheck(kind="FORMULA", stated=right_amt.value, computed=value,
+                                         detail=f"산식 '{' '.join(text.split())}'의 계산값 {value:,} / 기재 {right_amt.value:,}")
+            return right_amt, check
+    amt = parse_cell_amount(text, block_id=block_id, page=page)
+    if amt is not None:
+        return amt, None
+    return None, None
+
+
 class CalculationEngine:
     """문서에서 합계 진술을 찾아 세부 금액과 검산한다."""
 
@@ -172,9 +217,59 @@ class CalculationEngine:
         findings.extend(self._verify_table_totals(doc))
         # 실무 서면은 항목이 줄마다 나뉘므로 줄 단위 내역-합계도 검산한다
         findings.extend(self._verify_line_items(doc, seen_blocks))
-        findings = merge_same_total(findings)
+        findings = self._deduplicate_totals(merge_same_total(findings))
         findings.extend(self._verify_percentages(doc, findings))
         return findings
+
+    def _deduplicate_totals(self, findings: List[Finding]) -> List[Finding]:
+        """합계 검산 중복 제거: 중복·부분 판정 없이 가장 정확하고 포괄적인 한 건만 채택한다(과제 7)."""
+        calc_findings: List[Finding] = []
+        other_findings: List[Finding] = []
+        for f in findings:
+            if f.type == FindingType.ARITHMETIC_MISMATCH and (f.confidence_features or {}).get("stated"):
+                calc_findings.append(f)
+            else:
+                other_findings.append(f)
+
+        if len(calc_findings) <= 1:
+            return findings
+
+        # 세부 항목 수가 많고(가장 포괄적 검산), 심각도가 높은 것 우선 정렬
+        calc_findings.sort(
+            key=lambda x: (
+                -int((x.confidence_features or {}).get("item_count", 0)),
+                -x.severity.rank,
+            )
+        )
+
+        kept: List[Finding] = []
+        for cand in calc_findings:
+            cand_feat = cand.confidence_features or {}
+            cand_stated = cand_feat.get("stated")
+            cand_page = cand.page
+            cand_rows = set(cand_feat.get("rows_used") or [])
+
+            duplicate = False
+            for existing in kept:
+                ex_feat = existing.confidence_features or {}
+                ex_stated = ex_feat.get("stated")
+                ex_page = existing.page
+                ex_rows = set(ex_feat.get("rows_used") or [])
+
+                # 1) 같은 페이지에서 동일한 stated 금액을 검산한 경우 -> 중복
+                if cand_page == ex_page and cand_stated == ex_stated:
+                    duplicate = True
+                    break
+                # 2) rows_used가 서로 포함관계(subset)인 경우 -> 부분 판정이므로 이미 더 큰 쪽이 채택됨
+                if cand_page == ex_page and cand_rows and ex_rows:
+                    if cand_rows.issubset(ex_rows) or ex_rows.issubset(cand_rows):
+                        duplicate = True
+                        break
+
+            if not duplicate:
+                kept.append(cand)
+
+        return other_findings + kept
 
     def _verify_percentages(self, doc: NormalizedDocument, totals: List[Finding]) -> List[Finding]:
         """비율(%) 열을 금액 열로 다시 계산한다(v5 3-3). 비율은 합계에서 나온 파생 수치이므로, 틀린 비율이 기재 합계
@@ -307,71 +402,140 @@ class CalculationEngine:
         assert total_match is not None
         after = [a for a in amounts if a.start >= total_match.start()]
         before = [a for a in amounts if a.start < total_match.start()]
-        if not after or len(before) < 2:
+        # 합계가 속한 문단(직전 빈 줄 이후)으로 묶음을 한정하여 무관한 앞 문단(청구취지 등)을 합산하지 않는다
+        prefix = text[:total_match.start()]
+        last_break = prefix.rfind("\n\n")
+        section_start = (last_break + 2) if last_break != -1 else 0
+        section_before = [a for a in before if a.start >= section_start]
+        if not after or len(section_before) < 2:
             return []
         stated = after[0]
-        check = check_sum(before, stated)
+        check = check_sum(section_before, stated)
         if check.matches:
             return []
-        return [self._mismatch_finding(doc, check, block.block_id, block.page, text)]
+        return [self._mismatch_finding(doc, check, block.block_id, block.page, text[section_start:])]
 
     def _verify_cell_tables(self, doc: NormalizedDocument) -> Tuple[List[Finding], set]:
-        """셀 단위 표: 금액 열(머리글)을 찾아 행마다 최종 금액을 쓰고, 산식 칸은 금액 칸과 대조한다(J3)."""
+        """셀 단위 표: 모든 금액 열에 대해 세로 합산(지급총액, 공제계, 합계 등)과 실지급액 산식을 검산한다."""
         findings: List[Finding] = []
         handled = set()
-        for table in doc.structure.get("tables") or []:
-            cells = [[str(c or "").strip() for c in row] for row in table.get("cells") or []]
+
+        raw_tables = doc.structure.get("tables") or []
+        if not raw_tables:
+            return findings, handled
+
+        # 표 목록 구성: 개별 표 + 인접 페이지의 동일 열 수 연속 표 결합
+        tables_to_check = []
+        for t in raw_tables:
+            tables_to_check.append({
+                "page": t.get("page"),
+                "table_ref": t.get("table_ref"),
+                "cells": [[str(c or "").strip() for c in row] for row in t.get("cells") or []],
+            })
+
+        # 연속 표 결합 (예: 1페이지 하단 표와 2페이지 상단 표가 같은 열 개수를 가질 때)
+        for i in range(len(raw_tables) - 1):
+            t1, t2 = raw_tables[i], raw_tables[i + 1]
+            c1 = [[str(c or "").strip() for c in row] for row in t1.get("cells") or []]
+            c2 = [[str(c or "").strip() for c in row] for row in t2.get("cells") or []]
+            if c1 and c2 and len(c1[0]) == len(c2[0]) and len(c1[0]) >= 2:
+                # 2페이지 표의 첫 행이 헤더가 아니거나 연속 데이터인 경우 결합
+                combined_cells = c1 + c2
+                tables_to_check.append({
+                    "page": t1.get("page"),
+                    "table_ref": f"{t1.get('table_ref')}_combined_{t2.get('table_ref')}",
+                    "cells": combined_cells,
+                })
+
+        for table in tables_to_check:
+            cells = table.get("cells") or []
             if len(cells) < 3:
                 continue
             header = cells[0]
-            amount_cols = [i for i, h in enumerate(header) if AMOUNT_HEADER_RE.search(h)]
-            if not amount_cols:
-                counts = [sum(1 for r in cells[1:] if i < len(r) and parse_amounts(r[i])) for i in range(len(header))]
-                amount_cols = [max(range(len(header)), key=lambda i: (counts[i], i))] if any(counts) else []
-            if not amount_cols:
+            col_count = len(header)
+
+            # 금액이 존재하는 모든 데이터 열 탐색
+            candidate_cols = []
+            for col_idx in range(1, col_count):
+                amounts_in_col = sum(1 for r in cells[1:] if col_idx < len(r) and parse_cell_amount(r[col_idx]))
+                if amounts_in_col >= 2:
+                    candidate_cols.append(col_idx)
+
+            if not candidate_cols:
                 continue
-            col = amount_cols[-1]
-            # 소계 행은 바로 앞 소계(또는 표 머리) 이후 항목의 합이고, 마지막 합계 행은 최상위 항목(소계는 하나로)의 합이다.
-            total_rows = [r for r in cells[1:] if r and TOTAL_LABEL_RE.fullmatch(r[0].replace(" ", ""))]
-            grand = total_rows[-1] if total_rows else None
-            top: List[Amount] = []
-            segment: List[Tuple[Amount, str]] = []
-            grand_checked = False
-            for row in cells[1:]:
-                if col >= len(row):
-                    continue
-                final, formula = row_final_amount(row[col])
-                if final is None:
-                    continue
-                if any(row is r for r in total_rows):
-                    rows_used = [label for _, label in segment]
-                    items = top + [a for a, _ in segment] if row is grand else [a for a, _ in segment]
-                    if row is grand:
-                        rows_used = [f"{a.raw}" for a in top] + rows_used
-                    if len(items) >= 2:
-                        check = check_sum(items, final)
-                        check.rows = rows_used
-                        if not check.matches:
-                            excerpt = "\n".join(" | ".join(r) for r in cells)
-                            label = "합계" if row is grand else f"{row[0]}"
-                            findings.append(self._mismatch_finding(doc, check, None, table.get("page"), excerpt,
-                                                                   label=label))
-                        grand_checked = grand_checked or row is grand
-                    if row is not grand:
-                        top.append(final)  # 소계는 위 단계에서 한 항목이 된다
-                        segment = []
-                    continue
-                segment.append((final, f"{row[0]}: {final.raw}"))
-                for index, cell in enumerate(row):
-                    if index == col or not cell or not parse_amounts(cell):
+
+            for col in candidate_cols:
+                col_header_name = header[col] if col < len(header) else f"열 {col}"
+                total_rows = [r for r in cells[1:] if r and TOTAL_LABEL_RE.search(r[0].replace(" ", ""))]
+                grand = total_rows[-1] if total_rows else None
+                top: List[Amount] = []
+                segment: List[Tuple[Amount, str]] = []
+                subtotals: Dict[str, Amount] = {}
+                grand_checked = False
+
+                for row in cells[1:]:
+                    if col >= len(row):
                         continue
-                    value = evaluate_expression(cell.split("=")[0]) if "=" in cell or OPERATOR_RE.search(cell) else None
-                    if value is not None and abs(value - final.value) > TOLERANCE:
-                        check = CalculationCheck(kind="FORMULA", stated=final.value, computed=value,
-                                                 detail=f"'{row[0]}' 행 산식 '{cell}'의 계산값 {value:,} / 금액 칸 {final.value:,}")
-                        findings.append(self._formula_finding(doc, check, None, table.get("page"), " | ".join(row)))
-            if grand_checked:
-                handled.add(table.get("table_ref"))
+                    row_label = row[0].strip()
+                    cell_text = row[col].strip()
+                    final, formula = row_cell_final_amount(cell_text)
+
+                    # 산식 행 검산
+                    for index, cell in enumerate(row):
+                        if index == col or not cell or not parse_cell_amount(cell):
+                            continue
+                        val = evaluate_expression(cell.split("=")[0]) if "=" in cell or OPERATOR_RE.search(cell) else None
+                        if final and val is not None and abs(val - final.value) > TOLERANCE:
+                            chk = CalculationCheck(
+                                kind="FORMULA", stated=final.value, computed=val,
+                                detail=f"'{row_label}' 행 산식 '{cell}'의 계산값 {val:,} / 금액 칸 {final.value:,}"
+                            )
+                            findings.append(self._formula_finding(doc, chk, None, table.get("page"), " | ".join(row)))
+
+                    if final is None:
+                        continue
+
+                    if any(row is r for r in total_rows):
+                        # 1) 실지급액/차인지급액 산식 검증 (지급총액 - 공제계 = 실지급액)
+                        if any(k in row_label for k in ["실지급", "차인지급", "총수령"]):
+                            pay_total = next((v.value for k, v in subtotals.items() if any(p in k for p in ["지급", "총액", "기본"])), None)
+                            ded_total = next((v.value for k, v in subtotals.items() if any(d in k for d in ["공제", "세금", "보험"])), None)
+                            if pay_total is not None and ded_total is not None:
+                                expected_net = pay_total - ded_total
+                                if abs(final.value - expected_net) > TOLERANCE:
+                                    chk_net = CalculationCheck(
+                                        kind="NET_PAY", stated=final.value, computed=expected_net,
+                                        detail=f"[{col_header_name}] 실지급액 산식(지급총액 {pay_total:,} - 공제계 {ded_total:,} = {expected_net:,}) / 기재 {final.value:,}"
+                                    )
+                                    findings.append(self._mismatch_finding(
+                                        doc, chk_net, None, table.get("page"),
+                                        "\n".join(" | ".join(r) for r in cells), label=f"{col_header_name} {row_label}"
+                                    ))
+
+                        rows_used = [label for _, label in segment]
+                        items = top + [a for a, _ in segment] if row is grand else [a for a, _ in segment]
+                        if row is grand:
+                            rows_used = [f"{a.raw}" for a in top] + rows_used
+                        if len(items) >= 2:
+                            check = check_sum(items, final)
+                            check.rows = rows_used
+                            if not check.matches:
+                                excerpt = "\n".join(" | ".join(r) for r in cells)
+                                label = "합계" if row is grand else f"{col_header_name} {row_label}"
+                                findings.append(self._mismatch_finding(doc, check, None, table.get("page"), excerpt,
+                                                                       label=label))
+                            grand_checked = grand_checked or row is grand
+                        if row is not grand:
+                            top.append(final)  # 소계는 위 단계에서 한 항목이 된다
+                            segment = []
+                        subtotals[row_label] = final
+                        continue
+
+                    segment.append((final, f"{row_label}: {final.raw}"))
+
+                if grand_checked:
+                    handled.add(table.get("table_ref"))
+
         return findings, handled
 
     def _verify_table_totals(self, doc: NormalizedDocument) -> List[Finding]:

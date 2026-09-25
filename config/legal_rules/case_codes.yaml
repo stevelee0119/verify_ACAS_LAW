@@ -11,6 +11,63 @@ source:
 coverage_note: 현행 별표 제공 파일 2개의 부호에, 제공 파일에 없는 부분을 연혁본 별표에서 보충했다(supplement_source
   참조). 두 곳 모두에 없는 부호는 표에 넣지 않았다(unknown).
 codes:
+  # 민사사건 부호 (대법원 재판예규 별표)
+  가합:
+    case_type: 민사제1심합의사건
+    level: FIRST
+  가단:
+    case_type: 민사제1심단독사건
+    level: FIRST
+  가소:
+    case_type: 민사소액사건
+    level: FIRST
+  나:
+    case_type: 민사항소사건
+    level: APPELLATE
+  다:
+    case_type: 민사상고사건
+    level: SUPREME
+  라:
+    case_type: 민사항고사건
+    level: APPELLATE
+  마:
+    case_type: 민사재항고사건
+    level: SUPREME
+  그:
+    case_type: 민사특별항고사건
+    level: SUPREME
+  바:
+    case_type: 민사준항고사건
+    level: ANY
+  # 형사사건 부호 (대법원 재판예규 별표)
+  고합:
+    case_type: 형사제1심합의사건
+    level: FIRST
+  고단:
+    case_type: 형사제1심단독사건
+    level: FIRST
+  고약:
+    case_type: 약식명령사건
+    level: FIRST
+  노:
+    case_type: 형사항소사건
+    level: APPELLATE
+  도:
+    case_type: 형사상고사건
+    level: SUPREME
+  로:
+    case_type: 형사항고사건
+    level: APPELLATE
+  모:
+    case_type: 형사재항고사건
+    level: SUPREME
+  오:
+    case_type: 비상상고사건
+    level: SUPREME
+  구:
+    case_type: 구 행정소송제1심사건
+    level: FIRST
+
   초사:
     case_type: 사회봉사허가청구사건, 사회봉사허가취소청구사건
     level: ANY

@@ -163,7 +163,7 @@ def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     for block in doc.prose_blocks():
         text = block.text.strip()
         body = NUMBERING_RE.sub("", text, count=1)
-        exhibit = parse_exhibit_label(body) if body.startswith(("갑", "을", "병", "증")) else None
+        exhibit = parse_exhibit_label(body) if body.startswith(("갑", "을", "병", "정", "증", "피고인", "검사")) else None
         if exhibit and exhibit["span"][0] == 0 and len(_norm(exhibit["name"])) >= 2:
             items.append({"name": exhibit["name"], "reference": exhibit["label"], "source": "LIST",
                           "page": block.page, "block_id": block.block_id, "stated_status": text,

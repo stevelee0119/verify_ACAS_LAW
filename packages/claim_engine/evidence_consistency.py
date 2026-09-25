@@ -27,6 +27,7 @@ from .exhibits import exhibit_keys, parse_exhibits, split_items
 
 ENGINE_NAME = "claim_engine.evidence_consistency"
 
+
 DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.\-년]\s*(?P<m>\d{1,2})\s*[.\-월]\s*(?P<d>\d{1,2})\s*[.일]?")
 STANDALONE_DATE_RE = re.compile(r"^\s*(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?\s*$")
 HEADER_KEYS = {
