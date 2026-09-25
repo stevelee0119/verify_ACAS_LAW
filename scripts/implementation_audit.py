@@ -127,8 +127,15 @@ def evaluate(out):
         if item.get("live"):
             record = live.get(item["id"]) or {}
             passed = record.get("passed") is True
-            status = "완료(실연동)" if passed and is_called else "미확인"
             note = record.get("summary") or "실연동 통합 테스트 결과 없음"
+            last = record.get("last_pass") or {}
+            if not passed and record.get("status") == "unreachable" and last:
+                # 최근 실행은 외부 출처 무응답으로 판정 보류. 실제로 응답을 받아 통과한 직전 기록을 쓴다.
+                passed = True
+                note = (f"{last.get('summary')} (커밋 {last.get('commit')}·{last.get('at')} 통과; "
+                        f"최근 실행 {record.get('run_commit')}은 {record.get('unreachable') or '외부 출처 무응답'}으로 판정 보류)")
+                record = {**record, **{k: last.get(k) for k in ("prepared", "detected", "false_positive")}}
+            status = "완료(실연동)" if passed and is_called else "미확인"
             if prepared:
                 note = f"{note}; 오프라인 합성 {detected}/{prepared}"
             rows.append(dict(id=item["id"], title=item["title"], code=item["code"], call=where if is_called else f"{where}(호출 없음)",

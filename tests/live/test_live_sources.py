@@ -10,7 +10,7 @@ import pytest
 from packages.common.enums import CitationType, VerificationStatus
 from packages.legal_engine.normalize import same_case_number
 from scripts.fetch_official_sources import DETC_PROBES
-from tests.live._results import record
+from tests.live._results import record, skip_if_inconclusive, unreachable
 
 # 헌가·헌바·헌마·헌나·헌다를 모두 포함한다(11건). 병합 표기는 대표 사건번호로 조회한다.
 MERGED = [("헌법재판소 2004헌마554·566(병합) 결정", "2004헌마554"), ("헌법재판소 2011헌바379 등(병합) 결정", "2011헌바379")]
@@ -24,11 +24,12 @@ def _exact(response, number):
 def test_G1_constitutional_decisions_are_found_by_exact_number(registry):
     kinds = {n[n.index("헌"):n.index("헌") + 2] for n in DETC_PROBES}
     assert {"헌가", "헌바", "헌마"} <= kinds and len(DETC_PROBES) >= 10
-    cases, found, wrong = [], 0, 0
+    cases, found, wrong, silent = [], 0, 0, 0
     for number in DETC_PROBES:
         response = registry.law.search_case(number, court="헌법재판소")
         exact = _exact(response, number)
         found += bool(exact)
+        silent += not exact and unreachable([response.status])
         wrong += sum(1 for r in response.records if not same_case_number(str(r.get("case_number") or ""), number))
         cases.append({"case_number": number, "status": str(response.status), "found": bool(exact),
                       "message": (response.message or "")[:200],
@@ -37,6 +38,8 @@ def test_G1_constitutional_decisions_are_found_by_exact_number(registry):
     record("G1", prepared=len(DETC_PROBES), detected=found, false_positive=0, cases=cases,
            diagnostics={"adapter_status": str(registry.law.status())},
            summary=f"헌재 결정 {found}/{len(DETC_PROBES)}건 사건번호 정확 일치(다른 번호 기록 {wrong}건은 채택하지 않음)")
+    if found / len(DETC_PROBES) < 0.9:
+        skip_if_inconclusive("G1", len(DETC_PROBES) - found - silent, silent, "헌재 결정 조회")
     assert found / len(DETC_PROBES) >= 0.9
 
 
@@ -46,7 +49,7 @@ def test_J1_merged_notation_is_verified_through_the_lead_number(registry):
     from packages.legal_engine.verifier import LegalVerifier
 
     verifier = LegalVerifier(registry)
-    cases, ok = [], 0
+    cases, ok, silent = [], 0, 0
     for text, lead in MERGED:
         citations = [c for c in extract_from_text(text, document_id="live") if c.type == CitationType.CONSTITUTIONAL]
         assert citations, text
@@ -54,10 +57,13 @@ def test_J1_merged_notation_is_verified_through_the_lead_number(registry):
         adopted = str((verdict.official_record or {}).get("case_number") or "")
         good = verdict.status != VerificationStatus.NOT_FOUND and same_case_number(adopted, lead)
         ok += good
+        silent += not good and unreachable([r.status for r in verdict.source_records])
         cases.append({"text": text, "lead": lead, "merged": (citations[0].attributes or {}).get("merged_case_numbers"),
                       "status": str(verdict.status), "adopted": adopted, "notes": verdict.notes[:3],
                       "lookups": [str(r.status) for r in verdict.source_records][:5]})
     record("J1", prepared=len(MERGED), detected=ok, cases=cases, summary=f"병합 표기 {ok}/{len(MERGED)}건 대표 번호로 확인")
+    if ok < len(MERGED):
+        skip_if_inconclusive("J1", len(MERGED) - ok - silent, silent, "병합 표기 조회")
     assert ok == len(MERGED)
 
 
@@ -65,7 +71,7 @@ def test_J1_merged_notation_is_verified_through_the_lead_number(registry):
 def test_R4_only_exact_number_records_are_adopted(registry):
     # 앞자리가 같은 다른 사건(예: 554 ↔ 55)을 채택하면 안 된다. 조회 결과가 없으면 '부존재'가 아니라 미확인이다.
     probes = ["2004헌마55", "2011헌바37", "2016헌나10"]
-    cases, adopted_wrong, lookups_ok = [], 0, 0
+    cases, adopted_wrong, lookups_ok, silent = [], 0, 0, 0
     from packages.legal_engine.verifier import LegalVerifier
     from packages.common.schemas import Citation
 
@@ -79,11 +85,14 @@ def test_R4_only_exact_number_records_are_adopted(registry):
         adopted_wrong += bad
         looked_up = any(str(r.status).endswith("READY") for r in verdict.source_records)
         lookups_ok += looked_up
+        silent += not looked_up and unreachable([r.status for r in verdict.source_records])
         cases.append({"case_number": number, "status": str(verdict.status), "adopted": adopted or None,
                       "lookup_ready": looked_up, "notes": verdict.notes[:2]})
     record("R4", prepared=len(probes), detected=lookups_ok - adopted_wrong, false_positive=adopted_wrong, cases=cases,
            summary=f"실제 조회 {lookups_ok}/{len(probes)}건, 다른 번호 기록 채택 {adopted_wrong}건")
     # 조회를 실제로 하지 못했으면 '채택 안 함'은 확인이 아니다
+    if lookups_ok < len(probes) and adopted_wrong == 0:
+        skip_if_inconclusive("R4", len(probes) - lookups_ok - silent, silent, "헌재 결정 조회")
     assert lookups_ok == len(probes) and adopted_wrong == 0
 
 
@@ -136,6 +145,8 @@ def test_R3_line_broken_court_and_date_survive_to_the_live_lookup(tmp_path, regi
     record("R3", prepared=1, detected=int(ok), cases=[{"citation": citations[0] if citations else None,
                                                         "status": verdicts.get(citations[0]["citation_id"], {}).get("status")
                                                         if citations else None}])
+    if not ok and citations and citations[0].get("court") == "대법원":
+        _skip_if_court_silent("R3", registry)
     assert ok
 
 
@@ -152,4 +163,13 @@ def test_R6_running_head_citation_is_not_counted(tmp_path, registry):
     verified = all(s in ("VERIFIED", "PARTIALLY_VERIFIED") for s in statuses)
     record("R6", prepared=1, detected=int(len(cited) == 2 and verified), false_positive=max(0, len(cited) - 2),
            cases=[{"citations_counted": len(cited), "expected": 2, "statuses": statuses}])
+    if len(cited) == 2 and not verified:
+        _skip_if_court_silent("R6", registry)
     assert len(cited) == 2 and verified
+
+
+def _skip_if_court_silent(item_id, registry):
+    """문서 경로는 맞았는데 대조가 안 된 경우, 같은 판결을 한 번 더 조회해 출처 무응답이면 판정 보류로 둔다."""
+    response = registry.law.search_case("95다38677", court="대법원")
+    silent = unreachable([response.status])
+    skip_if_inconclusive(item_id, 0 if silent else 1, int(silent), "대법원 판결 조회")

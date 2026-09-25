@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 LIVE = os.getenv("LV_LIVE_TESTS") == "1"
-from tests.live._results import RESULTS, record  # noqa: F401  (테스트 모듈도 같은 객체를 쓴다)
+from tests.live._results import RESULTS, merge  # 테스트 모듈도 같은 객체(RESULTS)를 쓴다
 
 
 def pytest_configure(config):
@@ -47,23 +47,24 @@ def pytest_runtest_makereport(item, call):
     _write()  # 테스트마다 바로 쓴다. 제한 시간으로 중간에 끊겨도 끝난 항목의 기록은 남는다
 
 
+def _previous(out: str) -> dict:
+    try:
+        return json.loads(Path(out).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
 def _write() -> None:
+    """항목별 결과를 쓴다(이전 기록과의 병합 규칙은 _results.merge)."""
     out = os.getenv("LV_LIVE_RESULTS_OUT")
     if not (LIVE and out and RESULTS):
         return
-    for entry in RESULTS.values():
-        tests = entry.get("tests") or []
-        entry["passed"] = bool(tests) and all(t["outcome"] == "passed" for t in tests)
-        entry["summary"] = entry.get("summary") or ""
-        if not entry["summary"] or entry["summary"].startswith("실연동 테스트 "):
-            entry["summary"] = f"실연동 테스트 {sum(t['outcome'] == 'passed' for t in tests)}/{len(tests)} 통과"
     try:
         commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True).stdout.strip()
     except OSError:
         commit = ""
-    payload = {"generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"), "commit": commit,
-               "note": "CI '실연동 통합 테스트'가 국가법령정보센터·모델 API를 실제로 호출한 결과다. 기록이 없는 항목은 실행되지 않았다.",
-               **RESULTS}
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    payload = merge(_previous(out), RESULTS, commit, now)
     Path(out).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

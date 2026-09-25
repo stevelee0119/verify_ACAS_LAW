@@ -162,8 +162,17 @@ def describe_failure(error: str) -> str:
     if text.startswith("INVALID_RESPONSE_SCHEMA"):
         detail = text.partition(":")[2].strip()
         return f"응답 형식 오류({detail})" if detail else "응답 형식 오류"
+    if text.startswith("BUDGET_ADMISSION_FAILED"):
+        # 같은 코드라도 원인이 다르면 조치가 다르다. 한도 초과만 '예산 한도'로 적는다.
+        detail = text.partition(":")[2]
+        for marker, label in (("Budget exhausted", "예산 한도로 호출하지 않음"),
+                              ("Missing pricing", "모델 단가 미설정으로 호출하지 않음"),
+                              ("token", "입력·출력 길이 상한 초과로 호출하지 않음")):
+            if marker in detail:
+                return label
+        return "예산 원장 오류로 호출하지 않음(" + re.sub(r"\s+", " ", detail).strip()[:60] + ")"
     for prefix, label in (("PROVIDER_TIMEOUT", "응답 시간 초과"),
-                          ("EMPTY_RESPONSE", "본문 없는 응답"), ("BUDGET_ADMISSION_FAILED", "예산 한도로 호출하지 않음"),
+                          ("EMPTY_RESPONSE", "본문 없는 응답"),
                           ("PROVIDER_POLICY_BLOCKED", "정책상 사용 불가"), ("PROVIDER_EXCEPTION", "호출 중 오류")):
         if text.startswith(prefix):
             return label

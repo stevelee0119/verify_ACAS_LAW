@@ -56,11 +56,27 @@ class BudgetReservation(Base):
     settled_at = Column(DateTime)
 
 
+_READY_BINDS = set()
+
+
+def ensure_ledger_tables(session) -> None:
+    """원장 표가 없으면 만든다. API 밖(CLI·평가·실연동 테스트)에서 init_db 없이 돌 때 표가 없어
+    모든 모델 호출이 '예산 거절'로 빠지던 문제를 막는다. 운영 DB(Alembic)에는 이미 있어 아무것도 하지 않는다."""
+    bind = session.get_bind()
+    key = str(bind.url)
+    if key in _READY_BINDS:
+        return
+    Base.metadata.create_all(bind=bind, tables=[BudgetAccount.__table__, BudgetReservation.__table__],
+                             checkfirst=True)
+    _READY_BINDS.add(key)
+
+
 @contextmanager
 def write_session(factory=None):
     """Take SQLite's write lock before reading; PostgreSQL uses row locks."""
     session = (factory or get_session_factory())()
     try:
+        ensure_ledger_tables(session)
         if session.get_bind().dialect.name == "sqlite":
             session.connection().exec_driver_sql("BEGIN IMMEDIATE")
         yield session
