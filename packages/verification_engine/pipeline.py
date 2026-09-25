@@ -286,7 +286,9 @@ class VerificationPipeline:
         result.model_executions = [execution for d in result.documents
                                    for execution in d.engine_data.get("model_executions", [])]
         result.scores = aggregate_scores(result)
-        result.run_manifest = manifest.to_dict()
+        result.run_manifest = manifest.to_dict(versions={
+            "program": self.settings.version, "rule": self.settings.rule_version,
+            "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()})
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )

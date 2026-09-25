@@ -56,3 +56,18 @@ def test_stage_records_skip_error_and_finding_delta():
     assert data["engines"]["b"]["executed"] is False and data["engines"]["b"]["skip_reasons"] == ["입력 없음"]
     assert data["engines"]["c"]["errors"] == ["d2: ValueError"]
     assert data["not_executed"] == ["b"]
+
+
+def test_manifest_records_program_and_rule_versions(audit_run):
+    """매니페스트만 보고도 어떤 프로그램·규칙 버전으로 실행했는지 알 수 있어야 한다."""
+    from packages.common.config import get_settings
+
+    versions = audit_run["result"].run_manifest["versions"]
+    settings = get_settings()
+    assert versions["program"] == settings.version and versions["rule"] == settings.rule_version
+    assert versions["prompt"] == settings.prompt_version and "model_config" in versions
+
+
+def test_manifest_without_versions_stays_valid():
+    data = RunManifest().to_dict()
+    assert data["versions"] == {} and data["schema"] == 1

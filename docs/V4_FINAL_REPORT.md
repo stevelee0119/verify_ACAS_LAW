@@ -1,18 +1,18 @@
-# v4 작업 결과 보고 (0.8.1, 규칙 2026.09.25.1)
+# v4 작업 결과 보고 (0.8.5, 규칙 2026.09.25.2)
 
 작업 지시: `IMPLEMENTATION_AUDIT.md(수정 전)` 검토 결과 반영 — ① 부분 12개 항목과 v4 P1~P8 수정 후 같은 스크립트로 '수정 후' 표, ② 실연동 7개 항목(G1·J1·J2·R3·R4·R6·R10) 통합 테스트와 '미확인' 상태, ③ 감사표에 결함·탐지·오탐 수 열과 새 완료 기준(탐지율 90% 이상·오탐 0건), ④ 합성 문서 전부 PDF(표·여러 쪽·머리글/바닥글, 행정·민사·형사·가사), ⑤ R2 결합 결과에 기대값 표시, ⑥ rule 버전 올림·run_manifest 예시 첨부.
 
 ## 1. 감사 결과 — 수정 전·후
 
-같은 스크립트(`scripts/implementation_audit.py`)와 같은 PDF 코퍼스(`scripts/audit/corpus.py`, 7개 PDF)로 0.7.2 코드(수정 전)와 0.8.1 코드(수정 후)를 측정했다. 전체 표는 `docs/IMPLEMENTATION_AUDIT.md`.
+같은 스크립트(`scripts/implementation_audit.py`)와 같은 PDF 코퍼스(`scripts/audit/corpus.py`, 7개 PDF)로 0.7.2 코드(수정 전)와 0.8.5 코드(수정 후)를 측정했다. 전체 표는 `docs/IMPLEMENTATION_AUDIT.md`.
 
 | 구분 | 준비한 결함 | 탐지 | 오탐 | 상태 |
 |---|---|---|---|---|
 | 수정 전(0.7.2) | 120 | 58 | 24 | 완료 18 · 부분 12 · 미구현 7 · 연결 안 됨 2 · 미확인 7 |
-| 수정 후(0.8.1) — 오프라인 39개 항목 | 118 | 118 | 0 | 완료 39 |
-| 수정 후(0.8.1) — 실연동 7개 항목 | 21 | 21 | 0 | 완료(실연동) 7 |
+| 수정 후(0.8.5) — 오프라인 39개 항목 | 118 | 118 | 0 | 완료 39 |
+| 수정 후(0.8.5) — 실연동 7개 항목 | 21 | 21 | 0 | 완료(실연동) 7 |
 
-(0.8.0 표의 120건에는 실연동 항목의 오프라인 합성 결함 2건이 들어 있었다. 0.8.1 표는 실연동 항목을 CI 실제 호출 결과로 센다.)
+(0.8.0 표의 120건에는 실연동 항목의 오프라인 합성 결함 2건이 들어 있었다. 0.8.1 이후 표는 실연동 항목을 CI 실제 호출 결과로 센다.)
 
 바뀐 항목(수정 전 → 수정 후, 탐지/준비·오탐):
 
@@ -56,30 +56,66 @@
 | tests/live/* | 7 | 실연동 통합 테스트(CI 전용) |
 | test_budget_ledger_bootstrap.py | 7 | 표 없는 DB에서 원장 동작·한도 유지·정산, 거절 사유 4종 구분 |
 | test_live_results_history.py | 7 | 무응답 판정 보류, 직전 통과 보존, 실패 표시, 옛 기록 변환, 같은 실행 중 반복 기록 |
+| test_live_summary.py | 5 | 실연동 작업 요약·무응답 경고(직전 통과 유무), 실패 오류 표시, 이전 실행 항목 제외 |
+| test_operations_completion.py(추가·변경) | 8 | 주입 시계로 임차 연장·만료 후 거절·잠금 대기 중 임차 유지, 갱신 스레드 일시 오류·소유권 상실·임차 기간 내내 실패, 일반 쓰기 경로의 원장 스키마 비접촉 |
+| test_source_recovery.py(변경) | 2 | 출처 요청 간격을 대기 요청 기록으로 판정 |
+| test_v4_run_manifest.py(추가) | 2 | run_manifest에 프로그램·규칙·프롬프트·모델 설정 버전 기록 |
 
-## 3. run_manifest 예시 (수정 후 감사 실행, 문서 7건)
+## 3. rule 버전과 run_manifest 예시
 
-전문: `docs/run_manifest_example.json`. 요약:
+### 3-1. rule 버전
 
-| 엔진 | 실행 | 입력 | finding | 비고 |
-|---|---|---|---|---|
-| parsing | 7회 | 14 | 0 | |
-| ocr | 1회 | 2 | 0 | 나머지 6건은 '모든 쪽에 텍스트 레이어가 있어 OCR 불필요' |
-| adversarial_scan | 7회 | 168 | 20 | 경로별 인젝션 |
-| citation_verification | 5회 | 24 | 27 | 2건 '인용이 없음' |
-| temporal_review | 1회 | 2 | 2 | 행위시법 검토(형사) |
-| attachment_evidence / evidence_consistency | 7회 | 10 / 0 | 6 / 6 | |
-| arithmetic / period_recalculation | 7회 | — | 4 / 1 | |
-| legal_rules / claim_review | 7회 | — / 87 | 3 / 2 | |
-| ai_residue / ai_detection | 7회 | 3 / 0 | 3 / 1 | |
-| fact_store | 1회 | 6 | 5 | 문서 안 2·문서 간 3 |
-| semantic_review | 실행 안 함 | | | AI 공급자 없음(오프라인 감사) |
-| model_fact_reconcile | 실행 안 함 | | | 모델의 사실 모순 지적 없음 |
+| 시점 | rule 버전 | 바뀐 규칙 |
+|---|---|---|
+| 작업 전(0.7.2) | 2026.09.21.4 | — |
+| 0.8.0(커밋 ae60ac2) | 2026.09.25.1 | ADMIN.DEADLINE_EXCEPTION 부정 표현 제외, CRIM.REFORMATIO_IN_PEIUS_SCOPE·CRIM.RESTITUTION_AS_ELEMENT 신설, `config/ai_residue_patterns.yaml` 신설 |
+| 0.8.5 | 2026.09.25.2 | 0.8.0 뒤(커밋 0a6afe9) `rules.json` 근거에 공식 원문 3건(형사소송법 제368조, 형법 제51조, 행정소송법 제38조)을 싣고 ADMIN.DEADLINE_EXCEPTION 근거에 행정소송법 제38조를 더했는데 rule 버전을 올리지 않았다. 규칙 내용이 바뀌었으므로 올렸다 |
+
+### 3-2. run_manifest 예시 (수정 후 감사 실행, 문서 7건)
+
+전문: `docs/run_manifest_example.json`. 0.8.5부터 매니페스트에 실행 버전을 함께 기록한다.
+
+- 버전: 프로그램 0.8.5 · 규칙 2026.09.25.2 · 프롬프트 v0.2 · 모델 설정 none(오프라인 감사라 사용한 AI 모델 없음)
+- 실행하지 않은 엔진: semantic_review, model_fact_reconcile
+
+| 엔진 | 실행 | 문서 수 | 입력 | finding | 비고 |
+|---|---|---|---|---|---|
+| parsing | 예 | 7 | 14 | 0 |  |
+| ocr | 예 | 1 | 2 | 0 | 건너뜀: 모든 쪽에 텍스트 레이어가 있어 OCR 불필요 |
+| adversarial_scan | 예 | 7 | 168 | 20 |  |
+| forensic_scan | 예 | 7 | 0 | 18 |  |
+| redaction_check | 예 | 7 | 0 | 0 |  |
+| citation_extraction | 예 | 7 | 141 | 0 |  |
+| citation_verification | 예 | 5 | 24 | 27 | 건너뜀: 인용이 없음 |
+| citation_format_check | 예 | 5 | 16 | 9 | 건너뜀: 판례·결정 인용이 없음 |
+| temporal_review | 예 | 1 | 2 | 2 | 건너뜀: 시행 버전이 둘 이상인 조문이 없음 |
+| semantic_review | 아니오 | 0 | 7 | 0 | 건너뜀: AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.) |
+| claim_entity_event_extraction | 예 | 7 | 141 | 0 |  |
+| attachment_evidence | 예 | 7 | 10 | 6 |  |
+| arithmetic | 예 | 7 | 0 | 4 |  |
+| period_recalculation | 예 | 7 | 0 | 1 |  |
+| timeline | 예 | 7 | 32 | 0 |  |
+| legal_rules | 예 | 7 | 0 | 3 |  |
+| evidence_consistency | 예 | 7 | 0 | 6 |  |
+| claim_review | 예 | 7 | 87 | 2 |  |
+| argument_validity | 예 | 5 | 24 | 16 | 건너뜀: 허위·미확인 판례에 기댄 주장이 없음 |
+| authorship | 예 | 7 | 0 | 0 |  |
+| ai_residue | 예 | 7 | 3 | 3 |  |
+| ai_detection | 예 | 7 | 0 | 1 |  |
+| assertions_omissions | 예 | 7 | 0 | 0 |  |
+| model_fact_reconcile | 아니오 | 0 | 0 | 0 | 건너뜀: AI 모델의 사실 모순 지적이 없음 |
+| claim_contradiction | 예 | 1 | 74 | 0 |  |
+| cross_document_events | 예 | 1 | 27 | 0 |  |
+| internal_citation | 예 | 1 | 6 | 0 |  |
+| cross_document_copies | 예 | 1 | 6 | 0 |  |
+| fact_store | 예 | 1 | 6 | 5 |  |
+
+finding은 각 단계가 결과 목록에 더한 건수(병합·중복 제거 전)다. '건너뜀'은 일부 문서에서 그 엔진을 돌리지 않은 사유다.
 
 ## 4. 회귀 결과
 
 - 전체 단위·통합 테스트: 로컬 전부 통과(실연동 7건은 CI 전용이라 건너뜀). 이번에 추가한 원장·결과 기록 시험 14건 포함.
-- GitHub Actions CI: 통과(0.8.0 run 36080648874·커밋 765d36c, 0.8.1 run 36084508107·커밋 075cf94).
+- GitHub Actions CI: 통과(0.8.0 run 36080648874·커밋 765d36c, 0.8.1 run 36084508107·커밋 075cf94, 0.8.4 run 36094018254·커밋 4e46d21, main 병합 후 run 36094921059). 0.8.2·0.8.3 커밋에서 임차 시험 2건이 러너 지연으로 실패했다(run 36090264005, 36092298978). 원인은 `claim()`이 쓰기 잠금을 얻기 전에 시각을 읽어 임차가 짧아지는 결함과 벽시계에 기대는 시험 구조였고, 0.8.3·0.8.4에서 코드를 고치고 시험을 주입 시계로 바꿨다.
 - 실연동 통합 테스트(CI, 국가법령정보센터·모델 실제 호출, 결과 `docs/live_integration_results.json`):
 
 | 항목 | 결과 | 근거가 된 실행 | 내용 |

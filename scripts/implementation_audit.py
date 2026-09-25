@@ -9,7 +9,7 @@
 완료 기준: 호출·보고서·요약 점수 반영, 탐지율 90% 이상, 오탐 0건.
 실연동 항목(live)은 docs/live_integration_results.json(CI '실연동 통합 테스트' 결과)이 통과로 기록될 때까지 '미확인'이다.
 
-사용: python scripts/implementation_audit.py --label "수정 후 (0.8.1)"
+사용: python scripts/implementation_audit.py --label "수정 후 (0.8.5)"
 """
 from __future__ import annotations
 

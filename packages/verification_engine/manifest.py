@@ -74,7 +74,9 @@ class RunManifest:
         with self.stage(name, [], document_id=document_id) as handle:
             handle.skip_reason = reason
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self, versions: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+        """versions: 이 실행에 쓰인 프로그램·규칙·프롬프트·모델 설정 버전. 같은 문서의 결과가 달라졌을 때
+        어느 버전 변화 때문인지 매니페스트만으로 추적할 수 있게 함께 남긴다."""
         engines = {}
         for name in self.order:
             record = dict(self.engines[name])
@@ -82,6 +84,7 @@ class RunManifest:
             engines[name] = record
         return {
             "schema": 1,
+            "versions": dict(versions or {}),
             "engines": engines,
             "not_executed": [name for name in self.order if not self.engines[name]["executed"]],
             "note": ("findings는 각 단계가 결과 목록에 더한 건수(병합·중복 제거 전)다. executed=false는 그 엔진이 "

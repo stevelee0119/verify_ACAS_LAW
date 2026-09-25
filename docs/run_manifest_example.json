@@ -1,5 +1,11 @@
 {
   "schema": 1,
+  "versions": {
+    "program": "0.8.5",
+    "rule": "2026.09.25.2",
+    "prompt": "v0.2",
+    "model_config": "none"
+  },
   "engines": {
     "parsing": {
       "executed": true,
@@ -7,7 +13,7 @@
       "skipped_runs": 0,
       "inputs": 14,
       "findings": 0,
-      "seconds": 5.861,
+      "seconds": 7.417,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -15,49 +21,49 @@
           "document_id": "doc1",
           "inputs": 3,
           "findings": 0,
-          "seconds": 0.43,
+          "seconds": 0.385,
           "note": "PdfParser"
         },
         {
           "document_id": "doc2",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.03,
+          "seconds": 0.032,
           "note": "PdfParser"
         },
         {
           "document_id": "doc3",
           "inputs": 2,
           "findings": 0,
-          "seconds": 2.05,
+          "seconds": 2.617,
           "note": "PdfParser"
         },
         {
           "document_id": "doc4",
           "inputs": 4,
           "findings": 0,
-          "seconds": 3.243,
+          "seconds": 4.27,
           "note": "PdfParser"
         },
         {
           "document_id": "doc5",
           "inputs": 2,
           "findings": 0,
-          "seconds": 0.063,
+          "seconds": 0.068,
           "note": "PdfParser"
         },
         {
           "document_id": "doc6",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.018,
+          "seconds": 0.022,
           "note": "PdfParser"
         },
         {
           "document_id": "doc7",
           "inputs": 1,
           "findings": 0,
-          "seconds": 0.027,
+          "seconds": 0.024,
           "note": "PdfParser"
         }
       ]
@@ -130,7 +136,7 @@
       "skipped_runs": 0,
       "inputs": 168,
       "findings": 20,
-      "seconds": 0.098,
+      "seconds": 0.101,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -152,7 +158,7 @@
           "document_id": "doc3",
           "inputs": 33,
           "findings": 19,
-          "seconds": 0.072,
+          "seconds": 0.073,
           "note": "actual_text,annotation,attachment,encoded_text,form_field,hidden_text,image_ocr,metadata,outline,visible_text"
         },
         {
@@ -166,14 +172,14 @@
           "document_id": "doc5",
           "inputs": 24,
           "findings": 0,
-          "seconds": 0.004,
+          "seconds": 0.005,
           "note": "encoded_text,metadata,visible_text"
         },
         {
           "document_id": "doc6",
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.002,
           "note": "encoded_text,metadata,visible_text"
         },
         {
@@ -191,7 +197,7 @@
       "skipped_runs": 0,
       "inputs": 0,
       "findings": 18,
-      "seconds": 0.006,
+      "seconds": 0.007,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -199,13 +205,13 @@
           "document_id": "doc1",
           "inputs": null,
           "findings": 2,
-          "seconds": 0.002
+          "seconds": 0.003
         },
         {
           "document_id": "doc2",
           "inputs": null,
           "findings": 2,
-          "seconds": 0.001
+          "seconds": 0.0
         },
         {
           "document_id": "doc3",
@@ -229,7 +235,7 @@
           "document_id": "doc6",
           "inputs": null,
           "findings": 2,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc7",
@@ -299,7 +305,7 @@
       "skipped_runs": 0,
       "inputs": 141,
       "findings": 0,
-      "seconds": 0.009,
+      "seconds": 0.01,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -539,7 +545,7 @@
       "skipped_runs": 7,
       "inputs": 7,
       "findings": 0,
-      "seconds": 0.007,
+      "seconds": 0.006,
       "skip_reasons": [
         "AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함(사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.)",
         "공식 원문으로 확인된 판례 인용이 없음",
@@ -604,7 +610,7 @@
       "skipped_runs": 0,
       "inputs": 141,
       "findings": 0,
-      "seconds": 0.027,
+      "seconds": 0.026,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -612,7 +618,7 @@
           "document_id": "doc1",
           "inputs": 60,
           "findings": 0,
-          "seconds": 0.013,
+          "seconds": 0.012,
           "note": "주장 37·개체 8·사건 14"
         },
         {
@@ -626,14 +632,14 @@
           "document_id": "doc3",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.003,
+          "seconds": 0.004,
           "note": "주장 13·개체 2·사건 5"
         },
         {
           "document_id": "doc4",
           "inputs": 20,
           "findings": 0,
-          "seconds": 0.004,
+          "seconds": 0.003,
           "note": "주장 12·개체 4·사건 4"
         },
         {
@@ -647,7 +653,7 @@
           "document_id": "doc6",
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.001,
+          "seconds": 0.002,
           "note": "주장 5·개체 1·사건 2"
         },
         {
@@ -739,7 +745,7 @@
           "document_id": "doc3",
           "inputs": null,
           "findings": 0,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc4",
@@ -781,7 +787,7 @@
           "document_id": "doc1",
           "inputs": null,
           "findings": 1,
-          "seconds": 0.001
+          "seconds": 0.0
         },
         {
           "document_id": "doc2",
@@ -827,7 +833,7 @@
       "skipped_runs": 0,
       "inputs": 32,
       "findings": 0,
-      "seconds": 0.002,
+      "seconds": 0.003,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -961,7 +967,7 @@
           "document_id": "doc4",
           "inputs": null,
           "findings": 0,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc5",
@@ -1053,7 +1059,7 @@
           "document_id": "doc1",
           "inputs": 12,
           "findings": 7,
-          "seconds": 0.001
+          "seconds": 0.0
         },
         {
           "document_id": "doc2",
@@ -1072,7 +1078,7 @@
           "document_id": "doc4",
           "inputs": 5,
           "findings": 4,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc5",
@@ -1127,13 +1133,13 @@
           "document_id": "doc4",
           "inputs": null,
           "findings": 0,
-          "seconds": 0.001
+          "seconds": 0.0
         },
         {
           "document_id": "doc5",
           "inputs": null,
           "findings": 0,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc6",
@@ -1163,7 +1169,7 @@
           "document_id": "doc1",
           "inputs": 3,
           "findings": 3,
-          "seconds": 0.007
+          "seconds": 0.006
         },
         {
           "document_id": "doc2",
@@ -1193,7 +1199,7 @@
           "document_id": "doc6",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc7",
@@ -1241,7 +1247,7 @@
           "document_id": "doc5",
           "inputs": 0,
           "findings": 0,
-          "seconds": 0.0
+          "seconds": 0.001
         },
         {
           "document_id": "doc6",
@@ -1416,7 +1422,7 @@
       "skipped_runs": 0,
       "inputs": 6,
       "findings": 0,
-      "seconds": 0.006,
+      "seconds": 0.005,
       "skip_reasons": [],
       "errors": [],
       "documents": [
@@ -1424,7 +1430,7 @@
           "document_id": null,
           "inputs": 6,
           "findings": 0,
-          "seconds": 0.006
+          "seconds": 0.005
         }
       ]
     },
