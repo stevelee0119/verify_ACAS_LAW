@@ -25,9 +25,13 @@ WORD_CHARS = "영공일이삼사오육륙칠팔구십백천만억조"
 # 앞 글자가 한글이면(조사 '이' 등) 금액의 시작이 아니다. '금'·'일금' 바로 뒤는 허용한다.
 KOREAN_AMOUNT = rf"(?:(?<=금)|(?<![가-힣\d]))(?:\d[\d,]*\s*)?[{WORD_CHARS}](?:[{WORD_CHARS}\d,\s]*[{WORD_CHARS}])?"
 NUMERIC_AMOUNT = r"\d{1,3}(?:,\d{3})+|\d+"
+# 숫자 금액 앞 통화 기호(₩·￦, 한글 글꼴에서 원 기호로 보이는 역슬래시)와 뒤의 '-'·'원정' 표기(v5 3-3)
+CURRENCY = r"(?:[₩￦\\]\s*)?"
+DIGIT_TAIL = r"\s*(?:원\s*정|원|,?-|\.-)?"
 PAIR_RE = re.compile(
-    rf"(?:일금|금)?\s*(?P<words>{KOREAN_AMOUNT})\s*원\s*(?:정)?\s*[(（]\s*(?:금\s*)?(?P<digits>{NUMERIC_AMOUNT})\s*원?\s*[)）]"
-    rf"|(?:금\s*)?(?P<digits2>{NUMERIC_AMOUNT})\s*원\s*[(（]\s*(?:일금|금)?\s*(?P<words2>{KOREAN_AMOUNT})\s*원?\s*(?:정)?\s*[)）]")
+    rf"(?:일금|금)?\s*(?P<words>{KOREAN_AMOUNT})\s*원\s*(?:정)?\s*[(（]\s*(?:금\s*)?{CURRENCY}(?P<digits>{NUMERIC_AMOUNT})"
+    rf"{DIGIT_TAIL}\s*[)）]"
+    rf"|(?:금\s*)?{CURRENCY}(?P<digits2>{NUMERIC_AMOUNT})\s*원?\s*[(（]\s*(?:일금|금)?\s*(?P<words2>{KOREAN_AMOUNT})\s*원?\s*(?:정)?\s*[)）]")
 
 
 def _small(text: str) -> Optional[int]:

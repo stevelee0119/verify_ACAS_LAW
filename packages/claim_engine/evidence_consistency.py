@@ -30,13 +30,14 @@ ENGINE_NAME = "claim_engine.evidence_consistency"
 DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.\-년]\s*(?P<m>\d{1,2})\s*[.\-월]\s*(?P<d>\d{1,2})\s*[.일]?")
 STANDALONE_DATE_RE = re.compile(r"^\s*(?:19|20)\d{2}\s*\.\s*\d{1,2}\s*\.\s*\d{1,2}\s*\.?\s*$")
 HEADER_KEYS = {
-    "id": ("호증", "증거번호", "번호"),
-    "name": ("서증명", "증거명", "자료명", "문서명", "표목"),
-    "date": ("작성일", "일자", "작성일자"),
-    "author": ("작성자", "작성명의인", "발행"),
-    "purpose": ("입증취지", "입증 취지", "증명취지"),
+    "id": ("호증", "증거번호", "증번", "번호", "순번"),
+    "name": ("서증명", "증거명", "자료명", "문서명", "표목", "증거방법", "제출자료", "자료"),
+    "date": ("작성일", "작성일자", "발급일", "발행일", "일자", "날짜"),
+    "author": ("작성자", "작성명의인", "발행", "발급기관", "발급처", "제출자"),
+    "purpose": ("입증취지", "입증 취지", "증명취지", "입증사항", "요지"),
     "amount": ("금액", "액수"),
 }
+MIN_ID_SHARE = 0.6  # 열 내용으로 증거표를 찾을 때: 호증 참조가 있는 행의 비율
 # 사건 이후에 작성될 수밖에 없는 자료(그 사건을 분석·보고·진술한 문서)
 AFTER_EVENT_KINDS = re.compile(r"분석|보고서|감정|진술|확인서|소견|조사")
 MEDICAL_KINDS = re.compile(r"진단서|소견서|의무기록|진료기록")
@@ -149,13 +150,55 @@ def exhibit_rows(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                 if any(name in title.replace(" ", "") for name in names) and index not in columns.values():
                     columns[key] = index
                     break
+        body = cells[1:]
         if "id" not in columns or len(columns) < 3:
-            continue
-        for row in cells[1:]:
+            # 표 제목·머리글이 표준과 달라도(양형자료 제출서 등) 열 내용으로 증거표를 알아본다(v5 3-3)
+            columns, body = _columns_by_content(cells), cells
+            if not columns:
+                continue
+        for row in body:
             values = {key: _cell(row[index]) if index < len(row) else "" for key, index in columns.items()}
             for ref in parse_exhibits(values.get("id", "")):
                 rows.append(_row(values, ref, table_ref=table.get("table_ref"), page=table.get("page")))
     return rows or _exhibit_lines(doc)
+
+
+def _columns_by_content(cells: List[List[Any]]) -> Dict[str, int]:
+    """머리글 없이 열 내용으로 증거표 열을 정한다. 호증 참조가 칸 첫머리에 오는 행이 60% 이상인 열을 번호 열로,
+    날짜가 가장 많은 열을 작성일 열로, 번호 열 뒤 첫 글 열을 서증명, 마지막 글 열을 입증취지로 본다."""
+    rows = [[_cell(c) for c in row] for row in cells if any(str(c or "").strip() for c in row)]
+    if len(rows) < 2:
+        return {}
+    width = max(len(r) for r in rows)
+
+    def share(index, test):
+        values = [r[index] for r in rows if index < len(r) and r[index]]
+        return (sum(1 for v in values if test(v)) / len(rows)) if values else 0.0
+
+    def is_ref(value):
+        refs = parse_exhibits(value)
+        return bool(refs) and refs[0]["span"][0] == 0
+
+    id_col = max(range(width), key=lambda i: share(i, is_ref))
+    if share(id_col, is_ref) < MIN_ID_SHARE:
+        return {}
+    columns = {"id": id_col}
+    dates = [(share(i, lambda v: bool(DATE_RE.search(v))), i) for i in range(width) if i != id_col]
+    if dates and max(dates)[0] >= 0.5:
+        columns["date"] = max(dates)[1]
+    text_cols = [i for i in range(width) if i not in columns.values()
+                 and share(i, lambda v: bool(re.search(r"[가-힣]{2,}", v))) >= 0.5]
+    if not text_cols:
+        return {}
+    columns["name"] = text_cols[0]
+    if len(text_cols) >= 2:
+        columns["purpose"] = text_cols[-1]
+    if len(text_cols) >= 3:
+        columns["author"] = text_cols[1]
+    amount = [i for i in range(width) if i not in columns.values() and share(i, lambda v: bool(re.search(r"\d[\d,]{3,}\s*원", v))) >= 0.5]
+    if amount:
+        columns["amount"] = amount[0]
+    return columns
 
 
 # 목록 줄이 아닌 것: 날짜만 있는 줄, 서명·첨부·당사자 줄, 번호 머리말로 시작하는 새 항목
@@ -409,15 +452,34 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
 
 
 # --- 진술서 ------------------------------------------------------------------------
+# 사람 이름: 가명 표기(성 + ○○) 또는 2~4글자 실명. 목록의 작성자 칸에서 사람 이름 하나만 있을 때 쓴다.
+PERSON_NAME_RE = re.compile(r"(?<![가-힣])([가-힣])([○△□＊*]{1,3})(?![가-힣○△□＊*])")
+
+
 def _statement_fields(text: str) -> List[Dict[str, Any]]:
     out = []
     for m in NAME_FIELD_RE.finditer(text):
         window = text[m.end():m.end() + 160]
         affiliation = AFFILIATION_FIELD_RE.search(window)
         value = affiliation.group("value") if affiliation else ""
+        # 진술서 앞 300자 안의 가장 가까운 호증 표시('[갑 제6호증]')로 목록의 어느 행인지 정한다
+        before = parse_exhibits(text[max(0, m.start() - 300):m.start()])
         out.append({"name": m.group("name"), "ranks": set(RANK_RE.findall(value)),
-                    "units": {(n, u) for n, u in UNIT_RE.findall(value)}, "raw": value.strip()})
+                    "units": {(n, u) for n, u in UNIT_RE.findall(value)}, "raw": value.strip(),
+                    "exhibit": (before[-1]["party"], before[-1]["number"]) if before else None})
     return out
+
+
+def _surname_conflict(listed_author: str, stated_name: str) -> Optional[str]:
+    """목록 작성자 칸의 가명(성 + ○○)과 진술서 성명의 성이 다르면 두 표기를 돌려준다. 같은 가림 길이만 비교한다."""
+    listed = PERSON_NAME_RE.findall(listed_author or "")
+    stated = PERSON_NAME_RE.fullmatch(stated_name or "")
+    if len(listed) != 1 or not stated:
+        return None
+    surname, mask = listed[0]
+    if len(mask) != len(stated.group(2)) or surname == stated.group(1):
+        return None
+    return f"{surname}{mask} ↔ {stated_name}"
 
 
 def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]] = ()) -> List[Finding]:
@@ -459,6 +521,17 @@ def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]]
                                       "statements": [proximity[0][:200], distance[0][:200]]}))
     for fields in _statement_fields(text):
         for row in exhibits:
+            # 같은 호증(진술서 앞 호증 표시)인데 성이 다르면 작성 명의가 다르다(v5 3-3)
+            if fields.get("exhibit") == (row["party"], row["number"]):
+                conflict = _surname_conflict(row.get("author", ""), fields["name"])
+                if conflict:
+                    out.append(_finding(doc, FindingType.EVIDENCE_PERSON_INCONSISTENT, EvidenceGrade.B, Severity.HIGH,
+                                        f"증거 목록의 작성자와 첨부 문서의 성명이 다르다({row['label']}): {conflict}",
+                                        "같은 호증의 작성자를 증거 목록과 첨부 문서가 서로 다른 사람으로 적었다(성이 다름).",
+                                        f"목록: {row.get('author')} / 첨부: 성명 {fields['name']}",
+                                        features={"rule_id": "EVI.PERSON_NAME_MISMATCH", "exhibit": row["label"],
+                                                  "listed": row.get("author"), "stated": fields["name"]}))
+                    continue
             if fields["name"] not in row.get("author", "") or not re.search(r"진술|확인서", row.get("name", "")):
                 continue
             listed_ranks = set(RANK_RE.findall(row.get("author", "")))
