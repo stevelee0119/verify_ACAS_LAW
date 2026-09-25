@@ -83,7 +83,7 @@ class ProviderConfig:
 @dataclass
 class Settings:
     app_name: str = "ACASia_LAW"
-    version: str = "0.8.1"
+    version: str = "0.8.2"
     database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))

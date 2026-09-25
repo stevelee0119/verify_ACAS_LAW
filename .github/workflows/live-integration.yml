@@ -74,6 +74,10 @@ jobs:
           git commit -m "docs: 실연동 통합 테스트 결과 기록 [skip ci]"
           git pull --rebase origin "${GITHUB_REF_NAME}" || true
           git push origin "HEAD:${GITHUB_REF_NAME}"
+      - name: 결과 요약·무응답 경고
+        if: always()
+        # 외부 출처 무응답으로 판정 보류된 항목은 건너뜀이라 작업이 초록색으로 끝난다. 항목별 경고로 드러낸다
+        run: python scripts/live_summary.py --results docs/live_integration_results.json --sha "${GITHUB_SHA}"
       - name: 실패 표시
         if: steps.live.outcome == 'failure'
         run: |
