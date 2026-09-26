@@ -221,6 +221,33 @@ def test_vertical_slice_end_to_end(client, project, tmp_path):
         assert download.status_code == 200 and download.content
 
 
+def test_drive_enabled_submissions_refresh_instead_of_reusing_completed_runs(client, project, tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from packages.common.config import get_settings
+    from apps.api.db import VerificationRun, get_session_factory
+
+    monkeypatch.setattr(get_settings(), "rag_drive_folder_id", "folder00000001")
+    monkeypatch.setattr("apps.api.routers.verification.get_runner",
+                        lambda: SimpleNamespace(submit=lambda run_id: None))
+    path = make_docx(tmp_path / "rag.docx", ["손해배상 청구에 관한 서면이다."])
+    document = upload(client, project["id"], path, "application/vnd.openxmlformats-officedocument.wordprocessingml.document").json()
+    first = client.post(f"/api/documents/{document['id']}/verify", json={}).json()
+    with get_session_factory()() as session:
+        session.get(VerificationRun, first["id"]).state = "COMPLETED"
+        session.commit()
+    second = client.post(f"/api/documents/{document['id']}/verify", json={}).json()
+    assert first["id"] != second["id"]
+    assert first["verification_key"] != second["verification_key"]
+    assert second["reused"] is False
+    assert second["input_snapshot"]["reference_refresh_request"]
+    from apps.api.job_control import DurableJob
+    with get_session_factory()() as session:
+        for row in (first, second):
+            session.get(DurableJob, row["id"]).state = "CANCELLED"
+            session.get(VerificationRun, row["id"]).state = "CANCELLED"
+        session.commit()
+
+
 def test_idempotent_rerun_is_reused(client, project, tmp_path):
     path = make_pdf(tmp_path / "idem.pdf", ["원고는 대금 지급을 구한다."])
     document = upload(client, project["id"], path).json()

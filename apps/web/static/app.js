@@ -509,6 +509,45 @@ function renderHallucinationSummary(rows) {
   summary.className = "warning-text";
 }
 
+function referenceSection(docs) {
+  const library = state.result?.run_manifest?.reference_library;
+  if (!library || library.status === "DISABLED") return null;
+  const section = node("section", null, "detail-section reference-section");
+  const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
+    ADVISORY_REVIEWED: "근거 인용 대조 완료 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
+    RETRIEVED_ONLY: "검색 완료 · AI 대조 미실행", UNVERIFIED: "대조 미완료", SKIPPED: "대조 제외"};
+  section.append(node("h3", "Drive 참고자료"), node("p", `${statuses[library.status] || library.status} · 색인 ${library.files_indexed || 0}/${library.files_seen || 0}건 · 조회 ${library.checked_at || "미확인"}`));
+  if (library.issues?.length) {
+    const details = node("details");
+    details.append(node("summary", `미처리·제한 ${library.issues.length}건`));
+    for (const issue of library.issues) details.append(node("p", `${issue.name || issue.file_id || "Drive"}: ${issue.reason}`));
+    section.append(details);
+  }
+  for (const doc of docs) {
+    const review = doc.engine_data?.rag;
+    if (!review) continue;
+    const details = node("details");
+    details.append(node("summary", `${doc.filename}: ${statuses[review.status] || review.status}`));
+    if (review.reason) details.append(node("p", review.reason, "muted"));
+    if (review.document_truncated) details.append(node("p", "문서 앞부분 12,000자 기준 검색·대조", "warning-text"));
+    for (const source of review.sources || []) {
+      const link = node("a", `${source.source_id}: ${source.title} · ${source.page}쪽`);
+      if (/^[A-Za-z0-9_-]{10,200}$/.test(source.file_id || "")) {
+        link.href = `https://drive.google.com/file/d/${source.file_id}/view`;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+      }
+      details.append(link, node("p", `수정 ${source.modified_time} · SHA-256 ${source.sha256}`, "muted"), node("blockquote", source.text));
+    }
+    for (const item of review.observations || []) {
+      details.append(node("p", `문서: ${item.claim_quote}`), node("blockquote", `${item.source_id}: ${item.source_quote}`),
+        node("p", `AI 참고 의견: ${item.explanation}`));
+    }
+    section.append(details);
+  }
+  return section;
+}
+
 // --- 지표 세부 설명 ---------------------------------------------------------
 function explainDialog(title, children) {
   const root = node("div", null, "full metric-explainer");
@@ -1163,6 +1202,8 @@ function renderAIVerification() {
   // 허위 판례는 별도 카드로 두지 않고 아래 세부 대조표의 머리에 요약한다(중복 방지).
   renderHallucinationSummary(allRows);
   cardsContainer.append(card1, injectionCard(docs, hasQuarantine));
+  const references = referenceSection(docs);
+  if (references) cardsContainer.append(references);
 
   // 테이블 렌더링
   if (allRows.length === 0) {

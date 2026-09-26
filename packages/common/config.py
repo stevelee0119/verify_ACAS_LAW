@@ -96,6 +96,10 @@ class Settings:
     )
     allow_network: bool = field(default_factory=lambda: _flag("LV_ALLOW_NETWORK", True))
     http_timeout: float = field(default_factory=lambda: float(os.getenv("LV_HTTP_TIMEOUT", "12")))
+    rag_drive_folder_id: str = field(default_factory=lambda: os.getenv("LV_RAG_DRIVE_FOLDER_ID", "").strip())
+    rag_sync_seconds: int = field(default_factory=lambda: max(1, min(600, int(os.getenv("LV_RAG_SYNC_SECONDS", "120")))))
+    rag_max_files: int = field(default_factory=lambda: max(1, min(5000, int(os.getenv("LV_RAG_MAX_FILES", "1000")))))
+    rag_download_mb: int = field(default_factory=lambda: max(1, min(512, int(os.getenv("LV_RAG_DOWNLOAD_MB", "128")))))
     source_lookup_budget_seconds: float = field(
         default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_BUDGET_SECONDS", "120")))
     source_lookup_max_document_seconds: float = field(

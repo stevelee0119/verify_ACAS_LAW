@@ -1090,6 +1090,9 @@ table {
 .summary-card h3 { font-size: 15px; margin: 0 0 10px; color: #1e3a34; font-weight: 700; }
 .summary-card .card-item { margin-bottom: 8px; font-size: 14px; }
 .summary-card-wide { grid-column: 1 / -1; }
+.reference-section { grid-column: 1 / -1; min-width: 0; overflow-wrap: anywhere; }
+.reference-section blockquote { margin: 8px 0; padding-left: 12px; border-left: 3px solid var(--line); white-space: pre-wrap; }
+.reference-section h3 { font-size: 16px; margin: 0 0 10px; }
 .model-opinions-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
 .injection-basis { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
 .injection-basis h4 { margin: 0 0 6px; font-size: 14px; color: #1e3a34; }

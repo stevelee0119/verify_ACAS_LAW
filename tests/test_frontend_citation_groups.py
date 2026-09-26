@@ -16,7 +16,7 @@ def finding(fid, ftype, title, citation_id=None, severity="HIGH"):
             "has_sealed_content": False, "evidence": [], "sources": [], "citation_id": citation_id}
 
 
-def test_findings_from_one_citation_are_grouped():
+def test_findings_from_one_citation_are_grouped(tmp_path):
     static = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
@@ -41,7 +41,14 @@ def test_findings_from_one_citation_are_grouped():
         if path in replies:
             return route.fulfill(json=replies[path])
         if path.endswith("/result"):
-            return route.fulfill(json={"documents": [{"document_id": "d1", "filename": "준비서면.pdf"}]})
+            return route.fulfill(json={"run_manifest": {"reference_library": {
+                "status": "PARTIAL", "files_seen": 2, "files_indexed": 1, "checked_at": "2026-09-26T01:00:00Z",
+                "issues": [{"name": "scanned.pdf", "reason": "REFERENCE_PARTIALLY_READ"}]}},
+                "documents": [{"document_id": "d1", "filename": "준비서면.pdf", "engine_data": {"rag": {
+                    "status": "RETRIEVED_ONLY", "reason": "MODEL_UNAVAILABLE", "sources": [{
+                        "source_id": "R1", "file_id": "reference000001", "title": "<img onerror=alert(1)> " + "참고자료" * 20,
+                        "page": 2, "modified_time": "2026-09-26", "sha256": "a" * 64,
+                        "text": "Drive reference text"}]}}}]})
         if path.endswith("/case-matrix"):
             return route.fulfill(body="null", content_type="application/json")
         return route.fulfill(json=[])
@@ -65,6 +72,17 @@ def test_findings_from_one_citation_are_grouped():
             grouped.locator(".derived-findings summary").click()
             expect(grouped.locator(".derived-findings")).to_contain_text("공식 DB에서 확인되지 않은 판례에 기댄 주장")
             expect(rows.filter(has_text="다른 인용의 항목").locator(".derived-findings")).to_have_count(0)
+            page.locator("[data-tab='ai-verification']").click()
+            references = page.locator(".reference-section")
+            expect(references).to_contain_text("일부 자료 미처리")
+            expect(references.locator("img")).to_have_count(0)
+            references.locator("summary").last.click()
+            expect(references.locator("a")).to_have_attribute("href", "https://drive.google.com/file/d/reference000001/view")
+            for width in (1280, 390):
+                page.set_viewport_size({"width": width, "height": 900})
+                references.scroll_into_view_if_needed()
+                assert references.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+                references.screenshot(path=str(tmp_path / f"references-{width}.png"))
             assert errors == []
         finally:
             browser.close()

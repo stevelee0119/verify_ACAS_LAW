@@ -67,6 +67,13 @@ services:
         value: STANDARD
       - key: LV_ALLOW_NETWORK
         value: "1"
+      # Reference source only; corpus contents never enter Git or the Docker image.
+      - key: LV_RAG_DRIVE_FOLDER_ID
+        value: 1fbGA2Ifw9282Nu0ieVWPegAt_GJkdAtM
+      - key: LV_DRIVE_API_KEY
+        sync: false
+      - key: LV_RAG_SYNC_SECONDS
+        value: "120"
       # 국가법령정보가 느려지는 구간이 실측된다. 12초로는 정상 조회가
       # 시간 초과로 끊겨 실재하는 판례가 미확인으로 남는다.
       - key: LV_HTTP_TIMEOUT

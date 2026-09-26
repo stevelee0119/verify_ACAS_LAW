@@ -204,6 +204,13 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
         table(["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"],
               all_hallucination_rows, [1.0, 1.7, 1.6, 2.7])
 
+    from packages.rag_engine.review import report_lines
+    reference_lines = report_lines(run_result)
+    if reference_lines:
+        doc.add_heading("Drive 참고자료 검색·대조", 1)
+        for line in reference_lines:
+            paragraph(line)
+
     doc.add_heading("사람의 검토 기록", 1)
     workflow = snapshot.get("workflow", [])
     shown, untouched = reviewed_workflow(workflow) if summary else (workflow, 0)

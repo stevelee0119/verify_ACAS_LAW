@@ -365,6 +365,13 @@ def build_report_pdf(
     else:
         story.append(Paragraph("Manifest가 제공되지 않았다.", styles["body"]))
 
+    from packages.rag_engine.review import report_lines
+    reference_lines = report_lines(run_result)
+    if reference_lines:
+        story.append(Paragraph("Drive 참고자료 검색·대조", styles["h1"]))
+        for line in reference_lines:
+            story.append(Paragraph(_escape(line), styles["small"]))
+
     story.append(Paragraph("12. 실행 범위 및 기술적 부록", styles["h1"]))
     snapshot = getattr(run_result, "input_snapshot", {})
     context = snapshot.get("context", {})

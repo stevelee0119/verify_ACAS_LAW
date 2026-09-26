@@ -231,7 +231,7 @@ class VerificationPipeline:
         with source_lookup_session(self.settings.source_lookup_budget_seconds, check=check,
                                    notify=source_progress, max_attempts=self.settings.source_lookup_attempts,
                                    request_timeout=self.settings.http_timeout):
-            return self._run(run_id, context, documents, progress=emit)
+            return self._run(run_id, context, documents, progress=emit, check=check)
 
     def _run(
         self,
@@ -240,6 +240,7 @@ class VerificationPipeline:
         documents: List[DocumentInput],
         *,
         progress: Optional[ProgressCallback] = None,
+        check: Optional[Callable[[], None]] = None,
     ) -> VerificationRunResult:
         def emit(state: JobState, message: str, ratio: float) -> None:
             if progress:
@@ -266,12 +267,40 @@ class VerificationPipeline:
         manifest = RunManifest()
         manifest.environment = preflight(self.settings, self.registry, self.router)
 
+        from packages.rag_engine.library import ReferenceLibrary
+        from packages.rag_engine.review import review_document
+
+        references = ReferenceLibrary(self.settings, check=check or (lambda: None),
+            notify=lambda done, total: emit(JobState.VERIFYING, f"Drive 참고자료 확인 {done}/{total}건", 0.0))
+        if self.settings.rag_drive_folder_id:
+            emit(JobState.VERIFYING, "Drive 참고자료 변경·접근 권한 확인", 0.0)
+            with manifest.stage("reference_sync", [], inputs=0, unit="참고자료") as stage:
+                references.sync()
+                stage.inputs = references.summary["files_seen"]
+                stage.note = references.summary["status"]
+                if references.summary["status"] != "READY":
+                    stage.error = "참고자료 전체 동기화·읽기를 완료하지 못함"
+
         total = max(1, len(documents))
         for index, document in enumerate(documents):
             base = 0.85 * index / total
             try:
                 document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
                                                      source_run_id=run_id, run_inputs=documents, manifest=manifest)
+                if self.settings.rag_drive_folder_id:
+                    emit(JobState.VERIFYING, f"{document.filename} Drive 근거 검색·대조", base + 0.85 / total)
+                    with manifest.stage("reference_review", [], inputs=1, unit="문서",
+                                        document_id=document.document_id) as stage:
+                        try:
+                            review = review_document(document_result, references, self.router, context, pii)
+                        except Exception:
+                            review = {"status": "UNVERIFIED", "reason": "REFERENCE_REVIEW_FAILED", "advisory_only": True}
+                            document_result.engine_data["rag"] = review
+                        stage.note = review["status"]
+                        if review["status"] != "ADVISORY_REVIEWED":
+                            stage.skip_reason = review["reason"]
+                            document_result.unverified_items.append({"kind": "reference_review",
+                                "document_id": document.document_id, "reason": "Drive 참고자료 AI 대조 미완료: " + review["reason"]})
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
                 result.errors.append(f"{document.filename}: {exc}")
@@ -294,6 +323,9 @@ class VerificationPipeline:
         emit(JobState.AGGREGATING, "결과 집계", 0.95)
         result.unavailable_sources = annotate_unavailable_sources(self.registry.unavailable(), result.documents)
         result.unverified_items = [item for d in result.documents for item in d.unverified_items]
+        if self.settings.rag_drive_folder_id and references.summary["status"] != "READY":
+            result.unverified_items.append({"kind": "reference_library", "reason": "Drive 참고자료 중 미확인·미처리 자료가 있음",
+                                            "status": references.summary["status"]})
         result.model_executions = [execution for d in result.documents
                                    for execution in d.engine_data.get("model_executions", [])]
         result.scores = aggregate_scores(result)
@@ -301,6 +333,7 @@ class VerificationPipeline:
             "program": self.settings.version, "rule": self.settings.rule_version,
             "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()},
             environment=preflight(self.settings, self.registry, self.router))
+        result.run_manifest["reference_library"] = references.summary
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )

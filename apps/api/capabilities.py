@@ -186,6 +186,14 @@ def runtime_capabilities() -> Dict[str, Any]:
         "worker": _worker_state(),
         # AI가 실제로 쓰이는지. 설정만으로는 알 수 없어 화면에 드러나야 한다.
         "llm": _llm_state(),
+        "reference_library": {
+            "enabled": bool(settings.rag_drive_folder_id),
+            "credentials_present": bool(os.getenv("LV_DRIVE_API_KEY") or os.getenv("LV_DRIVE_SERVICE_ACCOUNT_FILE")),
+            "connectivity_verified": False,
+            "refresh": "every_analysis",
+            "sync_budget_seconds": settings.rag_sync_seconds,
+            "note": "설정 상태만 표시한다. 실제 Drive 접근·동기화 결과는 분석 실행 기록에서 확인한다.",
+        },
         "browser_session": {
             "idle_hours": idle.total_seconds() / 3600,
             "absolute_hours": absolute.total_seconds() / 3600,

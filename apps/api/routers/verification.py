@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -94,6 +95,10 @@ def _start_run(session: Session, project: Project, document_ids: List[str], payl
         "issues": [as_dict(issue) for issue in session.scalars(
             select(CaseIssue).where(CaseIssue.project_id == project.id).order_by(CaseIssue.id))],
     }
+    if settings.rag_drive_folder_id:
+        # A worker refreshes Drive, never an HTTP request holding a DB transaction.
+        # New submissions must not return a completed result before that refresh.
+        snapshot["reference_refresh_request"] = uuid.uuid4().hex
     key = verification_key(
         [d.sha256 for d in documents],
         profile,
