@@ -380,10 +380,11 @@ class VerificationPipeline:
         if self.settings.rag_drive_folder_id:
             from .sanitized_input import sanitized_reading_text
             # Build priorities only after extraction and injection scanning, across every input document.
-            query = "\n".join(sanitized_reading_text(d.normalized, d.findings)[0][:12000]
-                              for d in result.documents if d.normalized)
-            query += "\n" + "\n".join(context.requested_issues)
-            emit(JobState.VERIFYING, "Drive 전수 목록·문서 주제별 우선 자료 확인", 0.85)
+            # 문서마다 따로 넘긴다: 한 문서에 관련된 파일이 다른 문서들과 합친 질의에 묻히지 않게 한다.
+            issues = "\n".join(context.requested_issues)
+            query = [sanitized_reading_text(d.normalized, d.findings)[0][:12000] + "\n" + issues
+                     for d in result.documents if d.normalized]
+            emit(JobState.VERIFYING, "Drive 전수 목록·폴더·파일명으로 관련 자료 선정", 0.85)
             with manifest.stage("reference_sync", [], inputs=0, unit="참고자료") as stage:
                 references.sync(query=query)
                 stage.inputs = references.summary["files_seen"]

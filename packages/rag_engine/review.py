@@ -10,7 +10,9 @@ from packages.common.enums import ExternalAIPolicy, LLMRole, VerificationProfile
 from packages.document_engine.reading_text import build_reading_text
 from packages.llm_router.providers import LLMRequest
 
-SCHEMA = {"type": "object", "additionalProperties": False, "required": ["observations"], "properties": {
+# 최상위에는 모델이 덧붙이는 설명 키를 허용한다(실제 실행에서 Anthropic 응답 2건이 이 이유로 거부돼 Drive 대조가
+# 한 건도 완료되지 못했다). 쓰는 것은 observations뿐이고, 각 항목은 종전대로 엄격히 검사한다.
+SCHEMA = {"type": "object", "additionalProperties": True, "required": ["observations"], "properties": {
     "observations": {"type": "array", "maxItems": 5, "items": {
         "type": "object", "additionalProperties": False,
         "required": ["claim_quote", "source_id", "source_quote", "relationship", "explanation"],
@@ -101,6 +103,15 @@ def review_document(result, library, router, context, pii):
     outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                          policy=context.external_ai_policy, expected_task="참고자료 검토"))
     result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
+    failed = [e.provider for e in outcome.executions if getattr(e, "provider", "") and not e.ok]
+    if not outcome.used and failed:
+        # 한 공급자가 실패(형식 오류·잘림·일시 장애)하면 다른 공급자로 한 번만 다시 묻는다.
+        retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
+                                       exclude=failed, expected_task="참고자료 검토"))
+        result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
+        if retry.executions:
+            review["retried_after"] = failed
+            outcome = retry
     review["model_executed"] = outcome.used
     observations = grounded_observations(outcome.parsed, document, sources) if outcome.used and not outcome.quarantined else None
     if not observations:

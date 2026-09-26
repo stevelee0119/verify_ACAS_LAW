@@ -195,6 +195,35 @@ class DriveClient:
                 tokens.add(token)
         return list(files.values())
 
+    def search_fulltext(self, folder_ids, terms, *, max_results=200):
+        """Drive 서버의 본문 검색으로, 내려받지 않고 모든 단어를 본문에 가진 파일 ID를 찾는다.
+
+        folder_ids는 목록 조회에서 확인한 폴더(루트 포함)다. 그 폴더들의 직속 파일만 대상으로 한다."""
+        def quoted(value):
+            return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+        folders = [valid_id(f) for f in folder_ids]
+        words = [t for t in terms if t][:5]
+        if not folders or not words:
+            return set()
+        found = set()
+        for start in range(0, len(folders), 40):
+            scope = " or ".join(f"{quoted(f)} in parents" for f in folders[start:start + 40])
+            match = " and ".join(f"fullText contains {quoted(w)}" for w in words)
+            token, tokens = None, set()
+            while True:
+                params = {"q": f"({scope}) and ({match}) and trashed = false", "fields": "nextPageToken,files(id)",
+                          "pageSize": 100, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+                if token:
+                    params["pageToken"] = token
+                page = json.loads(self.read("files", params))
+                found.update(valid_id(f["id"]) for f in page.get("files", []))
+                token = page.get("nextPageToken")
+                if not token or len(found) >= max_results or token in tokens:
+                    break
+                tokens.add(token)
+        return found
+
     def download(self, item, *, max_bytes):
         if item.get("capabilities", {}).get("canDownload") is False or item.get("trashed"):
             raise ReferenceError("DOWNLOAD_NOT_ALLOWED")

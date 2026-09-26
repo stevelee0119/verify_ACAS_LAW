@@ -71,6 +71,40 @@ UNAVAILABLE result; they do not silently disable checks.
   make the next run re-index. The cache is rebuildable, not the original document
   repository. Past run evidence remains historical evidence, never fresh input.
 
+## Pre-open Selection: Only Candidate Files Are Opened
+
+During an analysis the library lists the whole folder tree first (metadata only: folder
+path, file name, description, size, revision). It then opens (downloads and extracts)
+only candidate files (`packages/rag_engine/relevance.py`, `metadata_gate`):
+
+1. **Name/path match** (`NAME_PATH_MATCH`): terms of each file's folder path, name and
+   description are weighted by rarity among the library's own names (digits, copy markers
+   and short Latin words removed). A file is a candidate when the checked document's text
+   covers at least 0.25 of that weight with at least 2 shared terms.
+2. **Drive full-text search** (`DRIVE_FULLTEXT_MATCH`): for each document the two most
+   salient repeated content words (particles and pleading boilerplate removed) are sent
+   as `fullText contains` queries restricted to the listed folders (40 folders per query).
+   Drive searches its own index, so files with uninformative names are still found
+   without being downloaded. If the search fails (HTTP error, network), the failure is
+   logged and selection falls back to names and paths.
+3. At most 24 candidates are opened per run (`CANDIDATE_LIMIT` for the rest, highest
+   score first). Non-candidates that are not cached are marked `NOT_SELECTED_METADATA`
+   and never downloaded. Already cached, unchanged files are reused at no cost.
+4. The relevance gate below then decides, from the opened text, whether any excerpt is
+   used. If nothing is selected, Drive material is not used.
+
+Why this design instead of "open every file whose name looks related": names in a real
+library are often generic (for example "결과보고서", "업무편람"), so a name-only rule either
+opens too much or misses files. Drive's server-side full-text search checks contents
+without downloads, while the name/path gate keeps the rule transparent. An unexpected
+defect in the selection step is recorded as `metadata_gate.error` with
+`fallback: ALL_FILES_BY_PRIORITY` so Drive review is not stopped. A sync without a query
+(`scripts.check_drive_references`) still indexes every file to warm the cache.
+
+`diagnostics.metadata_gate` records thresholds, full-text searches (terms, file count or
+error), selected and not-selected counts and time; each `inventory` entry carries its
+`gate` (score, matched terms, full-text hit, reason, selected).
+
 ## Relevance Gate: Drive Is Used Only When Relevant
 
 Before any excerpt reaches a model, the library decides whether any Drive file is

@@ -118,10 +118,16 @@ def test_metadata_priority_precedes_size_budget_and_logs_every_file(tmp_path):
     assert set(lib.eligible) == {guide}
     assert len(lib.summary["inventory"]) == 81
     assert all(i["reason"] != "NOT_PROCESSED" for i in lib.summary["inventory"])
-    assert sum(i["status"] == "SELECTED_PENDING" for i in lib.summary["inventory"]) == 80
+    # 분석 중에는 폴더·파일명으로 관련 없는 80개를 열지 않는다(0.9.8 열기 전 선정).
+    assert sum(i["status"] == "NOT_SELECTED_METADATA" for i in lib.summary["inventory"]) == 80
+    assert lib.summary["diagnostics"]["metadata_gate"]["selected"] == 1
     assert lib.select("학교폭력 피해학생 보호조치 손해배상")["decision"] == "USED"
     lib.sync(query="학교폭력 피해학생 보호조치 손해배상")
-    assert lib.summary["files_reused"] == 1 and drive.downloads == 2
+    assert lib.summary["files_reused"] == 1 and drive.downloads == 1
+    # 질의 없는 전체 동기화(관리자 점검)는 선정 없이 전체를 다룬다(같은 내용의 80개는 한 번만 연다).
+    lib.sync()
+    assert drive.downloads == 2
+    assert not any(i["status"] == "NOT_SELECTED_METADATA" for i in lib.summary["inventory"])
 
 
 def test_unread_relevant_guide_is_not_declared_irrelevant(tmp_path):

@@ -94,13 +94,16 @@ class ReferenceLibrary:
         self.eligible = {}
         self.summary.update(checked_at=None, snapshot_hash=None, files_seen=0, files_indexed=0,
                             files_reused=0, issues=[], sources=[], duplicates=[], similar_names=[], inventory=[])
-        self.sync_query = query if self.settings.rag_metadata_first else ""
+        # 분석 문서마다 따로 받은 질의(목록)나 하나로 합친 질의(문자열) 모두 받는다.
+        queries = [q for q in (query if isinstance(query, (list, tuple)) else [query]) if q]
+        self.sync_query = "\n".join(queries) if self.settings.rag_metadata_first else ""
+        queries = queries if self.sync_query else []
         budget = max(1, min(600, self.settings.rag_sync_seconds))
         diagnostics = self.summary["diagnostics"] = {
             "started_at": datetime.now(timezone.utc).isoformat(), "folder_id": self.folder,
             "network_allowed": bool(self.settings.allow_network), "budget_seconds": budget,
             "max_files": self.settings.rag_max_files, "inventory_max_files": self.settings.rag_inventory_max_files,
-            "selection_strategy": "METADATA_FIRST" if self.sync_query else "CACHE_SIZE_ORDER",
+            "selection_strategy": "METADATA_GATE" if self.sync_query else "CACHE_SIZE_ORDER",
             "download_budget_mb": self.settings.rag_download_mb,
             "credential_mode": None, "stages": [], "downloads": {"count": 0, "bytes": 0},
             "extractions": {"count": 0, "ms": 0}, "duplicates_skipped": 0, "deferred": 0}
@@ -139,9 +142,22 @@ class ReferenceLibrary:
                 diagnostics["files_by_type"] = extensions
                 duplicates, similar, skip = relevance.duplicate_groups(items)
                 self.summary["duplicates"], self.summary["similar_names"] = duplicates, similar
+                # 분석 중에는 폴더·파일명·Drive 본문 검색으로 고른 후보만 새로 연다. 질의 없는 동기화(관리자 점검
+                # 스크립트)는 종전처럼 전체를 색인해 캐시를 채운다.
+                gate = None
+                if queries:
+                    try:
+                        gate = self._metadata_gate(client, items, queries, folders)
+                    except ReferenceError:
+                        raise
+                    except Exception as exc:  # 선정 단계의 결함이 Drive 검토 전체를 멈추게 하지 않는다
+                        diagnostics["metadata_gate"] = {"error": type(exc).__name__, "fallback": "ALL_FILES_BY_PRIORITY"}
+                if gate:
+                    for entry in self.summary["inventory"]:
+                        entry["gate"] = gate[entry["file_id"]]
                 mark = time.monotonic()
                 with self.connect() as db:
-                    self._sync_files(client, db, items, skip)
+                    self._sync_files(client, db, items, skip, gate)
                 self._stage("files", mark, indexed=len(self.eligible))
                 self.summary["sources"] = list(self.eligible.values())
                 self.summary["files_indexed"] = len(self.eligible)
@@ -178,7 +194,37 @@ class ReferenceLibrary:
                                    "calls": list(getattr(client, "calls", []))}
         return self.summary
 
-    def _sync_files(self, client, db, items, skip):
+    def _metadata_gate(self, client, items, queries, folders):
+        """열어 볼 후보: 폴더·파일명 점수 + Drive 서버 본문 검색(파일을 내려받지 않음)."""
+        info = {"thresholds": relevance.gate_thresholds(), "fulltext": []}
+        hits = {}
+        search = getattr(client, "search_fulltext", None)
+        folder_ids = list(folders) or [self.folder]
+        mark = time.monotonic()
+        for query in queries if search else []:
+            words = relevance.salient_words(query)
+            if not words:
+                continue
+            try:
+                found = search(folder_ids, words)
+            except ReferenceError as exc:
+                # 본문 검색을 쓸 수 없으면 이름 점수만으로 고른다(열기 전 선정의 보조 수단일 뿐이다).
+                info["fulltext"].append({"terms": words, "error": str(exc)})
+                if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_429", "SYNC_BUDGET_EXHAUSTED"):
+                    break
+                continue
+            info["fulltext"].append({"terms": words, "files": len(found)})
+            for file_id in found:
+                hits.setdefault(file_id, []).append(" ".join(words))
+        gate = relevance.metadata_gate(items, queries, hits)
+        self._gate_weights = relevance.gate_weights(items)
+        info["selected"] = sum(1 for g in gate.values() if g["selected"])
+        info["not_selected"] = len(gate) - info["selected"]
+        info["ms"] = round((time.monotonic() - mark) * 1000)
+        self.summary["diagnostics"]["metadata_gate"] = info
+        return gate
+
+    def _sync_files(self, client, db, items, skip, gate=None):
         diagnostics = self.summary["diagnostics"]
         seen = {item["id"] for item in items}
         # Delete only after a complete listing, never infer deletion from a failed page.
@@ -193,12 +239,18 @@ class ReferenceLibrary:
         # Cached files next, so bounded runs stay useful while new material warms up.
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
         audit = {item["file_id"]: item for item in self.summary["inventory"]}
-        ordered = sorted(items, key=lambda i: (-audit[i["id"]]["metadata"]["score"],
-            i["id"] in skip, i["id"] not in cached, int(i.get("size") or 0), i["id"]))
+        chosen = (lambda file_id: True) if gate is None else (lambda file_id: gate[file_id]["selected"])
+        ordered = sorted(items, key=lambda i: (not chosen(i["id"]), -audit[i["id"]]["metadata"]["score"],
+            -(gate[i["id"]]["score"] if gate else 0), i["id"] in skip, i["id"] not in cached,
+            int(i.get("size") or 0), i["id"]))
         for index, item in enumerate(ordered):
             self.notify(index, len(ordered))
             file_id = item["id"]
             entry = audit[file_id]
+            if not chosen(file_id) and file_id not in cached:
+                # 후보가 아니고 색인된 적도 없는 파일은 권한 확인·내려받기 없이 넘어간다.
+                entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"])
+                continue
             try:
                 client.remaining()
                 if skip.get(file_id) in self.eligible:
@@ -220,6 +272,10 @@ class ReferenceLibrary:
                     parsed = json.loads(row[0])
                     self.summary["files_reused"] += 1
                     entry["reused"] = True
+                elif not chosen(file_id):
+                    # 이름·경로·본문 검색 어느 쪽으로도 관련 후보가 아니면 열지 않는다(이미 색인된 파일은 위에서 재사용).
+                    entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"])
+                    continue
                 else:
                     if new_files >= self.settings.rag_max_files:
                         raise ReferenceError("INDEX_FILE_BUDGET_EXHAUSTED")
@@ -304,7 +360,10 @@ class ReferenceLibrary:
                     diagnostics["deferred"] = len(ordered) - index
                     self.summary["issues"].append({"reason": "FILES_DEFERRED", "count": len(ordered) - index})
                     for later in ordered[index + 1:]:
-                        audit[later["id"]].update(status="SELECTED_PENDING", reason="SYNC_BUDGET_EXHAUSTED")
+                        if chosen(later["id"]):
+                            audit[later["id"]].update(status="SELECTED_PENDING", reason="SYNC_BUDGET_EXHAUSTED")
+                        else:
+                            audit[later["id"]].update(status="NOT_SELECTED_METADATA", reason=gate[later["id"]]["reason"])
                     break
             except Exception:
                 entry.update(status="PARSE_FAILED", reason="REFERENCE_PROCESSING_FAILED")
@@ -328,8 +387,9 @@ class ReferenceLibrary:
         log = {"decision": "NOT_USED", "reason": "", "thresholds": relevance.thresholds(),
                "corpus_chunks": 0, "query_terms": [], "candidates": [], "files_selected": 0, "sources": []}
         pending = [item for item in self.summary.get("inventory", [])
-                   if item["status"] not in ("INDEXED", "DUPLICATE_REUSED")
-                   and relevance.metadata_priority(item, text)["score"] > 0]
+                   if item["status"] not in ("INDEXED", "DUPLICATE_REUSED", "NOT_SELECTED_METADATA")
+                   and (relevance.metadata_priority(item, text)["score"] > 0
+                        or relevance.name_gate_passes(getattr(self, "_gate_weights", {}).get(item["file_id"], {}), text))]
         log["coverage"] = "INCOMPLETE_COVERAGE" if pending else "CHECKED_INDEXED_CORPUS"
         log["unreviewed_candidates"] = pending
         if not self.eligible:

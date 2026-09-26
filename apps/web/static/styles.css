@@ -1272,3 +1272,21 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   margin-top: 6px;
   font-weight: 600
 }
+
+.site-footer {
+  margin-top: 40px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 4px 16px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5
+}
+
+.site-footer small {
+  font-size: inherit;
+  overflow-wrap: anywhere
+}
