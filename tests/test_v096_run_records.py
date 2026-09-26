@@ -64,7 +64,7 @@ def test_every_router_call_is_collected_and_previous_hook_still_runs():
         router.on_execution(execution("gemini"))
         return VerificationRunResult(run_id="r", project_id="p", state="COMPLETED", verification_key="k")
 
-    pipeline._run = fake_run
+    pipeline._run_with_session = fake_run
     result = pipeline.run("r", SimpleNamespace(), [])
     assert [e["provider"] for e in result.model_executions] == ["anthropic", "openai", "gemini"]
     assert [e["document_id"] for e in result.model_executions] == ["doc-1", "doc-1", None]

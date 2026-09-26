@@ -354,7 +354,8 @@ def test_many_citations_are_asked_in_small_batches():
     asyncio.run(verify_argument_validity(doc, citations, verdicts, [], router=router))
     import json
     sizes = [len(json.loads(r.user)["items"]) for r in router.requests]
-    assert sizes == [4, 4, 1] and all(r.max_tokens == 4096 for r in router.requests)
+    # 0.9.4 실제 실행에서 3건 묶음도 4096토큰에서 잘려 2건씩 묻는다(0.9.6).
+    assert sizes == [2, 2, 2, 2, 1] and all(r.max_tokens == 4096 for r in router.requests)
 
 
 def test_a_single_model_cannot_raise_the_authorship_verdict_alone():

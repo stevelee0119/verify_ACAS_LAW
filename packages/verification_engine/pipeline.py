@@ -290,7 +290,7 @@ class VerificationPipeline:
         if hooked:
             self.router.on_execution = record
         try:
-            result = self._run(run_id, context, documents, progress=progress, check=check)
+            result = self._run_with_session(run_id, context, documents, progress=progress, check=check)
         finally:
             if hooked:
                 self.router.on_execution = previous
@@ -299,7 +299,7 @@ class VerificationPipeline:
             result.run_manifest["model_execution_summary"] = execution_summary(log)
         return result
 
-    def _run(
+    def _run_with_session(
         self, run_id: str, context: ProjectContext, documents: List[DocumentInput], *,
         progress: Optional[ProgressCallback] = None, check: Optional[Callable[[], None]] = None,
     ) -> VerificationRunResult:
