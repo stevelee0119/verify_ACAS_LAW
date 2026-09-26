@@ -13,7 +13,7 @@ from packages.document_engine.registry import parse_document
 
 MAX_CHARS = 3_000_000
 MAX_PAGES = 1500
-EXTRACTOR_VERSION = "drive-text-v1"
+EXTRACTOR_VERSION = "drive-text-v2"
 
 
 def extract(path, filename, mime):
@@ -61,6 +61,8 @@ def extract(path, filename, mime):
                            for p in doc.structure.get("page_coverage", []))
     partial = read_pages < total or coverage_missing or bool(doc.parse_warnings)
     return {"chunks": chunks, "sha256": digest, "partial": partial,
+            "page_numbers_reliable": doc.structure.get("page_numbers_reliable", path.suffix.lower() not in (".hwp", ".hwpx")),
+            "body_extraction_scope": doc.structure.get("body_extraction_scope", "TEXT_EXTRACTION"),
             "pages": total, "read_pages": read_pages,
             "reason": "REFERENCE_PARTIALLY_READ" if partial else ""}
 

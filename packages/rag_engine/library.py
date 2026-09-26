@@ -70,7 +70,7 @@ class ReferenceLibrary:
         self.summary = {"status": "DISABLED", "folder_id": self.folder, "checked_at": None,
                         "snapshot_hash": None, "files_seen": 0, "files_indexed": 0,
                         "files_reused": 0, "issues": [], "sources": [], "duplicates": [], "similar_names": [],
-                        "diagnostics": {},
+                        "diagnostics": {}, "inventory": [],
                         "retrieval": "SQLite FTS5; Korean character bigrams; corpus-IDF relevance gate "
                                      "with folder/file-name bonus",
                         "authority": "USER_REFERENCE_NOT_OFFICIAL", "extractor": EXTRACTOR_VERSION}
@@ -89,16 +89,19 @@ class ReferenceLibrary:
         finally:
             db.close()
 
-    def sync(self):
+    def sync(self, query=""):
         started = time.monotonic()
         self.eligible = {}
         self.summary.update(checked_at=None, snapshot_hash=None, files_seen=0, files_indexed=0,
-                            files_reused=0, issues=[], sources=[], duplicates=[], similar_names=[])
+                            files_reused=0, issues=[], sources=[], duplicates=[], similar_names=[], inventory=[])
+        self.sync_query = query if self.settings.rag_metadata_first else ""
         budget = max(1, min(600, self.settings.rag_sync_seconds))
         diagnostics = self.summary["diagnostics"] = {
             "started_at": datetime.now(timezone.utc).isoformat(), "folder_id": self.folder,
             "network_allowed": bool(self.settings.allow_network), "budget_seconds": budget,
-            "max_files": self.settings.rag_max_files, "download_budget_mb": self.settings.rag_download_mb,
+            "max_files": self.settings.rag_max_files, "inventory_max_files": self.settings.rag_inventory_max_files,
+            "selection_strategy": "METADATA_FIRST" if self.sync_query else "CACHE_SIZE_ORDER",
+            "download_budget_mb": self.settings.rag_download_mb,
             "credential_mode": None, "stages": [], "downloads": {"count": 0, "bytes": 0},
             "extractions": {"count": 0, "ms": 0}, "duplicates_skipped": 0, "deferred": 0}
         if not self.folder:
@@ -115,10 +118,15 @@ class ReferenceLibrary:
             self.directory.mkdir(parents=True, exist_ok=True)
             with FileLock(str(self.db_path) + ".lock", timeout=min(3, client.remaining())):
                 mark = time.monotonic()
-                items = client.inventory(self.folder, max_files=self.settings.rag_max_files)
+                items = client.inventory(self.folder, max_files=self.settings.rag_inventory_max_files)
                 self._stage("inventory", mark, files=len(items))
                 self.summary["checked_at"] = datetime.now(timezone.utc).isoformat()
                 self.summary["files_seen"] = len(items)
+                self.summary["inventory"] = [{"file_id": item["id"], "name": item.get("name", ""),
+                    "folder_path": item.get("folder_path", ""), "size": int(item.get("size") or 0),
+                    "metadata": relevance.metadata_priority(item, self.sync_query),
+                    "status": "SELECTED_PENDING", "reason": "NOT_PROCESSED", "background_queued": False}
+                    for item in items]
                 folders = getattr(client, "folders", {}) or {}
                 diagnostics["folders_seen"] = len(folders)
                 diagnostics["folder_paths"] = sorted(p for p in folders.values() if p)[:200]
@@ -159,6 +167,9 @@ class ReferenceLibrary:
         diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
         diagnostics["outcome"] = self.summary["status"]
         counts = {}
+        for item in self.summary["inventory"]:
+            if item["reason"] == "NOT_PROCESSED":
+                item["reason"] = "SYNC_INTERRUPTED"
         for issue in self.summary["issues"]:
             counts[issue.get("reason", "")] = counts.get(issue.get("reason", ""), 0) + 1
         diagnostics["issue_counts"] = counts
@@ -177,14 +188,17 @@ class ReferenceLibrary:
                 db.execute("DELETE FROM files WHERE id=?", (file_id,))
         db.commit()
         downloaded = 0
+        new_files = 0
         # Identical copies come last and are skipped when their kept original is usable.
         # Cached files next, so bounded runs stay useful while new material warms up.
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
-        ordered = sorted(items, key=lambda i: (i["id"] in skip, i["id"] not in cached,
-                                               int(i.get("size") or 0), i["id"]))
+        audit = {item["file_id"]: item for item in self.summary["inventory"]}
+        ordered = sorted(items, key=lambda i: (-audit[i["id"]]["metadata"]["score"],
+            i["id"] in skip, i["id"] not in cached, int(i.get("size") or 0), i["id"]))
         for index, item in enumerate(ordered):
             self.notify(index, len(ordered))
             file_id = item["id"]
+            entry = audit[file_id]
             try:
                 client.remaining()
                 if skip.get(file_id) in self.eligible:
@@ -192,6 +206,7 @@ class ReferenceLibrary:
                     db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
                     db.execute("DELETE FROM files WHERE id=?", (file_id,))
                     db.commit()
+                    entry.update(status="DUPLICATE_REUSED", reason="IDENTICAL_CONTENT", duplicate_of=skip[file_id])
                     continue
                 # The listing was read moments ago in this run; it already carries parents, trash state,
                 # download permission and revision, so an unchanged cached file needs no second request.
@@ -204,7 +219,11 @@ class ReferenceLibrary:
                 if row:
                     parsed = json.loads(row[0])
                     self.summary["files_reused"] += 1
+                    entry["reused"] = True
                 else:
+                    if new_files >= self.settings.rag_max_files:
+                        raise ReferenceError("INDEX_FILE_BUDGET_EXHAUSTED")
+                    new_files += 1
                     if client.remaining() < 30:
                         raise ReferenceError("SYNC_BUDGET_EXHAUSTED")
                     fresh = client.metadata(file_id)
@@ -257,23 +276,38 @@ class ReferenceLibrary:
                     self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
                         "reason": parsed.get("reason") or "REFERENCE_EMPTY",
                         "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
+                entry.update(status=("INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED")
+                             if parsed.get("chunk_count") else "PARSE_FAILED",
+                             reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
+                             read_pages=parsed.get("read_pages"))
+                entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
+                entry["body_extraction_scope"] = parsed.get("body_extraction_scope")
                 if parsed.get("chunk_count"):
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
                         "folder_path": folder_path,
+                        "metadata_score": entry["metadata"]["score"],
                         "url": "https://drive.google.com/file/d/" + file_id + "/view",
                         "revision": version, "modified_time": item.get("modifiedTime"),
                         "sha256": parsed["sha256"], "partial": bool(parsed.get("partial")),
                         "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages"),
+                        "page_numbers_reliable": parsed.get("page_numbers_reliable", True),
+                        "body_extraction_scope": parsed.get("body_extraction_scope"),
                         "chunk_count": parsed["chunk_count"]}
             except ReferenceError as exc:
+                code = str(exc)
+                entry.update(status="UNSUPPORTED_TYPE" if code == "UNSUPPORTED_REFERENCE_FORMAT" else
+                             "SELECTED_PENDING" if "BUDGET" in code else "UNAVAILABLE", reason=code)
                 if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_429"):
                     raise
                 self.summary["issues"].append({"file_id": file_id, "name": item.get("name"), "reason": str(exc)})
                 if str(exc) == "SYNC_BUDGET_EXHAUSTED":
                     diagnostics["deferred"] = len(ordered) - index
                     self.summary["issues"].append({"reason": "FILES_DEFERRED", "count": len(ordered) - index})
+                    for later in ordered[index + 1:]:
+                        audit[later["id"]].update(status="SELECTED_PENDING", reason="SYNC_BUDGET_EXHAUSTED")
                     break
             except Exception:
+                entry.update(status="PARSE_FAILED", reason="REFERENCE_PROCESSING_FAILED")
                 self.summary["issues"].append({"file_id": file_id, "reason": "REFERENCE_PROCESSING_FAILED"})
 
     def _access_detail(self, listed, fresh, problem):
@@ -293,13 +327,20 @@ class ReferenceLibrary:
         library is not used for the document."""
         log = {"decision": "NOT_USED", "reason": "", "thresholds": relevance.thresholds(),
                "corpus_chunks": 0, "query_terms": [], "candidates": [], "files_selected": 0, "sources": []}
+        pending = [item for item in self.summary.get("inventory", [])
+                   if item["status"] not in ("INDEXED", "DUPLICATE_REUSED")
+                   and relevance.metadata_priority(item, text)["score"] > 0]
+        log["coverage"] = "INCOMPLETE_COVERAGE" if pending else "CHECKED_INDEXED_CORPUS"
+        log["unreviewed_candidates"] = pending
         if not self.eligible:
+            if pending:
+                log["decision"] = "INCOMPLETE_COVERAGE"
             log["reason"] = "NO_ELIGIBLE_REFERENCE"
             return log
         mark = time.monotonic()
         total = sum(v.get("chunk_count") or 0 for v in self.eligible.values())
         log["corpus_chunks"] = total
-        counts = set(tokens(text[:24000]))
+        counts = set(relevance.query_tokens(text[:24000]))
         names = relevance.name_weights(self.eligible)
         with self.connect() as db:
             deadline = time.monotonic() + 5
@@ -314,6 +355,8 @@ class ReferenceLibrary:
             log["query_terms"] = [{"term": t, "weight": round(profile[t], 3), "chunks": frequency.get(t, 0)}
                                   for t in list(profile)[:20] if t in frequency]
             if not present:
+                if pending:
+                    log["decision"] = "INCOMPLETE_COVERAGE"
                 log["reason"] = "NO_SHARED_KEY_TERMS"
                 log["ms"] = round((time.monotonic() - mark) * 1000)
                 return log
@@ -336,7 +379,8 @@ class ReferenceLibrary:
             source = self.eligible[file_id]
             name_score, name_hits = relevance.name_coverage(names.get(file_id, {}), counts)
             best = max(entry["chunks"], key=lambda c: (c[0], c[1]))
-            file_score = best[0] + relevance.META_WEIGHT * name_score
+            metadata_bonus = min(0.05, (source.get("metadata_score") or 0) / 1000)
+            file_score = best[0] + relevance.META_WEIGHT * name_score + metadata_bonus
             reasons = []
             if best[1] < required:
                 reasons.append("TOO_FEW_SHARED_TERMS")
@@ -347,6 +391,7 @@ class ReferenceLibrary:
             candidates.append({"file_id": file_id, "title": source.get("title"), "folder_path": source.get("folder_path"),
                                "text_coverage": round(best[0], 3), "shared_terms": best[1],
                                "name_coverage": round(name_score, 3), "name_terms": name_hits[:8],
+                               "metadata_bonus": round(metadata_bonus, 3),
                                "file_score": round(file_score, 3), "selected": not reasons, "rejected_because": reasons,
                                "_name": name_score, "_chunks": entry["chunks"]})
         candidates.sort(key=lambda c: (-c["file_score"], c["file_id"]))
@@ -356,7 +401,8 @@ class ReferenceLibrary:
             usable = sorted((c for c in candidate["_chunks"]
                              if c[0] >= relevance.MIN_CHUNK_COVERAGE and c[1] >= required),
                             key=lambda c: (-c[0], c[2], c[3]))[:relevance.PER_FILE_EXCERPTS]
-            excerpts.extend((c[0] + relevance.META_WEIGHT * candidate["_name"], candidate["file_id"], c) for c in usable)
+            excerpts.extend((c[0] + relevance.META_WEIGHT * candidate["_name"] + candidate["metadata_bonus"],
+                             candidate["file_id"], c) for c in usable)
         excerpts.sort(key=lambda e: (-e[0], e[1], e[2][2], e[2][3]))
         result, seen = [], set()
         for score, file_id, (coverage, shared, page, start, excerpt) in excerpts:
@@ -372,11 +418,11 @@ class ReferenceLibrary:
                 break
         for candidate in candidates:
             candidate.pop("_name"), candidate.pop("_chunks")
-        log["candidates"] = candidates[:15]
+        log["candidates"] = candidates
         log["candidates_total"] = len(candidates)
         log["files_selected"] = len(chosen)
         log["sources"] = result
-        log["decision"] = "USED" if result else "NOT_USED"
+        log["decision"] = "USED" if result else "INCOMPLETE_COVERAGE" if pending else "NOT_USED"
         log["reason"] = "RELEVANT_REFERENCE_FOUND" if result else (
             "NO_CANDIDATE_CHUNK" if not candidates else "BELOW_RELEVANCE_THRESHOLD")
         log["ms"] = round((time.monotonic() - mark) * 1000)

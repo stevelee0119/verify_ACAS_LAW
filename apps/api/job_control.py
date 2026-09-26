@@ -126,7 +126,8 @@ def execution_settings_snapshot():
             "source_lookup_max_document_seconds", "source_lookup_recovery_seconds", "source_lookup_attempts",
             "ocr_psm", "ocr_dpi", "ocr_min_confidence", "ocr_max_pages", "ocr_timeout_seconds", "independent_ocr_pages",
             "independent_ocr_mode", "seal_meta_message_content", "allow_sealed_reveal",
-            "rag_drive_folder_id", "rag_sync_seconds", "rag_max_files", "rag_download_mb")},
+            "rag_drive_folder_id", "rag_sync_seconds", "rag_max_files", "rag_download_mb",
+            "rag_inventory_max_files", "rag_metadata_first")},
     }
 
 

@@ -522,6 +522,7 @@ function referenceSection(docs) {
   const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
     ADVISORY_REVIEWED: "근거 인용 대조 완료 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
     NOT_RELEVANT: "관련 자료 없음 · Drive 자료 미활용",
+    INCOMPLETE_COVERAGE: "관련 자료 검토 범위 미완결",
     RETRIEVED_ONLY: "검색 완료 · AI 대조 미실행", UNVERIFIED: "대조 미완료", SKIPPED: "대조 제외"};
   section.append(node("h3", "Drive 참고자료"), node("p", `${statuses[library.status] || library.status} · 색인 ${library.files_indexed || 0}/${library.files_seen || 0}건 · 조회 ${library.checked_at || "미확인"}`));
   const health = library.health;
@@ -552,6 +553,15 @@ function referenceSection(docs) {
     for (const issue of library.issues) details.append(node("p", `${issue.name || issue.file_id || "Drive"}: ${issue.reason}`));
     section.append(details);
   }
+  if (library.inventory?.length) {
+    const details = node("details");
+    details.append(node("summary", `자료별 처리 기록 ${library.inventory.length}건`));
+    for (const item of library.inventory.slice(0, 100)) {
+      details.append(node("p", `${[item.folder_path, item.name].filter(Boolean).join("/")} · ${item.status} · ${item.reason}`, "muted"));
+    }
+    if (library.inventory.length > 100) details.append(node("p", "전체 자료별 처리 기록은 결과 JSON에 보존되어 있습니다.", "muted"));
+    section.append(details);
+  }
   for (const doc of docs) {
     const review = doc.engine_data?.rag;
     if (!review) continue;
@@ -561,13 +571,21 @@ function referenceSection(docs) {
     if (review.document_truncated) details.append(node("p", "문서 앞부분 12,000자 기준 검색·대조", "warning-text"));
     const selection = review.selection;
     if (selection) {
+      if (selection.coverage === "INCOMPLETE_COVERAGE") {
+        details.append(node("p", "관련 후보 자료가 미처리 또는 일부만 읽힌 상태입니다. 관련 자료가 없다는 뜻이 아닙니다.", "warning-text"));
+        for (const item of (selection.unreviewed_candidates || []).slice(0, 50)) {
+          details.append(node("p", `${[item.folder_path, item.name].filter(Boolean).join("/")} · ${item.status} · ${item.reason}`, "muted"));
+        }
+        details.append(node("p", "미처리 자료는 다음 분석에서 재확인합니다. 자동 백그라운드 작업은 예약되지 않았습니다.", "muted"));
+      }
       details.append(node("p", `자료 선정: ${selection.decision === "USED" ? "관련 자료 사용" : "Drive 자료 미활용"} · 후보 ${selection.candidates_total || 0}개 중 ${selection.files_selected || 0}개 선정 (${selection.reason})`, "muted"));
       for (const candidate of (selection.candidates || []).slice(0, 5)) {
         details.append(node("p", `${candidate.selected ? "선정" : "제외"} · ${[candidate.folder_path, candidate.title].filter(Boolean).join("/")} · 본문 ${candidate.text_coverage} · 폴더·파일명 ${candidate.name_coverage} · 점수 ${candidate.file_score}`, "muted"));
       }
+      if ((selection.candidates || []).length > 5) details.append(node("p", `나머지 ${selection.candidates.length - 5}개 후보는 결과 JSON에 기록되어 있습니다.`, "muted"));
     }
     for (const source of review.sources || []) {
-      const link = node("a", `${source.source_id}: ${source.title} · ${source.page}쪽`);
+      const link = node("a", `${source.source_id}: ${source.title} · ${source.page_numbers_reliable === false ? "텍스트 구간 " + source.page + " (원본 쪽 미확인)" : source.page + "쪽"}`);
       if (/^[A-Za-z0-9_-]{10,200}$/.test(source.file_id || "")) {
         link.href = `https://drive.google.com/file/d/${source.file_id}/view`;
         link.target = "_blank";

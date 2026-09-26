@@ -104,6 +104,41 @@ def library(tmp_path, drive):
 
 
 # --- 관련 자료 선정 -------------------------------------------------------------------------------------
+def test_metadata_priority_precedes_size_budget_and_logs_every_file(tmp_path):
+    drive = Drive({})
+    for i in range(80):
+        drive.add(f"unrelated{i:06d}", "업무", f"일반 자료{i}.txt", "사무 공간")
+    guide = "schoolguide00001"
+    text = "학교폭력 피해학생 보호조치와 가해학생 조치. 학교폭력 손해배상 입증 자료를 확인한다."
+    drive.add(guide, "분야별 업무편람", "2026년 학교폭력 사안처리 가이드북.pdf", text)
+    settings = replace(get_settings(), storage_root=tmp_path, rag_drive_folder_id=ROOT,
+                       allow_network=True, rag_max_files=1)
+    lib = ReferenceLibrary(settings, client_factory=drive, extractor=extract)
+    lib.sync(query="학교폭력 피해학생 보호조치 손해배상")
+    assert set(lib.eligible) == {guide}
+    assert len(lib.summary["inventory"]) == 81
+    assert all(i["reason"] != "NOT_PROCESSED" for i in lib.summary["inventory"])
+    assert sum(i["status"] == "SELECTED_PENDING" for i in lib.summary["inventory"]) == 80
+    assert lib.select("학교폭력 피해학생 보호조치 손해배상")["decision"] == "USED"
+    lib.sync(query="학교폭력 피해학생 보호조치 손해배상")
+    assert lib.summary["files_reused"] == 1 and drive.downloads == 2
+
+
+def test_unread_relevant_guide_is_not_declared_irrelevant(tmp_path):
+    drive = Drive({})
+    drive.add("schoolguide00001", "분야별 업무편람", "학교폭력 가이드북.pdf", "학교폭력 피해학생")
+    drive.items["schoolguide00001"]["capabilities"]["canDownload"] = False
+    settings = replace(get_settings(), storage_root=tmp_path, rag_drive_folder_id=ROOT, allow_network=True)
+    lib = ReferenceLibrary(settings, client_factory=drive, extractor=extract)
+    lib.sync(query="학교폭력 피해학생")
+    selection = lib.select("학교폭력 피해학생")
+    assert selection["decision"] == "INCOMPLETE_COVERAGE"
+    assert selection["unreviewed_candidates"][0]["status"] == "UNAVAILABLE"
+    assert selection["unreviewed_candidates"][0]["background_queued"] is False
+    assert selection["thresholds"] == relevance.thresholds()
+    assert lib.select("선박 운항 항만 보안")["decision"] == "NOT_USED"
+
+
 @pytest.mark.parametrize("expected, text", [
     ("징계업무편람", "청구인은 공무원으로서 감봉 징계처분을 받았다. 징계의결 과정에서 진술 기회를 얻지 못하였고 표창 공적 등 "
                   "감경 사유도 고려되지 않아 징계양정의 재량을 벗어났다."),
@@ -340,7 +375,7 @@ def test_check_script_prints_delete_candidates(tmp_path):
     assert lines[-1].startswith("중복 묶음 1개")
 
 
-def test_web_shows_drive_health_selection_and_duplicates():
+def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
     import os
     from pathlib import Path
     from urllib.parse import urlsplit
@@ -405,6 +440,23 @@ def test_web_shows_drive_health_selection_and_duplicates():
             expect(link).to_have_attribute("href", "https://drive.google.com/file/d/reference900001/view")
             expect(section).to_contain_text("a.pdf: 관련 자료 없음 · Drive 자료 미활용")
             expect(section).to_contain_text("제외 · 업무편람/징계업무편람.pdf · 본문 0.05")
+            page.evaluate("""() => {
+              const r = state.result.documents[0].engine_data.rag;
+              r.status = 'INCOMPLETE_COVERAGE';
+              r.selection.coverage = 'INCOMPLETE_COVERAGE';
+              r.selection.unreviewed_candidates = [{name: '학교폭력 가이드북.pdf', folder_path: '분야별 업무편람',
+                status: 'SELECTED_PENDING', reason: 'SYNC_BUDGET_EXHAUSTED'}];
+              renderAIVerification();
+              switchTab('ai-verification');
+            }""")
+            expect(section).to_contain_text("관련 자료 검토 범위 미완결")
+            expect(section).to_contain_text("학교폭력 가이드북.pdf")
+            for width in (1280, 390):
+                page.set_viewport_size({"width": width, "height": 900})
+                section.locator("details").last.evaluate("e => e.open = true")
+                section.scroll_into_view_if_needed()
+                assert section.evaluate("e => e.scrollWidth <= e.clientWidth + 1")
+                section.screenshot(path=str(tmp_path / f"coverage-{width}.png"))
             page.close()
         finally:
             browser.close()

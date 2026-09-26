@@ -11,7 +11,7 @@ import time
 import httpx
 
 FOLDER = "application/vnd.google-apps.folder"
-FIELDS = "id,name,mimeType,createdTime,modifiedTime,version,md5Checksum,size,parents,trashed,capabilities(canDownload)"
+FIELDS = "id,name,description,mimeType,createdTime,modifiedTime,version,md5Checksum,size,parents,trashed,capabilities(canDownload)"
 EXPORTS = {
     "application/vnd.google-apps.document": ("text/plain", ".txt"),
     "application/vnd.google-apps.presentation": ("application/pdf", ".pdf"),

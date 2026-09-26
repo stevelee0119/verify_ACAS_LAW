@@ -69,7 +69,7 @@ def idf(df, total):
 def query_profile(text, document_frequency, total_chunks):
     """Weighted key terms of the checked document. Terms absent from the corpus are weighted like
     a term seen once, so a document about an unrelated subject keeps most of its weight unmatched."""
-    counts = Counter(tokens(text))
+    counts = Counter(query_tokens(text))
     weights = {}
     for term, count in counts.items():
         df = document_frequency.get(term, 0)
@@ -78,6 +78,32 @@ def query_profile(text, document_frequency, total_chunks):
         weights[term] = (1 + math.log(count)) * idf(max(df, 1), max(total_chunks, 1))
     top = sorted(weights.items(), key=lambda kv: (-kv[1], kv[0]))[:QUERY_TERMS]
     return dict(top)
+
+
+QUERY_NOISE = frozenset("으로 에서 관한 관하여 대하여 따라 위한 위한 것은 되는 하는 있습니다 합니다 원고 피고 제호 호증".split())
+
+
+def query_text(text):
+    text = re.sub(r"(?:갑|을|병|정)\s*제?\s*\d+(?:\s*[,~]\s*\d+)*\s*호증(?:의\s*\d+)?", " ", text)
+    text = re.sub(r"\d[\d,.]*\s*(?:원|년|월|일|%)(?:정)?", " ", text)
+    return text
+
+
+def query_tokens(text):
+    return [term for term in tokens(query_text(text)) if term not in QUERY_NOISE and not term.isdigit()]
+
+
+def metadata_priority(item, text):
+    """Ordering signal only. A matching title never bypasses the body relevance gate."""
+    words = Counter(re.findall(r"[가-힣]{3,}|[a-zA-Z]{3,}", query_text(text[:100000]).lower()))
+    name = (item.get("folder_path", "") + " " + base_name(item.get("name")) + " " +
+            str(item.get("description") or "")[:2000]).lower()
+    matches = [word for word, _ in words.most_common(80)
+               if word not in QUERY_NOISE and word in name]
+    score = sum((1 + math.log(words[word])) * len(word) for word in matches)
+    if score:
+        score += 2 if re.search(r"업무편람|가이드북|사안처리|매뉴얼|지침|해설|질의회신|판례집", name) else 0
+    return {"score": round(score, 3), "matched_terms": matches[:20]}
 
 
 def name_weights(eligible):

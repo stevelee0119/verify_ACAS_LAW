@@ -72,6 +72,10 @@ def review_document(result, library, router, context, pii):
     document = mask(document)
     sources = [{**source, "text": mask(source["text"]), "title": mask(source["title"])} for source in hits]
     review["sources"] = sources
+    review["coverage"] = selection.get("coverage")
+    if selection["decision"] == "INCOMPLETE_COVERAGE":
+        review.update(status="INCOMPLETE_COVERAGE", reason="RELEVANT_REFERENCES_NOT_FULLY_READ")
+        return review
     if selection["reason"] == "NO_ELIGIBLE_REFERENCE":
         # Nothing could be read from Drive: that is an unfinished check, not "no relevant material".
         review["reason"] = "NO_READABLE_DRIVE_REFERENCE"
@@ -116,6 +120,12 @@ def report_lines(run_result):
              "검색 기반 AI 참고 의견이며 공식 출처 확인, AI 작성 여부, 위조 여부 판정을 대체하지 않는다."]
     for issue in library.get("issues", [])[:20]:
         lines.append(f"미처리 자료: {issue.get('name', issue.get('file_id', 'Drive'))} / {issue.get('reason')}")
+    for item in library.get("inventory", [])[:100]:
+        if item.get("status") in ("SELECTED_PENDING", "UNAVAILABLE", "PARSE_FAILED", "INDEXED_PARTIAL"):
+            lines.append(f"미검토·부분처리: {item.get('folder_path', '')}/{item.get('name')} / "
+                         f"{item.get('status')} / {item.get('reason')} (자동 백그라운드 작업 아님)")
+    if len(library.get("inventory", [])) > 100:
+        lines.append("자료별 처리 기록은 앞 100건만 표시했다. 전체 기록은 결과 JSON에 보존되어 있다.")
     for group in library.get("duplicates", [])[:20]:
         copies = ", ".join(f"{c['folder_path']}/{c['name']}".lstrip("/") for c in group["delete_candidates"])
         lines.append(f"중복 사본(삭제 후보): {copies} — 보존: {group['keep']['folder_path']}/{group['keep']['name']}")
@@ -124,7 +134,8 @@ def report_lines(run_result):
         used = "Drive 자료 활용" if review.get("drive_used") else "Drive 자료 미활용"
         lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {used} / {review.get('reason', '')}")
         for source in review.get("sources", []):
-            lines.append(f"{source['source_id']}: {source['title']} / {source['page']}쪽 / "
+            location = f"{source['page']}쪽" if source.get("page_numbers_reliable", True) else f"텍스트 구간 {source['page']}(원본 쪽 미확인)"
+            lines.append(f"{source['source_id']}: {source['title']} / {location} / "
                          f"수정 {source['modified_time']} / SHA-256 {source['sha256']} / {source['url']}")
         for item in review.get("observations", []):
             lines.append(f"문서: {item['claim_quote']}\n근거 {item['source_id']}: {item['source_quote']}\n"

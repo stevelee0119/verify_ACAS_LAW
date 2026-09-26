@@ -360,16 +360,7 @@ class VerificationPipeline:
         from packages.rag_engine.review import review_document
 
         references = ReferenceLibrary(self.settings, check=check or (lambda: None),
-            notify=lambda done, total: emit(JobState.VERIFYING, f"Drive 참고자료 확인 {done}/{total}건", 0.0))
-        if self.settings.rag_drive_folder_id:
-            emit(JobState.VERIFYING, "Drive 참고자료 변경·접근 권한 확인", 0.0)
-            with manifest.stage("reference_sync", [], inputs=0, unit="참고자료") as stage:
-                references.sync()
-                stage.inputs = references.summary["files_seen"]
-                stage.note = references.summary["status"]
-                if references.summary["status"] != "READY":
-                    stage.error = "참고자료 전체 동기화·읽기를 완료하지 못함"
-
+            notify=lambda done, total: emit(JobState.VERIFYING, f"Drive 참고자료 확인 {done}/{total}건", 0.85))
         total = max(1, len(documents))
         for index, document in enumerate(documents):
             self._execution_document = document.document_id
@@ -377,22 +368,6 @@ class VerificationPipeline:
             try:
                 document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
                                                      source_run_id=run_id, run_inputs=documents, manifest=manifest)
-                if self.settings.rag_drive_folder_id:
-                    emit(JobState.VERIFYING, f"{document.filename} Drive 근거 검색·대조", base + 0.85 / total)
-                    with manifest.stage("reference_review", [], inputs=1, unit="문서",
-                                        document_id=document.document_id) as stage:
-                        try:
-                            review = review_document(document_result, references, self.router, context, pii)
-                        except Exception as exc:
-                            review = {"status": "UNVERIFIED", "reason": "REFERENCE_REVIEW_FAILED", "advisory_only": True,
-                                      "drive_used": False, "error": type(exc).__name__}
-                            document_result.engine_data["rag"] = review
-                        stage.note = review["status"]
-                        # "No relevant Drive material" is an outcome, not an unfinished check.
-                        if review["status"] not in ("ADVISORY_REVIEWED", "NOT_RELEVANT"):
-                            stage.skip_reason = review["reason"]
-                            document_result.unverified_items.append({"kind": "reference_review",
-                                "document_id": document.document_id, "reason": "Drive 참고자료 AI 대조 미완료: " + review["reason"]})
                 result.documents.append(document_result)
             except Exception as exc:  # 문서 하나의 실패가 Job 전체를 실패시키지 않는다
                 result.errors.append(f"{document.filename}: {exc}")
@@ -401,6 +376,37 @@ class VerificationPipeline:
                                    warnings=[f"처리 실패: {exc}"], unverified_items=[{
                                        "kind": "document", "document_id": document.document_id, "reason": "처리 실패"}])
                 )
+
+        if self.settings.rag_drive_folder_id:
+            from .sanitized_input import sanitized_reading_text
+            # Build priorities only after extraction and injection scanning, across every input document.
+            query = "\n".join(sanitized_reading_text(d.normalized, d.findings)[0][:12000]
+                              for d in result.documents if d.normalized)
+            query += "\n" + "\n".join(context.requested_issues)
+            emit(JobState.VERIFYING, "Drive 전수 목록·문서 주제별 우선 자료 확인", 0.85)
+            with manifest.stage("reference_sync", [], inputs=0, unit="참고자료") as stage:
+                references.sync(query=query)
+                stage.inputs = references.summary["files_seen"]
+                stage.note = references.summary["status"]
+                if references.summary["status"] != "READY":
+                    stage.error = "참고자료 전체 동기화·읽기를 완료하지 못함"
+            for document_result in result.documents:
+                self._execution_document = document_result.document_id
+                emit(JobState.VERIFYING, f"{document_result.filename} Drive 근거 검색·대조", 0.85)
+                with manifest.stage("reference_review", [], inputs=1, unit="문서",
+                                    document_id=document_result.document_id) as stage:
+                    try:
+                        review = review_document(document_result, references, self.router, context, pii)
+                    except Exception as exc:
+                        review = {"status": "UNVERIFIED", "reason": "REFERENCE_REVIEW_FAILED", "advisory_only": True,
+                                  "drive_used": False, "error": type(exc).__name__}
+                        document_result.engine_data["rag"] = review
+                    stage.note = review["status"]
+                    if review["status"] not in ("ADVISORY_REVIEWED", "NOT_RELEVANT"):
+                        stage.skip_reason = review["reason"]
+                        document_result.unverified_items.append({"kind": "reference_review",
+                            "document_id": document_result.document_id,
+                            "reason": "Drive 참고자료 AI 대조 미완료: " + review["reason"]})
 
         self._execution_document = None
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------

@@ -99,6 +99,8 @@ class Settings:
     rag_drive_folder_id: str = field(default_factory=lambda: os.getenv("LV_RAG_DRIVE_FOLDER_ID", "").strip())
     rag_sync_seconds: int = field(default_factory=lambda: max(1, min(600, int(os.getenv("LV_RAG_SYNC_SECONDS", "120")))))
     rag_max_files: int = field(default_factory=lambda: max(1, min(5000, int(os.getenv("LV_RAG_MAX_FILES", "1000")))))
+    rag_inventory_max_files: int = field(default_factory=lambda: max(1, min(100000, int(os.getenv("LV_RAG_INVENTORY_MAX_FILES", "20000")))))
+    rag_metadata_first: bool = field(default_factory=lambda: os.getenv("LV_RAG_METADATA_FIRST", "1") == "1")
     rag_download_mb: int = field(default_factory=lambda: max(1, min(512, int(os.getenv("LV_RAG_DOWNLOAD_MB", "128")))))
     source_lookup_budget_seconds: float = field(
         default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_BUDGET_SECONDS", "120")))
@@ -138,7 +140,7 @@ class Settings:
     # 공급자 수만큼 호출 비용이 늘어나므로 예산 설정과 함께 본다.
     llm_cross_check: str = field(
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
-    rule_version: str = "2026.09.26.7"
+    rule_version: str = "2026.09.27.1"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

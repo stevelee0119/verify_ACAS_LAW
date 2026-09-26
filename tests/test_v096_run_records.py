@@ -38,7 +38,7 @@ def test_pipeline_manifest_always_has_health(tmp_path, registry):
     path = make_docx(tmp_path / "document.docx", ["손해배상 청구에 관한 준비서면이다."])
     pipeline = VerificationPipeline(registry=registry)
     pipeline.settings = replace(get_settings(), rag_drive_folder_id="", allow_network=False)
-    result = pipeline.run("health-off", ProjectContext("p", profile=VerificationProfile.QUICK),
+    result = pipeline.run("health-off", ProjectContext("health-off-isolated", profile=VerificationProfile.QUICK),
                           [DocumentInput("doc", str(path), path.name, sha256=sha256_file(path))])
     health = result.run_manifest["reference_library"]["health"]
     assert health["enabled"] is False and health["disabled_reason"] == "LV_RAG_DRIVE_FOLDER_ID_NOT_SET"
