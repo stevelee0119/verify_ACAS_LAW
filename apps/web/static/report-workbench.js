@@ -46,7 +46,8 @@ const reportWorkbench = (() => {
     }
   }
   async function finished(pid, job) {
-    if(state.project?.id===pid)await loadReports();
+    // 상단 버튼으로 만든 보고서는 보고서 탭의 내려받기 목록에서 바로 보이게 한다.
+    if(state.project?.id===pid){switchTab("reports");await loadReports();}
     const failed=Object.entries(job.artifacts || {}).filter(([,artifact])=>artifact.error).map(([fmt])=>fmt.toUpperCase());
     toast(failed.length?`보고서 초안을 만들었지만 ${failed.join(", ")} 형식은 생성하지 못했습니다.`:"보고서 초안을 생성했습니다.");
   }

@@ -300,7 +300,10 @@ function renderProject() {
   operationsUI.renderJobControls();
   projectTools.renderControls();
   $("reportScope").textContent = state.run ? `${dateText(state.run.started_at)} · 자료 ${state.run.document_ids.length}개 · ${label(state.run.state)}${$("staleNotice").hidden?"":" · 변경 전 자료 기준"}` : "검증 결과가 없습니다.";
-  $("createReport").disabled = !["COMPLETED","PARTIAL_COMPLETED"].includes(state.run?.state);
+  // 보고서 생성은 상단 버튼 하나로 한다(보고서 탭은 내려받기 목록만 보여 준다).
+  const reportReady = ["COMPLETED","PARTIAL_COMPLETED"].includes(state.run?.state);
+  $("reportBtn").disabled = !reportReady;
+  $("reportBtn").title = reportReady ? "완료된 검증 결과로 검토 보고서를 생성합니다" : "검증이 끝나면 보고서를 생성할 수 있습니다";
 }
 
 function renderSummary() {
@@ -1557,8 +1560,7 @@ $("documentForm").onsubmit = action(async e => {
 });
 for (const id of ["verifyBtn", "reverify"]) $(id).onclick = action(verify);
 for (const id of ["findingSearch", "reviewFilter", "severityFilter"]) $(id).addEventListener("input", renderFindings);
-$("reportBtn").onclick = () => switchTab("reports");
-$("createReport").onclick = action(createReport);
+$("reportBtn").onclick = action(createReport);
 $("refreshAudit").onclick = action(loadAudit);
 $("prevPage").onclick = action(async () => {
   state.page--;

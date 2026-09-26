@@ -152,10 +152,14 @@ class OpenAIProvider(LLMProvider):
         quirks = self._quirks.setdefault(self.config.model, set())
 
         def body() -> Dict[str, Any]:
+            system = request.system
+            # json_object 형식은 메시지 어딘가에 'json'이라는 단어가 있어야 받아 준다(없으면 HTTP 400).
+            if request.schema and "json" not in (system + request.user).lower():
+                system += "\nRespond with a single JSON object."
             payload: Dict[str, Any] = {
                 "model": self.config.model,
                 "messages": [
-                    {"role": "system", "content": request.system},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": request.user},
                 ],
             }

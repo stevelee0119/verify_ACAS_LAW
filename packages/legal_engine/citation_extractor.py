@@ -80,7 +80,8 @@ CONTINUED_ARTICLE_RE = re.compile(
     r"\s*(?:,|및|또는|와|과|·|ㆍ|(?:은|는)\s*[^.?!。\n「」『』,]{1,90},)\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?)")
 # "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
-SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?$")
+# "동법 시행령"·"같은 법 시행규칙"은 앞서 인용한 법률의 하위 법령이다.
+SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?(?:\s*(?P<sub>시행령|시행규칙))?$")
 # 앞 인용의 조를 가리키는 표현(추가지시 G3): "같은 조 제2항", "동조 제2항", "위 조항", 그리고 조 없이 쓴 "제2항".
 SAME_ARTICLE_REF_RE = re.compile(
     # '같은 조건'·'위조한'·'동조하였다'는 조 인용이 아니다. 조(항) 뒤가 공백·문장부호·조사일 때만 잡는다.
@@ -344,13 +345,16 @@ def extract_from_text(
             # "같은 법 제60조"는 앞서 인용한 법령을 가리킨다. 앞 법령이 없으면 식별할 수 없으므로 뺀다.
             if previous_law is None:
                 continue
-            law_name, start = previous_law, m.start("law") + same_law.start()
+            base = re.sub(r"\s*시행(?:령|규칙)$", "", previous_law)
+            law_name = f"{base} {same_law.group('sub')}" if same_law.group("sub") else previous_law
+            start = m.start("law") + same_law.start()
         else:
             law_name = canonical_law_name(raw_law)
             start = _law_name_start(m)
         if len(law_name) < 2:
             continue
-        previous_law = law_name
+        # "동법 시행령"을 읽은 뒤에도 다음 "동법"은 모법을 가리킨다.
+        previous_law = base if same_law and same_law.group("sub") else law_name
         if law_name.endswith(ADMIN_RULE_KINDS):
             # 이름이 훈령·예규·고시·지침으로 끝나면 법령이 아니라 행정규칙이다.
             kind = next(k for k in ADMIN_RULE_KINDS if law_name.endswith(k))

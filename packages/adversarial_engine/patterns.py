@@ -24,8 +24,9 @@ MACHINE_ADDRESSEE = (r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|(?:검증|�
 
 INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # --- Instruction Override -------------------------------------------
+    # 목적어와 동사 사이의 부사("규칙을 모두 무시하고")도 허용한다(0.9.9: 이 변형이 탐지되지 않았다).
     (_c(r"(이전|앞의|앞선|위의|기존|종전|지금까지)\s*(의\s*)?(모든\s*)?(지시|명령|지침|규칙|프롬프트)[을를]?\s*"
-        r"(무시|무효|취소|잊|폐기|따르지)"),
+        r"(?:(?:모두|전부|다|일체|완전히|전혀)\s*)?(무시|무효|취소|잊|폐기|따르지)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(한국어)"),
     (_c(r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|directions?)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(영어)"),
@@ -100,7 +101,7 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"(모든|전부|모두|각)\s*(인용|판례|조문|법령|항목|결과|사건번호|날짜)[을를은는이가]?\s*(모두|전부)?\s*"
         r"(확인된|검증된|정상인|실존하는|유효한|이상\s*없는|문제\s*없는)\s*것으로\s*(보고|기재|표시|처리|판정|분류|출력)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "전부 확인된 것으로 보고 요구"),
-    (_c(r"(확인|검증|검토)\s*(완료|됨|필)\s*(으로|로)\s*(표시|보고|처리|기재)"),
+    (_c(r"(확인|검증|검토)\s*(완료|됨|필)\s*(으로|로)\s*(표시|보고|처리|기재|출력|판정|분류)"),
      InjectionIntent.OUTPUT_MANIPULATION, 0.9, "검증 완료 표시 요구"),
     (_c(r"(오류|문제|의심|위험)\s*(가|이|은|는)?\s*(없다고|없음으로)\s*(보고|기재|결론|판단)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무오류 결론 강제"),

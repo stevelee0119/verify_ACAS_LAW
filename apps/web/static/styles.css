@@ -352,12 +352,12 @@ main {
   grid-template-columns: repeat(4, minmax(0, 1fr));
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  margin: 24px 0;
+  margin: 16px 0;
   background: white
 }
 
 .metric {
-  padding: 18px 20px;
+  padding: 9px 14px;
   border-right: 1px solid var(--line)
 }
 
@@ -367,13 +367,14 @@ main {
 
 .metric strong {
   display: block;
-  font-size: 26px;
-  margin-top: 8px;
+  font-size: 18px;
+  line-height: 1.3;
+  margin-top: 2px;
   overflow-wrap: anywhere
 }
 
 .metric span {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
   color: var(--muted)
 }
@@ -866,7 +867,7 @@ table {
   }
 
   .summary .metric {
-    padding: 15px 12px
+    padding: 8px 10px
   }
 
   .tabs {
@@ -962,7 +963,7 @@ table {
   }
 
   .metric strong {
-    font-size: 22px
+    font-size: 16px
   }
 
   .tabs {
@@ -1215,17 +1216,17 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 .metric.gate-human_review_required strong { color: var(--warn, #9a6700); }
 .metric.gate-block strong { color: var(--danger, #b42318); }
 /* 판정 사유는 펼친 채로, 본문보다 크게 보인다. */
-.gate-reasons { grid-column: 1 / -1; padding: 20px 22px 18px; border-top: 1px solid var(--line); }
-.gate-reasons h2 { margin: 0 0 14px; font-size: 20px; line-height: 1.35; }
+.gate-reasons { grid-column: 1 / -1; padding: 12px 16px 6px; border-top: 1px solid var(--line); }
+.gate-reasons h2 { margin: 0 0 8px; font-size: 18px; line-height: 1.35; }
 .gate-reasons.gate-block h2 { color: var(--danger, #b42318); }
 .gate-reasons.gate-human_review_required h2,
 .gate-reasons.gate-pass_with_warnings h2 { color: var(--warn, #9a6700); }
-.gate-group { border-left: 4px solid var(--line); padding: 2px 0 2px 16px; margin: 0 0 16px; }
+.gate-group { border-left: 4px solid var(--line); padding: 2px 0 2px 16px; margin: 0 0 10px; }
 .gate-group-block { border-left-color: var(--danger, #b42318); }
 .gate-group-review { border-left-color: var(--warn, #9a6700); }
-.gate-group h3 { margin: 0 0 8px; font-size: 17px; }
+.gate-group h3 { margin: 0 0 4px; font-size: 17px; }
 .gate-group ol { margin: 0; padding-left: 1.4em; }
-.gate-group li { font-size: 16px; line-height: 1.65; margin-bottom: 6px; overflow-wrap: anywhere; }
+.gate-group li { font-size: 16px; line-height: 1.6; margin-bottom: 4px; overflow-wrap: anywhere; }
 .gate-note { margin: 4px 0 0; font-size: 15px; line-height: 1.6; color: var(--muted); }
 
 /* 인증 실패 사유. 고정 문구만으로는 원인을 알 수 없어 서버 안내를 함께 보인다. */
@@ -1236,7 +1237,7 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 /* 눌러서 세부 설명을 여는 지표 */
 .metric-explain { cursor: pointer; }
 .metric-explain:hover, .metric-explain:focus-visible { background: #f4f8f6; outline: none; }
-.metric-hint { display: block; margin-top: 4px; font-size: 12px; color: var(--green, #1f6b52); }
+.metric-hint { display: block; margin-top: 1px; font-size: 11px; color: var(--green, #1f6b52); }
 .metric-explainer h3 { font-size: 16px; margin: 16px 0 6px; }
 .metric-explainer p { line-height: 1.65; }
 .unverified-cause { border-left: 3px solid var(--warn, #9a6700); padding: 2px 0 2px 12px; margin: 10px 0; }

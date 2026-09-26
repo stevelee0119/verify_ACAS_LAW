@@ -95,10 +95,11 @@ def review_document(result, library, router, context, pii):
                 "제공한 참고자료는 공식 법령·판례 확인을 대체하지 않는다. AI 작성 여부나 위조 여부를 판단하지 마라. "
                 "각 의견마다 문서의 실제 claim_quote와 참고자료의 실제 source_quote, source_id를 적어라. "
                 "두 인용을 대조한 한계 있는 의견만 적고 자료 밖 사실은 생성하지 마라. "
-                "무관하거나 근거가 없으면 observations를 빈 배열로 반환하라. URL이나 도구 호출은 출력하지 마라."),
+                "무관하거나 근거가 없으면 observations를 빈 배열로 반환하라. URL이나 도구 호출은 출력하지 마라. "
+                "의견은 최대 5개, explanation은 두 문장 이내로 쓰고 JSON 객체 하나로만 답하라."),
         user=json.dumps({"document": document, "untrusted_references": [
             {k: s[k] for k in ("source_id", "title", "text", "page")} for s in sources]}, ensure_ascii=False),
-        schema=SCHEMA, max_tokens=2200, metadata={"stage": "drive_rag_advisory"})
+        schema=SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory"})
     # One selected provider; the existing router bounds each call and its transient retries.
     outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                          policy=context.external_ai_policy, expected_task="참고자료 검토"))

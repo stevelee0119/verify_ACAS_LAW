@@ -56,6 +56,10 @@ def isolated_extract(data, filename, mime, *, directory, timeout):
         return json.loads(output.read_text(encoding="utf-8"))
 
 
+def stale_quarantine(parsed):
+    return parsed.get("reason") == "REFERENCE_QUARANTINED" and "scan_findings" not in parsed
+
+
 class ReferenceLibrary:
     def __init__(self, settings, *, check=lambda: None, notify=lambda done, total: None,
                  client_factory=DriveClient, extractor=isolated_extract):
@@ -209,8 +213,14 @@ class ReferenceLibrary:
                 found = search(folder_ids, words)
             except ReferenceError as exc:
                 # 본문 검색을 쓸 수 없으면 이름 점수만으로 고른다(열기 전 선정의 보조 수단일 뿐이다).
-                info["fulltext"].append({"terms": words, "error": str(exc)})
-                if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_429", "SYNC_BUDGET_EXHAUSTED"):
+                entry = {"terms": words, "error": str(exc)}
+                if getattr(client, "last_error_reason", ""):
+                    entry["reason"] = client.last_error_reason
+                info["fulltext"].append(entry)
+                if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_403", "DRIVE_HTTP_429", "DRIVE_FULLTEXT_FORBIDDEN",
+                                "SYNC_BUDGET_EXHAUSTED"):
+                    # 같은 거절을 문서마다 반복하지 않는다(0.9.8 실제 실행: 403 5회).
+                    info["fulltext_available"] = False
                     break
                 continue
             info["fulltext"].append({"terms": words, "files": len(found)})
@@ -240,7 +250,8 @@ class ReferenceLibrary:
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
         audit = {item["file_id"]: item for item in self.summary["inventory"]}
         chosen = (lambda file_id: True) if gate is None else (lambda file_id: gate[file_id]["selected"])
-        ordered = sorted(items, key=lambda i: (not chosen(i["id"]), -audit[i["id"]]["metadata"]["score"],
+        ordered = sorted(items, key=lambda i: (not chosen(i["id"]), gate[i["id"]].get("rank", 0) if gate else 0,
+            -audit[i["id"]]["metadata"]["score"],
             -(gate[i["id"]]["score"] if gate else 0), i["id"] in skip, i["id"] not in cached,
             int(i.get("size") or 0), i["id"]))
         for index, item in enumerate(ordered):
@@ -268,6 +279,8 @@ class ReferenceLibrary:
                 folder_path = item.get("folder_path", "")
                 version = revision(item) + ":" + EXTRACTOR_VERSION
                 row = db.execute("SELECT payload FROM files WHERE id=? AND revision=?", (file_id, version)).fetchone()
+                if row and stale_quarantine(json.loads(row[0])):
+                    row = None                    # 예전 규칙(파일 전체 격리, 근거 미기록)의 결과는 다시 읽는다
                 if row:
                     parsed = json.loads(row[0])
                     self.summary["files_reused"] += 1
@@ -336,6 +349,9 @@ class ReferenceLibrary:
                              if parsed.get("chunk_count") else "PARSE_FAILED",
                              reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
                              read_pages=parsed.get("read_pages"))
+                for key in ("excluded_pages", "scan_findings"):
+                    if parsed.get(key):
+                        entry[key] = parsed[key]
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
                 entry["body_extraction_scope"] = parsed.get("body_extraction_scope")
                 if parsed.get("chunk_count"):
@@ -357,8 +373,9 @@ class ReferenceLibrary:
                     raise
                 self.summary["issues"].append({"file_id": file_id, "name": item.get("name"), "reason": str(exc)})
                 if str(exc) == "SYNC_BUDGET_EXHAUSTED":
-                    diagnostics["deferred"] = len(ordered) - index
-                    self.summary["issues"].append({"reason": "FILES_DEFERRED", "count": len(ordered) - index})
+                    # 미룬 파일 수는 열기로 한 후보 중 남은 것만 센다(선정되지 않은 파일은 미룬 것이 아니다).
+                    diagnostics["deferred"] = sum(1 for later in ordered[index:] if chosen(later["id"]))
+                    self.summary["issues"].append({"reason": "FILES_DEFERRED", "count": diagnostics["deferred"]})
                     for later in ordered[index + 1:]:
                         if chosen(later["id"]):
                             audit[later["id"]].update(status="SELECTED_PENDING", reason="SYNC_BUDGET_EXHAUSTED")
@@ -386,8 +403,10 @@ class ReferenceLibrary:
         library is not used for the document."""
         log = {"decision": "NOT_USED", "reason": "", "thresholds": relevance.thresholds(),
                "corpus_chunks": 0, "query_terms": [], "candidates": [], "files_selected": 0, "sources": []}
+        # 관련 있어 보이는데 읽지 못한 파일이 있으면 '관련 자료 없음'으로 단정하지 않는다. 일부 쪽만 못 읽은
+        # 파일(INDEXED_PARTIAL)은 이미 색인돼 대조에 들어갔으므로 미검토로 세지 않는다.
         pending = [item for item in self.summary.get("inventory", [])
-                   if item["status"] not in ("INDEXED", "DUPLICATE_REUSED", "NOT_SELECTED_METADATA")
+                   if item["status"] not in ("INDEXED", "INDEXED_PARTIAL", "DUPLICATE_REUSED", "NOT_SELECTED_METADATA")
                    and (relevance.metadata_priority(item, text)["score"] > 0
                         or relevance.name_gate_passes(getattr(self, "_gate_weights", {}).get(item["file_id"], {}), text))]
         log["coverage"] = "INCOMPLETE_COVERAGE" if pending else "CHECKED_INDEXED_CORPUS"

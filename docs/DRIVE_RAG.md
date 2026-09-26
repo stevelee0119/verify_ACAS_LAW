@@ -61,6 +61,14 @@ UNAVAILABLE result; they do not silently disable checks.
   kept copy is downloaded and indexed. If the kept copy is unusable, a copy is used.
   Copy markers such as "…의 사본", " (1)" and "Copy of" are ignored when reading a
   file's format, so copies keep their PDF/HWP/TXT format.
+- Instruction-like text in a reference: pages carrying a HIGH/CRITICAL machine-instruction
+  finding are excluded and the rest of the file is indexed (`REFERENCE_INSTRUCTION_PAGES_EXCLUDED`,
+  `excluded_pages`) when the file has at least 10 pages and the flagged pages are at most 2%
+  of them (minimum 1, maximum 3). Otherwise, or when the signal cannot be tied to a page
+  (metadata, hidden layer, encoding), the whole file is quarantined (`REFERENCE_QUARANTINED`).
+  Either way `scan_findings` (type, severity, page, path, intents, 60-character excerpt, first
+  5) is logged in the inventory entry. Cached whole-file quarantines from earlier versions,
+  which carried no evidence, are re-read once.
 - Cache extracted chunks and file SHA-256 under `LV_STORAGE_ROOT/reference-cache`.
   Removed files are deleted from this cache after a successful complete listing.
   Revoked, moved, changed-but-unreadable files are excluded even when cached.
@@ -100,6 +108,19 @@ without downloads, while the name/path gate keeps the rule transparent. An unexp
 defect in the selection step is recorded as `metadata_gate.error` with
 `fallback: ALL_FILES_BY_PRIORITY` so Drive review is not stopped. A sync without a query
 (`scripts.check_drive_references`) still indexes every file to warm the cache.
+
+Opening order is per document: each document's candidates are ranked by their own name
+score, and a file's `rank` is its best position for any document. Every document's first
+candidate is opened before any document's second, so a short sync budget is not spent on
+one document. `diagnostics.deferred` counts only selected candidates left for a later run.
+
+Full-text search refusals: Drive may refuse `fullText contains` (HTTP 403), notably for
+API-key access. A refused multi-folder query is retried once folder by folder; if that is
+also refused the run records `DRIVE_FULLTEXT_FORBIDDEN`, sets `fulltext_available: false`
+and stops further full-text calls (names and paths still select files). The Drive error
+reason code (for example `insufficientFilePermissions`) is logged per call as `reason`;
+messages, URLs and keys are not logged. A service account with the folder shared to it is
+the credential mode in which full-text search is expected to work (unverified here).
 
 `diagnostics.metadata_gate` records thresholds, full-text searches (terms, file count or
 error), selected and not-selected counts and time; each `inventory` entry carries its

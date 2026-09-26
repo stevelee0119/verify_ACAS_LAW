@@ -20,6 +20,17 @@ EXPORTS = {
 }
 
 
+def error_reason(response):
+    """Drive 오류 본문에서 사유 코드만 꺼낸다(예: insufficientFilePermissions). 메시지·URL·키는 남기지 않는다."""
+    try:
+        body = response.read()[:4096]
+        error = json.loads(body.decode("utf-8", "replace")).get("error", {})
+        reason = (error.get("errors") or [{}])[0].get("reason") or error.get("status") or ""
+    except Exception:
+        return ""
+    return reason if re.fullmatch(r"[A-Za-z_]{1,48}", str(reason)) else ""
+
+
 class ReferenceError(Exception):
     """Only stable codes, never HTTP bodies, URLs with keys, or credential details."""
 
@@ -69,6 +80,8 @@ class DriveClient:
             "service_account" if os.getenv("LV_DRIVE_SERVICE_ACCOUNT_FILE") else
             "api_key" if os.getenv("LV_DRIVE_API_KEY") else "none")
         self.folders = {}
+        self.last_error_reason = ""
+        self.fulltext_batch = 40
 
     def _record(self, path, params, status, started, size, error=None):
         operation = ("list" if path == "files" else "export" if path.endswith("/export")
@@ -125,6 +138,7 @@ class DriveClient:
         return self.headers
 
     def read(self, path, params=None, *, max_bytes=4_000_000):
+        self.last_error_reason = ""
         headers = self._auth()
         started, status, content = time.monotonic(), None, bytearray()
         try:
@@ -132,6 +146,7 @@ class DriveClient:
                                   timeout=min(15, self.remaining())) as response:
                 status = response.status_code
                 if response.status_code != 200:
+                    self.last_error_reason = error_reason(response)
                     raise ReferenceError("DRIVE_HTTP_" + str(response.status_code))
                 for block in response.iter_bytes(65536):
                     self.remaining()
@@ -140,6 +155,8 @@ class DriveClient:
                     content.extend(block)
         except ReferenceError as exc:
             self._record(path, params, status, started, len(content), str(exc))
+            if status not in (None, 200) and self.calls and self.last_error_reason:
+                self.calls[-1]["reason"] = self.last_error_reason
             raise
         except httpx.HTTPError:
             self._record(path, params, status, started, len(content), "DRIVE_NETWORK_ERROR")
@@ -206,22 +223,36 @@ class DriveClient:
         words = [t for t in terms if t][:5]
         if not folders or not words:
             return set()
-        found = set()
-        for start in range(0, len(folders), 40):
-            scope = " or ".join(f"{quoted(f)} in parents" for f in folders[start:start + 40])
-            match = " and ".join(f"fullText contains {quoted(w)}" for w in words)
+        match = " and ".join(f"fullText contains {quoted(w)}" for w in words)
+        found, start = set(), 0
+        while start < len(folders):
+            batch = folders[start:start + self.fulltext_batch]
+            scope = " or ".join(f"{quoted(f)} in parents" for f in batch)
             token, tokens = None, set()
-            while True:
-                params = {"q": f"({scope}) and ({match}) and trashed = false", "fields": "nextPageToken,files(id)",
-                          "pageSize": 100, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
-                if token:
-                    params["pageToken"] = token
-                page = json.loads(self.read("files", params))
-                found.update(valid_id(f["id"]) for f in page.get("files", []))
-                token = page.get("nextPageToken")
-                if not token or len(found) >= max_results or token in tokens:
-                    break
-                tokens.add(token)
+            try:
+                while True:
+                    params = {"q": f"({scope}) and ({match}) and trashed = false", "fields": "nextPageToken,files(id)",
+                              "pageSize": 100, "supportsAllDrives": "true", "includeItemsFromAllDrives": "true"}
+                    if token:
+                        params["pageToken"] = token
+                    page = json.loads(self.read("files", params))
+                    found.update(valid_id(f["id"]) for f in page.get("files", []))
+                    token = page.get("nextPageToken")
+                    if not token or len(found) >= max_results or token in tokens:
+                        break
+                    tokens.add(token)
+            except ReferenceError as exc:
+                # 여러 폴더를 한 질의로 묶은 검색만 거절될 수 있다. 폴더 하나씩으로 한 번 줄여 보고, 그래도
+                # 거절되면 이 인증 방식에서는 본문 검색을 쓸 수 없는 것으로 본다.
+                if str(exc) != "DRIVE_HTTP_403":
+                    raise
+                if len(batch) > 1:
+                    self.fulltext_batch = 1
+                    continue
+                raise ReferenceError("DRIVE_FULLTEXT_FORBIDDEN") from None
+            start += len(batch)
+            if len(found) >= max_results:
+                break
         return found
 
     def download(self, item, *, max_bytes):

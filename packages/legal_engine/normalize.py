@@ -127,6 +127,15 @@ LAW_ALIASES = {
     "근기법": "근로기준법",
     # 공식 제명은 '대한민국헌법'(https://www.law.go.kr/법령/대한민국헌법). 서면은 흔히 '헌법'으로 쓴다.
     "헌법": "대한민국헌법",
+    # 국가법령정보센터가 표시하는 공식 약칭. 법령명 검색(lawSearch.do, section=lawNm)은 약칭으로 찾지 못한다
+    # (0.9.8 실제 실행: '국가계약법' 조회 결과 0건).
+    "국가계약법": "국가를 당사자로 하는 계약에 관한 법률",
+    "지방계약법": "지방자치단체를 당사자로 하는 계약에 관한 법률",
+    "공정거래법": "독점규제 및 공정거래에 관한 법률",
+    "성폭력처벌법": "성폭력범죄의 처벌 등에 관한 특례법",
+    "특정범죄가중법": "특정범죄 가중처벌 등에 관한 법률",
+    "정보통신망법": "정보통신망 이용촉진 및 정보보호 등에 관한 법률",
+    "학교폭력예방법": "학교폭력예방 및 대책에 관한 법률",
 }
 
 
@@ -163,7 +172,12 @@ LAW_NAME_LINKS = {"관한", "대한", "위한", "따른", "의한", "관하는",
 # 법령명 안 토큰이 이 글자로 끝나면 뒤 토큰에 이어진다(공공기관의 / 정보공개에 / 자본시장과).
 LAW_NAME_JOINING_TAILS = set("의에과와")
 # 이 글자로 끝나는 토큰은 문장 성분(주어·목적어·부사어·어미)이다. 법령명은 여기서 끊는다.
-SENTENCE_TAILS = set("는은이가을를로서도만며고다면게해여니나요까야든데지")
+SENTENCE_TAILS = set("는은이가을를로서도만며고다면게해여니나요까야든데지써바")
+# 관형형 어미 '-한'으로 끝나는 서술어("기망한", "위반한"). 법령명 안의 '관한·대한·위한'은 LAW_NAME_LINKS가 먼저 받는다.
+PREDICATE_TAIL_RE = re.compile(r"[가-힣]{2,}한$")
+# 띄어쓰기 없이 서술어에 붙은 법령명: "기망한형법", "제출함으로써민법". 서술어 부분이 법령명 연결어로 끝나면
+# (…에관한법률, 대한민국헌법) 나누지 않는다.
+GLUED_PREDICATE_RE = re.compile(r"^(?P<pre>[가-힣]{2,}?(?:한|써))(?P<law>[가-힣]{1,20}(?:법률|법|령|규칙))$")
 
 
 def law_name_suffix(raw: str) -> str:
@@ -193,12 +207,17 @@ def law_name_suffix(raw: str) -> str:
         if token in LAW_NAME_LINKS or token[-1] in LAW_NAME_JOINING_TAILS:
             kept.insert(0, token)
             continue
-        if token[-1] in SENTENCE_TAILS or not re.fullmatch(r"[가-힣A-Za-z·]{2,}", token):
+        if token[-1] in SENTENCE_TAILS or not re.fullmatch(r"[가-힣A-Za-z·]{2,}", token) \
+                or PREDICATE_TAIL_RE.search(token):
             break
         kept.insert(0, token)  # 조사가 붙지 않은 명사(개인정보 보호법의 '개인정보', 처벌 등에 관한의 '처벌')
     while kept and (kept[0] in LAW_NAME_LINKS or kept[0][-1] in LAW_NAME_JOINING_TAILS) and len(kept) > 1 \
             and not _joins_forward(kept):
         kept.pop(0)
+    glued = GLUED_PREDICATE_RE.match(kept[0]) if len(kept) == 1 else None
+    if glued and not any(glued.group("pre").endswith(link) for link in LAW_NAME_LINKS) \
+            and " ".join(kept) not in LAW_ALIASES:
+        kept = [glued.group("law")]
     return " ".join(kept)
 
 

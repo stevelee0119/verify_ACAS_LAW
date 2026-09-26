@@ -259,8 +259,14 @@ def severity_for(classification: Classification, *, in_ocr_layer: bool = False) 
     if classification.label == AdversarialClass.BENIGN_CONTENT:
         return base
     # 권한·역할 전이나 판정값 조작 의도가 확인되면 최소 HIGH로 본다.
-    # 이런 문자열이 법률문서 본문에 우연히 들어갈 이유는 없다.
-    if any(i in ESCALATING_INTENTS for i in classification.intents):
+    # 다만 지시 무시·결론 지정 표현이 명령형도 아니고 보조 신호도 없으면 사건 서술일 수 있다
+    # ("피고는 종전 규칙을 무시하고 영업을 계속하였다"). 이런 단일 서술은 승격하지 않는다(0.9.9:
+    # 판례집 같은 참고자료가 파일째 격리되고 대조군 문서에 HIGH가 붙는 원인이었다).
+    intents = set(classification.intents)
+    narrative = (not classification.features.get("imperative")
+                 and not classification.features.get("corroborating_signals")
+                 and InjectionIntent.ROLE_OVERRIDE not in intents)
+    if intents & ESCALATING_INTENTS and not narrative:
         return max(base, Severity.HIGH, key=_severity_rank)
     return base
 

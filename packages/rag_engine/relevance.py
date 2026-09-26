@@ -238,17 +238,22 @@ def metadata_gate(items, queries, fulltext_hits=None):
     weights = gate_weights(items)
     per_query = [set(query_tokens(q)) for q in queries if q]
     fulltext_hits = fulltext_hits or {}
-    out = {}
+    out, per_file = {}, {}
+    texts = [q for q in queries if q]
     for item in items:
         file_id = item["id"]
         best, terms = 0.0, []
+        scores = []
         for document_terms in per_query:
             score, hits = gate_score(weights[file_id], document_terms)
+            scores.append(score)
             if (score, len(hits)) > (best, len(terms)):
                 best, terms = score, hits
         # 제목 단어 일치는 한글 단어가 맞을 때만 인정한다(영문 일반어 'system' 같은 우연 일치 방지).
-        priority = max((m["score"] for q in queries if q for m in [metadata_priority(item, q)]
-                        if any(re.match(r"[가-힣]", w) for w in m["matched_terms"])), default=0)
+        priorities = [m["score"] if any(re.match(r"[가-힣]", w) for w in m["matched_terms"]) else 0
+                      for m in (metadata_priority(item, q) for q in texts)]
+        priority = max(priorities, default=0)
+        per_file[file_id] = list(zip(scores, priorities))
         reasons = []
         if best >= GATE_MIN_SCORE and len(terms) >= GATE_MIN_TERMS:
             reasons.append("NAME_PATH_MATCH")
@@ -259,8 +264,19 @@ def metadata_gate(items, queries, fulltext_hits=None):
         out[file_id] = {"score": best, "terms": terms[:8], "fulltext": fulltext_hits.get(file_id, []),
                         "title_priority": priority, "selected": bool(reasons),
                         "reason": "+".join(reasons) or "NAME_PATH_NOT_RELATED"}
-    ranked = sorted((f for f in out if out[f]["selected"]),
-                    key=lambda f: (-(len(out[f]["fulltext"]) > 0), -out[f]["score"], -out[f]["title_priority"], f))
+    # 문서별 순위: 문서마다 자기 후보를 점수 순으로 줄 세우고, 파일의 순위는 가장 앞선 문서 기준이다.
+    # 여는 순서와 상한을 이 순위로 정하면 시간 예산이 한 문서의 후보에 몰리지 않는다(각 문서의 1순위부터 연다).
+    selected = [f for f in out if out[f]["selected"]]
+    for f in selected:
+        out[f]["rank"] = len(selected)
+    for index in range(len(texts)):
+        order = sorted((f for f in selected if per_file[f] and (per_file[f][index][0] > 0 or per_file[f][index][1] > 0
+                                                                or out[f]["fulltext"])),
+                       key=lambda f: (-(len(out[f]["fulltext"]) > 0), -per_file[f][index][0], -per_file[f][index][1], f))
+        for position, f in enumerate(order):
+            out[f]["rank"] = min(out[f]["rank"], position)
+    ranked = sorted(selected, key=lambda f: (out[f]["rank"], -(len(out[f]["fulltext"]) > 0), -out[f]["score"],
+                                             -out[f]["title_priority"], f))
     for file_id in ranked[GATE_MAX_CANDIDATES:]:
         out[file_id].update(selected=False, reason="CANDIDATE_LIMIT")
     return out
