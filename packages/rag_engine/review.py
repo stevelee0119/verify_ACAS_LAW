@@ -39,9 +39,9 @@ def grounded_observations(parsed, document, sources):
 
 def review_document(result, library, router, context, pii):
     review = {"status": "UNVERIFIED", "advisory_only": True, "source_quotes_validated": False,
-              "model_executed": False, "sources": [], "observations": [],
+              "model_executed": False, "drive_used": False, "sources": [], "observations": [],
               "snapshot_hash": library.summary["snapshot_hash"],
-              "reason": "", "document_truncated": False}
+              "reason": "", "document_truncated": False, "selection": None}
     result.engine_data["rag"] = review
     if result.quarantined or result.normalized is None:
         review.update(status="SKIPPED", reason="DOCUMENT_QUARANTINED_OR_UNREADABLE")
@@ -52,15 +52,25 @@ def review_document(result, library, router, context, pii):
     text = build_reading_text(result.normalized).text
     review["document_truncated"] = len(text) > 12000
     document = text[:12000]
-    hits = library.search(document + "\n" + "\n".join(context.requested_issues))
+    selection = library.select(document + "\n" + "\n".join(context.requested_issues))
+    hits = selection.pop("sources")
+    selection["sources_used"] = [{k: h.get(k) for k in ("source_id", "file_id", "title", "folder_path", "page",
+                                                       "relevance", "text_coverage", "shared_terms")} for h in hits]
+    review["selection"] = selection
     mask = (lambda value: value) if context.external_ai_policy == ExternalAIPolicy.ORIGINAL else (
         lambda value: pii.mask_text(value).masked_text)
     document = mask(document)
     sources = [{**source, "text": mask(source["text"]), "title": mask(source["title"])} for source in hits]
     review["sources"] = sources
-    if not sources:
-        review.update(status="NO_MATCH", reason="NO_RETRIEVED_REFERENCE_NOT_PROOF_OF_ABSENCE")
+    if selection["reason"] == "NO_ELIGIBLE_REFERENCE":
+        # Nothing could be read from Drive: that is an unfinished check, not "no relevant material".
+        review["reason"] = "NO_READABLE_DRIVE_REFERENCE"
         return review
+    if not sources:
+        # No relevant Drive material: the library is not used for this document (not proof of absence).
+        review.update(status="NOT_RELEVANT", reason="NO_RELEVANT_DRIVE_REFERENCE:" + selection["reason"])
+        return review
+    review["drive_used"] = True
     if context.profile == VerificationProfile.QUICK or not router.has_available_provider(policy=context.external_ai_policy):
         review.update(status="RETRIEVED_ONLY", reason="MODEL_NOT_AVAILABLE_OR_QUICK_PROFILE")
         return review
@@ -96,9 +106,13 @@ def report_lines(run_result):
              "검색 기반 AI 참고 의견이며 공식 출처 확인, AI 작성 여부, 위조 여부 판정을 대체하지 않는다."]
     for issue in library.get("issues", [])[:20]:
         lines.append(f"미처리 자료: {issue.get('name', issue.get('file_id', 'Drive'))} / {issue.get('reason')}")
+    for group in library.get("duplicates", [])[:20]:
+        copies = ", ".join(f"{c['folder_path']}/{c['name']}".lstrip("/") for c in group["delete_candidates"])
+        lines.append(f"중복 사본(삭제 후보): {copies} — 보존: {group['keep']['folder_path']}/{group['keep']['name']}")
     for doc in run_result.documents:
         review = doc.engine_data.get("rag", {})
-        lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {review.get('reason', '')}")
+        used = "Drive 자료 활용" if review.get("drive_used") else "Drive 자료 미활용"
+        lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {used} / {review.get('reason', '')}")
         for source in review.get("sources", []):
             lines.append(f"{source['source_id']}: {source['title']} / {source['page']}쪽 / "
                          f"수정 {source['modified_time']} / SHA-256 {source['sha256']} / {source['url']}")

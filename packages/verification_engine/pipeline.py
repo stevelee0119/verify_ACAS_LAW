@@ -192,6 +192,31 @@ def verification_key(
 ProgressCallback = Callable[[JobState, str, float], None]
 
 
+def reference_health(summary, documents):
+    """One block that answers "did the Drive connection work in this run?" from the run JSON."""
+    diagnostics = summary.get("diagnostics") or {}
+    http = (diagnostics.get("http") or {}).get("totals") or {}
+    statuses = http.get("by_status") or {}
+    per_document = []
+    for doc in documents:
+        review = doc.engine_data.get("rag") or {}
+        selection = review.get("selection") or {}
+        per_document.append({"document_id": doc.document_id, "filename": doc.filename,
+                             "status": review.get("status"), "drive_used": bool(review.get("drive_used")),
+                             "reason": review.get("reason"), "files_selected": selection.get("files_selected", 0),
+                             "sources_used": len(selection.get("sources_used") or []),
+                             "model_executed": bool(review.get("model_executed"))})
+    return {"library_status": summary.get("status"),
+            "listing_succeeded": bool(summary.get("checked_at")),
+            "credential_mode": diagnostics.get("credential_mode"),
+            "http_calls": http.get("count", 0),
+            "http_errors": sum(n for code, n in statuses.items() if code != "200"),
+            "files_seen": summary.get("files_seen", 0), "files_indexed": summary.get("files_indexed", 0),
+            "files_reused": summary.get("files_reused", 0),
+            "duplicate_groups": len(summary.get("duplicates") or []),
+            "sync_ms": diagnostics.get("elapsed_ms"), "documents": per_document}
+
+
 class VerificationPipeline:
     def __init__(
         self,
@@ -293,11 +318,13 @@ class VerificationPipeline:
                                         document_id=document.document_id) as stage:
                         try:
                             review = review_document(document_result, references, self.router, context, pii)
-                        except Exception:
-                            review = {"status": "UNVERIFIED", "reason": "REFERENCE_REVIEW_FAILED", "advisory_only": True}
+                        except Exception as exc:
+                            review = {"status": "UNVERIFIED", "reason": "REFERENCE_REVIEW_FAILED", "advisory_only": True,
+                                      "drive_used": False, "error": type(exc).__name__}
                             document_result.engine_data["rag"] = review
                         stage.note = review["status"]
-                        if review["status"] != "ADVISORY_REVIEWED":
+                        # "No relevant Drive material" is an outcome, not an unfinished check.
+                        if review["status"] not in ("ADVISORY_REVIEWED", "NOT_RELEVANT"):
                             stage.skip_reason = review["reason"]
                             document_result.unverified_items.append({"kind": "reference_review",
                                 "document_id": document.document_id, "reason": "Drive 참고자료 AI 대조 미완료: " + review["reason"]})
@@ -334,6 +361,8 @@ class VerificationPipeline:
             "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()},
             environment=preflight(self.settings, self.registry, self.router))
         result.run_manifest["reference_library"] = references.summary
+        if self.settings.rag_drive_folder_id:
+            result.run_manifest["reference_library"]["health"] = reference_health(references.summary, result.documents)
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )

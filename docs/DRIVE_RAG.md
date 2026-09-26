@@ -44,8 +44,15 @@ UNAVAILABLE result; they do not silently disable checks.
   not while an API request holds the project transaction.
 - Recursively list all accessible children with pagination (depth 12, 200 folders).
   Incomplete or failed listings make the entire cached corpus ineligible.
-- Check each file's current metadata, parents, download permission and revision.
-  Read changed files only. Verify revision after download and MD5 when available.
+- The listing read at the start of each run already carries every file's parents, trash
+  state, download permission and revision. An unchanged cached file is reused on that
+  basis without a second per-file request (so large libraries do not stall on request
+  latency). A new or changed file is re-read just before download, and its revision is
+  verified again after download, with MD5 when available.
+- Identical copies (same MD5 and size) are listed as delete candidates and only one
+  kept copy is downloaded and indexed. If the kept copy is unusable, a copy is used.
+  Copy markers such as "…의 사본", " (1)" and "Copy of" are ignored when reading a
+  file's format, so copies keep their PDF/HWP/TXT format.
 - Cache extracted chunks and file SHA-256 under `LV_STORAGE_ROOT/reference-cache`.
   Removed files are deleted from this cache after a successful complete listing.
   Revoked, moved, changed-but-unreadable files are excluded even when cached.
@@ -55,6 +62,50 @@ UNAVAILABLE result; they do not silently disable checks.
 - Retain the existing Render persistent disk. Ephemeral disks lose the cache and
   make the next run re-index. The cache is rebuildable, not the original document
   repository. Past run evidence remains historical evidence, never fresh input.
+
+## Relevance Gate: Drive Is Used Only When Relevant
+
+Before any excerpt reaches a model, the library decides whether any Drive file is
+relevant to the checked document (`packages/rag_engine/relevance.py`):
+
+1. Key terms of the document are weighted by their frequency in the document times their
+   rarity (IDF) in the indexed Drive chunks; terms in more than half of the chunks of a
+   corpus with 20+ chunks are treated as boilerplate.
+2. Text coverage of a chunk = share of that weighted key-term mass the chunk contains.
+3. Folder/file-name coverage = share of the file's folder-path and name terms (weighted by
+   rarity among the library's own names, copy markers removed) that the document uses.
+4. File score = best chunk coverage + 0.5 x name coverage. A file is selected only when
+   its text coverage is at least 0.14, it shares at least 4 key terms (fewer for a very
+   short query), and its file score is at least 0.25. A name alone never selects a file.
+5. Up to three excerpts per selected file, six in total, are used. If no file passes,
+   the document's RAG status is `NOT_RELEVANT` and **Drive material is not used**; this is
+   an outcome, not an unfinished check, and not proof that no authority exists.
+
+The thresholds were set on a synthetic calibration set (17 synthetic references in
+topic folders; 11 tuning and 11 separately worded check queries, 6 related and 5
+unrelated each). Both sets gave 6/6 related documents using the expected file and 5/5
+unrelated documents not using Drive; zero-error settings spanned text floors 0.12-0.16
+and file scores 0.25-0.28. This is a small synthetic calibration, not a measurement on
+the real library. Every selection log records the thresholds and each candidate's text
+coverage, name coverage and score, so real run JSON can be used to re-calibrate.
+
+## Connection Log in the Run JSON
+
+`run_manifest.reference_library` in the downloaded result JSON contains:
+
+- `health`: listing success, credential mode (`api_key`, `service_account`, `none`),
+  API call and error counts, files seen/indexed/reused, duplicate groups, sync time and,
+  per document, the RAG status, whether Drive was used, files selected and sources used.
+- `diagnostics`: start/finish time, budget, stage timings (inventory, files), folder paths,
+  file types, downloads (count/bytes), extractions (count/ms), skipped duplicates,
+  deferred files, issue counts and the Drive API call log (operation, HTTP status,
+  milliseconds, bytes, file ID; at most 300 calls). URLs, keys and tokens are not logged.
+- `duplicates` / `similar_names`: identical copies with the kept file and delete
+  candidates (Drive links), and same-named files whose content differs.
+
+Each document's `engine_data.rag.selection` holds the relevance decision, reason,
+thresholds, shared key terms and the top candidate files with their scores.
+`python -m scripts.check_drive_references --duplicates` prints the delete-candidate list.
 
 ## Retrieval and Evidence Boundaries
 
@@ -67,7 +118,7 @@ first 12,000 document characters plus requested issues and discloses truncation.
 Up to six retrieved excerpts are sent through the existing LLM router, with the
 same LOCAL_ONLY/MASKED/ORIGINAL policy, organization restrictions, output quarantine,
 budget ledger and model audit. Titles and excerpts are masked under MASKED policy.
-QUICK or unavailable models yield RETRIEVED_ONLY. Quarantined documents are not sent.
+QUICK or unavailable models yield RETRIEVED_ONLY; no relevant file yields NOT_RELEVANT. Quarantined documents are not sent.
 Both the model's claim quote and reference quote must occur exactly in the provided
 text; fabricated source IDs/quotes or invalid output schemas are rejected.
 

@@ -11,7 +11,7 @@ import time
 import httpx
 
 FOLDER = "application/vnd.google-apps.folder"
-FIELDS = "id,name,mimeType,modifiedTime,version,md5Checksum,size,parents,trashed,capabilities(canDownload)"
+FIELDS = "id,name,mimeType,createdTime,modifiedTime,version,md5Checksum,size,parents,trashed,capabilities(canDownload)"
 EXPORTS = {
     "application/vnd.google-apps.document": ("text/plain", ".txt"),
     "application/vnd.google-apps.presentation": ("application/pdf", ".pdf"),
@@ -44,6 +44,31 @@ class DriveClient:
         self.http = httpx.Client(base_url="https://www.googleapis.com/drive/v3/",
                                  follow_redirects=False, transport=transport)
         self.headers = headers
+        # Diagnostic call log for the run JSON: operation, status, time and size only (no URLs or keys).
+        self.calls, self.call_limit = [], 300
+        self.call_totals = {"count": 0, "bytes": 0, "by_operation": {}, "by_status": {}}
+        self.credential_mode = "injected" if headers is not None else (
+            "service_account" if os.getenv("LV_DRIVE_SERVICE_ACCOUNT_FILE") else
+            "api_key" if os.getenv("LV_DRIVE_API_KEY") else "none")
+        self.folders = {}
+
+    def _record(self, path, params, status, started, size, error=None):
+        operation = ("list" if path == "files" else "export" if path.endswith("/export")
+                     else "download" if (params or {}).get("alt") == "media" else "metadata")
+        entry = {"operation": operation, "status": status, "ms": round((time.monotonic() - started) * 1000),
+                 "bytes": size}
+        if path != "files":
+            entry["file_id"] = path.split("/")[1]
+        if error:
+            entry["error"] = error
+        totals = self.call_totals
+        totals["count"] += 1
+        totals["bytes"] += size
+        totals["by_operation"][operation] = totals["by_operation"].get(operation, 0) + 1
+        key = str(status) if status is not None else "network_error"
+        totals["by_status"][key] = totals["by_status"].get(key, 0) + 1
+        if len(self.calls) < self.call_limit:
+            self.calls.append(entry)
 
     def remaining(self):
         self.check()
@@ -82,20 +107,27 @@ class DriveClient:
         return self.headers
 
     def read(self, path, params=None, *, max_bytes=4_000_000):
+        headers = self._auth()
+        started, status, content = time.monotonic(), None, bytearray()
         try:
-            with self.http.stream("GET", path, params=params, headers=self._auth(),
+            with self.http.stream("GET", path, params=params, headers=headers,
                                   timeout=min(15, self.remaining())) as response:
+                status = response.status_code
                 if response.status_code != 200:
                     raise ReferenceError("DRIVE_HTTP_" + str(response.status_code))
-                content = bytearray()
                 for block in response.iter_bytes(65536):
                     self.remaining()
                     if len(content) + len(block) > max_bytes:
                         raise ReferenceError("FILE_SIZE_LIMIT")
                     content.extend(block)
-                return bytes(content)
+        except ReferenceError as exc:
+            self._record(path, params, status, started, len(content), str(exc))
+            raise
         except httpx.HTTPError:
+            self._record(path, params, status, started, len(content), "DRIVE_NETWORK_ERROR")
             raise ReferenceError("DRIVE_NETWORK_ERROR") from None
+        self._record(path, params, status, started, len(content))
+        return bytes(content)
 
     def metadata(self, file_id):
         return json.loads(self.read("files/" + valid_id(file_id),
@@ -106,6 +138,8 @@ class DriveClient:
         if root.get("mimeType") != FOLDER or root.get("trashed"):
             raise ReferenceError("ROOT_FOLDER_UNAVAILABLE")
         queue, visited, files = [(folder_id, 0)], set(), {}
+        # Folder path relative to the root ("" for the root) lets retrieval weigh folder names.
+        self.folders = {folder_id: ""}
         while queue:
             parent, depth = queue.pop(0)
             if parent in visited:
@@ -127,7 +161,10 @@ class DriveClient:
                     valid_id(item["id"])
                     if item.get("mimeType") == FOLDER:
                         queue.append((item["id"], depth + 1))
+                        base = self.folders.get(parent, "")
+                        self.folders[item["id"]] = (base + "/" if base else "") + str(item.get("name", ""))
                     else:
+                        item["folder_path"] = self.folders.get(parent, "")
                         files[item["id"]] = item
                         if len(files) > max_files:
                             raise ReferenceError("FILE_COUNT_LIMIT")

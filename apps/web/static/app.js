@@ -515,8 +515,31 @@ function referenceSection(docs) {
   const section = node("section", null, "detail-section reference-section");
   const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
     ADVISORY_REVIEWED: "근거 인용 대조 완료 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
+    NOT_RELEVANT: "관련 자료 없음 · Drive 자료 미활용",
     RETRIEVED_ONLY: "검색 완료 · AI 대조 미실행", UNVERIFIED: "대조 미완료", SKIPPED: "대조 제외"};
   section.append(node("h3", "Drive 참고자료"), node("p", `${statuses[library.status] || library.status} · 색인 ${library.files_indexed || 0}/${library.files_seen || 0}건 · 조회 ${library.checked_at || "미확인"}`));
+  const health = library.health;
+  if (health) {
+    section.append(node("p", `연결 점검 · 인증 ${health.credential_mode || "없음"} · 목록 조회 ${health.listing_succeeded ? "성공" : "실패"} · API 호출 ${health.http_calls}건(오류 ${health.http_errors}건) · 동기화 ${Math.round((health.sync_ms || 0) / 100) / 10}초`, "muted"));
+  }
+  if (library.duplicates?.length) {
+    const details = node("details");
+    const bytes = library.duplicates.reduce((sum, g) => sum + (g.reclaimable_bytes || 0), 0);
+    details.append(node("summary", `중복 사본 ${library.duplicates.length}묶음 · 삭제 시 ${Math.round(bytes / 1048576)}MB 절약 (내용 동일, 보존본 1개만 색인)`));
+    for (const group of library.duplicates) {
+      details.append(node("p", `보존: ${[group.keep.folder_path, group.keep.name].filter(Boolean).join("/")}`, "muted"));
+      for (const copy of group.delete_candidates) {
+        const link = node("a", `삭제 후보: ${[copy.folder_path, copy.name].filter(Boolean).join("/")}`);
+        if (/^[A-Za-z0-9_-]{10,200}$/.test(copy.file_id || "")) {
+          link.href = `https://drive.google.com/file/d/${copy.file_id}/view`;
+          link.target = "_blank";
+          link.rel = "noopener noreferrer";
+        }
+        details.append(link);
+      }
+    }
+    section.append(details);
+  }
   if (library.issues?.length) {
     const details = node("details");
     details.append(node("summary", `미처리·제한 ${library.issues.length}건`));
@@ -530,6 +553,13 @@ function referenceSection(docs) {
     details.append(node("summary", `${doc.filename}: ${statuses[review.status] || review.status}`));
     if (review.reason) details.append(node("p", review.reason, "muted"));
     if (review.document_truncated) details.append(node("p", "문서 앞부분 12,000자 기준 검색·대조", "warning-text"));
+    const selection = review.selection;
+    if (selection) {
+      details.append(node("p", `자료 선정: ${selection.decision === "USED" ? "관련 자료 사용" : "Drive 자료 미활용"} · 후보 ${selection.candidates_total || 0}개 중 ${selection.files_selected || 0}개 선정 (${selection.reason})`, "muted"));
+      for (const candidate of (selection.candidates || []).slice(0, 5)) {
+        details.append(node("p", `${candidate.selected ? "선정" : "제외"} · ${[candidate.folder_path, candidate.title].filter(Boolean).join("/")} · 본문 ${candidate.text_coverage} · 폴더·파일명 ${candidate.name_coverage} · 점수 ${candidate.file_score}`, "muted"));
+      }
+    }
     for (const source of review.sources || []) {
       const link = node("a", `${source.source_id}: ${source.title} · ${source.page}쪽`);
       if (/^[A-Za-z0-9_-]{10,200}$/.test(source.file_id || "")) {

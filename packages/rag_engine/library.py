@@ -1,14 +1,12 @@
 """Incremental FTS5/BM25 cache; fresh Drive permissions gate every run's corpus."""
 from __future__ import annotations
 
-from collections import Counter
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
-import re
 import sqlite3
 import subprocess
 import sys
@@ -20,19 +18,10 @@ from filelock import FileLock, Timeout
 from packages.common.config import REPO_ROOT
 from .drive import DriveClient, EXPORTS, ReferenceError, revision, valid_id
 from .extract import EXTRACTOR_VERSION
+from . import relevance
+from .relevance import tokens
 
 SUPPORTED = {".pdf", ".docx", ".hwpx", ".hwp", ".xlsx", ".txt", ".md", ".csv"}
-
-
-def tokens(text):
-    words = re.findall(r"[a-z0-9]+|[가-힣]+", text.lower())
-    result = []
-    for word in words:
-        if re.fullmatch(r"[가-힣]+", word):
-            result.extend(word[i:i + 2] for i in range(len(word) - 1))
-        elif len(word) > 1:
-            result.append(word[:80])
-    return result
 
 
 def isolated_extract(data, filename, mime, *, directory, timeout):
@@ -42,7 +31,7 @@ def isolated_extract(data, filename, mime, *, directory, timeout):
     if data.lstrip().startswith(b"%PDF"):
         filename, mime = "reference.pdf", "application/pdf"
     else:
-        filename = "reference" + Path(filename).suffix.lower()
+        filename = "reference" + relevance.extension(filename)
     if Path(filename).suffix not in SUPPORTED or scan_upload(filename, data):
         raise ReferenceError("UNSUPPORTED_OR_UNSAFE_REFERENCE")
     with tempfile.TemporaryDirectory(prefix="extract-", dir=directory) as temporary:
@@ -80,8 +69,10 @@ class ReferenceLibrary:
         self.eligible = {}
         self.summary = {"status": "DISABLED", "folder_id": self.folder, "checked_at": None,
                         "snapshot_hash": None, "files_seen": 0, "files_indexed": 0,
-                        "files_reused": 0, "issues": [], "sources": [],
-                        "retrieval": "SQLite FTS5 BM25; Korean character bigrams",
+                        "files_reused": 0, "issues": [], "sources": [], "duplicates": [], "similar_names": [],
+                        "diagnostics": {},
+                        "retrieval": "SQLite FTS5; Korean character bigrams; corpus-IDF relevance gate "
+                                     "with folder/file-name bonus",
                         "authority": "USER_REFERENCE_NOT_OFFICIAL", "extractor": EXTRACTOR_VERSION}
 
     @contextmanager
@@ -92,32 +83,58 @@ class ReferenceLibrary:
         db.execute("CREATE TABLE IF NOT EXISTS files (id TEXT PRIMARY KEY, revision TEXT, payload TEXT)")
         db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5("
                    "file_id UNINDEXED, revision UNINDEXED, page UNINDEXED, start UNINDEXED, text UNINDEXED, terms)")
+        db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunk_terms USING fts5vocab(chunks, 'row')")
         try:
             yield db
         finally:
             db.close()
 
     def sync(self):
+        started = time.monotonic()
         self.eligible = {}
         self.summary.update(checked_at=None, snapshot_hash=None, files_seen=0, files_indexed=0,
-                            files_reused=0, issues=[], sources=[])
+                            files_reused=0, issues=[], sources=[], duplicates=[], similar_names=[])
+        budget = max(1, min(600, self.settings.rag_sync_seconds))
+        diagnostics = self.summary["diagnostics"] = {
+            "started_at": datetime.now(timezone.utc).isoformat(), "folder_id": self.folder,
+            "network_allowed": bool(self.settings.allow_network), "budget_seconds": budget,
+            "max_files": self.settings.rag_max_files, "download_budget_mb": self.settings.rag_download_mb,
+            "credential_mode": None, "stages": [], "downloads": {"count": 0, "bytes": 0},
+            "extractions": {"count": 0, "ms": 0}, "duplicates_skipped": 0, "deferred": 0}
         if not self.folder:
             return self.summary
         self.summary["status"] = "UNAVAILABLE"
         if not self.settings.allow_network:
             self.summary["issues"] = [{"reason": "NETWORK_DISABLED"}]
-            return self.summary
-        deadline = time.monotonic() + max(1, min(600, self.settings.rag_sync_seconds))
+            return self._finish(started, None)
+        deadline = time.monotonic() + budget
         client = self.client_factory(deadline=deadline, check=self.check)
+        diagnostics["credential_mode"] = getattr(client, "credential_mode", "injected")
         try:
             valid_id(self.folder)
             self.directory.mkdir(parents=True, exist_ok=True)
             with FileLock(str(self.db_path) + ".lock", timeout=min(3, client.remaining())):
+                mark = time.monotonic()
                 items = client.inventory(self.folder, max_files=self.settings.rag_max_files)
+                self._stage("inventory", mark, files=len(items))
                 self.summary["checked_at"] = datetime.now(timezone.utc).isoformat()
                 self.summary["files_seen"] = len(items)
+                folders = getattr(client, "folders", {}) or {}
+                diagnostics["folders_seen"] = len(folders)
+                diagnostics["folder_paths"] = sorted(p for p in folders.values() if p)[:200]
+                extensions = {}
+                for item in items:
+                    mime = item.get("mimeType", "")
+                    key = mime if mime.startswith("application/vnd.google-apps") else (
+                        relevance.extension(item.get("name")) or "(none)")
+                    extensions[key] = extensions.get(key, 0) + 1
+                diagnostics["files_by_type"] = extensions
+                duplicates, similar, skip = relevance.duplicate_groups(items)
+                self.summary["duplicates"], self.summary["similar_names"] = duplicates, similar
+                mark = time.monotonic()
                 with self.connect() as db:
-                    self._sync_files(client, db, items)
+                    self._sync_files(client, db, items, skip)
+                self._stage("files", mark, indexed=len(self.eligible))
                 self.summary["sources"] = list(self.eligible.values())
                 self.summary["files_indexed"] = len(self.eligible)
                 self.summary["snapshot_hash"] = hashlib.sha256(json.dumps(
@@ -130,9 +147,28 @@ class ReferenceLibrary:
                                             else "CACHE_BUSY" if isinstance(exc, Timeout) else "SYNC_FAILED"})
         finally:
             client.close()
+        return self._finish(started, client)
+
+    def _stage(self, name, mark, **values):
+        self.summary["diagnostics"]["stages"].append(
+            {"stage": name, "ms": round((time.monotonic() - mark) * 1000), **values})
+
+    def _finish(self, started, client):
+        diagnostics = self.summary["diagnostics"]
+        diagnostics["finished_at"] = datetime.now(timezone.utc).isoformat()
+        diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
+        diagnostics["outcome"] = self.summary["status"]
+        counts = {}
+        for issue in self.summary["issues"]:
+            counts[issue.get("reason", "")] = counts.get(issue.get("reason", ""), 0) + 1
+        diagnostics["issue_counts"] = counts
+        if client is not None:
+            diagnostics["http"] = {"totals": getattr(client, "call_totals", {}),
+                                   "calls": list(getattr(client, "calls", []))}
         return self.summary
 
-    def _sync_files(self, client, db, items):
+    def _sync_files(self, client, db, items, skip):
+        diagnostics = self.summary["diagnostics"]
         seen = {item["id"] for item in items}
         # Delete only after a complete listing, never infer deletion from a failed page.
         for (file_id,) in db.execute("SELECT id FROM files").fetchall():
@@ -141,19 +177,27 @@ class ReferenceLibrary:
                 db.execute("DELETE FROM files WHERE id=?", (file_id,))
         db.commit()
         downloaded = 0
-        # Cached files first makes bounded subsequent runs useful while new material warms up.
+        # Identical copies come last and are skipped when their kept original is usable.
+        # Cached files next, so bounded runs stay useful while new material warms up.
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
-        ordered = sorted(items, key=lambda i: (i["id"] not in cached, int(i.get("size") or 0), i["id"]))
+        ordered = sorted(items, key=lambda i: (i["id"] in skip, i["id"] not in cached,
+                                               int(i.get("size") or 0), i["id"]))
         for index, item in enumerate(ordered):
             self.notify(index, len(ordered))
             file_id = item["id"]
             try:
                 client.remaining()
-                fresh = client.metadata(file_id)
-                if (fresh.get("trashed") or fresh.get("parents") != item.get("parents")
-                        or fresh.get("capabilities", {}).get("canDownload") is False):
+                if skip.get(file_id) in self.eligible:
+                    diagnostics["duplicates_skipped"] += 1
+                    db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                    db.execute("DELETE FROM files WHERE id=?", (file_id,))
+                    db.commit()
+                    continue
+                # The listing was read moments ago in this run; it already carries parents, trash state,
+                # download permission and revision, so an unchanged cached file needs no second request.
+                if item.get("trashed") or item.get("capabilities", {}).get("canDownload") is False:
                     raise ReferenceError("REFERENCE_MOVED_OR_REVOKED")
-                item = fresh
+                folder_path = item.get("folder_path", "")
                 version = revision(item) + ":" + EXTRACTOR_VERSION
                 row = db.execute("SELECT payload FROM files WHERE id=? AND revision=?", (file_id, version)).fetchone()
                 if row:
@@ -162,15 +206,23 @@ class ReferenceLibrary:
                 else:
                     if client.remaining() < 30:
                         raise ReferenceError("SYNC_BUDGET_EXHAUSTED")
+                    fresh = client.metadata(file_id)
+                    if (fresh.get("trashed") or fresh.get("parents") != item.get("parents")
+                            or fresh.get("capabilities", {}).get("canDownload") is False):
+                        raise ReferenceError("REFERENCE_MOVED_OR_REVOKED")
+                    item = {**fresh, "folder_path": folder_path}
+                    version = revision(item) + ":" + EXTRACTOR_VERSION
                     mime = item.get("mimeType", "")
                     if (mime not in EXPORTS and mime != "application/pdf"
-                            and Path(item.get("name", "")).suffix.lower() not in SUPPORTED):
+                            and relevance.extension(item.get("name")) not in SUPPORTED):
                         raise ReferenceError("UNSUPPORTED_REFERENCE_FORMAT")
                     limit = min(96 * 1024 * 1024, self.settings.rag_download_mb * 1024 * 1024 - downloaded)
                     if limit <= 0 or int(item.get("size") or 0) > limit:
                         raise ReferenceError("DOWNLOAD_BUDGET_EXHAUSTED")
                     data, filename, mime = client.download(item, max_bytes=limit)
                     downloaded += len(data)
+                    diagnostics["downloads"]["count"] += 1
+                    diagnostics["downloads"]["bytes"] += len(data)
                     after = client.metadata(file_id)
                     if revision(after) != revision(item) or after.get("capabilities", {}).get("canDownload") is False:
                         raise ReferenceError("REFERENCE_CHANGED_DURING_DOWNLOAD")
@@ -178,12 +230,16 @@ class ReferenceLibrary:
                         raise ReferenceError("REFERENCE_CHECKSUM_MISMATCH")
                     if client.remaining() < 30:
                         raise ReferenceError("SYNC_BUDGET_EXHAUSTED")
+                    mark = time.monotonic()
                     try:
                         parsed = self.extractor(data, filename, mime, directory=self.directory, timeout=30)
                     except ReferenceError as exc:
                         if str(exc) not in ("REFERENCE_PARSE_TIMEOUT", "REFERENCE_PARSE_FAILED"):
                             raise
                         parsed = {"chunks": [], "partial": True, "reason": str(exc)}
+                    finally:
+                        diagnostics["extractions"]["count"] += 1
+                        diagnostics["extractions"]["ms"] += round((time.monotonic() - mark) * 1000)
                     chunks = parsed.pop("chunks", [])
                     parsed["chunk_count"] = len(chunks)
                     # Cache terminal parse outcomes, too; a large unreadable file must not starve later files.
@@ -198,45 +254,118 @@ class ReferenceLibrary:
                         "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
                 if parsed.get("chunk_count"):
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
+                        "folder_path": folder_path,
                         "url": "https://drive.google.com/file/d/" + file_id + "/view",
                         "revision": version, "modified_time": item.get("modifiedTime"),
                         "sha256": parsed["sha256"], "partial": bool(parsed.get("partial")),
-                        "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages")}
+                        "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages"),
+                        "chunk_count": parsed["chunk_count"]}
             except ReferenceError as exc:
                 if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_429"):
                     raise
                 self.summary["issues"].append({"file_id": file_id, "name": item.get("name"), "reason": str(exc)})
                 if str(exc) == "SYNC_BUDGET_EXHAUSTED":
+                    diagnostics["deferred"] = len(ordered) - index
                     self.summary["issues"].append({"reason": "FILES_DEFERRED", "count": len(ordered) - index})
                     break
             except Exception:
                 self.summary["issues"].append({"file_id": file_id, "reason": "REFERENCE_PROCESSING_FAILED"})
 
-    def search(self, text, limit=6):
+    def select(self, text, limit=6):
+        """Choose relevant files (text match plus folder/file-name bonus), then their best excerpts.
+
+        Returns the decision log; `sources` is empty when nothing is relevant, and then the Drive
+        library is not used for the document."""
+        log = {"decision": "NOT_USED", "reason": "", "thresholds": relevance.thresholds(),
+               "corpus_chunks": 0, "query_terms": [], "candidates": [], "files_selected": 0, "sources": []}
         if not self.eligible:
-            return []
-        terms = [word for word, _ in Counter(tokens(text[:24000])).most_common(48)]
-        if not terms:
-            return []
-        query = " OR ".join('"' + term + '"' for term in terms)
+            log["reason"] = "NO_ELIGIBLE_REFERENCE"
+            return log
+        mark = time.monotonic()
+        total = sum(v.get("chunk_count") or 0 for v in self.eligible.values())
+        log["corpus_chunks"] = total
+        counts = set(tokens(text[:24000]))
+        names = relevance.name_weights(self.eligible)
         with self.connect() as db:
             deadline = time.monotonic() + 5
             db.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
+            frequency = {}
+            for term in counts:
+                row = db.execute("SELECT doc FROM chunk_terms WHERE term=?", (term,)).fetchone()
+                if row:
+                    frequency[term] = row[0]
+            profile = relevance.query_profile(text[:24000], frequency, total)
+            present = [t for t in profile if t in frequency]
+            log["query_terms"] = [{"term": t, "weight": round(profile[t], 3), "chunks": frequency.get(t, 0)}
+                                  for t in list(profile)[:20] if t in frequency]
+            if not present:
+                log["reason"] = "NO_SHARED_KEY_TERMS"
+                log["ms"] = round((time.monotonic() - mark) * 1000)
+                return log
             db.execute("CREATE TEMP TABLE eligible (id TEXT PRIMARY KEY, revision TEXT)")
             db.executemany("INSERT INTO eligible VALUES (?,?)", [(k, v["revision"]) for k, v in self.eligible.items()])
-            rows = db.execute("SELECT file_id, page, start, text, bm25(chunks) AS rank FROM chunks "
+            rows = db.execute("SELECT file_id, page, start, text, terms FROM chunks "
                 "JOIN eligible e ON e.id=chunks.file_id AND e.revision=chunks.revision "
-                "WHERE chunks MATCH ? ORDER BY rank LIMIT ?", (query, limit * 4)).fetchall()
+                "WHERE chunks MATCH ? ORDER BY bm25(chunks) LIMIT ?",
+                (" OR ".join('"' + term + '"' for term in present), relevance.CANDIDATE_CHUNKS)).fetchall()
+        # A short query cannot share more terms than it has.
+        required = min(relevance.MIN_MATCHED_TERMS, len(profile))
+        log["required_shared_terms"] = required
+        files = {}
+        for file_id, page, start, excerpt, terms in rows:
+            score, matched = relevance.coverage(profile, set(terms.split()))
+            entry = files.setdefault(file_id, {"chunks": []})
+            entry["chunks"].append((score, len(matched), int(page), int(start), excerpt))
+        candidates = []
+        for file_id, entry in files.items():
+            source = self.eligible[file_id]
+            name_score, name_hits = relevance.name_coverage(names.get(file_id, {}), counts)
+            best = max(entry["chunks"], key=lambda c: (c[0], c[1]))
+            file_score = best[0] + relevance.META_WEIGHT * name_score
+            reasons = []
+            if best[1] < required:
+                reasons.append("TOO_FEW_SHARED_TERMS")
+            if best[0] < relevance.MIN_CHUNK_COVERAGE:
+                reasons.append("LOW_TEXT_COVERAGE")
+            if file_score < relevance.MIN_FILE_SCORE:
+                reasons.append("LOW_FILE_SCORE")
+            candidates.append({"file_id": file_id, "title": source.get("title"), "folder_path": source.get("folder_path"),
+                               "text_coverage": round(best[0], 3), "shared_terms": best[1],
+                               "name_coverage": round(name_score, 3), "name_terms": name_hits[:8],
+                               "file_score": round(file_score, 3), "selected": not reasons, "rejected_because": reasons,
+                               "_name": name_score, "_chunks": entry["chunks"]})
+        candidates.sort(key=lambda c: (-c["file_score"], c["file_id"]))
+        chosen = [c for c in candidates if c["selected"]]
+        excerpts = []
+        for candidate in chosen:
+            usable = sorted((c for c in candidate["_chunks"]
+                             if c[0] >= relevance.MIN_CHUNK_COVERAGE and c[1] >= required),
+                            key=lambda c: (-c[0], c[2], c[3]))[:relevance.PER_FILE_EXCERPTS]
+            excerpts.extend((c[0] + relevance.META_WEIGHT * candidate["_name"], candidate["file_id"], c) for c in usable)
+        excerpts.sort(key=lambda e: (-e[0], e[1], e[2][2], e[2][3]))
         result, seen = [], set()
-        for file_id, page, start, excerpt, rank in rows:
+        for score, file_id, (coverage, shared, page, start, excerpt) in excerpts:
             # Identical copies cannot occupy every retrieval slot.
             digest = hashlib.sha256(excerpt.encode()).hexdigest()
             if digest in seen:
                 continue
             seen.add(digest)
-            source = self.eligible[file_id]
-            result.append({**source, "source_id": "R" + str(len(result) + 1), "page": int(page),
-                           "start": int(start), "text": excerpt, "rank": rank})
+            result.append({**self.eligible[file_id], "source_id": "R" + str(len(result) + 1), "page": page,
+                           "start": start, "text": excerpt, "relevance": round(score, 3),
+                           "text_coverage": round(coverage, 3), "shared_terms": shared})
             if len(result) >= limit:
                 break
-        return result
+        for candidate in candidates:
+            candidate.pop("_name"), candidate.pop("_chunks")
+        log["candidates"] = candidates[:15]
+        log["candidates_total"] = len(candidates)
+        log["files_selected"] = len(chosen)
+        log["sources"] = result
+        log["decision"] = "USED" if result else "NOT_USED"
+        log["reason"] = "RELEVANT_REFERENCE_FOUND" if result else (
+            "NO_CANDIDATE_CHUNK" if not candidates else "BELOW_RELEVANCE_THRESHOLD")
+        log["ms"] = round((time.monotonic() - mark) * 1000)
+        return log
+
+    def search(self, text, limit=6):
+        return self.select(text, limit)["sources"]
