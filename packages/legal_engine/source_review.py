@@ -49,6 +49,19 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
         return verdict
     response = verifier.registry.law.resolve_statute(citation.law_name, as_of=as_of, current_date=current_date)
     verdict.source_records.extend(response.source_records)
+    alias = (citation.attributes or {}).get("law_alias_candidate")
+    if response.ok and (response.message or "").startswith("EXACT_LAW_NOT_FOUND:") and alias:
+        # 적힌 이름이 목록에 없고, 같은 문서가 정식 법령명을 함께 쓴 경우: 정식명으로 다시 조회한다.
+        retried = verifier.registry.law.resolve_statute(alias, as_of=as_of, current_date=current_date)
+        verdict.source_records.extend(retried.source_records)
+        verdict.review["law_alias"] = {"written": citation.law_name, "resolved": alias,
+                                       "basis": citation.attributes.get("law_alias_basis"),
+                                       "found": bool(retried.ok and not (retried.message or "").startswith(
+                                           "EXACT_LAW_NOT_FOUND:"))}
+        if verdict.review["law_alias"]["found"]:
+            verdict.notes.append(f"'{citation.law_name}'은(는) 목록에 없어 문서의 정식 법령명 「{alias}」로 조회했다"
+                                 "(약칭으로 판단한 근거는 문서 안의 표기다)")
+            response = retried
     if response.ok and (response.message or "").startswith("EXACT_LAW_NOT_FOUND:"):
         _law_absent(verdict, response)
         return verdict

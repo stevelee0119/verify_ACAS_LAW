@@ -101,7 +101,7 @@ coverage, name coverage and score, so real run JSON can be used to re-calibrate.
 
 `run_manifest.reference_library` in the downloaded result JSON contains:
 
-- `health`: listing success, credential mode (`api_key`, `service_account`, `none`),
+- `health` (always present, also when Drive is off, with `enabled`, `disabled_reason`, `credentials_configured`): listing success, credential mode (`api_key`, `service_account`, `none`),
   API call and error counts, files seen/indexed/reused, duplicate groups, sync time and,
   per document, the RAG status, whether Drive was used, files selected and sources used.
 - `diagnostics`: start/finish time, budget, stage timings (inventory, files), folder paths,
@@ -126,7 +126,7 @@ first 12,000 document characters plus requested issues and discloses truncation.
 Up to six retrieved excerpts are sent through the existing LLM router, with the
 same LOCAL_ONLY/MASKED/ORIGINAL policy, organization restrictions, output quarantine,
 budget ledger and model audit. Titles and excerpts are masked under MASKED policy.
-QUICK or unavailable models yield RETRIEVED_ONLY; no relevant file yields NOT_RELEVANT. Quarantined documents are not sent.
+QUICK or unavailable models yield RETRIEVED_ONLY; no relevant file yields NOT_RELEVANT. A quarantined document is searched and reviewed with its detected instruction blocks and strings removed (`engine_data.rag.input`); if nothing remains it is SKIPPED.
 Both the model's claim quote and reference quote must occur exactly in the provided
 text; fabricated source IDs/quotes or invalid output schemas are rejected.
 

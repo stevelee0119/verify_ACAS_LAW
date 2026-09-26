@@ -172,7 +172,8 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
         records = _normalize_law_payload(payload)
         # lawSearch.do는 키워드 검색이다. "민법"으로 조회하면 "난민법"·"주민법" 등
         # 부분 문자열을 포함한 법령이 함께 돌아온다. 이름이 정확히 같은 것만 남긴다.
-        exact = [r for r in records if _same_law_name(law_name, r.get("law_name"))]
+        exact = [r for r in records if _same_law_name(law_name, r.get("law_name"))] or \
+            [r for r in records if _same_law_name(law_name, r.get("abbreviation"))]
         for record in exact:
             record["requested_as_of"] = as_of
             record["temporal_scope"] = "CURRENT_LIST_ONLY"
@@ -397,6 +398,7 @@ def _normalize_law_payload(payload: Any) -> List[Dict[str, Any]]:
         out.append(
             {
                 "law_name": _first(item, "법령명한글", "law_name"),
+                "abbreviation": _first(item, "법령약칭명", "abbreviation"),
                 "promulgation_date": _canon_date(_first(item, "공포일자", "") or ""),
                 "effective_from": _canon_date(_first(item, "시행일자", "") or ""),
                 "law_id": _first(item, "법령ID"),

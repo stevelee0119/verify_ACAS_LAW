@@ -128,6 +128,11 @@ class OfficialLegalMixin:
         normalized = _normalize_law_payload({"LawSearch": {"law": listed.records}})
         named = [r for r in normalized if _same_law_name(law_name, r.get("law_name"))]
         if not named:
+            # 공식 목록이 약칭(법령약칭명)을 함께 주면 그 값과도 정확히 대조한다. 부분 일치는 쓰지 않는다.
+            named = [r for r in normalized if _same_law_name(law_name, r.get("abbreviation"))]
+            for record in named:
+                record["matched_by"] = "OFFICIAL_ABBREVIATION"
+        if not named:
             # 목록 조회는 성공했으나 같은 이름의 법령이 없다. '조회 범위 내 미발견'이지 조회 실패가 아니다.
             candidates = list(dict.fromkeys(str(r.get("law_name")) for r in normalized if r.get("law_name")))[:5]
             return AdapterResponse(AdapterStatus.READY, [], listed.source_record,

@@ -511,8 +511,14 @@ function renderHallucinationSummary(rows) {
 
 function referenceSection(docs) {
   const library = state.result?.run_manifest?.reference_library;
-  if (!library || library.status === "DISABLED") return null;
+  if (!library) return null;
   const section = node("section", null, "detail-section reference-section");
+  if (library.status === "DISABLED") {
+    if (!library.health) return null;
+    const keys = library.health.credentials_configured || {};
+    section.append(node("h3", "Drive 참고자료"), node("p", `비활성 · 폴더 설정 없음(${library.health.disabled_reason || "설정 없음"}) · 인증 설정 ${keys.api_key ? "API 키 있음" : keys.service_account_file ? "서비스 계정 있음" : "없음"}`, "muted"));
+    return section;
+  }
   const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
     ADVISORY_REVIEWED: "근거 인용 대조 완료 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
     NOT_RELEVANT: "관련 자료 없음 · Drive 자료 미활용",

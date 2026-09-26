@@ -12,6 +12,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from packages.common.confidence import score as confidence_score
 from packages.common.enums import (
+    CitationType,
     EvidenceGrade,
     ExternalAIPolicy,
     FindingType,
@@ -209,6 +210,8 @@ async def verify_argument_validity(
             result.rows.append(row)
             result.findings.append(_fabrication_finding(c, doc))
             continue
+        statute = c.type in (CitationType.STATUTE, CitationType.ADMIN_RULE)
+        noun = "법령" if statute else "판례"
         row = HallucinationTableRow(
             location=f"{c.page or 1}면",
             claim_text=c.context[:150] if c.context else f"{c.raw_text}에 기반한 법률적 주장",
@@ -220,23 +223,27 @@ async def verify_argument_validity(
                  + (f"원문과 다른 어절: {item['quote_diff']}. " if item.get("quote_diff") else "")
                  + "인용 오류·발췌 왜곡·임의 생성 가능성을 모두 열어 두고 원문과 대조가 필요함.")
                 if mismatch else
-                "국가법령정보 공식 DB 검색 결과 같은 사건번호의 기록을 확인하지 못함. "
-                "공식 DB는 모든 재판을 수록하지 않으므로(미공개·수록범위 밖) 이 사실만으로 "
-                "부존재나 임의 생성으로 단정하지 않음."),
+                ("국가법령정보 법령 목록에서 같은 이름의 법령·조문을 확인하지 못함. 법령명 오기·약칭·폐지 "
+                 "가능성이 있으므로 이 사실만으로 부존재나 임의 생성으로 단정하지 않음.") if statute else
+                ("국가법령정보 공식 DB 검색 결과 같은 사건번호의 기록을 확인하지 못함. "
+                 "공식 DB는 모든 재판을 수록하지 않으므로(미공개·수록범위 밖) 이 사실만으로 "
+                 "부존재나 임의 생성으로 단정하지 않음.")),
             validity_verdict=("인용문 변형 (원문과 어절 차이)" if mismatch and item.get("quote_diff")
                               else "인용 내용 불일치 (원문 대조 필요)") if mismatch else "공식 DB 미확인 (원문 확인 필요)",
             legal_reasoning=(
                 "사건 자체는 확인되나 인용 내용이 공식 기록과 달라, 그 취지를 전제로 한 주장은 "
                 "원문 대조 전까지 근거가 확정되지 않습니다."
                 if mismatch else
-                "공식 DB에서 확인하지 못한 판례를 근거로 삼고 있어, 원문을 확인하기 전까지 "
-                "그 주장의 근거가 확정되지 않습니다. 판례가 존재하지 않는다는 뜻은 아닙니다."),
+                f"공식 DB에서 확인하지 못한 {noun}을(를) 근거로 삼고 있어, 원문을 확인하기 전까지 "
+                f"그 주장의 근거가 확정되지 않습니다. {noun}이(가) 존재하지 않는다는 뜻은 아닙니다."),
             recommended_counteraction=(
                 "공식 기록 원문과 인용 부분을 대조하고, 차이가 있으면 정확한 판시사항으로 "
                 "정정하거나 그 취지가 주장을 뒷받침하는지 다시 검토해야 함."
                 if mismatch else
-                "판결문 사본 또는 출처를 확인하고, 대법원 종합법률정보 등 다른 공식 경로에서도 "
-                "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음."),
+                ("정식 법령명·약칭·시행 여부를 국가법령정보센터에서 다시 확인하고, 조문 원문과 대조할 것."
+                 if statute else
+                 "판결문 사본 또는 출처를 확인하고, 대법원 종합법률정보 등 다른 공식 경로에서도 "
+                 "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음.")),
         )
         row.item_id = index
         result.rows.append(row)
@@ -250,7 +257,7 @@ async def verify_argument_validity(
                 severity=Severity.MEDIUM,
                 evidence_grade=EvidenceGrade.C,
                 title=(f"인용 내용이 공식 기록과 다른 판례: {c.raw_text}" if mismatch
-                       else f"공식 DB에서 확인되지 않은 판례 인용: {c.raw_text}"),
+                       else f"공식 DB에서 확인되지 않은 {noun} 인용: {c.raw_text}"),
                 detail=("사건은 확인되나 인용 내용이 공식 기록과 다릅니다. 원문 대조가 필요합니다."
                         if mismatch else
                         "공식 DB에서 같은 사건번호를 확인하지 못했습니다. 공식 DB는 모든 재판을 "
@@ -285,7 +292,7 @@ async def verify_argument_validity(
                   for basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH", "UNCONFIRMED")}
         parts = [f"성립할 수 없는 사건번호 {counts['FABRICATION_SUSPECTED']}건" if counts["FABRICATION_SUSPECTED"] else "",
                  f"인용 내용이 공식 기록과 다른 판례 {counts['CONTENT_MISMATCH']}건" if counts["CONTENT_MISMATCH"] else "",
-                 f"공식 DB에서 확인되지 않은 판례 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else ""]
+                 f"공식 DB에서 확인되지 않은 판례·법령 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else ""]
         summary = ", ".join(p for p in parts if p) + "을(를) 근거로 한 주장이 있습니다. "
         summary += ("미확인은 부존재를 뜻하지 않으므로 원문 확인이 필요합니다."
                     if counts["UNCONFIRMED"] else "원문 대조가 필요합니다.")
@@ -304,8 +311,9 @@ _BASIS_LABEL = {
     "FABRICATION_SUSPECTED": "사건번호 형식상 성립할 수 없음(있을 수 없는 연도 또는 사건부호)",
 }
 
-# 한 요청에 묻는 인용 수. 인용 1건에 Anthropic이 약 900토큰을 썼다(실측).
-_OPINION_BATCH = 4
+# 한 요청에 묻는 인용 수. 인용 1건에 Anthropic이 약 900토큰을 썼다(실측)는 전제로 4건씩 묻다가,
+# 0.9.4 실제 실행에서 3건 묶음도 출력 한도(4096토큰)에서 잘려 그 모델이 교차검증에서 빠졌다. 2건씩 묻는다.
+_OPINION_BATCH = 2
 
 _OPINION_SCHEMA = {
     "type": "object",

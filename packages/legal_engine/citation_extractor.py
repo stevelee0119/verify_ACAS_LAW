@@ -75,6 +75,10 @@ LAW_RE = re.compile(
     r"(?:\s*제\s*(?P<item>\d+)\s*호(?:\s*의\s*(?P<item_sub>\d+))?)?"
     r"(?:\s*(?P<subitem>[가-힣])\s*목)?"
 )
+# 앞 조문 인용에 이어지는 조문: "및 제751조", ", 제4조 제2항", "와 제9조의2"
+CONTINUED_ARTICLE_RE = re.compile(
+    r"\s*(?:,|및|또는|와|과|·|ㆍ)\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
+    r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?)")
 # "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
 SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?$")
 # 앞 인용의 조를 가리키는 표현(추가지시 G3): "같은 조 제2항", "동조 제2항", "위 조항", 그리고 조 없이 쓴 "제2항".
@@ -376,6 +380,20 @@ def extract_from_text(
             )
         )
         consumed.append((m.start(), m.end()))
+        # "제750조 및 제751조", "제3조, 제4조": 법령명 없이 이어진 조문도 같은 법령의 인용이다.
+        head_id, position = citations[-1].citation_id, m.end()
+        while (more := CONTINUED_ARTICLE_RE.match(text, position)):
+            number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
+            span_start = more.start("ref")
+            citations.append(Citation.create(
+                CitationType.STATUTE, f"{law_name} {text[span_start:more.end()].strip()}",
+                document_id=document_id, block_id=block_id, page=page, span=(span_start, more.end()),
+                law_name=law_name, article=number, paragraph=more.group("paragraph"), item=more.group("item"),
+                quoted_text=_quote_near(text, more.end()),
+                context=text[max(0, start - 100): more.end() + 150],
+                attributes={"continued_from": head_id}))
+            consumed.append((span_start, more.end()))
+            position = more.end()
 
     # 4-2) 앞 인용의 조를 가리키는 표현을 그 조의 인용으로 푼다(추가지시 G3). 뒤따르는 수치가 가장 가까운
     #      항·호 인용에 결합되도록, 가리킨 항을 별도 인용으로 둔다.
@@ -604,6 +622,8 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
         seen.add(key)
         out.append(citation)
 
+    _attach_law_alias_candidates(reading.text, out)
+
     for block in doc.body_blocks():
         if block.block_type != "table":
             continue
@@ -623,3 +643,38 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
                     seen.add(key)
                     out.append(citation)
     return out
+
+
+# "「…에 관한 법률」(이하 '○○법'이라 한다)"처럼 문서가 스스로 정한 약칭
+ALIAS_DEFINITION_RE = re.compile(
+    r"[「『](?P<full>[^」』]{3,80})[」』]\s*[(（]\s*(?:이하\s*)?[‘'\"“「『]?(?P<abbr>[가-힣A-Za-z·]{2,30}?)[’'\"”」』]?"
+    r"\s*(?:이?라\s*(?:한다|함|칭한다|약칭한다))?\s*[)）]")
+
+
+def _attach_law_alias_candidates(text: str, citations: List[Citation]) -> None:
+    """짧게 쓴 법령명에 같은 문서 안의 정식 법령명을 약칭 후보로 붙인다(교체하지 않는다).
+
+    적힌 이름으로 먼저 조회하고, 목록에 없을 때만 후보로 다시 조회한다(source_review). 근거는
+    ① 문서의 약칭 정의("(이하 '○○법'이라 한다)") ② 같은 문서에 인용된 정식 법령명이 짧은 이름의
+    어간(끝의 '법'을 뗀 4자 이상)으로 시작하는 경우이며, 후보가 하나일 때만 붙인다.
+    """
+    statutes = [c for c in citations if c.type == CitationType.STATUTE and c.law_name]
+    defined = {}
+    for m in ALIAS_DEFINITION_RE.finditer(text):
+        full, abbr = canonical_law_name(m.group("full")), m.group("abbr").strip()
+        if abbr.endswith("법") and full.replace(" ", "") != abbr.replace(" ", ""):
+            defined[abbr.replace(" ", "")] = full
+    full_names = {c.law_name for c in statutes if " " in c.law_name}
+    for citation in statutes:
+        written = citation.law_name.replace(" ", "")
+        if " " in citation.law_name or not written.endswith("법"):
+            continue
+        if written in defined:
+            citation.attributes.update(law_alias_candidate=defined[written], law_alias_basis="DOCUMENT_DEFINITION")
+            continue
+        stem = written[:-1]
+        if len(stem) < 4:
+            continue
+        candidates = sorted(f for f in full_names if f.replace(" ", "").startswith(stem) and f.replace(" ", "") != written)
+        if len(candidates) == 1:
+            citation.attributes.update(law_alias_candidate=candidates[0], law_alias_basis="DOCUMENT_FULL_NAME_PREFIX")

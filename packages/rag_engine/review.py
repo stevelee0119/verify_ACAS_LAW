@@ -43,13 +43,23 @@ def review_document(result, library, router, context, pii):
               "snapshot_hash": library.summary["snapshot_hash"],
               "reason": "", "document_truncated": False, "selection": None}
     result.engine_data["rag"] = review
-    if result.quarantined or result.normalized is None:
-        review.update(status="SKIPPED", reason="DOCUMENT_QUARANTINED_OR_UNREADABLE")
+    if result.normalized is None:
+        review.update(status="SKIPPED", reason="DOCUMENT_UNREADABLE")
         return review
     if library.summary["status"] not in ("READY", "PARTIAL"):
         review["reason"] = "REFERENCE_LIBRARY_UNAVAILABLE"
         return review
-    text = build_reading_text(result.normalized).text
+    if result.quarantined:
+        # 격리 문서는 지시문 블록·문자열을 뺀 본문으로만 검색·대조한다(v6 P3).
+        from packages.verification_engine.sanitized_input import sanitized_reading_text
+
+        text, review["input"] = sanitized_reading_text(result.normalized, result.findings)
+        if not text.strip():
+            review.update(status="SKIPPED", reason="NO_TEXT_AFTER_REMOVING_INSTRUCTIONS")
+            return review
+    else:
+        text = build_reading_text(result.normalized).text
+        review["input"] = {"mode": "FULL_TEXT"}
     review["document_truncated"] = len(text) > 12000
     document = text[:12000]
     selection = library.select(document + "\n" + "\n".join(context.requested_issues))

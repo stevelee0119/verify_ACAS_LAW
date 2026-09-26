@@ -287,8 +287,13 @@ def test_review_masks_all_evidence_and_never_changes_deterministic_findings(libr
     assert len(masked) >= 3  # document, reference title, reference text
     assert "untrusted_references" in json.loads(sent[0].user)
     assert result.findings == []
+    # 격리 문서에서 지시문 블록을 빼면 남는 본문이 없으면 검색·대조하지 않는다(v6 P3).
+    from packages.common.enums import FindingType
     result.quarantined = True
-    assert review_document(result, lib, Router(), context, SimpleNamespace(mask_text=mask))["status"] == "SKIPPED"
+    result.findings = [SimpleNamespace(type=FindingType.META_INSTRUCTION, advisory_only=False, block_id="b",
+                                       confidence_features={"block_ids": ["b"], "observed_text": TEXT})]
+    skipped = review_document(result, lib, Router(), context, SimpleNamespace(mask_text=mask))
+    assert skipped["status"] == "SKIPPED" and skipped["reason"] == "NO_TEXT_AFTER_REMOVING_INSTRUCTIONS"
     assert len(sent) == 1
 
 

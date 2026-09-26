@@ -88,6 +88,7 @@ from .ai_document_detector import create_ai_detector_findings, detect_ai_documen
 from .ai_residue import residue_findings, scan_residue
 from .finalize import finalize_document_findings
 from packages.document_engine.reading_text import SPACE_MAP, build_reading_text
+from packages.verification_engine.sanitized_input import injection_parts, strip_injections
 from .authorship import analyze_authorship, authorship_findings
 from .manifest import RunManifest
 from .scoring import aggregate_scores
@@ -192,9 +193,17 @@ def verification_key(
 ProgressCallback = Callable[[JobState, str, float], None]
 
 
-def reference_health(summary, documents):
-    """One block that answers "did the Drive connection work in this run?" from the run JSON."""
+def reference_health(summary, documents, settings=None):
+    """One block that answers "did the Drive connection work in this run?" from the run JSON.
+
+    Always present, also when Drive is off, so a missing setting is visible instead of silent."""
+    import os as _os
+
     diagnostics = summary.get("diagnostics") or {}
+    enabled = bool(summary.get("folder_id"))
+    configured = {"api_key": bool(_os.getenv("LV_DRIVE_API_KEY")),
+                  "service_account_file": bool(_os.getenv("LV_DRIVE_SERVICE_ACCOUNT_FILE"))}
+    disabled_reason = None if enabled else "LV_RAG_DRIVE_FOLDER_ID_NOT_SET"
     http = (diagnostics.get("http") or {}).get("totals") or {}
     statuses = http.get("by_status") or {}
     per_document = []
@@ -202,19 +211,42 @@ def reference_health(summary, documents):
         review = doc.engine_data.get("rag") or {}
         selection = review.get("selection") or {}
         per_document.append({"document_id": doc.document_id, "filename": doc.filename,
-                             "status": review.get("status"), "drive_used": bool(review.get("drive_used")),
+                             "status": review.get("status") or ("DISABLED" if not enabled else None),
+                             "drive_used": bool(review.get("drive_used")),
+                             "input": (review.get("input") or {}).get("mode"),
                              "reason": review.get("reason"), "files_selected": selection.get("files_selected", 0),
                              "sources_used": len(selection.get("sources_used") or []),
                              "model_executed": bool(review.get("model_executed"))})
-    return {"library_status": summary.get("status"),
+    return {"enabled": enabled, "disabled_reason": disabled_reason,
+            "credentials_configured": configured,
+            "network_allowed": bool(getattr(settings, "allow_network", False)) if settings is not None else None,
+            "library_status": summary.get("status"),
             "listing_succeeded": bool(summary.get("checked_at")),
-            "credential_mode": diagnostics.get("credential_mode"),
+            "credential_mode": diagnostics.get("credential_mode") or (
+                "service_account" if configured["service_account_file"] else
+                "api_key" if configured["api_key"] else "none"),
             "http_calls": http.get("count", 0),
             "http_errors": sum(n for code, n in statuses.items() if code != "200"),
             "files_seen": summary.get("files_seen", 0), "files_indexed": summary.get("files_indexed", 0),
             "files_reused": summary.get("files_reused", 0),
             "duplicate_groups": len(summary.get("duplicates") or []),
             "sync_ms": diagnostics.get("elapsed_ms"), "documents": per_document}
+
+
+def execution_summary(log):
+    """공급자별 호출·성공·실패 수와 실패 사유(앞 80자)."""
+    summary: Dict[str, Any] = {"calls": len(log), "providers": {}}
+    for entry in log:
+        provider = summary["providers"].setdefault(entry.get("provider") or "unknown",
+                                                   {"calls": 0, "ok": 0, "failed": 0, "errors": {}})
+        provider["calls"] += 1
+        if entry.get("ok"):
+            provider["ok"] += 1
+        else:
+            provider["failed"] += 1
+            reason = str(entry.get("error") or "UNKNOWN")[:80]
+            provider["errors"][reason] = provider["errors"].get(reason, 0) + 1
+    return summary
 
 
 class VerificationPipeline:
@@ -236,6 +268,38 @@ class VerificationPipeline:
 
     # -- 진입점 -----------------------------------------------------------
     def run(
+        self, run_id: str, context: ProjectContext, documents: List[DocumentInput], *,
+        progress: Optional[ProgressCallback] = None, check: Optional[Callable[[], None]] = None,
+    ) -> VerificationRunResult:
+        """모든 AI 호출을 라우터의 실행 훅에서 모아 결과의 model_executions로 남긴다.
+
+        단계마다 따로 모으면 빠지는 단계가 생긴다(법리 교차검토·AI 작성 판별이 집계에서 빠졌다). 기존 훅
+        (워커의 체크포인트)은 그대로 호출한다."""
+        log: List[Dict[str, Any]] = []
+        self._execution_document = None
+        previous = getattr(self.router, "on_execution", None)
+
+        def record(execution):
+            entry = execution.to_dict()
+            entry["document_id"] = self._execution_document
+            log.append(entry)
+            if previous:
+                previous(execution)
+
+        hooked = hasattr(self.router, "on_execution")
+        if hooked:
+            self.router.on_execution = record
+        try:
+            result = self._run(run_id, context, documents, progress=progress, check=check)
+        finally:
+            if hooked:
+                self.router.on_execution = previous
+        if hooked:
+            result.model_executions = log
+            result.run_manifest["model_execution_summary"] = execution_summary(log)
+        return result
+
+    def _run(
         self, run_id: str, context: ProjectContext, documents: List[DocumentInput], *,
         progress: Optional[ProgressCallback] = None, check: Optional[Callable[[], None]] = None,
     ) -> VerificationRunResult:
@@ -308,6 +372,7 @@ class VerificationPipeline:
 
         total = max(1, len(documents))
         for index, document in enumerate(documents):
+            self._execution_document = document.document_id
             base = 0.85 * index / total
             try:
                 document_result = self._run_document(document, context, pii, emit, base, 0.85 / total,
@@ -337,6 +402,7 @@ class VerificationPipeline:
                                        "kind": "document", "document_id": document.document_id, "reason": "처리 실패"}])
                 )
 
+        self._execution_document = None
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------
         emit(JobState.CROSS_CHECKING, "문서간 교차검증", 0.85)
         result.project_findings.extend(self._cross_check(result, manifest))
@@ -361,8 +427,8 @@ class VerificationPipeline:
             "prompt": self.settings.prompt_version, "model_config": self.settings.model_config_version()},
             environment=preflight(self.settings, self.registry, self.router))
         result.run_manifest["reference_library"] = references.summary
-        if self.settings.rag_drive_folder_id:
-            result.run_manifest["reference_library"]["health"] = reference_health(references.summary, result.documents)
+        result.run_manifest["reference_library"]["health"] = reference_health(
+            references.summary, result.documents, self.settings)
         result.timeline = build_timeline(
             [e for d in result.documents for e in _events_from(d)]
         )
@@ -710,9 +776,15 @@ class VerificationPipeline:
                 stage.error = type(exc).__name__
                 result.warnings.append(f"증거 정합성 점검 경고: {exc}")
 
-        # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다.
-        mask_for_models = (None if context.external_ai_policy == ExternalAIPolicy.ORIGINAL
-                           else (lambda text: pii.mask_text(text).masked_text))
+        # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다. 문서 속 지시문 구간은 정책과 무관하게
+        # 모델 입력에서 뺀다(v6 P3: 격리 문서도 지시문을 뺀 나머지 본문은 검토한다).
+        _, instruction_texts = injection_parts(result.findings)
+        result.engine_data["model_input"] = {"instructions_removed": len(instruction_texts),
+                                             "quarantined": result.quarantined}
+
+        def mask_for_models(text, _texts=instruction_texts):
+            text = strip_injections(text, _texts)
+            return text if context.external_ai_policy == ExternalAIPolicy.ORIGINAL else pii.mask_text(text).masked_text
 
         # 법리 주장 검토: 주장 유형 분류 → 근거 조회 → 판단(추가지시 G4). 조문 요건 대조에는 위에서 조회한
         # 공식 조문 원문을, 위헌 주장에는 헌재 결정 이력을 쓴다. 기존 규칙이 이미 판정한 문장은 다시 보지 않는다.
@@ -1036,8 +1108,9 @@ class VerificationPipeline:
             if not citation or not any(k in verdict.get("levels", {}) for k in ("level4", "level5")):
                 continue
             reason = ""
-            if result.quarantined:
-                reason = "격리 문서이므로 AI 검토를 수행하지 않음"
+            instruction_blocks, instruction_texts = injection_parts(result.findings)
+            if result.quarantined and citation.block_id in instruction_blocks:
+                reason = "문서 속 지시문과 같은 블록의 인용이므로 AI 검토를 수행하지 않음"
             elif context.profile == VerificationProfile.QUICK:
                 reason = "빠른 검토에서는 의미·적용 검토를 수행하지 않음"
             elif not official.get("full_text"):
@@ -1047,7 +1120,8 @@ class VerificationPipeline:
                                 "review_id": verdict.get("review_id"), "advisory_only": True})
                 continue
             source_text = str(official["full_text"])[:24000]
-            document_text = citation.context[:8000]
+            # 격리 문서는 지시문 구간을 뺀 인용 주변 문장만 보낸다(v6 P3).
+            document_text = strip_injections(citation.context[:8000], instruction_texts)
             if context.external_ai_policy != ExternalAIPolicy.ORIGINAL:
                 source_text = pii.mask_text(source_text).masked_text
                 document_text = pii.mask_text(document_text).masked_text

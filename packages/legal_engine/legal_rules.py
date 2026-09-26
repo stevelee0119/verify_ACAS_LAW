@@ -90,6 +90,7 @@ NEGATION_WORDS_RE = re.compile(
     r"(?:대상이\s*아니(?:다|라고|라|며|었던|면)?|해당하지\s*않(?:는다|았다|고|으며|을)?|"
     r"볼\s*수\s*없(?:다|으며|고|어서)?|인정되지\s*않(?:는다|았다|고)?|"
     r"아니(?:다|라고|라|며|었)|않(?:는다|았다|고|으며)|"
+    r"아닙니다|아니었습니다|않습니다|않았습니다|없습니다|볼\s*수\s*없습니다|"
     r"이유\s*없(?:다|어|으므로)?|배척되어야|배제되어야|적용되지\s*않(?:는다|았다)?)"
 )
 
@@ -123,10 +124,15 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
     text = build_reading_text(doc).text
     sections = _sections(text)
     admin = _is_admin_suit(text, sections["RELIEF"])
+    # 금전 지급·배상을 구하는 민사 청구취지(행정소송 서면은 제외)
+    civil = (bool(sections["RELIEF"]) and not admin
+             and bool(re.search(r"지급하라|지급한다|배상하라|반환하라", sections["RELIEF"])))
     out: List[Finding] = []
     seen: set = set()
     for rule in table.get("rules") or []:
         if rule.get("requires_admin_suit") and not admin:
+            continue
+        if rule.get("requires_civil_suit") and not civil:
             continue
         if rule.get("context") and not re.search(rule["context"], text):
             continue

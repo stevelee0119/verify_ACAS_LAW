@@ -172,11 +172,22 @@ def law_name_suffix(raw: str) -> str:
     "에게 폭언을 하였다는 이유로 군인사법" → "군인사법",
     "원고는 공공기관의 정보공개에 관한 법률" → "공공기관의 정보공개에 관한 법률".
     """
+    bracketed = re.search(r"[「『]([^」』]+)[」』]?\s*$", raw or "")
+    if bracketed and bracketed.group(1).strip():
+        # 낫표는 법령명의 경계를 표시한다. 안쪽 전체가 법령명이다(「…예방 및 대책에 관한 법률」).
+        return " ".join(bracketed.group(1).split())
     tokens = re.sub(r"[「」『』]", " ", raw or "").split()
     if not tokens:
         return ""
     kept = [tokens[-1]]
-    for token in reversed(tokens[:-1]):
+    remaining = tokens[:-1]
+    for index in range(len(remaining) - 1, -1, -1):
+        token = remaining[index]
+        if token in LAW_NAME_ENUMERATORS and kept and index > 0 and _continues_name(remaining[index - 1]):
+            # '및'·'또는' 앞 토큰이 법령명으로 끝나지 않고 조사도 붙지 않은 명사면, 법령명 안의 접속어다
+            # (학교폭력예방 및 대책에 관한 법률). 앞 토큰이 법령명이면 두 법령을 나열한 것이다(형법 및 민법).
+            kept.insert(0, token)
+            continue
         if token in LAW_NAME_PREFIX_NOISE:
             break
         if token in LAW_NAME_LINKS or token[-1] in LAW_NAME_JOINING_TAILS:
@@ -189,6 +200,17 @@ def law_name_suffix(raw: str) -> str:
             and not _joins_forward(kept):
         kept.pop(0)
     return " ".join(kept)
+
+
+LAW_NAME_ENUMERATORS = {"및", "또는"}
+LAW_KIND_TAIL_RE = re.compile(r"(?:법|법률|령|규칙|조례)$")
+
+
+def _continues_name(token: str) -> bool:
+    """'및' 앞 토큰이 법령명의 일부(조사 없는 명사)인지 본다."""
+    return (bool(re.fullmatch(r"[가-힣A-Za-z·]{2,}", token)) and not LAW_KIND_TAIL_RE.search(token)
+            and token[-1] not in SENTENCE_TAILS and token[-1] not in JOSA_TAILS
+            and token not in LAW_NAME_PREFIX_NOISE)
 
 
 def _joins_forward(tokens) -> bool:
