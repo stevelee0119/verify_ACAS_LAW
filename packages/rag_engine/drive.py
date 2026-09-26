@@ -33,9 +33,27 @@ def valid_id(value):
 def revision(item):
     if not item.get("modifiedTime") or not (item.get("version") or item.get("md5Checksum")):
         raise ReferenceError("MISSING_REVISION")
+    # Location is checked separately (access_problem): anonymous API-key responses may omit `parents`.
     return hashlib.sha256(json.dumps({k: item.get(k) for k in (
-        "id", "name", "mimeType", "modifiedTime", "version", "md5Checksum", "size", "parents")},
+        "id", "name", "mimeType", "modifiedTime", "version", "md5Checksum", "size")},
         sort_keys=True).encode()).hexdigest()
+
+
+def access_problem(listed, fresh=None):
+    """Why a listed file may not be used, as a stable code; None when usable.
+
+    `listed_parent` is the folder whose listing returned the file. A move is inferred only when a
+    fresh response names parents and that folder is not among them; Drive omits `parents` for some
+    callers (for example API-key reads of link-shared files), and an omitted field is not a move."""
+    current = fresh if fresh is not None else listed
+    if current.get("trashed"):
+        return "REFERENCE_TRASHED"
+    if (current.get("capabilities") or {}).get("canDownload") is False:
+        return "REFERENCE_DOWNLOAD_BLOCKED"
+    if fresh is not None and fresh.get("parents") and listed.get("listed_parent") \
+            and listed["listed_parent"] not in fresh["parents"]:
+        return "REFERENCE_MOVED"
+    return None
 
 
 class DriveClient:
@@ -165,6 +183,7 @@ class DriveClient:
                         self.folders[item["id"]] = (base + "/" if base else "") + str(item.get("name", ""))
                     else:
                         item["folder_path"] = self.folders.get(parent, "")
+                        item["listed_parent"] = parent
                         files[item["id"]] = item
                         if len(files) > max_files:
                             raise ReferenceError("FILE_COUNT_LIMIT")

@@ -49,6 +49,14 @@ UNAVAILABLE result; they do not silently disable checks.
   basis without a second per-file request (so large libraries do not stall on request
   latency). A new or changed file is re-read just before download, and its revision is
   verified again after download, with MD5 when available.
+- Access decisions have distinct codes: `REFERENCE_TRASHED`, `REFERENCE_DOWNLOAD_BLOCKED`,
+  `REFERENCE_MOVED`. A move is inferred only when a fresh response names parents and the
+  folder whose listing returned the file is not among them. Drive may omit `parents` for
+  API-key (anonymous) reads of link-shared files; an omitted field is not a move. The
+  fields behind each rejection (parent IDs and flags only) are logged in
+  `diagnostics.access_checks` (first 10). The cache revision no longer includes parents.
+- With an API key only link-shared ("anyone with the link") folders are listed. A subfolder
+  with narrower sharing is invisible to the listing and therefore absent from `folder_paths`.
 - Identical copies (same MD5 and size) are listed as delete candidates and only one
   kept copy is downloaded and indexed. If the kept copy is unusable, a copy is used.
   Copy markers such as "…의 사본", " (1)" and "Copy of" are ignored when reading a

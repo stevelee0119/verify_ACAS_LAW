@@ -425,3 +425,47 @@ def test_unreadable_library_is_unverified_not_irrelevant(tmp_path):
                              ProjectContext("p", external_ai_policy=ExternalAIPolicy.MASKED),
                              SimpleNamespace(mask_text=lambda v: SimpleNamespace(masked_text=v)))
     assert review["status"] == "UNVERIFIED" and review["reason"] == "NO_READABLE_DRIVE_REFERENCE"
+
+
+# --- 접근 판정: 익명(API 키) 응답의 필드 누락은 이동·권한 회수가 아니다 ----------------------------------------
+class AnonymousDrive(Drive):
+    """목록 응답에는 parents가 있고 파일 재조회 응답에는 parents가 빠지는 경우(API 키 익명 읽기)."""
+
+    def __init__(self, refs=REFS, fresh=None):
+        super().__init__(refs)
+        self.fresh = fresh or (lambda meta: {k: v for k, v in meta.items() if k != "parents"})
+
+    def inventory(self, *args, **kwargs):
+        return [{**entry, "listed_parent": ROOT} for entry in super().inventory()]
+
+    def metadata(self, file_id):
+        return self.fresh(super().metadata(file_id))
+
+
+def test_omitted_parents_in_fresh_metadata_do_not_revoke(tmp_path):
+    drive = AnonymousDrive()
+    lib = library(tmp_path, drive)
+    assert lib.summary["status"] == "READY" and len(lib.eligible) == len(REFS)
+    downloads = drive.downloads
+    lib.sync()  # listing has parents, metadata does not: cached revisions must still match
+    assert drive.downloads == downloads and lib.summary["files_reused"] == len(REFS)
+
+
+@pytest.mark.parametrize("change, reason", [
+    (lambda meta: {**meta, "parents": ["folder00000099"]}, "REFERENCE_MOVED"),
+    (lambda meta: {**meta, "capabilities": {"canDownload": False}}, "REFERENCE_DOWNLOAD_BLOCKED"),
+    (lambda meta: {**meta, "trashed": True}, "REFERENCE_TRASHED"),
+])
+def test_access_problems_have_distinct_reasons_and_details(tmp_path, change, reason):
+    drive = AnonymousDrive({("판례", "징계.txt"): "징계위원회는 혐의자에게 진술 기회를 주어야 한다."}, fresh=change)
+    lib = library(tmp_path, drive)
+    assert not lib.eligible and lib.summary["issues"][0]["reason"] == reason
+    [detail] = lib.summary["diagnostics"]["access_checks"]
+    assert detail["reason"] == reason and detail["listed_parent"] == ROOT
+    assert set(detail) >= {"listed_parents", "fresh_parents", "fresh_trashed", "fresh_can_download"}
+
+
+def test_parent_still_listed_among_several_parents_is_not_a_move(tmp_path):
+    drive = AnonymousDrive({("판례", "징계.txt"): "징계위원회는 혐의자에게 진술 기회를 주어야 한다."},
+                           fresh=lambda meta: {**meta, "parents": ["folder00000077", ROOT]})
+    assert library(tmp_path, drive).summary["status"] == "READY"

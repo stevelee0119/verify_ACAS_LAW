@@ -16,7 +16,7 @@ import time
 from filelock import FileLock, Timeout
 
 from packages.common.config import REPO_ROOT
-from .drive import DriveClient, EXPORTS, ReferenceError, revision, valid_id
+from .drive import DriveClient, EXPORTS, ReferenceError, access_problem, revision, valid_id
 from .extract import EXTRACTOR_VERSION
 from . import relevance
 from .relevance import tokens
@@ -195,8 +195,9 @@ class ReferenceLibrary:
                     continue
                 # The listing was read moments ago in this run; it already carries parents, trash state,
                 # download permission and revision, so an unchanged cached file needs no second request.
-                if item.get("trashed") or item.get("capabilities", {}).get("canDownload") is False:
-                    raise ReferenceError("REFERENCE_MOVED_OR_REVOKED")
+                problem = access_problem(item)
+                if problem:
+                    raise ReferenceError(problem)
                 folder_path = item.get("folder_path", "")
                 version = revision(item) + ":" + EXTRACTOR_VERSION
                 row = db.execute("SELECT payload FROM files WHERE id=? AND revision=?", (file_id, version)).fetchone()
@@ -207,10 +208,11 @@ class ReferenceLibrary:
                     if client.remaining() < 30:
                         raise ReferenceError("SYNC_BUDGET_EXHAUSTED")
                     fresh = client.metadata(file_id)
-                    if (fresh.get("trashed") or fresh.get("parents") != item.get("parents")
-                            or fresh.get("capabilities", {}).get("canDownload") is False):
-                        raise ReferenceError("REFERENCE_MOVED_OR_REVOKED")
-                    item = {**fresh, "folder_path": folder_path}
+                    problem = access_problem(item, fresh)
+                    if problem:
+                        self._access_detail(item, fresh, problem)
+                        raise ReferenceError(problem)
+                    item = {**fresh, "folder_path": folder_path, "listed_parent": item.get("listed_parent")}
                     version = revision(item) + ":" + EXTRACTOR_VERSION
                     mime = item.get("mimeType", "")
                     if (mime not in EXPORTS and mime != "application/pdf"
@@ -224,7 +226,10 @@ class ReferenceLibrary:
                     diagnostics["downloads"]["count"] += 1
                     diagnostics["downloads"]["bytes"] += len(data)
                     after = client.metadata(file_id)
-                    if revision(after) != revision(item) or after.get("capabilities", {}).get("canDownload") is False:
+                    if access_problem(item, after):
+                        self._access_detail(item, after, access_problem(item, after))
+                        raise ReferenceError(access_problem(item, after))
+                    if revision(after) != revision(item):
                         raise ReferenceError("REFERENCE_CHANGED_DURING_DOWNLOAD")
                     if item.get("md5Checksum") and hashlib.md5(data).hexdigest() != item["md5Checksum"]:
                         raise ReferenceError("REFERENCE_CHECKSUM_MISMATCH")
@@ -270,6 +275,16 @@ class ReferenceLibrary:
                     break
             except Exception:
                 self.summary["issues"].append({"file_id": file_id, "reason": "REFERENCE_PROCESSING_FAILED"})
+
+    def _access_detail(self, listed, fresh, problem):
+        """Record the fields behind an access decision (IDs and flags only) for the run JSON."""
+        details = self.summary["diagnostics"].setdefault("access_checks", [])
+        if len(details) < 10:
+            details.append({"file_id": listed.get("id"), "reason": problem,
+                            "listed_parent": listed.get("listed_parent"),
+                            "listed_parents": listed.get("parents"), "fresh_parents": fresh.get("parents"),
+                            "fresh_trashed": fresh.get("trashed"),
+                            "fresh_can_download": (fresh.get("capabilities") or {}).get("canDownload")})
 
     def select(self, text, limit=6):
         """Choose relevant files (text match plus folder/file-name bonus), then their best excerpts.
