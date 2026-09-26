@@ -283,5 +283,12 @@
       "청구 구조·과장 법리 규칙: 민사 청구취지의 행정·징계 처분 요구(CIV.RELIEF_ADMIN_DISPOSITION, 근거 행정소송법 제4조), 요건·단서를 생략한 무조건적 책임 단정(GEN.LIABILITY_REQUIREMENTS_OMITTED), 행정·심의 결정의 민사 기속 주장(GEN.ADMIN_DECISION_BINDS_CIVIL). 모두 확인 요청(SUSPICIOUS·C). 부정문 판정에 합쇼체(아닙니다·않습니다) 추가",
       "기록 보완: Drive 상태 블록(health)을 비활성일 때도 기록(사유·인증 설정 여부·네트워크), 모든 AI 호출을 라우터 실행 훅에서 모아 model_executions와 공급자별 요약(model_execution_summary)으로 기록, 법리 교차검토 묶음을 2건으로 줄여 출력 한도 잘림 방지"
     ]
+  },
+  {
+    "version": "0.9.7",
+    "date": "2026-09-26",
+    "changes": [
+      "화면 좌상단 제목을 '종합행정학교 법무교육단 법률문서 검증시스템'으로 변경: 기관명(윗줄, 작은 글씨)과 시스템명(아랫줄)을 엠블럼 높이 안에 두 줄로 배치하고, 좁은 화면에서는 단어 단위로 줄바꿈(기관명 최소 9px). 제목 웹폰트 서브셋에 새 글자 9자를 추가(Noto Sans KR 2.004, OFL)"
+    ]
   }
 ]

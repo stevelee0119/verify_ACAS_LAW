@@ -92,7 +92,15 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 page.evaluate("document.fonts.ready")
                 size = float(title.evaluate("el => getComputedStyle(el).fontSize").removesuffix("px"))
                 assert size == 22 if width > 700 else 13 <= size <= 22
-                assert page.evaluate("document.fonts.check('600 22px \"ACAS Title\"', '법률문서 검증시스템')")
+                assert page.evaluate("document.fonts.check('600 22px \"ACAS Title\"', '종합행정학교 법무교육단 법률문서 검증시스템')")
+                # 기관명(윗줄)과 시스템명(아랫줄)이 엠블럼 높이 안에 두 줄로 놓이고, 기관명은 9px 이상이다.
+                expect(title.locator(".brand-org")).to_have_text("종합행정학교 법무교육단")
+                expect(title.locator(".brand-name")).to_have_text("법률문서 검증시스템")
+                assert title.evaluate("""el => {
+                    const org = el.querySelector('.brand-org').getBoundingClientRect();
+                    const name = el.querySelector('.brand-name').getBoundingClientRect();
+                    return org.bottom <= name.top + 1 && parseFloat(getComputedStyle(el.querySelector('.brand-org')).fontSize) >= 9;
+                }""")
                 # 폭과 무관하게 제목은 엠블럼 바로 옆(같은 줄)에 있어야 한다.
                 assert title.evaluate("""el => {
                     const t = el.getBoundingClientRect(), e = document.querySelector('.brand-emblem').getBoundingClientRect();

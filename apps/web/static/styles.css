@@ -202,6 +202,26 @@ h3 {
   white-space: nowrap;
 }
 
+/* 기관명(윗줄)과 시스템명(아랫줄)을 엠블럼 높이 안에 두 줄로 쌓는다. */
+.brand-title:has(.brand-org) {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  line-height: 1.18;
+}
+
+.brand-org {
+  font-size: max(9px, .6em);
+  font-weight: 500;
+  letter-spacing: .04em;
+  color: #4d6a65;
+}
+
+.brand-name {
+  font-size: 1em;
+  font-weight: 600;
+}
+
 .brand strong>span {
   font-weight: 400
 }
@@ -1038,6 +1058,10 @@ table {
   .brand-sub {
     padding-left: 6px;
     font-size: 13px
+  }
+
+  .brand-org {
+    letter-spacing: 0
   }
 }
 

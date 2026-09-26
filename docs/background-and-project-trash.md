@@ -28,10 +28,10 @@
 
 ## 제목 글꼴
 
-상단 제목은 22px, 600 굵기의 로컬 한글 웹폰트로 표시한다. 좁은 화면에서는 제목을 별도 줄에 배치한다. 외부 폰트 서버를 호출하지 않는다.
+상단 제목은 기관명 '종합행정학교 법무교육단'(윗줄, 제목의 0.6배·최소 9px)과 시스템명 '법률문서 검증시스템'(아랫줄, 22px·600 굵기)을 엠블럼 높이 안에 두 줄로 쌓아 로컬 한글 웹폰트로 표시한다. 좁은 화면에서는 각 줄이 단어 단위로 줄바꿈된다. 외부 폰트 서버를 호출하지 않는다.
 
 - 원본: [Google Fonts Noto Sans KR](https://github.com/google/fonts/tree/main/ofl/notosanskr)
-- 배포 파일: `apps/web/static/fonts/acas-title.woff2` (제목에 필요한 문자만 포함)
+- 배포 파일: `apps/web/static/fonts/acas-title.woff2` (제목에 필요한 19자만 포함, Noto Sans KR 2.004 가변 굵기에서 `pyftsubset`으로 생성. 제목 문구를 바꾸면 새 글자를 넣어 다시 생성해야 한다)
 - 라이선스: `apps/web/static/fonts/OFL-NotoSansKR.txt` (SIL Open Font License 1.1)
 
 ## 회귀 검증
