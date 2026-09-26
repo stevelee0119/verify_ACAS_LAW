@@ -232,7 +232,8 @@ const workflowUI = (() => {
     for (const verdict of doc?.engine_data?.legal_verdicts || []) {
       if(!citationIds.has(verdict.citation_id))continue;
       if(verdict.components?.length)area.append(citationComponents(verdict,(doc.citations || []).find(c=>c.citation_id===verdict.citation_id)));
-      const record=verdict.official_record;
+      const inline=verdict.official_record;
+      const record=state.result?.source_objects?.[inline?.source_object_ref] || inline;
       if (!record) continue;
       const detail=node("details",null,"detail-section");
       detail.append(node("summary",`공식 출처 대조 · ${verdict.reference_date || record.effective_date || "기준일 미확인"}`));

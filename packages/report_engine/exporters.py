@@ -102,7 +102,11 @@ def to_payload(run_result: Any, *, reveal_sealed: bool = False) -> dict:
         payload["report"] = run_result.report_metadata
         payload["review_snapshot"] = {key: value for key, value in run_result.review_snapshot.items()
                                       if key != "engine_result"}
-    return payload
+    from .source_objects import compact_sources
+
+    if getattr(run_result, "source_objects", None):
+        payload["source_objects"] = run_result.source_objects
+    return compact_sources(payload)
 
 
 def safe_cell(value):
