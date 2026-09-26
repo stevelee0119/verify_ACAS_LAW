@@ -1,0 +1,16 @@
+{
+  "baseline_commit": "a78c72eb039e23503b5f6ea76bc90691396d0e70",
+  "execution_commit": "5777e56",
+  "scope": "Offline synthetic PDF; no live legal, Drive or model assertions",
+  "authorship": "UNCERTAIN",
+  "quarantined": true,
+  "protected_findings": [
+    ["adversarial_engine:META_INSTRUCTION", "SUSPICIOUS", "HIGH", "C"],
+    ["FMT.FUTURE_CASE_YEAR", "CONTRADICTED", "HIGH", "A"],
+    ["claim_engine.calculation:ARITHMETIC_MISMATCH", "CONTRADICTED", "HIGH", "A"],
+    ["CIV.RELIEF_ADMIN_DISPOSITION", "SUSPICIOUS", "MEDIUM", "C"],
+    ["GEN.LIABILITY_REQUIREMENTS_OMITTED", "SUSPICIOUS", "MEDIUM", "C"],
+    ["GEN.ADMIN_DECISION_BINDS_CIVIL", "SUSPICIOUS", "MEDIUM", "C"]
+  ],
+  "arithmetic": {"stated": "12785000", "computed": "11785000"}
+}

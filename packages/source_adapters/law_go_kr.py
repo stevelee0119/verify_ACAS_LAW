@@ -398,7 +398,7 @@ def _normalize_law_payload(payload: Any) -> List[Dict[str, Any]]:
         out.append(
             {
                 "law_name": _first(item, "법령명한글", "law_name"),
-                "abbreviation": _first(item, "법령약칭명", "abbreviation"),
+                "abbreviation": _first(item, "법령명약칭", "법령약칭명", "abbreviation"),
                 "promulgation_date": _canon_date(_first(item, "공포일자", "") or ""),
                 "effective_from": _canon_date(_first(item, "시행일자", "") or ""),
                 "law_id": _first(item, "법령ID"),

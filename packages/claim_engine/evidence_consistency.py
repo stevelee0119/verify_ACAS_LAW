@@ -490,10 +490,15 @@ def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]]
     text = reading.text
     if SIGNATURE_OMITTED_RE.search(text) and re.search(r"진\s*술\s*서|확\s*인\s*서", text):
         m = SIGNATURE_OMITTED_RE.search(text)
+        local = text[max(0, m.start() - 120):m.end() + 40]
+        pleading = bool(re.search(r"소\s*장|청\s*구\s*취\s*지", text[:1500]) and
+                        re.search(r"원고|피고|대리인", local))
         out.append(_finding(doc, FindingType.EVIDENCE_FORM_DEFECT, EvidenceGrade.B, Severity.MEDIUM,
-                            f"진술서에 서명이 없다: '{m.group(0)}'",
-                            "진술인의 서명·날인이 생략되어 작성 명의를 확인할 수 없다.",
-                            text[max(0, m.start() - 40):m.end() + 20]))
+                            "소장 작성자 기명날인 확인 필요" if pleading else f"진술서에 서명이 없다: '{m.group(0)}'",
+                            "소장 작성자란에 서명 생략이 기재되어 있다. 제출본의 기명날인을 확인해야 한다. 진술서의 서명 누락이나 위조 판정이 아니다."
+                            if pleading else "진술인의 서명·날인이 생략되어 작성 명의를 확인할 수 없다.",
+                            text[max(0, m.start() - 40):m.end() + 20],
+                            status=VerificationStatus.UNVERIFIED if pleading else VerificationStatus.CONTRADICTED))
     statement_start = _statement_start(text)
     proximity: List[str] = []
     distance: List[str] = []

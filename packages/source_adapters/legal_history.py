@@ -126,8 +126,15 @@ def _children(raw: dict, key: str, number_key: str, text_key: str, level: str) -
         number = (str(item.get(number_key) or "").rstrip(".) ") if level == "subitem"
                   else provision_number(item.get(number_key)))
         node = {"number": number, "text": body_text(item.get(text_key)), "raw": item}
-        if not number and not (level == "paragraph" and number_key not in item):
-            raise ValueError(f"Missing {level} number")
+        if not number and level == "paragraph":
+            # Some official responses carry an empty number but an explicit circled marker in text.
+            marker = re.match(r"^\s*([①-⑳㉑-㉟㊱-㊿])", node["text"])
+            if marker:
+                node["number"] = number = provision_number(marker[1])
+            elif str(item.get(number_key) or "").strip():
+                node["number_unresolved"] = True
+        elif not number:
+            raise ValueError(f"조항 번호 해석 불가: {level}")
         if level == "paragraph":
             node["items"] = _children(item, "호", "호번호", "호내용", "item")
         if level == "item":
@@ -227,6 +234,8 @@ def select_provision(law: dict, article: str, paragraph: str | None = None,
                 implicit = [p for p in node.get("paragraphs", []) if p["number"] is None]
                 rows = implicit[0].get("items", []) if len(implicit) == 1 else []
         matches = [r for r in rows if r["number"] == wanted]
+        if level == "paragraph" and any(r.get("number_unresolved") for r in rows):
+            return {"status": "UNVERIFIED", "path": path, "reason": "항 번호가 불명확하여 지정 항을 확정하지 못함"}
         if not matches and level == "article" and rows:
             # 조회한 버전의 전체 조문 목록을 모두 대조했는데 없다. 조회 실패와 구별해
             # 범위(그 버전의 조문 수)와 함께 돌려준다. 다른 버전·부칙에 있었을 가능성은 남는다.

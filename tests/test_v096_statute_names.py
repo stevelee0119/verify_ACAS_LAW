@@ -192,11 +192,12 @@ def test_without_alias_the_absence_is_still_reported(adapter, monkeypatch):
     assert any(f.type.value == "STATUTE_NONEXISTENT" for f in verdict.findings)
 
 
-def test_alias_that_is_also_absent_keeps_the_absence(adapter, monkeypatch):
+def test_unresolved_document_alias_is_unverified_not_a_hard_block(adapter, monkeypatch):
     install(monkeypatch, adapter, lambda params: [])
     verdict = verify(adapter, cite("시험폭력예방법", FULL))
     assert verdict.review["law_alias"]["found"] is False
-    assert any(f.type.value == "STATUTE_NONEXISTENT" for f in verdict.findings)
+    assert verdict.status.value == "UNVERIFIED"
+    assert not any(f.type.value == "STATUTE_NONEXISTENT" for f in verdict.findings)
 
 
 @pytest.mark.parametrize("abbreviation_field", ["법령약칭명", "abbreviation"])

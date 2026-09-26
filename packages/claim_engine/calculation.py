@@ -224,6 +224,9 @@ class CalculationEngine:
         findings.extend(self._verify_line_items(doc, seen_blocks))
         findings = self._deduplicate_totals(merge_same_total(findings))
         findings.extend(self._verify_percentages(doc, findings))
+        from .claim_amounts import claim_amount_findings
+
+        findings.extend(claim_amount_findings(doc))
         return findings
 
     def _deduplicate_totals(self, findings: List[Finding]) -> List[Finding]:

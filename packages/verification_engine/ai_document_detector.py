@@ -522,8 +522,10 @@ _CONTRADICTION_WORDS = re.compile(r"다르|다름|다릅|혼재|상충|불일치
 
 
 def value_anchors(text: str) -> set:
+    from packages.claim_engine.calculation import parse_amounts
+
     anchors = {f"D:{int(y)}-{int(m)}-{int(d)}" for y, m, d in _ANCHOR_DATE.findall(text or "")}
-    anchors |= {f"A:{a.replace(',', '')}" for a in _ANCHOR_AMOUNT.findall(text or "")}
+    anchors |= {f"A:{format(a.value.normalize(), 'f')}" for a in parse_amounts(text or "")}
     anchors |= {f"L:{law}:{int(n)}" for law, n in _ANCHOR_ARTICLE.findall(text or "")}
     return anchors
 

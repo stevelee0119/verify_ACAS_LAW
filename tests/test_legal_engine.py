@@ -135,8 +135,15 @@ def test_unknown_case_is_unverified_not_declared_absent(registry):
     assert all(f.evidence_grade == EvidenceGrade.U for f in findings)
 
 
-def test_impossible_case_number_is_reported_even_when_lookup_is_unavailable(registry):
+def test_impossible_case_number_is_reported_even_when_lookup_is_unavailable(registry, monkeypatch):
+    calls = []
+    original = registry.law.search_case
+    def lookup(number, **kwargs):
+        calls.append(number)
+        return original(number, **kwargs)
+    monkeypatch.setattr(registry.law, "search_case", lookup)
     _, result = _verify(registry, "대법원 2099. 3. 3. 선고 2099도88888 판결")
+    assert "2099도88888" in calls
     findings = [f for f in result.findings if f.document_id == "D1"]
     # v3 D5: 제목은 위반 유형별(날짜 불가능 / 법원–부호 불일치 / 연도 역전·불가능)
     assert [("(INVALID_FORMAT)" in f.title and "연도 불가능" in f.title) for f in findings] == [True]

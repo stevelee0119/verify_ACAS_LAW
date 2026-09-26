@@ -36,7 +36,7 @@ NOT_PROVIDED_RE = re.compile(
 ATTACHED_STATUS_RE = re.compile(r"^(첨부|제출|있음|o|○|◯|y|yes|첨부함|제출함)$", re.IGNORECASE)
 MISSING_STATUS_RE = re.compile(r"(미\s*첨부|미\s*제출|없음|^x$|^×$|^-$|^n$|^no$|첨부\s*안\s*됨|제출\s*안\s*됨|추후)",
                                re.IGNORECASE)
-NAME_HEADER_RE = re.compile(r"(자료명|증거명|문서명|서류명|첨부\s*자료|증거\s*자료|명칭|자료)")
+NAME_HEADER_RE = re.compile(r"(서증명|자료명|증거명|문서명|서류명|첨부\s*자료|증거\s*자료|명칭|자료)")
 STATUS_HEADER_RE = re.compile(r"(첨부\s*여부|제출\s*여부|첨부|제출|비고|상태|여부)")
 ID_HEADER_RE = re.compile(r"(번호|증거번호|호증|순번|no\.?)", re.IGNORECASE)
 LIST_ITEM_RE = re.compile(
@@ -48,7 +48,7 @@ EVIDENCE_NOUN_RE = re.compile(
     r"영수증|내역서|기록|대장|문자메시지|메시지|캡처|원본|사본))"
 )
 HASH_RE = re.compile(
-    r"(?P<algo>SHA[-\s]?256|SHA[-\s]?1|MD5|해시(?:값)?|hash)\s*(?:값)?\s*(?:은|는|:|：|=)?\s*"
+    r"(?P<algo>(?:(?:해시(?:값)?|hash)\s*[:：=]\s*)?(?:SHA[-\s]?256|SHA[-\s]?1|MD5)|해시(?:값)?|hash)\s*(?:값)?\s*(?:은|는|:|：|=)?\s*"
     r"[\"'“]?(?P<value>[0-9A-Za-z][0-9A-Za-z\-_]{5,127})",
     re.IGNORECASE,
 )
@@ -171,6 +171,8 @@ def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             continue
         m = LIST_ITEM_RE.match(text)
         if m:
+            if re.match(r"(?:위|본|해당)\s*(?:서증|자료|첨부|문서)", m.group("name")):
+                continue
             items.append({"name": m.group("name").strip(), "reference": " ".join(m.group("label").split()),
                           "source": "LIST", "page": block.page, "block_id": block.block_id,
                           "stated_status": block.text.strip()})
@@ -184,14 +186,15 @@ def _sentences(text: str) -> List[str]:
 def _statement_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """본문에서 '…은 첨부되지 않았다' 같은 진술과 그 대상 자료를 찾는다."""
     items = []
-    for block in doc.body_blocks():
-        if block.block_type == "table":
-            continue
+    for block in doc.prose_blocks():
         for sentence in _sentences(block.text):
             if not NOT_PROVIDED_RE.search(sentence) or not re.search(r"첨부|제출|자료|증거|파일", sentence):
                 continue
             names = [" ".join(m.group("name").split()) for m in EVIDENCE_NOUN_RE.finditer(sentence)]
             for name in dict.fromkeys(n for n in names if len(_norm(n)) >= 2):
+                name = re.sub(r"^(?:및|또는)\s+", "", name).strip()
+                if re.fullmatch(r"(?:본|원본|사본|해당|위|증거|서증)\s*(?:파일|자료)", name):
+                    continue
                 items.append({"name": name, "source": "STATEMENT", "page": block.page,
                               "block_id": block.block_id, "stated_status": sentence.strip()[:200]})
     return items
@@ -207,11 +210,16 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
     uploads = list(uploads)
     raw = _table_items(doc) + _exhibit_table_items(doc) + _line_items(doc) + _statement_items(doc)
     merged: Dict[str, Dict[str, Any]] = {}
+    references = {}
     for item in raw:
         key = _norm(item["name"])
-        target = merged.get(key)
+        ref = _norm(item.get("reference") or "")
+        target = references.get(ref) if ref else None
+        target = target or merged.get(key)
         if target is None:
             merged[key] = {**item, "mentions": [dict(item)]}
+            if ref:
+                references[ref] = merged[key]
         else:
             target["mentions"].append(dict(item))
             for field_name in ("reference", "table_ref", "row", "columns", "table_title"):
@@ -252,12 +260,17 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                       "mentions": item["mentions"][:5]})
     hashes = []
     for m in HASH_RE.finditer(text):
-        window = text[max(0, m.start() - 80):m.end() + 40]
+        start = max(text.rfind("\n", 0, m.start()) + 1, m.start() - 160)
+        window = text[start:m.end() + 40]
         algorithm = _algorithm(m.group("algo"), window)
-        owner = next((i for i in items if _norm(i["name"]) and _norm(i["name"]) in _norm(window)), None)
+        owner = next((i for i in items if i.get("reference") and _norm(i["reference"]) in _norm(window)), None)
+        if owner is None:
+            matches = [i for i in items if _norm(i["name"]) and _norm(i["name"]) in _norm(window)]
+            owner = matches[0] if len(matches) == 1 else None
         upload = next((u for u in uploads if owner and u.get("document_id") == owner.get("uploaded_document_id")), None)
         check = hash_check(m.group("value"), algorithm, upload.get("sha256") if upload else None)
-        check.update(excerpt=" ".join(window.split()), related_item=owner["name"] if owner else None)
+        check.update(excerpt=" ".join(window.split()), related_item=owner["name"] if owner else None,
+                     related_reference=owner.get("reference") if owner else None)
         hashes.append(check)
         if owner is not None:
             owner["hash"] = check

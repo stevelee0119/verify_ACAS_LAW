@@ -77,7 +77,7 @@ LAW_RE = re.compile(
 )
 # 앞 조문 인용에 이어지는 조문: "및 제751조", ", 제4조 제2항", "와 제9조의2"
 CONTINUED_ARTICLE_RE = re.compile(
-    r"\s*(?:,|및|또는|와|과|·|ㆍ)\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
+    r"\s*(?:,|및|또는|와|과|·|ㆍ|(?:은|는)\s*[^.?!。\n「」『』,]{1,90},)\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?)")
 # "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
 SAME_LAW_RE = re.compile(r"(?:^|\s)(?:같은|동|위)\s*법(?:률)?$")
@@ -383,6 +383,9 @@ def extract_from_text(
         # "제750조 및 제751조", "제3조, 제4조": 법령명 없이 이어진 조문도 같은 법령의 인용이다.
         head_id, position = citations[-1].citation_id, m.end()
         while (more := CONTINUED_ARTICLE_RE.match(text, position)):
+            bridge = text[position:more.start("ref")]
+            if re.search(r"[가-힣]+법(?:률)?|제\s*\d+\s*조", bridge):
+                break
             number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
             span_start = more.start("ref")
             citations.append(Citation.create(

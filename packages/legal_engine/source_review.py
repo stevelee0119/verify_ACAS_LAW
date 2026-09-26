@@ -62,6 +62,11 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
             verdict.notes.append(f"'{citation.law_name}'은(는) 목록에 없어 문서의 정식 법령명 「{alias}」로 조회했다"
                                  "(약칭으로 판단한 근거는 문서 안의 표기다)")
             response = retried
+        else:
+            # An unresolved alias (including a failed detail parse) is not a nonexistent law.
+            verdict.notes.append("법령 약칭 후보를 확인하지 못했다. 정식명칭·조회 상태를 확인해야 한다")
+            verdict.findings.append(verifier._unverified_finding(citation, verdict.notes[-1], retried.source_record))
+            return verdict
     if response.ok and (response.message or "").startswith("EXACT_LAW_NOT_FOUND:"):
         _law_absent(verdict, response)
         return verdict
