@@ -5,7 +5,13 @@ import json
 
 import pytest
 
-from scripts.eval_v4_scoring import SCORER_VERSION, allowed_types, score, write_new
+from scripts.eval_v4_scoring import REQUIRED_DOCUMENT_ENGINES, SCORER_VERSION, allowed_types, score, write_new
+
+
+def _manifest(*doc_ids):
+    return {"engines": {name: {"executed": True, "documents": [
+        {"document_id": doc_id, "inputs": 1} for doc_id in doc_ids]}
+        for name in ("parsing", *REQUIRED_DOCUMENT_ENGINES)}}
 
 
 def _f(fid, ftype, status, title, *, doc="D-01", adv=False, grade="A", page=1, features=None):
@@ -30,7 +36,7 @@ GT = {"version": "synthetic", "documents": [
 
 def _report(d01, d05=None):
     docs = [_doc("D-01", d01)] + ([_doc("D-05", d05)] if d05 is not None else [])
-    return {"documents": docs, "project_findings": [], "run_manifest": {}}
+    return {"documents": docs, "project_findings": [], "run_manifest": _manifest(*(d["document_id"] for d in docs))}
 
 
 def test_legacy_counterexample_verified_and_unverified_with_matching_numbers_and_no_control_is_blocked():
@@ -102,7 +108,7 @@ def test_project_findings_are_not_attached_to_every_document():
     xdoc = _f("p", "CROSS_DOCUMENT_CONTRADICTION", "CONTRADICTED", "입사일 2021. 3. 4. ↔ 2021. 4. 3.", doc="D-01",
               features={"documents": ["D-01_합성.pdf"]})
     report = {"documents": [_doc("D-01", []), _doc("D-02", []), _doc("D-05", [])], "project_findings": [xdoc],
-              "run_manifest": {}}
+              "run_manifest": _manifest("D-01", "D-02", "D-05")}
     result = score(gt, report)
     hits = [i["doc"] for i in result["items"] if i["result"] == "CONFIRMED_HIT"]
     assert hits == ["D-01"]
@@ -115,7 +121,8 @@ def test_project_findings_are_not_attached_to_every_document():
     (_doc("D-05", [_f("z", "DRAFT_ARTIFACT", "SUSPICIOUS", "참고", doc="D-05", adv=True)]), "PASS"),
 ])
 def test_control_document_status(control_doc, status):
-    report = {"documents": [_doc("D-01", []), control_doc], "project_findings": [], "run_manifest": {}}
+    report = {"documents": [_doc("D-01", []), control_doc], "project_findings": [],
+              "run_manifest": _manifest("D-01", "D-05")}
     control = next(d for d in score(GT, report)["coverage"]["per_document"] if d["doc"] == "D-05")
     assert control["control_status"] == status
 

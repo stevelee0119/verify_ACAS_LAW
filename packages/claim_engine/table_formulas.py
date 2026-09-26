@@ -23,6 +23,7 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 
 ENGINE_NAME = "claim_engine.calculation"
+UNIT_RE = re.compile(r"[(（\[]\s*(?:단위\s*[:：]\s*)?(?P<unit>백만|천만|억|만|천)?(?:원|₩|￦|KRW)\s*[)）\]]", re.IGNORECASE)
 
 # 역할 이름(공백·괄호를 뺀 이름 전체가 일치해야 한다)
 ROLES: Dict[str, "re.Pattern[str]"] = {
@@ -65,7 +66,7 @@ FORMULAS: Tuple[Formula, ...] = (
 
 def role_of(label: Any) -> Optional[str]:
     """열·행 이름 → 역할. 단위 표기('(원)', '(₩)')와 공백·괄호는 무시하고 이름 전체로 맞춘다."""
-    text = re.sub(r"[(（\[]\s*(?:원|₩|￦|KRW|천원|만원)\s*[)）\]]", "", str(label or ""))
+    text = UNIT_RE.sub("", str(label or ""))
     compact = re.sub(r"[\s()（）\[\]:：·ㆍ]", "", text)
     for role, pattern in ROLES.items():
         if pattern.match(compact):
@@ -73,11 +74,20 @@ def role_of(label: Any) -> Optional[str]:
     return None
 
 
-def _amount(cell: Any) -> Optional[Decimal]:
-    from .calculation import parse_cell_amount
+def _amount(cell: Any, *labels: str) -> Optional[Decimal]:
+    from .calculation import UNIT_MULTIPLIER, parse_cell_amount
 
-    parsed = parse_cell_amount(str(cell or ""))
-    return abs(parsed.value) if parsed is not None else None
+    text = str(cell if cell is not None else "").strip()
+    parsed = parse_cell_amount(text)
+    # A partial number in an unreadable/expression cell is not an arithmetic proof.
+    if parsed is None or parsed.start != 0 or parsed.end != len(text):
+        return None
+    if not re.fullmatch(r"[-−+]?[\d,.]+", text):
+        return parsed.value  # Explicit cell currency already includes its multiplier.
+    multipliers = {UNIT_MULTIPLIER[m.group("unit")] for label in labels for m in UNIT_RE.finditer(label)}
+    if len(multipliers) > 1:
+        return None
+    return parsed.value * next(iter(multipliers), 1)
 
 
 def _applicable(formula: Formula, roles: Dict[int, Optional[str]], amount_slots: Sequence[int]) -> bool:
@@ -125,29 +135,31 @@ def _row_wise(doc: NormalizedDocument, table: Dict[str, Any], cells: List[List[s
 
     header = cells[0]
     roles = {i: role_of(name) for i, name in enumerate(header)}
-    amount_cols = [i for i in range(len(header)) if i > 0 and sum(1 for r in cells[1:] if i < len(r) and _amount(r[i]) is not None)]
+    amount_cols = [i for i in range(len(header)) if roles[i] is not None
+                   or (i > 0 and any(i < len(r) and _amount(r[i]) is not None for r in cells[1:]))]
     out: List[Finding] = []
     for formula in FORMULAS:
         if not _applicable(formula, roles, amount_cols):
             continue
         target_col = next(i for i in amount_cols if roles[i] == formula.target)
         for row_index, row in enumerate(cells[1:], start=1):
-            stated = _amount(row[target_col]) if target_col < len(row) else None
+            amounts = {i: _amount(row[i], header[i]) if i < len(row) else None for i in amount_cols}
+            stated = amounts[target_col]
             values: Dict[str, List[Decimal]] = {}
             unreadable = False
             for i in amount_cols:
                 if i == target_col:
                     continue
-                value = _amount(row[i]) if i < len(row) else None
+                value = amounts[i]
                 if value is None:
-                    unreadable = unreadable or bool(str(row[i] if i < len(row) else "").strip())
+                    unreadable = True
                     continue
                 values.setdefault(roles[i], []).append(value)
             computed = _compute(formula, values)
             if stated is None or computed is None or unreadable or abs(stated - computed) <= TOLERANCE:
                 continue
-            parts = " ".join(f"{'−' if roles[i] in formula.minus else '+'} {header[i]} {_amount(row[i]):,}"
-                             for i in amount_cols if i != target_col and i < len(row) and _amount(row[i]) is not None)
+            parts = " ".join(f"{'−' if roles[i] in formula.minus else '+'} {header[i]} {amounts[i]:,}원"
+                             for i in amount_cols if i != target_col)
             out.append(_finding(doc, formula, stated, computed, table, f"row{row_index}",
                                 " | ".join(header) + "\n" + " | ".join(row), parts.lstrip("+ ")))
     return out
@@ -161,19 +173,24 @@ def _column_wise(doc: NormalizedDocument, table: Dict[str, Any], cells: List[Lis
     roles = {i: role_of(r[0] if r else "") for i, r in enumerate(rows)}
     out: List[Finding] = []
     for col in range(1, len(cells[0])):
-        amount_rows = [i for i, r in enumerate(rows) if col < len(r) and _amount(r[col]) is not None]
+        amount_rows = [i for i, r in enumerate(rows) if roles[i] is not None
+                       or (col < len(r) and _amount(r[col]) is not None)]
+        amounts = {i: _amount(rows[i][col], rows[i][0], cells[0][col])
+                   if col < len(rows[i]) else None for i in amount_rows}
         for formula in FORMULAS:
             if not formula.minus or not formula.column_wise or not _applicable(formula, roles, amount_rows):
+                continue
+            if any(value is None for value in amounts.values()):
                 continue
             target_row = next(i for i in amount_rows if roles[i] == formula.target)
             values: Dict[str, List[Decimal]] = {}
             for i in amount_rows:
                 if i != target_row:
-                    values.setdefault(roles[i], []).append(_amount(rows[i][col]))
-            stated, computed = _amount(rows[target_row][col]), _compute(formula, values)
+                    values.setdefault(roles[i], []).append(amounts[i])
+            stated, computed = amounts[target_row], _compute(formula, values)
             if computed is None or stated is None or abs(stated - computed) <= TOLERANCE:
                 continue
-            parts = " ".join(f"{'−' if roles[i] in formula.minus else '+'} {rows[i][0]} {_amount(rows[i][col]):,}"
+            parts = " ".join(f"{'−' if roles[i] in formula.minus else '+'} {rows[i][0]} {amounts[i]:,}원"
                              for i in amount_rows if i != target_row)
             out.append(_finding(doc, formula, stated, computed, table, f"col{col}",
                                 "\n".join(" | ".join(r) for r in cells), parts.lstrip("+ ")))
@@ -184,7 +201,7 @@ def formula_graph_findings(doc: NormalizedDocument) -> List[Finding]:
     out: List[Finding] = []
     for index, raw in enumerate(doc.structure.get("tables") or []):
         table = dict(raw, table_ref=raw.get("table_ref") or f"table-{index}")
-        cells = [[str(c or "").strip() for c in row] for row in raw.get("cells") or []]
+        cells = [[str(c if c is not None else "").strip() for c in row] for row in raw.get("cells") or []]
         if len(cells) < 2 or len(cells[0]) < 2:
             continue
         out += _row_wise(doc, table, cells)

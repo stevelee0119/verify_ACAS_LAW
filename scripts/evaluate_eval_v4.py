@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""eval_v4 채점 CLI (채점기 v2: scripts/eval_v4_scoring.py).
+"""eval_v4 채점 CLI (채점기 v3: scripts/eval_v4_scoring.py).
 
     python scripts/evaluate_eval_v4.py --answer-key <정답지.json> --report reports/verification_v090_eval_v4.json
 

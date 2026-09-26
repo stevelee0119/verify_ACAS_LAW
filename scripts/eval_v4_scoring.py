@@ -1,4 +1,4 @@
-"""eval_v4 정답지 채점기 v2 (SCORER_VERSION).
+"""eval_v4 정답지 채점기 v3 (SCORER_VERSION).
 
 이전 채점기(scripts/evaluate_eval_v4.py, 0.9.0 시점, 이하 v1)의 문제와 v2의 기준
   v1: 사건번호·날짜·금액 하나만 finding 글에 들어 있어도 +4점으로 적중(HIT) 처리 → 유형이 다르거나 '확인됨(VERIFIED)'·
@@ -15,7 +15,8 @@
           missing_items·differences 등)에만 나열 항목마다 하나씩 대응한다(최대 이분 매칭).
       대조군(결함 항목이 없는 문서)이 결과에 없거나, 추출 실패·격리되면 '평가 불완전'이다(오탐 0으로 보지 않는다).
       오탐은 전체 문서에서 센다. 합산 종합점수는 내지 않고 지표를 나눠 보고한다.
-v1과 v2의 수치는 정의가 달라 증감으로 비교하지 않는다.
+v3: 법령명·조항호를 함께 대조하고 추출·엔진 실행 증거가 없으면 평가 불완전으로 둔다.
+    OCR 판단 유보의 정답은 결함 적중·정밀도와 별도로 센다. v1/v2/v3 수치는 직접 증감 비교하지 않는다.
 """
 from __future__ import annotations
 
@@ -32,7 +33,9 @@ sys.path.insert(0, str(ROOT))
 from scripts.eval_testset import (_INJECTION, _norm, finding_text, is_control_false_positive,  # noqa: E402
                                   is_defect_claim, models_called)
 
-SCORER_VERSION = "eval_v4-scorer-2"
+SCORER_VERSION = "eval_v4-scorer-3"
+REQUIRED_DOCUMENT_ENGINES = ("adversarial_scan", "forensic_scan", "citation_verification",
+                             "arithmetic", "legal_rules", "ai_detection")
 
 # 결함 태그 → 적중으로 인정하는 finding 유형
 TAG_TYPE_MAP: Dict[str, Set[str]] = {
@@ -172,9 +175,26 @@ def _date_forms(ident: str) -> List[str]:
 
 
 def anchor_ok(target: str, loc: str, text: str, finding: Dict[str, Any]) -> bool:
+    from packages.common.enums import CitationType
+    from packages.legal_engine.citation_extractor import extract_from_text
+
     compact = re.sub(r"\s+", "", text)
     idents, words = anchors(target)
-    if idents:
+    statutes = [c for c in extract_from_text(target) if c.type == CitationType.STATUTE]
+    if statutes:
+        candidates = [c for c in extract_from_text(text) if c.type == CitationType.STATUTE]
+        # finding_text also includes machine type prefixes and adjacent excerpts.
+        # Start at a bounded law name so those prefixes cannot become part of it.
+        for expected in statutes:
+            name_pattern = r"(?<![가-힣A-Za-z0-9])" + r"\s*".join(map(re.escape, expected.law_name.replace(" ", "")))
+            for match in re.finditer(name_pattern, text):
+                candidates.extend(c for c in extract_from_text(text[match.start():]) if c.type == CitationType.STATUTE)
+        # A matching number in a different law or provision is not the target citation.
+        if not all(any(c.law_name == expected.law_name and c.article == expected.article
+                       and all(getattr(expected, field) is None or getattr(c, field) == getattr(expected, field)
+                               for field in ("paragraph", "item")) for c in candidates) for expected in statutes):
+            return False
+    elif idents:
         if not any(form in compact for ident in idents for form in _date_forms(ident)):
             return False
     else:
@@ -207,7 +227,16 @@ def _max_matching(edges: Dict[int, List[Tuple[str, int]]]) -> Dict[int, Tuple[st
 
 
 # --- 채점 --------------------------------------------------------------------------------------------
+def _stage_completed(manifest: Dict[str, Any], name: str, doc_id: str, *, positive_inputs: bool = False) -> bool:
+    stage = (manifest.get("engines") or {}).get(name) or {}
+    entries = [entry for entry in stage.get("documents") or [] if entry.get("document_id") == doc_id]
+    return bool(stage.get("executed") and entries
+                and all(not entry.get("error") and not entry.get("skipped") for entry in entries)
+                and (not positive_inputs or any((entry.get("inputs") or 0) > 0 for entry in entries)))
+
+
 def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
+    manifest = report.get("run_manifest") or {}
     report_docs = report.get("documents") or []
     project = report.get("project_findings") or []
     doc_results: List[Dict[str, Any]] = []
@@ -240,10 +269,15 @@ def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
             coverage = "MISSING_FROM_REPORT"
         elif any(d.get("quarantined") for d in matched_docs):
             coverage = "QUARANTINED"
-        elif any(p.get("status") not in ("EXTRACTED", "OCR_EXTRACTED", "OCR")
+        elif any(not d.get("page_coverage")
+                 and not _stage_completed(manifest, "parsing", d.get("document_id"), positive_inputs=True)
+                 for d in matched_docs) or any(p.get("status") not in ("EXTRACTED", "OCR_EXTRACTED", "OCR")
                  for d in matched_docs for p in d.get("page_coverage") or []) \
                 or any(str(f.get("type")) in ("PARSE_ERROR", "UNSUPPORTED_FORMAT") for f in findings):
             coverage = "EXTRACTION_INCOMPLETE"
+        elif any(not _stage_completed(manifest, name, d.get("document_id"))
+                 for d in matched_docs for name in REQUIRED_DOCUMENT_ENGINES):
+            coverage = "EXECUTION_INCOMPLETE"
         if coverage != "EVALUATED":
             incomplete_reasons.append(f"{gid}: {coverage}")
 
@@ -272,8 +306,8 @@ def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             fid = str(f.get("finding_id"))
             confirmed = (str(f.get("status")) in statuses and not f.get("advisory_only"))
-            if base_tag(item["tag"]) in UNVERIFIED_IS_CORRECT and str(f.get("status")) == "UNVERIFIED":
-                confirmed = True
+            if base_tag(item["tag"]) in UNVERIFIED_IS_CORRECT:
+                confirmed = str(f.get("status")) == "UNVERIFIED"
             for slot, text in enumerate(_entries(f)):
                 if not anchor_ok(item["target"], item["loc"], text, f):
                     continue
@@ -287,7 +321,9 @@ def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
         if item.get("result"):
             continue
         if index in assignment:
-            item["result"], item["finding"] = "CONFIRMED_HIT", assignment[index][0]
+            item["result"] = ("CORRECT_ABSTENTION" if base_tag(item["tag"]) in UNVERIFIED_IS_CORRECT
+                              else "CONFIRMED_HIT")
+            item["finding"] = assignment[index][0]
         elif reference.get(index):
             item["result"], item["finding"] = "REFERENCE_ONLY", reference[index][0]
         else:
@@ -303,12 +339,16 @@ def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
                 if is_defect_claim(f) and anchor_ok(trap["target"], trap["loc"], finding_text(f), f):
                     trap_fps.append({"doc": doc["doc"], "trap": trap["target"], "finding": _brief(f)})
 
-    scorable = [i for i in all_items if i["result"] != "NOT_SCORABLE_UNMAPPED_TAG"]
+    scorable = [i for i in all_items if i["result"] != "NOT_SCORABLE_UNMAPPED_TAG"
+                and base_tag(i["tag"]) not in UNVERIFIED_IS_CORRECT]
+    abstentions = [i for i in all_items if base_tag(i["tag"]) in UNVERIFIED_IS_CORRECT]
     hits = [i for i in scorable if i["result"] == "CONFIRMED_HIT"]
+    matched_claims = {i["finding"] for i in hits} & {str(f.get("finding_id")) for f in defect_claims}
     ref_only = [i for i in scorable if i["result"] == "REFERENCE_ONLY"]
     all_eval = list(evaluated_findings.values())
-    manifest = report.get("run_manifest") or {}
     environment = manifest.get("environment") or {}
+    if environment.get("complete") is False:
+        incomplete_reasons.append("실행 환경의 필수 자원이 완전하지 않다")
     if unmapped_tags:
         incomplete_reasons.append("대응표에 없는 결함 태그: " + ", ".join(sorted(unmapped_tags)))
     controls = [d for d in doc_results if d["control"]]
@@ -326,11 +366,13 @@ def score(answer_key: Dict[str, Any], report: Dict[str, Any]) -> Dict[str, Any]:
             "defect_items_scorable": len(scorable),
             "confirmed_hits": len(hits),
             "recall_confirmed": _ratio(len(hits), len(scorable)),
+            "abstention_items_scorable": len(abstentions),
+            "correct_abstentions": sum(i["result"] == "CORRECT_ABSTENTION" for i in abstentions),
             "reference_only_items": len(ref_only),
             "reference_only_ratio": _ratio(len(ref_only), len(scorable)),
             "defect_claim_findings": len(defect_claims),
-            "defect_claims_used_for_hits": len({i["finding"] for i in hits}),
-            "precision_lower_bound": _ratio(len({i["finding"] for i in hits}), len(defect_claims)),
+            "defect_claims_used_for_hits": len(matched_claims),
+            "precision_lower_bound": _ratio(len(matched_claims), len(defect_claims)),
             "unmatched_defect_claims": len(unmatched_claims),
             "fp_trap_false_positives": len(trap_fps),
             "control_false_positives": sum(len(d["control_false_positives"]) for d in controls),
@@ -381,6 +423,7 @@ def iter_markdown(result: Dict[str, Any]) -> Iterable[str]:
           f" · 모델 호출: {c['models_called']} · 미실행 엔진: {', '.join(c['engines_not_executed']) or '없음'}"
     yield f"- 확정 적중 {m['confirmed_hits']}/{m['defect_items_scorable']} (재현율 {m['recall_confirmed']})," \
           f" 참고 신호로만 맞음 {m['reference_only_items']}"
+    yield f"- 올바른 판단 유보 {m['correct_abstentions']}/{m['abstention_items_scorable']} (결함 정밀도·재현율에서 제외)"
     yield f"- 결함 주장 finding {m['defect_claim_findings']}건 중 정답에 쓰인 것 {m['defect_claims_used_for_hits']}" \
           f" (정밀도 하한 {m['precision_lower_bound']}), 정답지 밖 주장 {m['unmatched_defect_claims']}"
     yield f"- FP-TRAP 오탐 {m['fp_trap_false_positives']} · 대조군 오탐 {m['control_false_positives']}" \

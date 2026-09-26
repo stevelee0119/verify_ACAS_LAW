@@ -159,17 +159,33 @@ def bind_subject(sentence: str, position: int) -> Optional[str]:
     return None
 
 
-def _annotate(doc: NormalizedDocument, entities: Dict[str, List[Dict[str, Any]]]) -> None:
+def _annotate(doc: NormalizedDocument, entities: Dict[str, List[Dict[str, Any]]], facts: List[Dict[str, Any]]) -> None:
     """엔티티마다 주체 당사자(subject)와 양태(modality: 확정/예정/가정/상대방 주장)를 붙인다."""
-    from .fact_store import modality
+    from .fact_store import PARTY_RE, modality
 
     text = _get_doc_text(doc)
+    names: Dict[str, set] = defaultdict(set)
+    plural = set()
+    for fact in facts:
+        if fact["document_id"] == doc.document_id and fact["attribute"] == "party_name":
+            names[fact["key"]].add(fact["value"])
+            if fact["plural_role"]:
+                plural.add(fact["key"])
     for items in entities.values():
         for item in items:
             start, end = item["span"]
             left, right = _sentence_bounds(text, start, end)
             sentence = text[left:right]
             item["subject"] = bind_subject(sentence, start - left)
+            role = item["subject"]
+            # Reuse the fact store's explicit masked-name evidence; role alone is not identity.
+            local_names = {m.group("name") for m in PARTY_RE.finditer(sentence) if m.group("role") == role}
+            role_reference = any(m.group("role") == role and not m.group("plural")
+                                 and m.group("particle") in SUBJECT_PARTICLES | {"의"}
+                                 for m in PARTY_ROLE_RE.finditer(sentence))
+            item["subject_identity"] = (next(iter(names[role]))
+                                        if role not in plural and len(names[role]) == 1
+                                        and (local_names == names[role] or (not local_names and role_reference)) else None)
             item["modality"] = modality(sentence, end - left)
 
 
@@ -191,8 +207,9 @@ def _xdoc_finding(key: str, by_doc: Dict[str, List[Dict[str, Any]]], *, bound: O
     if bound:
         features.update(bound)
         grade, status = EvidenceGrade.B, VerificationStatus.CONTRADICTED
-        title = f"문서 간 사실 모순(XDOC): {bound['subject']}의 '{key}' 기재가 서로 다르다"
-        detail = (f"같은 사건(사건번호 {', '.join(bound['shared_case_numbers'])})의 문서들이 같은 당사자({bound['subject']})의 "
+        title = f"문서 간 사실 모순(XDOC): {bound['subject']} {bound['subject_identity']}의 '{key}' 기재가 서로 다르다"
+        detail = (f"같은 사건(사건번호 {', '.join(bound['shared_case_numbers'])})의 문서들이 같은 당사자"
+                  f"({bound['subject']} {bound['subject_identity']})의 "
                   f"'{key}'를 서로 다르게 확정적으로 적었다: " + " vs ".join(details_list)
                   + ". 상대방 주장·가정적 서술·예정 사항은 비교에서 뺐다. 어느 쪽이 맞는지는 원본 증거로 확인해야 한다.")
     else:
@@ -239,12 +256,13 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
     if len(docs) < 2:
         return findings
     doc_entity_map: Dict[str, Dict[str, List[Dict[str, Any]]]] = {}
+    facts = build_fact_store(docs)
     for doc in docs:
         entities = extract_document_entities(doc)
-        _annotate(doc, entities)
+        _annotate(doc, entities, facts)
         doc_entity_map[doc.document_id] = entities
     numbers = {doc.document_id: own_case_numbers(doc) for doc in docs}
-    groups = case_groups(docs, build_fact_store(docs))
+    groups = case_groups(docs, facts)
 
     for group in groups:
         if len(group) < 2:
@@ -258,15 +276,25 @@ def verify_cross_document_entities(docs: List[NormalizedDocument]) -> List[Findi
             # 1) 같은 당사자에 묶인 확정 서술끼리
             if key in PARTY_BOUND_KEYS:
                 for subject in sorted({i["subject"] for i in items if i.get("subject")}):
-                    by_doc = _group_by_doc([i for i in items if i.get("subject") == subject])
-                    if not _differs(by_doc):
-                        continue
-                    shared = set.intersection(*(numbers[d] for d in by_doc)) if by_doc else set()
-                    single = all(len({i["norm"] for i in its}) == 1 for its in by_doc.values())
-                    bound = ({"subject": subject, "shared_case_numbers": sorted(shared), "binding": "PARTY_AND_CASE",
-                              "rule_id": "XDOC.PARTY_FACT_CONFLICT"} if shared and single else None)
-                    findings.append(_xdoc_finding(key, by_doc, bound=bound))
-                    reported = True
+                    subject_items = [i for i in items if i.get("subject") == subject]
+                    identities = {i.get("subject_identity") for i in subject_items}
+                    subject_reported = False
+                    # Compare each identified person separately before considering an unbound advisory.
+                    for identity in sorted(i for i in identities if i is not None) + [None]:
+                        if identity is None and (None not in identities or subject_reported):
+                            continue
+                        by_doc = _group_by_doc(subject_items if identity is None else
+                                               [i for i in subject_items if i.get("subject_identity") == identity])
+                        if not _differs(by_doc):
+                            continue
+                        shared = set.intersection(*(numbers[d] for d in by_doc))
+                        single = all(len({i["norm"] for i in its}) == 1 for its in by_doc.values())
+                        bound = ({"subject": subject, "subject_identity": identity,
+                                  "shared_case_numbers": sorted(shared), "binding": "PARTY_IDENTITY_AND_CASE",
+                                  "rule_id": "XDOC.PARTY_FACT_CONFLICT"}
+                                 if shared and single and identity is not None else None)
+                        findings.append(_xdoc_finding(key, by_doc, bound=bound))
+                        reported = subject_reported = True
             if reported:
                 continue
             # 2) 주체를 특정하지 못한 값이 있으면 참고(C)로만 알린다. 서로 다른 당사자의 값끼리는 비교하지 않는다.
