@@ -158,6 +158,8 @@ def test_keyboard_tabs_and_drawer_focus(admin_page):
     expect(page.get_by_role("dialog")).to_have_count(1)
     page.keyboard.press("Escape")
     expect(page.get_by_role("dialog")).to_have_count(0)
+    # The deferred close handler restores focus after the native dialog hides.
+    expect(page.locator("dialog.admin-detail")).to_have_count(0)
     expect(opener).to_be_focused()
     page.get_by_role("tab", name="승인 대기", exact=True).press("End")
     expect(page.get_by_role("tab", name="메일 기록", exact=True)).to_be_focused()
