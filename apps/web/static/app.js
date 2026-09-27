@@ -221,7 +221,7 @@ async function loadProjects() {
 
 async function updateSidebarHeader() {
   try {
-    const me = await api("/auth/me");
+    const me = await api("/auth/me", {interactiveAuth:false});
     const sideTitleEl = document.querySelector("#sidebar .side-title h2");
     if (sideTitleEl && me && me.email) {
       const affil = me.affiliation || "종합행정학교 법무교육단";

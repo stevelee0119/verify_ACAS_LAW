@@ -285,10 +285,267 @@ def test_monthly_activity_metrics_and_csv_export(client, bootstrap_data):
     assert "사용자ID" in csv_text
     assert "성명" in csv_text
     assert "이메일" in csv_text
-    assert "누적저장용량(MB)" in csv_text
+    assert "현재활성원본용량(MiB)" in csv_text
     assert "접속횟수" in csv_text
     assert "검증분석횟수" in csv_text
-    assert "컴퓨팅소요시간(분)" in csv_text
+    assert "처리경과시간_대기포함(분)" in csv_text
     # 관리자 정보 포함 검증
     assert "이창민" in csv_text
     assert "종합행정학교 법무교육단" in csv_text
+
+
+def _register(client, email="applicant@example.test"):
+    response = client.post("/api/auth/register", json={
+        "email": email, "password": "Password123!", "display_name": "Applicant",
+        "phone_number": "010-0000-0000", "affiliation": "Test",
+    })
+    assert response.status_code == 201, response.text
+    return response.json()["user_id"]
+
+
+def test_approval_is_atomic_with_outbox_and_retry_does_not_reapprove(client, bootstrap_data, monkeypatch):
+    from apps.api.db import UserNotification
+    from apps.api.notifications import dispatch_once
+    from packages.notification_engine.mailer import MailResult
+    headers = _auth(bootstrap_data["admin_token"])
+    user_id = _register(client)
+    monkeypatch.setenv("LV_SMTP_HOST", "")
+    response = client.post(f"/api/admin/users/{user_id}/approve", headers=headers)
+    assert response.status_code == 200
+    mail_id = response.json()["notification"]["id"]
+    assert response.json()["notification"]["status"] == "QUEUED"
+    assert client.post(f"/api/admin/users/{user_id}/approve", headers=headers).status_code == 409
+    assert dispatch_once()
+    result = client.get("/api/admin/notifications", headers=headers).json()
+    assert result["smtp"]["configured"] is False
+    assert result["items"][0]["status"] == "UNAVAILABLE"
+    assert not dispatch_once()  # No infinite retry loop.
+    with get_session_factory()() as session:
+        user = session.get(User, user_id)
+        approved_at = user.approved_at
+        assert user.approval_status == "APPROVED"
+    assert client.post(f"/api/admin/notifications/{mail_id}/retry", headers=headers).status_code == 200
+    monkeypatch.setattr("apps.api.notifications.send_approval_email", lambda *args: MailResult("SMTP_ACCEPTED"))
+    assert dispatch_once()
+    with get_session_factory()() as session:
+        assert session.get(UserNotification, mail_id).status == "SMTP_ACCEPTED"
+        assert session.get(User, user_id).approved_at == approved_at
+    assert client.post(f"/api/admin/notifications/{mail_id}/retry", headers=headers).status_code == 409
+
+
+def test_rejection_is_password_gated_and_never_emails(client, bootstrap_data):
+    from apps.api.db import UserNotification
+    headers = _auth(bootstrap_data["admin_token"])
+    user_id = _register(client)
+    assert client.post(f"/api/admin/users/{user_id}/reject", headers=headers, json={"reason":" "}).status_code == 422
+    assert client.post(f"/api/admin/users/{user_id}/reject", headers=headers, json={"reason":"Confirm affiliation"}).status_code == 200
+    bad = client.post("/api/auth/login", json={"email":"applicant@example.test", "password":"wrong"})
+    assert "Confirm affiliation" not in bad.text
+    good = client.post("/api/auth/login", json={"email":"applicant@example.test", "password":"Password123!"})
+    assert good.status_code == 403 and "Confirm affiliation" in good.text
+    assert client.post(f"/api/admin/users/{user_id}/approve", headers=headers).status_code == 409
+    with get_session_factory()() as session:
+        assert session.scalars(select(UserNotification)).all() == []
+
+
+def test_admin_endpoints_are_organization_scoped(client, bootstrap_data):
+    from apps.api.notifications import queue_notification
+    with get_session_factory()() as session:
+        org = Organization(name="Other organization")
+        session.add(org)
+        session.flush()
+        other = User(email="other@example.test", display_name="Other", organization_id=org.id,
+                     approval_status="PENDING")
+        session.add(other)
+        session.flush()
+        row = queue_notification(session, other, "APPROVAL")
+        row.status = "FAILED"
+        session.commit()
+        other_id, mail_id = other.id, row.id
+    headers = _auth(bootstrap_data["admin_token"])
+    assert client.get("/api/admin/pending-registrations", headers=headers).json()["count"] == 0
+    assert other_id not in [u["id"] for u in client.get("/api/admin/users", headers=headers).json()]
+    assert "other@example.test" not in client.get("/api/admin/users/export.csv", headers=headers).text
+    assert client.get("/api/admin/notifications", headers=headers).json()["items"] == []
+    for action in ("approve", "reject"):
+        assert client.post(f"/api/admin/users/{other_id}/{action}", headers=headers,
+                           json={"reason":"test"}).status_code == 404
+    assert client.delete(f"/api/admin/users/{other_id}", headers=headers).status_code == 404
+    assert client.get(f"/api/admin/users/{other_id}/monthly-stats", headers=headers).status_code == 404
+    assert client.post(f"/api/admin/notifications/{mail_id}/retry", headers=headers).status_code == 404
+
+
+def test_unapproved_account_cannot_bypass_via_identity_api(client, bootstrap_data):
+    from apps.api.identity import user_is_enabled, set_account_enabled, principal_for_user
+    from fastapi import HTTPException
+    user_id = _register(client)
+    headers = _auth(bootstrap_data["admin_token"])
+    assert client.patch(f"/api/identity/users/{user_id}", headers=headers, json={"enabled": True}).status_code == 409
+    with get_session_factory()() as session:
+        user = session.get(User, user_id)
+        set_account_enabled(session, user, True)  # Simulate an inconsistent old database.
+        session.commit()
+        assert not user_is_enabled(session, user)
+        with pytest.raises(HTTPException):
+            principal_for_user(session, user_id, "token")
+
+
+def test_metrics_count_only_login_success_and_csv_is_safe(client, bootstrap_data):
+    from apps.api.services import make_audit
+    from packages.common.enums import AuditEventType
+    from sqlalchemy import event
+    headers = _auth(bootstrap_data["admin_token"])
+    now = datetime.utcnow()
+    with get_session_factory()() as session:
+        user = session.get(User, bootstrap_data["admin_id"])
+        user.display_name = "=HYPERLINK(example)"
+        user.registration_reason = "  +formula"
+        session.commit()
+        for name in ("LOGIN_SUCCEEDED", "LOGOUT", "USER_CREATED", "PROJECT_QUERY"):
+            make_audit(session).record(AuditEventType.API_QUERY, {"event":name}, actor=user.id)
+        counts = []
+        def count(*args):
+            counts.append(1)
+        event.listen(session.get_bind(), "before_cursor_execute", count)
+        try:
+            result = get_all_users_monthly_metrics(session, now.year, now.month, user.organization_id)
+        finally:
+            event.remove(session.get_bind(), "before_cursor_execute", count)
+        assert len(counts) == 6
+        assert result[user.id]["login_count"] == 1
+    csv = client.get("/api/admin/users/export.csv", headers=headers)
+    assert csv.content.startswith(b"\xef\xbb\xbf")
+    assert not csv.content[3:].startswith(b"\xef\xbb\xbf")
+    assert "'=HYPERLINK" in csv.text and "'  +formula" in csv.text
+    for path in ("/api/admin/users?month=13", "/api/admin/users/export.csv?year=0",
+                 f"/api/admin/users/{bootstrap_data['admin_id']}/monthly-stats?months=0"):
+        assert client.get(path, headers=headers).status_code == 422
+    history = client.get(f"/api/admin/users/{bootstrap_data['admin_id']}/monthly-stats?months=1", headers=headers).json()
+    assert history[0]["storage_used_mb"] is None
+
+
+def test_quota_duplicate_and_rollback_do_not_send_false_warning(client, bootstrap_data, monkeypatch):
+    from apps.api.db import UserNotification
+    from apps.api.notifications import dispatch_once
+    from packages.notification_engine.mailer import MailResult
+    headers = _auth(bootstrap_data["admin_token"])
+    project = client.post("/api/projects", headers=headers, json={"name":"Quota test"}).json()
+    with get_session_factory()() as session:
+        session.get(User, bootstrap_data["admin_id"]).storage_quota_bytes = 100
+        session.commit()
+    content = b"Legal document test. " * 4
+    url = f"/api/projects/{project['id']}/documents"
+    first = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")})
+    assert first.status_code == 201, first.text
+    duplicate = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")})
+    assert duplicate.status_code == 201 and duplicate.json()["id"] == first.json()["id"]
+    assert client.post(url, headers=headers, files={"file":("test.txt", b"x"*30, "text/plain")}).status_code == 413
+    with get_session_factory()() as session:
+        assert len(session.scalars(select(UserNotification)).all()) == 1
+        assert session.get(User, bootstrap_data["admin_id"]).quota_warning_sent_at is None
+    monkeypatch.setattr("apps.api.notifications.send_quota_warning_email", lambda *args: MailResult("SMTP_ACCEPTED"))
+    assert dispatch_once()
+    with get_session_factory()() as session:
+        assert session.get(User, bootstrap_data["admin_id"]).quota_warning_sent_at is not None
+
+
+def test_stale_smtp_claim_is_not_automatically_resent(bootstrap_data):
+    from datetime import timedelta
+    from apps.api.db import UserNotification
+    from apps.api.notifications import dispatch_once, queue_notification
+    with get_session_factory()() as session:
+        row = queue_notification(session, session.get(User, bootstrap_data["admin_id"]), "APPROVAL")
+        row.status = "SENDING"
+        row.attempted_at = datetime.utcnow() - timedelta(minutes=6)
+        session.commit()
+        mail_id = row.id
+    assert not dispatch_once()
+    with get_session_factory()() as session:
+        assert session.get(UserNotification, mail_id).status == "UNKNOWN"
+
+
+def test_bootstrap_never_reapproves_disabled_administrator(bootstrap_data):
+    with get_session_factory()() as session:
+        user = session.get(User, bootstrap_data["admin_id"])
+        user.approval_status = "REJECTED"
+        user.is_active = False
+        session.commit()
+        bootstrap_admin_from_env(session)
+        assert user.approval_status == "REJECTED" and not user.is_active
+
+
+def test_legacy_ownership_transfer_is_once_only_and_preserves_records(client, bootstrap_data, monkeypatch):
+    from apps.api.db import Document, LegacyProjectOwnership, VerificationRun
+    from apps.api.legacy_ownership import migrate_legacy_project_ownership
+    with get_session_factory()() as session:
+        old = Project(id="legacy-case", name="Original case", memo="Original memo")
+        session.add(old)
+        session.flush()
+        session.add(Document(id="legacy-doc", project_id=old.id, filename="original.pdf",
+                             size_bytes=123, sha256="a"*64, storage_key="immutable-original"))
+        session.add(VerificationRun(id="legacy-run", project_id=old.id, state="COMPLETED",
+                                    result_json={"preserved":True}))
+        session.add(LegacyProjectOwnership(project_id=old.id))
+        session.commit()
+    assert migrate_legacy_project_ownership() == 1
+    result = client.get("/api/admin/ownership-migration", headers=_auth(bootstrap_data["admin_token"]))
+    assert result.json() == {"target_user_id": bootstrap_data["admin_id"], "total": 1,
+                             "completed": 1, "pending": 0}
+    with monkeypatch.context() as changed:
+        changed.setenv("LV_BOOTSTRAP_ADMIN_EMAIL", "different@example.test")
+        assert client.get("/api/admin/ownership-migration",
+                          headers=_auth(bootstrap_data["admin_token"])).status_code == 404
+    with get_session_factory()() as session:
+        old = session.get(Project, "legacy-case")
+        admin = session.get(User, bootstrap_data["admin_id"])
+        assert (old.owner_id, old.organization_id) == (admin.id, admin.organization_id)
+        assert old.memo == "Original memo"
+        assert session.get(Document, "legacy-doc").storage_key == "immutable-original"
+        assert session.get(VerificationRun, "legacy-run").result_json == {"preserved":True}
+        assert session.get(LegacyProjectOwnership, old.id).previous_owner_id is None
+        member = User(email="future@example.test", organization_id=admin.organization_id)
+        session.add(member)
+        session.flush()
+        session.add(Project(id="future-case", name="New case", owner_id=member.id, organization_id=admin.organization_id))
+        session.commit()
+        member_id = member.id
+    assert migrate_legacy_project_ownership() == 0
+    with get_session_factory()() as session:
+        assert session.get(Project, "future-case").owner_id == member_id
+
+
+def test_legacy_transfer_missing_target_fails_without_partial_change(bootstrap_data, monkeypatch):
+    from apps.api.db import LegacyProjectOwnership
+    from apps.api.legacy_ownership import migrate_legacy_project_ownership
+    with get_session_factory()() as session:
+        session.add(Project(id="legacy-case", name="Unassigned"))
+        session.flush()
+        session.add(LegacyProjectOwnership(project_id="legacy-case"))
+        session.commit()
+    monkeypatch.setenv("LV_BOOTSTRAP_ADMIN_EMAIL", "missing@example.test")
+    with pytest.raises(RuntimeError, match="LV_BOOTSTRAP_ADMIN_EMAIL"):
+        migrate_legacy_project_ownership()
+    with get_session_factory()() as session:
+        assert session.get(Project, "legacy-case").owner_id is None
+        assert session.get(LegacyProjectOwnership, "legacy-case").migrated_at is None
+
+
+def test_registration_uses_configured_bootstrap_organization(client, bootstrap_data):
+    with get_session_factory()() as session:
+        session.add(Organization(name="Unrelated organization"))
+        session.commit()
+        expected = session.get(User, bootstrap_data["admin_id"]).organization_id
+    user_id = _register(client)
+    with get_session_factory()() as session:
+        assert session.get(User, user_id).organization_id == expected
+
+
+def test_bootstrap_does_not_populate_an_unrelated_administrators_profile(bootstrap_data, monkeypatch):
+    with get_session_factory()() as session:
+        admin = session.get(User, bootstrap_data["admin_id"])
+        admin.display_name = ""
+        admin.phone_number = ""
+        session.commit()
+        monkeypatch.setenv("LV_BOOTSTRAP_ADMIN_EMAIL", "another@example.test")
+        bootstrap_admin_from_env(session)
+        assert admin.display_name == "" and admin.phone_number == ""

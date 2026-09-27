@@ -633,6 +633,7 @@ def test_jobs_api_resolves_project_and_requires_member_for_mutations(ops, ops_cl
         session.add(db.User(id="viewer", email="viewer@example.invalid", organization_id="org", role="VIEWER"))
         session.flush()
         session.get(Project, run.project_id).organization_id = "org"
+        session.get(Project, run.project_id).owner_id = "viewer"
         session.add(db.ProjectMember(project_id=run.project_id, user_id="viewer", role="VIEWER"))
         session.commit()
     state["principal"] = Principal("viewer", "org", "VIEWER", "token")

@@ -1304,7 +1304,7 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   font-size: 11px;
   color: var(--muted, #64748b);
   font-weight: 500;
-  letter-spacing: -0.3px;
+  letter-spacing: 0;
 }
 
 #sidebar .side-title h2 .user-proj-msg {
@@ -1329,6 +1329,36 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   flex-wrap: wrap;
   gap: 8px;
   margin-bottom: 12px;
+  align-items: end;
+  justify-content: flex-start;
+}
+
+.user-identity {
+  display: grid;
+  gap: 3px;
+}
+
+.user-identity small {
+  color: var(--muted);
+}
+
+.user-toolbar label {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+  max-width: 100%;
+}
+
+.workflow-dialog .full {
+  min-width: 0;
+}
+
+.workflow-dialog .workflow-table td {
+  overflow-wrap: anywhere;
+}
+
+.workflow-dialog .actions {
+  flex-wrap: wrap;
 }
 
 .strong-notice {

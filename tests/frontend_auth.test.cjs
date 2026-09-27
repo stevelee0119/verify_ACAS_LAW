@@ -40,7 +40,7 @@ function labeledButton(element, text) { return find(element, child => child.tagN
 function submit(dialog) { return dialog.querySelector("form").onsubmit({preventDefault() {}}); }
 const principal = {user_id:"u1", organization_id:"org1", role:"ADMIN", authentication:"password"};
 
-function harness(me = principal) {
+function harness(me = principal, adminUsers = []) {
   const body = new Element("body"), requests = [], apiRequests = [], responses = [], views = [];
   const ids = new Map(); let reloads = 0;
   for (const id of ["settingsButton", "progress"]) { const element = new Element("div"); element.id = id; ids.set(id, element); body.append(element); }
@@ -68,6 +68,7 @@ function harness(me = principal) {
       apiRequests.push({url, options});
       if (url === "/identity/me") return me;
       if (url === "/identity/users" && !options.method) return [];
+      if (url.startsWith("/admin/users?") && !options.method) return adminUsers;
       return {};
     },
     fetch: async (url, options) => {
@@ -215,6 +216,15 @@ test("merged page retains every workbench and no script persists authentication 
   const ids = Array.from(html.matchAll(/\bid="([^"]+)"/g), match => match[1]); assert.equal(new Set(ids).size, ids.length);
   assert.doesNotMatch(source + app, /(?:sessionStorage|localStorage)\.setItem\([^)]*(?:token|password|credential)/i);
   assert.doesNotMatch(source + app + html, /<<<<<<<|=======|>>>>>>>/);
+});
+
+test("invalid metrics response displays an error and reload action instead of empty statistics", async () => {
+  const h = harness(principal, {});
+  await h.account();
+  await labeledButton(h.views[0].grid, "조직 사용자").click();
+  assert.ok(find(h.views[1].grid, element => element.className === "error").textContent);
+  assert.ok(labeledButton(h.views[1].grid, "다시 불러오기"));
+  assert.equal(descendants(h.views[1].grid).filter(element => element.tagName === "table").length, 0);
 });
 
 function networkHarness(fetch, authenticate = async () => {}, authVersion = () => 0) {

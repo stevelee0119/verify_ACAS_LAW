@@ -90,9 +90,13 @@ def create_app() -> FastAPI:
             await asyncio.to_thread(require_ocr_ready)
         runner = get_runner()
         await asyncio.to_thread(runner.start)
+        from .notifications import NotificationDispatcher
+        notifications = NotificationDispatcher()
+        notifications.start()
         try:
             yield
         finally:
+            await asyncio.to_thread(notifications.stop)
             await asyncio.to_thread(runner.stop)
 
     app = FastAPI(
@@ -160,6 +164,8 @@ def create_app() -> FastAPI:
     # 스키마는 앱 생성 시점에 준비한다(운영에서는 Alembic migration을 사용한다).
     init_db()
     _bootstrap_admin()
+    from .legacy_ownership import migrate_legacy_project_ownership
+    migrate_legacy_project_ownership()
     # 저장소가 휘발성이면 재시작마다 로그인·원본·감사기록이 사라진다.
     # 화면상 정상으로 보이므로 기동 로그에서 먼저 알린다.
     log_durability_warning()

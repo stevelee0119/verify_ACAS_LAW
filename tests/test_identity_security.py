@@ -115,11 +115,11 @@ def test_authentication_and_no_context_fallback(secured, monkeypatch):
 
 def test_projects_filter_owner_org_policy_and_idempotency(secured):
     s = secured
-    assert {p["id"] for p in s.client.get("/api/projects", headers=s.headers("member")).json()} == {"pa"}
+    assert s.client.get("/api/projects", headers=s.headers("member")).json() == []
     assert {p["id"] for p in s.client.get("/api/projects", headers=s.headers("admin")).json()} == {"pa", "private"}
     assert s.client.get("/api/projects/orphan", headers=s.headers("admin")).status_code == 404
     assert s.client.post("/api/projects", json={"creation_key": "key-b"}, headers=s.headers("admin")).status_code == 404
-    assert s.client.post("/api/projects", json={"creation_key": "key-a"}, headers=s.headers("member")).json()["id"] == "pa"
+    assert s.client.post("/api/projects", json={"creation_key": "key-a"}, headers=s.headers("member")).status_code == 404
     payload = {"name": "New", "creation_key": "unique", "external_ai_policy": "MASKED",
                "owner_id": s.users["other"], "organization_id": "ob"}
     response = s.client.post("/api/projects", json=payload, headers=s.headers("member"))
@@ -129,7 +129,7 @@ def test_projects_filter_owner_org_policy_and_idempotency(secured):
     with s.factory() as session:
         row = session.get(Project, created["id"])
         assert (row.owner_id, row.organization_id) == (s.users["member"], "oa")
-    response = s.client.patch("/api/projects/pa", json={"external_ai_policy": "MASKED"}, headers=s.headers("member"))
+    response = s.client.patch("/api/projects/pa", json={"external_ai_policy": "MASKED"}, headers=s.headers("admin"))
     assert response.status_code == 200 and response.json()["external_ai_policy"] == "LOCAL_ONLY"
 
 
@@ -141,12 +141,27 @@ def test_foreign_resource_routes_fail_closed(secured, path):
     assert secured.client.get("/api" + path, headers=secured.headers("member")).status_code == 404
 
 
+@pytest.mark.parametrize("path", ["/projects/pa", "/documents/da", "/documents/da/original",
+    "/documents/da/pages/1.png", "/verification-runs/ua/result", "/findings/fa",
+    "/reports/ra/download/pdf", "/artifacts/xa", "/projects/pa/audit", "/projects/pa/search"])
+def test_legacy_membership_and_admin_role_never_grant_owner_data(secured, path):
+    s = secured
+    assert s.client.get("/api" + path, headers=s.headers("member")).status_code == 404
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
+    assert s.client.get("/api" + path, headers=s.headers("admin")).status_code == 404
+
+
 @pytest.mark.parametrize("method,path", [("post", "/projects"), ("patch", "/projects/pa"),
     ("patch", "/documents/da"), ("patch", "/findings/fa/review"), ("put", "/findings/fa/workflow"),
     ("put", "/findings/fa/review-draft"), ("post", "/reports/ra/finalize"), ("post", "/projects/pa/reviews"),
     ("put", "/projects/pa/claim-assessments"), ("put", "/projects/pa/case-profile"), ("post", "/projects/pa/issues"),
     ("post", "/projects/pa/document-relations")])
-def test_viewer_is_readonly_even_with_project_admin_membership(secured, method, path):
+def test_viewer_is_readonly_even_when_project_owner(secured, method, path):
+    with secured.factory() as session:
+        session.get(Project, "pa").owner_id = secured.users["viewer"]
+        session.commit()
     response = getattr(secured.client, method)("/api" + path, json={}, headers=secured.headers("viewer"))
     assert response.status_code == 403, response.text
 
@@ -156,6 +171,9 @@ def test_related_resource_and_reviewer_spoofing(secured):
     for body in ({"document_ids": ["db"]}, {"left_document_id": "da", "right_document_id": "db"}, {"run_id": "ub"}):
         assert s.client.post("/api/projects/pa/compare", json=body, headers=s.headers("admin")).status_code == 404
     assert s.client.get("/api/projects/pa/compare?document_id=da&document_id=db", headers=s.headers("admin")).status_code == 404
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
     response = s.client.patch("/api/findings/fa/review", json={"reviewer": "forged-admin"}, headers=s.headers("member"))
     assert response.status_code == 200, response.text
     assert response.json()["body"]["reviewer"] == response.json()["actor"] == s.users["member"]
@@ -170,9 +188,12 @@ def test_access_management_is_org_and_project_scoped(secured):
     foreign = f"/api/projects/pa/members/{s.users['other']}"
     assert s.client.put(foreign, json={"role": "ADMIN"}, headers=s.headers("admin")).status_code == 404
     own = f"/api/projects/pa/members/{s.users['member']}"
-    assert s.client.put(own, json={"role": "ADMIN"}, headers=s.headers("member")).status_code == 403
-    assert s.client.put(own, json={"role": "ADMIN"}, headers=s.headers("admin")).status_code == 200
-    assert s.client.get("/api/projects/pa/members", headers=s.headers("member")).status_code == 200
+    assert s.client.put(own, json={"role": "ADMIN"}, headers=s.headers("member")).status_code == 404
+    assert s.client.put(own, json={"role": "ADMIN"}, headers=s.headers("admin")).status_code == 409
+    assert s.client.get("/api/projects/pa/members", headers=s.headers("member")).status_code == 404
+    assert s.client.get("/api/projects/pa/members", headers=s.headers("admin")).json() == []
+    assert s.client.post(f"/api/identity/users/{s.users['member']}/tokens",
+                         json={}, headers=s.headers("admin")).status_code == 403
     assert s.client.get("/api/audit/verify", headers=s.headers("admin")).status_code == 403
     assert s.client.patch("/api/settings/providers/example", json={}, headers=s.headers("admin")).status_code == 403
 
@@ -180,6 +201,9 @@ def test_access_management_is_org_and_project_scoped(secured):
 def test_document_null_clearing_and_trusted_audit_actor(secured):
     from apps.api.db import AuditEventRow
     s = secured
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
     response = s.client.patch("/api/documents/da", json={"submitted_on": None}, headers=s.headers("member"))
     assert response.status_code == 200 and response.json()["submitted_on"] is None
     response = s.client.patch("/api/projects/pa/document-scope", json={"document_ids": ["da"], "included_in_verification": False}, headers=s.headers("member"))
@@ -191,6 +215,9 @@ def test_document_null_clearing_and_trusted_audit_actor(secured):
 
 def test_session_cookie_download_csrf_logout_and_hash_storage(secured):
     s = secured
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
     assert s.client.get("/").status_code == s.client.get("/static/login.js").status_code == 200
     response = s.client.post("/api/identity/session", headers=s.headers("member"))
     assert response.status_code == 200, response.text
@@ -330,7 +357,11 @@ def test_oidc_signature_algorithm_key_rotation_and_explicit_provisioning(secured
     headers = {"Authorization": "Bearer " + token}
     assert s.client.get("/api/identity/me", headers=headers).status_code == 401
     response = s.client.post(f"/api/identity/users/{s.users['viewer']}/oidc", json={"subject": claims["sub"]}, headers=s.headers("admin"))
-    assert response.status_code == 201
+    assert response.status_code == 403
+    # Existing, operator-provisioned identity bindings still validate signatures.
+    with s.factory() as session:
+        session.add(identity.ExternalIdentity(user_id=s.users["viewer"], issuer=j.settings.issuer, subject=claims["sub"]))
+        session.commit()
     response = s.client.get("/api/identity/me", headers=headers)
     assert response.status_code == 200 and response.json()["role"] == "VIEWER" and response.json()["organization_id"] == "oa"
     assert s.client.post("/api/projects", json={}, headers=headers).status_code == 403
@@ -362,6 +393,7 @@ def viewer_audit(secured, monkeypatch, tmp_path):
     monkeypatch.setattr(viewer, "get_storage", lambda: storage)
     originals = {}
     with secured.factory() as session:
+        session.get(Project, "pa").owner_id = secured.users["viewer"]
         for document_id, project_id in (("da", "pa"), ("db", "pb"),
                                         ("dprivate", "private"), ("dorphan", "orphan")):
             data = make_pdf(tmp_path / (document_id + ".pdf"), ["Private content " + document_id]).read_bytes()
@@ -535,6 +567,9 @@ def test_audit_export_query_is_project_scoped_and_never_verifies_global_chain(vi
     event.listen(engine, "before_cursor_execute", capture)
     try:
         for user in ("member", "viewer", "admin"):
+            with s.factory() as session:
+                session.get(Project, "pa").owner_id = s.users[user]
+                session.commit()
             headers = s.headers(user)
             response = s.client.get("/api/projects/pa/audit?limit=1", headers=headers)
             assert response.status_code == 200 and [e["payload"]["marker"] for e in response.json()["events"]] == ["A2"]
@@ -552,7 +587,7 @@ def test_audit_export_query_is_project_scoped_and_never_verifies_global_chain(vi
     finally:
         event.remove(engine, "before_cursor_execute", capture)
     for limit in (0, -1, 1001):
-        assert s.client.get(f"/api/projects/pa/audit?limit={limit}", headers=s.headers("member")).status_code == 422
+        assert s.client.get(f"/api/projects/pa/audit?limit={limit}", headers=s.headers("admin")).status_code == 422
     assert s.client.get("/api/audit/verify", headers=s.headers("admin")).status_code == 403
 
 
@@ -566,7 +601,7 @@ def test_manifest_tampering_empty_project_and_local_verification(viewer_audit, m
     with s.factory() as session:
         session.scalar(select(AuditEventRow).where(AuditEventRow.project_id == "pb")).payload = {"tampered": "foreign"}
         session.commit()
-    own = s.client.get("/api/projects/pa/manifest", headers=s.headers("member")).json()
+    own = s.client.get("/api/projects/pa/manifest", headers=s.headers("viewer")).json()
     assert own["event_hashes_valid"] is True and own["chain_valid"] is None
     monkeypatch.setenv("LV_AUTH_MODE", "local")
     local = s.client.get("/api/projects/pa/manifest").json()
@@ -579,7 +614,7 @@ def test_manifest_tampering_empty_project_and_local_verification(viewer_audit, m
         session.scalar(select(AuditEventRow).where(AuditEventRow.project_id == "pa")).payload = {"tampered": "own"}
         session.commit()
     monkeypatch.setenv("LV_AUTH_MODE", "multi-user")
-    own = s.client.get("/api/projects/pa/manifest", headers=s.headers("member")).json()
+    own = s.client.get("/api/projects/pa/manifest", headers=s.headers("viewer")).json()
     assert own["event_hashes_valid"] is False and own["chain_valid"] is None
 
 
@@ -599,6 +634,9 @@ def test_outbound_export_requires_member_and_uses_trusted_actor(viewer_audit, tm
     path = "/api/documents/out/outbound-guard"
     payload = {"generate_sanitized": True, "actor": "forged-admin", "reviewer": s.users["other"]}
     assert s.client.post(path, json=payload, headers=s.headers("viewer")).status_code == 403
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
     assert s.client.post("/api/identity/session", headers=s.headers("member")).status_code == 200
     assert s.client.post(path, json=payload).status_code == 403
     assert s.client.post(path, json=payload, headers={"Origin": "https://evil.invalid"}).status_code == 403
@@ -625,6 +663,7 @@ def test_legacy_sealed_reports_require_editor_before_storage(secured, monkeypatc
 
     monkeypatch.setattr(reports, "get_storage", forbidden_storage)
     with s.factory() as session:
+        session.get(Project, "pa").owner_id = s.users["viewer"]
         report = session.get(ReportRow, "ra")
         report.include_sealed = True
         report.artifacts = {"pdf": {"storage_key": "sealed.pdf"}}
@@ -636,6 +675,8 @@ def test_legacy_sealed_reports_require_editor_before_storage(secured, monkeypatc
             assert error.value.status_code == 403
         finally:
             identity._principal.reset(token)
+        session.get(Project, "pa").owner_id = s.users["member"]
+        session.commit()
         token = identity._principal.set(identity.principal_for_user(session, s.users["member"], "token"))
         try:
             assert reports._report_or_404(session, "ra")[0].id == "ra"

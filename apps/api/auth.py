@@ -308,7 +308,9 @@ def bootstrap_admin_from_env(session: Session) -> Optional[User]:
 
     if identity.has_provisioned_users(session):
         # 기존 가입되어 있는 관리자 정보 갱신 및 보장 (요구사항 2)
-        existing_admin = session.scalars(select(User).where(User.role == ROLE_ADMIN)).first()
+        email = (os.getenv("LV_BOOTSTRAP_ADMIN_EMAIL") or "").strip().lower()
+        existing_admin = session.scalar(select(User).where(
+            User.role == ROLE_ADMIN, User.email == email)) if email else None
         if existing_admin:
             if not existing_admin.display_name or existing_admin.display_name == "관리자":
                 existing_admin.display_name = admin_name
@@ -318,8 +320,6 @@ def bootstrap_admin_from_env(session: Session) -> Optional[User]:
                 existing_admin.phone_number = admin_phone
             if not getattr(existing_admin, "registration_reason", None):
                 existing_admin.registration_reason = admin_reason
-            if getattr(existing_admin, "approval_status", None) != "APPROVED":
-                existing_admin.approval_status = "APPROVED"
             session.commit()
         return None
     email = (os.getenv("LV_BOOTSTRAP_ADMIN_EMAIL") or "").strip().lower()

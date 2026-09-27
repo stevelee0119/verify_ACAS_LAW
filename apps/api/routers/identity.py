@@ -9,6 +9,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..db import ProjectMember, User, get_db
+from ..services import make_audit
+from packages.common.enums import AuditEventType
 from ..identity import (ApiToken, ExternalIdentity, OIDCSettings,
                         current_principal, issue_token, provision_user,
                         require_org_admin, require_project, issue_browser_session, SESSION_COOKIE,
@@ -79,8 +81,13 @@ def me():
 
 @router.post("/identity/session")
 def exchange_session(request: Request, response: Response, session: Session = Depends(get_db)):
-    row, secret = issue_browser_session(session, current_principal())
+    principal = current_principal()
+    row, secret = issue_browser_session(session, principal)
     _commit(session)
+    if principal.authentication in {"token", "oidc"}:
+        make_audit(session).record(AuditEventType.API_QUERY,
+            {"event": "LOGIN_SUCCEEDED", "authentication": principal.authentication},
+            actor=principal.user_id)
     cookie_deadline = browser_cookie_deadline(session, SESSION_COOKIE, secret)
     response.set_cookie(SESSION_COOKIE, secret, httponly=True, secure=request.state.secure_transport,
                         samesite="lax", path="/api", expires=cookie_deadline.replace(tzinfo=timezone.utc),
@@ -128,6 +135,8 @@ def update_user(user_id: str, payload: UserUpdate, session: Session = Depends(ge
     user = _user(session, user_id)
     if user.id == principal.user_id and (payload.enabled is False or payload.role not in {None, "ADMIN"}):
         raise HTTPException(409, "Administrators cannot disable or demote themselves")
+    if payload.enabled and user.approval_status != "APPROVED":
+        raise HTTPException(409, "가입 신청 승인 후 계정을 활성화할 수 있습니다.")
     if payload.role is not None:
         user.role = payload.role
     if payload.enabled is not None:
@@ -141,7 +150,7 @@ def create_token(user_id: str, payload: TokenCreate, session: Session = Depends(
     principal = current_principal()
     _user(session, user_id)
     if principal.user_id != user_id:
-        require_org_admin()
+        raise HTTPException(403, "다른 사용자의 접속 토큰은 발급할 수 없습니다.")
     row, secret = issue_token(session, user_id, **payload.model_dump())
     _commit(session)
     return {"id": row.id, "token": secret, "expires_at": row.expires_at.isoformat() + "Z"}
@@ -171,8 +180,10 @@ def revoke_token(token_id: str, session: Session = Depends(get_db)):
 
 @router.post("/identity/users/{user_id}/oidc", status_code=201)
 def bind_oidc(user_id: str, payload: OIDCBinding, session: Session = Depends(get_db)):
-    require_org_admin()
+    principal = require_org_admin()
     _user(session, user_id)
+    if user_id != principal.user_id:
+        raise HTTPException(403, "다른 사용자의 SSO 연결은 변경할 수 없습니다.")
     settings = OIDCSettings.from_env()
     if settings is None:
         raise HTTPException(409, "OIDC is not configured")
@@ -197,8 +208,7 @@ def unbind_oidc(binding_id: str, session: Session = Depends(get_db)):
 @router.get("/projects/{project_id}/members")
 def members(project_id: str, session: Session = Depends(get_db)):
     require_project(session, project_id, "ADMIN")
-    return [{"user_id": row.user_id, "role": row.role} for row in session.scalars(
-        select(ProjectMember).where(ProjectMember.project_id == project_id))]
+    return []
 
 
 @router.put("/projects/{project_id}/members/{user_id}")
@@ -207,13 +217,7 @@ def set_member(project_id: str, user_id: str, payload: Membership, session: Sess
     user = _user(session, user_id)
     if user.organization_id != project.organization_id or not user_is_enabled(session, user):
         raise HTTPException(404, "Identity resource not found")
-    row = session.scalar(select(ProjectMember).where(ProjectMember.project_id == project_id, ProjectMember.user_id == user_id))
-    if row is None:
-        row = ProjectMember(project_id=project_id, user_id=user_id)
-        session.add(row)
-    row.role = payload.role
-    _commit(session)
-    return {"user_id": user_id, "role": row.role}
+    raise HTTPException(409, "프로젝트는 소유자만 접근할 수 있으며 공유할 수 없습니다.")
 
 
 @router.delete("/projects/{project_id}/members/{user_id}", status_code=204)

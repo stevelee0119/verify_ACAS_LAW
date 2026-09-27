@@ -31,7 +31,7 @@ def upgrade():
     bind = op.get_bind()
     # 기존에 등록된 사용자들은 APPROVED 상태로 전환
     bind.execute(
-        sa.text("UPDATE users SET approval_status = 'APPROVED' WHERE is_active = 1 OR is_active = true")
+        sa.text("UPDATE users SET approval_status = 'APPROVED' WHERE is_active = true")
     )
     # 기존 관리자 계정 정보 갱신 (요구사항 2 반영)
     bind.execute(

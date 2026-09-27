@@ -23,6 +23,7 @@ def workspace(merged_auth, clock, monkeypatch):
     s.app.include_router(verification.router, prefix="/api")
     monkeypatch.setattr(verification, "get_runner", lambda: SimpleNamespace(submit=lambda _: None))
     with s.factory() as session:
+        session.get(Project, "pa").owner_id = "member"
         row = session.get(SessionToken, "old-member")
         row.issued_at = clock.utcnow() - timedelta(days=7) + timedelta(minutes=1)
         row.expires_at = clock.utcnow() + timedelta(minutes=1)
@@ -86,7 +87,7 @@ def test_existing_run_binding_is_idempotent_and_cannot_target_other_sessions(wor
     assert s.client.get("/api/identity/me", headers=s.headers("admin")).status_code == 401
 
 
-@pytest.mark.parametrize("change", ["logout", "password", "disabled", "revoked", "membership", "organization", "trashed"])
+@pytest.mark.parametrize("change", ["logout", "password", "disabled", "revoked", "ownership", "organization", "trashed"])
 def test_work_protection_does_not_override_security_changes(workspace, clock, change):
     s = workspace
     active_run(s, clock)
@@ -102,8 +103,8 @@ def test_work_protection_does_not_override_security_changes(workspace, clock, ch
                 identity.set_account_enabled(session, session.get(User, "member"), False)
             elif change == "revoked":
                 session.get(SessionToken, "old-member").revoked_at = clock.utcnow()
-            elif change == "membership":
-                session.query(ProjectMember).filter_by(project_id="pa", user_id="member").delete()
+            elif change == "ownership":
+                session.get(Project, "pa").owner_id = "admin"
             elif change == "organization":
                 session.get(User, "member").organization_id = "ob"
             else:
@@ -213,6 +214,9 @@ def test_source_token_expiry_is_not_overridden_by_work(workspace, clock):
 
 def test_readonly_reviewer_can_protect_own_session_without_edit_permission(workspace, clock):
     s = workspace
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = "viewer"
+        session.commit()
     active_run(s, clock)
     headers = {**s.headers("viewer"), "Origin": "https://testserver"}
     assert s.client.post("/api/verification-runs/run/session", headers=headers).json() == {"protected": True}

@@ -7,12 +7,14 @@ from __future__ import annotations
 
 import csv
 import io
+import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from packages.common.enums import AuditEventType
@@ -26,11 +28,12 @@ from ..auth import (
     require_admin,
     revoke_all_sessions,
 )
-from ..db import Organization, SessionToken, User, UserApprovalStatus, get_db
+from ..db import LegacyProjectOwnership, Organization, SessionToken, User, UserApprovalStatus, UserNotification, get_db
+from ..notifications import RETRYABLE, notification_out, queue_notification, smtp_configuration
 from ..access import check_origin, secure_transport
 from ..identity import (PASSWORD_SESSION_COOKIE, SESSION_COOKIE, auth_mode, current_principal,
                         provision_user, require_org_admin, revoke_principal_credential,
-                        set_account_enabled)
+                        set_account_enabled, user_is_enabled)
 from ..services import make_audit
 from ..session_policy import session_lifetimes
 
@@ -49,6 +52,8 @@ def _normalize_email(value: str) -> str:
         raise ValueError("이메일 형식이 올바르지 않다")
     local, _, domain = email.partition("@")
     if not local or not domain or "." not in domain:
+        raise ValueError("이메일 형식이 올바르지 않다")
+    if not re.fullmatch(r"[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+", email):
         raise ValueError("이메일 형식이 올바르지 않다")
     return email
 
@@ -91,9 +96,39 @@ class RegisterRequest(BaseModel):
     def _email(cls, v: str) -> str:
         return _normalize_email(v)
 
+    @field_validator("display_name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("성명을 입력하세요.")
+        return value.strip()
+
+    @field_validator("password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        if not (any(c.isalpha() for c in value) and any(c.isdigit() for c in value)
+                and any(not c.isalnum() and not c.isspace() for c in value)):
+            raise ValueError("비밀번호는 문자, 숫자, 특수문자를 포함해야 합니다.")
+        return value
+
+    @field_validator("phone_number")
+    @classmethod
+    def _phone(cls, value: str) -> str:
+        value = value.strip()
+        if value and not re.fullmatch(r"\+?[0-9][0-9 ()-]{6,29}", value):
+            raise ValueError("연락처 형식을 확인하세요.")
+        return value
+
 
 class RejectRequest(BaseModel):
-    reason: str = Field(default="", max_length=1000)
+    reason: str = Field(min_length=1, max_length=1000)
+
+    @field_validator("reason")
+    @classmethod
+    def _reason(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("반려 사유를 입력하세요.")
+        return value.strip()
 
 
 class CreateUserRequest(BaseModel):
@@ -221,13 +256,23 @@ def register_user(
     if existing is not None:
         raise HTTPException(409, "이미 등록된 이메일 주소입니다.")
 
-    import os
-    organizations = session.scalars(select(Organization).limit(1)).all()
-    organization = organizations[0] if organizations else None
+    if auth_mode() != "multi-user":
+        raise HTTPException(409, "다중 사용자 모드에서만 가입할 수 있습니다.")
+    bootstrap_email = os.getenv("LV_BOOTSTRAP_ADMIN_EMAIL", "").strip().lower()
+    if bootstrap_email:
+        bootstrap = session.scalar(select(User).where(User.email == bootstrap_email))
+        if not bootstrap or bootstrap.role != "ADMIN" or not user_is_enabled(session, bootstrap):
+            raise HTTPException(409, "관리자 계정 설정 후 가입할 수 있습니다.")
+        organization = session.get(Organization, bootstrap.organization_id) if bootstrap.organization_id else None
+    else:
+        organizations = session.scalars(select(Organization).limit(2)).all()
+        organization = organizations[0] if len(organizations) == 1 else None
     if organization is None:
-        organization = Organization(name=os.getenv("LV_ORG_NAME", "종합행정학교 법무교육단"))
-        session.add(organization)
-        session.flush()
+        raise HTTPException(409, "관리자가 가입 대상 조직을 설정해야 합니다.")
+    if not session.scalar(select(User.id).where(
+            User.organization_id == organization.id, User.role == "ADMIN",
+            User.is_active.is_(True), User.approval_status == "APPROVED").limit(1)):
+        raise HTTPException(409, "관리자 계정 설정 후 가입할 수 있습니다.")
 
     user = User(
         email=email,
@@ -264,12 +309,29 @@ def register_user(
     )
     return {
         "status": "PENDING_APPROVAL",
-        "message": "사용자 등록 신청이 접수되었습니다. 관리자 승인 후 안내 메일이 발송됩니다.",
+        "message": "가입 신청이 접수되었습니다. 승인 결과는 로그인 시 확인할 수 있으며, 승인 시 안내 메일 발송을 시도합니다.",
         "user_id": user.id,
     }
 
 
 # --- 관리자 전용 -------------------------------------------------------------
+def _managed_user(session: Session, admin: User, user_id: str, *, pending=False, lock=True) -> User:
+    require_org_admin()
+    if lock and session.get_bind().dialect.name == "sqlite":
+        connection = session.connection()
+        if not connection.connection.driver_connection.in_transaction:
+            connection.exec_driver_sql("BEGIN IMMEDIATE")
+    query = select(User).where(
+        User.id == user_id, User.organization_id == admin.organization_id
+    ).execution_options(populate_existing=True)
+    user = session.scalar(query.with_for_update() if lock else query)
+    if user is None:
+        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
+    if pending and (user.id == admin.id or user.approval_status != "PENDING"):
+        raise HTTPException(409, "승인 대기 중인 신청만 처리할 수 있습니다.")
+    return user
+
+
 @router.get("/api/auth/users", response_model=List[UserOut])
 def list_users(
     admin: User = Depends(require_admin),
@@ -288,9 +350,11 @@ def list_pending_registrations(
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """승인 대기 중인 신규 가입 신청자 목록 조회."""
+    require_org_admin()
     rows = session.execute(
         select(User)
-        .where(User.approval_status == UserApprovalStatus.PENDING)
+        .where(User.approval_status == UserApprovalStatus.PENDING,
+               User.organization_id == admin.organization_id)
         .order_by(User.created_at.desc())
     ).scalars().all()
     users_data = [
@@ -315,14 +379,13 @@ def approve_user(
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """사용자 등록 신청 승인 및 안내 메일 발송."""
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
+    user = _managed_user(session, admin, user_id, pending=True)
     user.approval_status = UserApprovalStatus.APPROVED
     user.approved_at = datetime.utcnow()
     user.approved_by = admin.id
     user.is_active = True
     set_account_enabled(session, user, True)
+    notification = queue_notification(session, user, "APPROVAL")
     session.commit()
 
     make_audit(session).record(
@@ -331,13 +394,7 @@ def approve_user(
         actor=admin.id,
     )
 
-    try:
-        from packages.notification_engine.mailer import send_approval_email_background
-        send_approval_email_background(user.email, user.display_name or user.email)
-    except Exception:
-        pass
-
-    return {"approved": True, "user_id": user.id}
+    return {"approved": True, "user_id": user.id, "notification": notification_out(notification)}
 
 
 @router.post("/api/admin/users/{user_id}/reject")
@@ -348,9 +405,7 @@ def reject_user(
     session: Session = Depends(get_db),
 ) -> Dict[str, Any]:
     """사용자 등록 신청 반려."""
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
+    user = _managed_user(session, admin, user_id, pending=True)
     user.approval_status = UserApprovalStatus.REJECTED
     user.rejection_reason = payload.reason
     set_account_enabled(session, user, False)
@@ -373,11 +428,7 @@ def delete_user(
     """사용자 삭제 및 비활성화."""
     if user_id == admin.id:
         raise HTTPException(400, "자기 자신(관리자 계정)은 삭제할 수 없습니다.")
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
-
-    revoke_all_sessions(session, user.id)
+    user = _managed_user(session, admin, user_id)
     set_account_enabled(session, user, False)
     user.is_active = False
     user.approval_status = UserApprovalStatus.REJECTED
@@ -394,8 +445,8 @@ def delete_user(
 
 @router.get("/api/admin/users", response_model=List[UserOut])
 def list_admin_users(
-    year: Optional[int] = None,
-    month: Optional[int] = None,
+    year: Optional[int] = Query(None, ge=2000, le=9998),
+    month: Optional[int] = Query(None, ge=1, le=12),
     admin: User = Depends(require_admin),
     session: Session = Depends(get_db),
 ) -> List[UserOut]:
@@ -405,10 +456,11 @@ def list_admin_users(
     target_month = month or now.month
 
     from ..user_metrics import get_all_users_monthly_metrics
-    metrics_by_user = get_all_users_monthly_metrics(session, target_year, target_month)
+    require_org_admin()
+    metrics_by_user = get_all_users_monthly_metrics(session, target_year, target_month, admin.organization_id)
 
     rows = session.execute(
-        select(User).order_by(User.created_at)
+        select(User).where(User.organization_id == admin.organization_id).order_by(User.created_at)
     ).scalars().all()
 
     return [_out(u, metrics_by_user.get(u.id)) for u in rows]
@@ -417,22 +469,20 @@ def list_admin_users(
 @router.get("/api/admin/users/{user_id}/monthly-stats")
 def user_monthly_stats(
     user_id: str,
-    months: int = 12,
+    months: int = Query(12, ge=1, le=36),
     admin: User = Depends(require_admin),
     session: Session = Depends(get_db),
 ) -> List[Dict[str, Any]]:
     """특정 사용자의 최근 N개월간 월별 활동 지표 추이 조회."""
-    user = session.get(User, user_id)
-    if user is None:
-        raise HTTPException(404, "사용자를 찾을 수 없습니다.")
+    _managed_user(session, admin, user_id, lock=False)
     from ..user_metrics import get_user_historical_metrics
     return get_user_historical_metrics(session, user_id, months=min(max(1, months), 36))
 
 
 @router.get("/api/admin/users/export.csv")
 def export_users_csv(
-    year: Optional[int] = None,
-    month: Optional[int] = None,
+    year: Optional[int] = Query(None, ge=2000, le=9998),
+    month: Optional[int] = Query(None, ge=1, le=12),
     admin: User = Depends(require_admin),
     session: Session = Depends(get_db),
 ) -> Response:
@@ -442,29 +492,29 @@ def export_users_csv(
     target_month = month or now.month
 
     from ..user_metrics import get_all_users_monthly_metrics
-    metrics_by_user = get_all_users_monthly_metrics(session, target_year, target_month)
+    require_org_admin()
+    metrics_by_user = get_all_users_monthly_metrics(session, target_year, target_month, admin.organization_id)
 
-    rows = session.execute(select(User).order_by(User.created_at)).scalars().all()
+    rows = session.scalars(select(User).where(User.organization_id == admin.organization_id).order_by(User.created_at)).all()
 
     output = io.StringIO()
     # Excel 한글 깨짐 방지 UTF-8 BOM
-    output.write("\ufeff")
     writer = csv.writer(output)
 
     header = [
         "사용자ID", "성명", "이메일", "연락처", "소속", "등록사유",
         "승인상태", "역할", "등록일시", "승인일시", "승인자",
-        "누적저장용량(MB)", "저장소한도(MB)", "용량사용률(%)",
+        "현재활성원본용량(MiB)", "저장소한도(MiB)", "용량사용률(%)",
         f"[{target_year}년{target_month}월]접속횟수",
         f"[{target_year}년{target_month}월]검증분석횟수",
-        f"[{target_year}년{target_month}월]신규업로드(MB)",
-        f"[{target_year}년{target_month}월]컴퓨팅소요시간(분)",
+        f"[{target_year}년{target_month}월]신규업로드(MiB)",
+        f"[{target_year}년{target_month}월UTC]처리경과시간_대기포함(분)",
     ]
     writer.writerow(header)
 
     for u in rows:
         m = metrics_by_user.get(u.id, {})
-        writer.writerow([
+        writer.writerow([_csv_cell(value) for value in [
             u.id,
             u.display_name or "",
             u.email,
@@ -483,15 +533,73 @@ def export_users_csv(
             m.get("verification_count", 0),
             m.get("monthly_upload_mb", 0.0),
             m.get("compute_minutes", 0.0),
-        ])
+        ]])
 
     csv_bytes = output.getvalue().encode("utf-8-sig")
     filename = f"acasia_users_{target_year}{target_month:02d}.csv"
+    make_audit(session).record(AuditEventType.API_QUERY,
+        {"event": "USER_METRICS_CSV_EXPORTED", "year": target_year, "month": target_month,
+         "count": len(rows)}, actor=admin.id)
     return Response(
         content=csv_bytes,
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _csv_cell(value):
+    if isinstance(value, str) and value.lstrip().startswith(("=", "+", "-", "@", "\t", "\r", "\n")):
+        return "'" + value
+    return value
+
+
+@router.get("/api/admin/notifications")
+def notifications(admin: User = Depends(require_admin), session: Session = Depends(get_db)):
+    require_org_admin()
+    rows = session.scalars(select(UserNotification).join(User).where(
+        User.organization_id == admin.organization_id
+    ).order_by(UserNotification.created_at.desc()).limit(100)).all()
+    return {"smtp": smtp_configuration(), "items": [notification_out(row) for row in rows]}
+
+
+@router.get("/api/admin/ownership-migration")
+def ownership_migration(admin: User = Depends(require_admin), session: Session = Depends(get_db)):
+    require_org_admin()
+    if admin.email != os.getenv("LV_BOOTSTRAP_ADMIN_EMAIL", "").strip().lower():
+        raise HTTPException(404, "이전 정보를 찾을 수 없습니다.")
+    total, completed = session.execute(select(
+        func.count(LegacyProjectOwnership.project_id), func.count(LegacyProjectOwnership.migrated_at)
+    )).one()
+    return {"target_user_id": admin.id, "total": total, "completed": completed,
+            "pending": total - completed}
+
+
+@router.post("/api/admin/notifications/{notification_id}/retry")
+def retry_notification(notification_id: str, admin: User = Depends(require_admin),
+                       session: Session = Depends(get_db)):
+    require_org_admin()
+    row = session.scalar(select(UserNotification).join(User).where(
+        UserNotification.id == notification_id, User.organization_id == admin.organization_id
+    ).with_for_update())
+    if row is None:
+        raise HTTPException(404, "알림을 찾을 수 없습니다.")
+    if row.status not in RETRYABLE or row.attempts >= 3:
+        raise HTTPException(409, "재시도 가능한 실패 알림이 아닙니다.")
+    user = session.get(User, row.user_id)
+    if not user.is_active or user.approval_status != "APPROVED":
+        raise HTTPException(409, "활성 승인 계정에만 안내할 수 있습니다.")
+    claimed = session.execute(update(UserNotification).where(
+        UserNotification.id == row.id, UserNotification.status.in_(RETRYABLE),
+        UserNotification.attempts == row.attempts, UserNotification.attempts < 3,
+    ).values(status="QUEUED", error_code="", finished_at=None))
+    if claimed.rowcount != 1:
+        session.rollback()
+        raise HTTPException(409, "다른 요청에서 이미 처리된 알림입니다.")
+    session.commit()
+    session.refresh(row)
+    make_audit(session).record(AuditEventType.API_QUERY,
+        {"event": "USER_MAIL_RETRIED", "notification_id": row.id}, actor=admin.id)
+    return notification_out(row)
 
 
 @router.post("/api/auth/users", response_model=UserOut, status_code=201)

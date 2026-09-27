@@ -15,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MERGED_HEAD = "f3a91c"
 TRASH_HEAD = "a72e10"
 SESSION_HEAD = "b83f21"
-CURRENT_HEAD = "c94d32"
+SCOPE_HEAD = "c94d32"
+USER_HEAD = "d35e41"
+MAIL_HEAD = "e46f52"
+CURRENT_HEAD = "f57a63"
 CREATED = datetime(2026, 9, 1, 10, 0, 0)
 EXPIRES = datetime(2027, 9, 1, 10, 0, 0)
 PASSWORD_HASH = "scrypt$32768$8$1$" + "01" * 16 + "$" + "02" * 32
@@ -150,7 +153,10 @@ def test_published_revision_parents_are_unchanged(migration_db):
     config, _ = migration_db
     graph = ScriptDirectory.from_config(config)
     assert graph.get_heads() == [CURRENT_HEAD]
-    assert graph.get_revision(CURRENT_HEAD).down_revision == SESSION_HEAD
+    assert graph.get_revision(CURRENT_HEAD).down_revision == MAIL_HEAD
+    assert graph.get_revision(MAIL_HEAD).down_revision == USER_HEAD
+    assert graph.get_revision(USER_HEAD).down_revision == SCOPE_HEAD
+    assert graph.get_revision(SCOPE_HEAD).down_revision == SESSION_HEAD
     assert graph.get_revision(SESSION_HEAD).down_revision == TRASH_HEAD
     assert graph.get_revision(TRASH_HEAD).down_revision == MERGED_HEAD
     for revision, parent in {
@@ -180,6 +186,10 @@ def test_upgrade_preserves_existing_deployments(migration_db, starting_revision)
     command.upgrade(config, "head")
     _assert_preserved(engine, before)
     merged = _snapshot(engine)
+    with engine.connect() as connection:
+        captured = connection.exec_driver_sql("SELECT project_id FROM legacy_project_ownership").scalars().all()
+        projects = connection.exec_driver_sql("SELECT id FROM projects").scalars().all()
+        assert set(captured) == set(projects)
     command.upgrade(config, "head")
     _assert_preserved(engine, merged)
 
@@ -214,7 +224,7 @@ def test_reconciliation_rerun_preserves_account_decisions(migration_db):
     # Re-run just the merge after its data work has already been applied, as in a
     # retry restored to the two-parent revision marker. No parent DDL is replayed.
     command.stamp(config, ["e2fc39", "b2d5f88c0e31"], purge=True)
-    command.upgrade(config, "head")
+    command.upgrade(config, MERGED_HEAD)
     _assert_preserved(engine, before)
     with engine.connect() as connection:
         assert connection.execute(sa.text("SELECT enabled FROM identity_accounts WHERE user_id = 'later-user'")).scalar_one() == 0
@@ -261,13 +271,13 @@ def test_analysis_session_upgrade_preserves_credentials_and_work_protection(migr
     command.upgrade(config, TRASH_HEAD)
     _seed_database(engine)
     before = _snapshot(engine)
-    command.upgrade(config, "head")
+    command.upgrade(config, SESSION_HEAD)
     _assert_preserved(engine, before)
     with engine.begin() as connection:
         _insert(connection, "analysis_session_leases", credential_kind="password", credential_id="session-active",
                 user_id="owner", run_id="run-original", active_until=EXPIRES, expires_at=EXPIRES, review_seconds=86400)
     before = _snapshot(engine)
-    command.upgrade(config, "head")
+    command.upgrade(config, SESSION_HEAD)
     _assert_preserved(engine, before)
     with pytest.raises(RuntimeError, match="restore a verified backup"):
         command.downgrade(config, TRASH_HEAD)

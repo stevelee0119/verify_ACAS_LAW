@@ -2,14 +2,16 @@
 
 - 관리자 승인 완료 안내 메일 (엠블럼 이미지 첨부)
 - 70% 저장소 용량 초과 경고 메일
-- SMTP 미설정 시 mock 로깅 모드 자동 전환
+- SMTP 미설정과 전송 실패를 성공으로 취급하지 않는다.
 """
 from __future__ import annotations
 
 import logging
 import os
 import smtplib
-import threading
+import ssl
+from dataclasses import dataclass
+from html import escape
 from email.mime.image import MIMEImage
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -18,13 +20,39 @@ from typing import Optional
 
 logger = logging.getLogger("notification_engine.mailer")
 
-# SMTP 설정 (환경 변수)
-SMTP_HOST = os.getenv("LV_SMTP_HOST", "").strip()
-SMTP_PORT = int(os.getenv("LV_SMTP_PORT", "587"))
-SMTP_USER = os.getenv("LV_SMTP_USER", "").strip()
-SMTP_PASSWORD = os.getenv("LV_SMTP_PASSWORD", "").strip()
-SMTP_FROM = os.getenv("LV_SMTP_FROM", "noreply@acas-law.mil.kr").strip()
-SMTP_USE_TLS = os.getenv("LV_SMTP_USE_TLS", "true").lower() in ("true", "1", "yes")
+@dataclass(frozen=True)
+class MailResult:
+    status: str
+    error_code: str = ""
+
+    def __bool__(self):
+        return self.status == "SMTP_ACCEPTED"
+
+
+def _env(name: str, default: str = "") -> str:
+    return os.getenv("LV_SMTP_" + name, os.getenv("SMTP_" + name, default))
+
+
+def smtp_configuration() -> dict:
+    """Public, credential-free configuration readiness, not a connectivity test."""
+    try:
+        port = int(_env("PORT", "587"))
+    except ValueError:
+        port = 0
+    host = _env("HOST").strip()
+    sender = _env("FROM", _env("USER")).strip()
+    tls = _env("USE_TLS", "true").lower() in {"true", "1", "yes"}
+    implicit = port == 465 or _env("USE_SSL", "false").lower() in {"true", "1", "yes"}
+    missing = [name for name, value in (("HOST", host), ("FROM", sender)) if not value]
+    code = "SMTP_NOT_CONFIGURED" if missing else ""
+    if not code and (not 1 <= port <= 65535 or "@" not in sender
+                     or any(c in sender + host for c in "\r\n")
+                     or bool(_env("USER")) != bool(_env("PASSWORD"))
+                     or not (tls or implicit)):
+        code = "SMTP_INVALID_CONFIGURATION"
+    return {"configured": not code, "error_code": code, "missing": missing,
+            "port": port, "security": "SSL" if implicit else "STARTTLS",
+            "delivery_confirmation": "SMTP_ACCEPTED"}
 
 # 엠블럼 이미지 경로 확인
 def _get_emblem_path() -> Optional[Path]:
@@ -41,14 +69,15 @@ def _get_emblem_path() -> Optional[Path]:
     return None
 
 
-def send_approval_email(to_email: str, user_name: str) -> bool:
+def send_approval_email(to_email: str, user_name: str) -> MailResult:
     """사용자 등록 승인 완료 안내 이메일을 발송한다.
     
     엠블럼 이미지를 cid:emblem 형태로 인라인 첨부하며,
     종합행정학교 법무교육단의 정중한 안내 문구를 포함한다.
     """
     subject = "[ACASia_LAW] 사용자 등록 신청이 승인되었습니다"
-    user_display = user_name or "사용자"
+    user_display = escape(user_name or "사용자")
+    display_email = escape(to_email)
 
     html_content = f"""<!DOCTYPE html>
 <html>
@@ -75,7 +104,7 @@ def send_approval_email(to_email: str, user_name: str) -> bool:
     <p>안녕하십니까, <strong>{user_display}</strong>님.</p>
     <p>종합행정학교 법무교육단 <strong>ACASia_LAW 법률문서 검증시스템</strong>에 신청하신 사용자 계정이 정상적으로 승인되었습니다.</p>
     <div class="box">
-      <strong>계정 ID (이메일):</strong> {to_email}<br>
+      <strong>계정 ID (이메일):</strong> {display_email}<br>
       <strong>상태:</strong> 승인 완료 (정상 이용 가능)
     </div>
     <p>이제 등록하신 이메일과 비밀번호로 시스템에 로그인하여 법률문서 검증 및 분석 기능을 이용하실 수 있습니다.</p>
@@ -92,10 +121,10 @@ def send_approval_email(to_email: str, user_name: str) -> bool:
     return _send_email_internal(to_email, subject, html_content, attach_emblem=True)
 
 
-def send_quota_warning_email(to_email: str, user_name: str, used_bytes: int, quota_bytes: int) -> bool:
+def send_quota_warning_email(to_email: str, user_name: str, used_bytes: int, quota_bytes: int) -> MailResult:
     """개인 저장소 용량 70% 초과 경고 이메일을 발송한다."""
     subject = "[ACASia_LAW] 개인 저장소 용량 70% 초과 경고 안내"
-    user_display = user_name or "사용자"
+    user_display = escape(user_name or "사용자")
     used_mb = used_bytes / (1024 * 1024)
     quota_mb = quota_bytes / (1024 * 1024)
     percent = (used_bytes / quota_bytes * 100) if quota_bytes > 0 else 0
@@ -122,12 +151,12 @@ def send_quota_warning_email(to_email: str, user_name: str, used_bytes: int, quo
   <div class="content">
     <div class="title">개인 저장소 용량 70% 초과 알림</div>
     <p>안녕하십니까, <strong>{user_display}</strong>님.</p>
-    <p>현재 ACASia_LAW 시스템 내 개인 저장소 사용량이 기본 제공 용량(1GB)의 <strong>70%</strong>를 초과하였습니다.</p>
+    <p>현재 ACASia_LAW 시스템 내 활성 원본 자료의 저장 용량이 설정된 한도의 <strong>70%</strong>에 도달했습니다.</p>
     <div class="box">
       <strong>현재 사용량:</strong> {used_mb:.1f} MB / {quota_mb:.0f} MB ({percent:.1f}%)<br>
       <strong>남은 용량:</strong> {max(0.0, quota_mb - used_mb):.1f} MB
     </div>
-    <p>저장소 용량(1GB)을 완전히 초과하는 경우 새로운 파일 등록 및 검증 진행이 제한될 수 있습니다.</p>
+    <p>설정된 저장소 한도를 초과하면 새 파일 등록이 제한됩니다.</p>
     <p>원활한 업무 수행을 위해 완료된 사건이나 불필요한 자료를 휴지통으로 이동 후 정리하시기 바랍니다.</p>
     <p>감사합니다.</p>
   </div>
@@ -142,16 +171,18 @@ def send_quota_warning_email(to_email: str, user_name: str, used_bytes: int, quo
     return _send_email_internal(to_email, subject, html_content, attach_emblem=False)
 
 
-def _send_email_internal(to_email: str, subject: str, html_content: str, attach_emblem: bool = False) -> bool:
-    """실제 메일을 발송하거나 mock 로깅 모드로 처리한다."""
-    if not SMTP_HOST:
-        logger.info("[Mock Mailer] SMTP_HOST 미설정 - 테스트 로그 발송: To=%s, Subject=%s", to_email, subject)
-        return True
+def _send_email_internal(to_email: str, subject: str, html_content: str, attach_emblem: bool = False) -> MailResult:
+    config = smtp_configuration()
+    if not config["configured"]:
+        return MailResult("UNAVAILABLE", config["error_code"])
+    if any(c in to_email for c in "\r\n") or "@" not in to_email:
+        return MailResult("FAILED", "INVALID_RECIPIENT")
 
+    sending = accepted = False
     try:
         msg = MIMEMultipart("related")
         msg["Subject"] = subject
-        msg["From"] = SMTP_FROM
+        msg["From"] = _env("FROM", _env("USER")).strip()
         msg["To"] = to_email
 
         alt = MIMEMultipart("alternative")
@@ -173,35 +204,26 @@ def _send_email_internal(to_email: str, subject: str, html_content: str, attach_
                 msg.attach(img_part)
 
         # SMTP 전송
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
-            if SMTP_USE_TLS:
-                server.starttls()
-            if SMTP_USER and SMTP_PASSWORD:
-                server.login(SMTP_USER, SMTP_PASSWORD)
-            server.send_message(msg)
+        context = ssl.create_default_context()
+        client = smtplib.SMTP_SSL if config["security"] == "SSL" else smtplib.SMTP
+        kwargs = {"context": context} if client is smtplib.SMTP_SSL else {}
+        with client(_env("HOST").strip(), config["port"], timeout=10, **kwargs) as server:
+            if config["security"] == "STARTTLS":
+                server.starttls(context=context)
+            if _env("USER"):
+                server.login(_env("USER").strip(), _env("PASSWORD"))
+            sending = True
+            if server.send_message(msg):
+                return MailResult("FAILED", "SMTP_RECIPIENT_REFUSED")
+            accepted = True
 
-        logger.info("[Mailer] 이메일 발송 성공: %s", to_email)
-        return True
+        return MailResult("SMTP_ACCEPTED")
     except Exception as exc:
-        logger.error("[Mailer] 이메일 발송 실패 (%s): %s", to_email, exc)
-        return False
-
-
-def send_approval_email_background(to_email: str, user_name: str) -> None:
-    """백그라운드 스레드로 승인 안내 메일을 비동기 발송한다."""
-    thread = threading.Thread(
-        target=send_approval_email,
-        args=(to_email, user_name),
-        daemon=True,
-    )
-    thread.start()
-
-
-def send_quota_warning_email_background(to_email: str, user_name: str, used_bytes: int, quota_bytes: int) -> None:
-    """백그라운드 스레드로 70% 용량 경고 메일을 비동기 발송한다."""
-    thread = threading.Thread(
-        target=send_quota_warning_email,
-        args=(to_email, user_name, used_bytes, quota_bytes),
-        daemon=True,
-    )
-    thread.start()
+        if accepted:
+            return MailResult("SMTP_ACCEPTED")
+        logger.warning("smtp_send_failed error_type=%s", type(exc).__name__)
+        if sending and (isinstance(exc, smtplib.SMTPServerDisconnected)
+                        or (isinstance(exc, OSError) and not isinstance(exc, smtplib.SMTPException))):
+            return MailResult("UNKNOWN", "DELIVERY_UNCONFIRMED")
+        code = "SMTP_AUTHENTICATION_FAILED" if isinstance(exc, smtplib.SMTPAuthenticationError) else "SMTP_SEND_FAILED"
+        return MailResult("FAILED", code)

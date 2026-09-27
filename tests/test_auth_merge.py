@@ -115,7 +115,8 @@ def test_old_cookie_and_bearer_session_use_project_rbac(merged_auth):
     s = merged_auth
     for headers in (s.headers("member"), {"Cookie": "lv_session=legacy-session-member"}):
         response = s.client.get("/api/projects", headers=headers)
-        assert response.status_code == 200 and {p["id"] for p in response.json()} == {"pa"}
+        assert response.status_code == 200 and response.json() == []
+        assert s.client.get("/api/projects/pa", headers=headers).status_code == 404
         assert s.client.get("/api/projects/pb", headers=headers).status_code == 404
         assert s.client.get("/api/projects/private", headers=headers).status_code == 404
         assert s.client.get("/api/auth/users", headers=headers).status_code == 403
@@ -124,11 +125,14 @@ def test_old_cookie_and_bearer_session_use_project_rbac(merged_auth):
     with s.factory() as session:
         row = session.get(Project, response.json()["id"])
         assert (row.owner_id, row.organization_id) == ("member", "oa")
-    assert s.client.patch("/api/projects/pa", json={"memo": "No"}, headers=s.headers("viewer")).status_code == 403
+    assert s.client.patch("/api/projects/pa", json={"memo": "No"}, headers=s.headers("viewer")).status_code == 404
 
 
 def test_password_login_secure_cookie_and_csrf(merged_auth):
     s = merged_auth
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = "member"
+        session.commit()
     payload = {"email": "member@example.invalid", "password": PASSWORD}
     assert s.client.post("/api/auth/login", json=payload, headers={"Origin": "https://evil.invalid"}).status_code == 403
     assert s.client.post("/api/auth/login", json=payload, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403

@@ -355,12 +355,21 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
     if issue:
         raise HTTPException(400, issue)
 
-    # 저장소 용량 쿼터(1GB) 검사 및 70% 초과 경고 (요구사항 7)
+    digest = sha256_bytes(data)
+    lock_project(session, project_id)
+    require_project(session, project_id, "MEMBER")
+    existing = session.scalar(select(Document).where(
+        Document.project_id == project_id, Document.sha256 == digest))
+    if existing is not None:
+        return _document_out(session, existing)
+
+    # Serialize quota checks across this owner's different projects as well.
     owner_id = project.owner_id
     if owner_id:
         from ..db import User
         from ..storage_quota import get_user_storage_usage_bytes
-        owner = session.get(User, owner_id)
+        owner = session.scalar(select(User).where(User.id == owner_id).with_for_update()
+                               .execution_options(populate_existing=True))
         if owner is not None:
             quota = getattr(owner, "storage_quota_bytes", 1073741824) or 1073741824
             current_usage = get_user_storage_usage_bytes(session, owner_id)
@@ -370,35 +379,13 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
                     f"개인 저장소 용량 한도({quota / (1024**3):.1f}GB)를 초과하여 업로드할 수 없습니다. "
                     "기존 자료를 정리한 후 다시 시도하십시오."
                 )
-            # 70% 초과 여부 확인 및 24시간 내 1회 경고 메일 비동기 발송
+            # The outbox commits with the upload; no SMTP on an uncommitted file.
             if (current_usage + len(data)) >= quota * 0.7:
-                warning_sent = getattr(owner, "quota_warning_sent_at", None)
-                now = datetime.utcnow()
-                if not warning_sent or (now - warning_sent).total_seconds() > 86400:
-                    owner.quota_warning_sent_at = now
-                    session.flush()
-                    try:
-                        from packages.notification_engine.mailer import send_quota_warning_email_background
-                        send_quota_warning_email_background(
-                            to_email=owner.email,
-                            user_name=owner.display_name or owner.email,
-                            used_bytes=current_usage + len(data),
-                            quota_bytes=quota,
-                        )
-                    except Exception as mail_err:
-                        logger.error("Failed to trigger quota warning email: %s", mail_err)
+                from ..notifications import queue_quota_warning
+                queue_quota_warning(session, owner, current_usage + len(data))
 
-    digest = sha256_bytes(data)
-    lock_project(session, project_id)
-    require_project(session, project_id, "MEMBER")
     storage = get_storage()
     storage_key = storage.put_original(f"{project_id}/{digest}{suffix}", data)
-
-    existing = session.execute(
-        select(Document).where(Document.project_id == project_id, Document.sha256 == digest)
-    ).scalar_one_or_none()
-    if existing is not None:
-        return _document_out(session, existing)
 
     document = Document(
         project_id=project_id,

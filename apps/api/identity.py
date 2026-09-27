@@ -16,10 +16,10 @@ from functools import lru_cache
 from urllib.parse import urlsplit
 
 from fastapi import HTTPException, Request
-from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, or_, select, update
+from sqlalchemy import Boolean, Column, DateTime, ForeignKey, Integer, String, UniqueConstraint, select, update
 from sqlalchemy.orm import Session
 
-from .db import Base, Organization, Project, ProjectMember, SessionToken, User, VerificationRun, new_uuid
+from .db import Base, Organization, Project, SessionToken, User, VerificationRun, new_uuid
 from .session_policy import RENEW_INTERVAL, absolute_deadline, analysis_lifetimes, session_deadline
 
 ROLES = {"VIEWER": 1, "MEMBER": 2, "ADMIN": 3}
@@ -129,7 +129,8 @@ def user_is_enabled(session: Session, user: User | None) -> bool:
     # provisioned legacy population is accepted before startup reconciliation.
     legacy = user is not None and bool(user.password_hash and user.password_hash.startswith("scrypt$"))
     account = session.get(IdentityAccount, user.id) if user is not None else None
-    return bool(user is not None and user.is_active and (account.enabled if account else legacy))
+    return bool(user is not None and user.is_active and user.approval_status == "APPROVED"
+                and (account.enabled if account else legacy))
 
 
 def principal_for_user(session: Session, user_id: str, authentication: str,
@@ -176,7 +177,7 @@ def reconcile_password_accounts(session: Session) -> int:
             account = IdentityAccount(user_id=user.id, enabled=bool(user.is_active))
             session.add(account)
             added += 1
-        if not user.is_active or not account.enabled:
+        if not user.is_active or not account.enabled or user.approval_status != "APPROVED":
             user.is_active = account.enabled = False
             revoke_user_credentials(session, user.id)
     session.flush()
@@ -491,10 +492,8 @@ def project_role(session: Session, project: Project, principal: Principal | None
         return "ADMIN"
     if project.organization_id != principal.organization_id:
         return None
-    # 사용자별 격리 (요구사항 6): 본인이 소유자(owner_id)이거나 명시적 멤버인 경우만 접근 허용
-    member = session.scalar(select(ProjectMember).where(
-        ProjectMember.project_id == project.id, ProjectMember.user_id == principal.user_id))
-    role = "ADMIN" if project.owner_id == principal.user_id else (member.role if member else None)
+    # Legacy memberships remain as history, never as authorization.
+    role = "ADMIN" if project.owner_id == principal.user_id else None
     if role not in ROLES or principal.role not in ROLES:
         return None
     if principal.role == "VIEWER":
@@ -528,12 +527,8 @@ def visible_project_ids(session: Session, principal: Principal | None = None, *,
         return None
     if principal.role not in ROLES:
         return []
-    # 사용자별 격리 (요구사항 6): 본인이 소유자(owner_id)인 프로젝트(또는 참여 멤버)만 조회
-    memberships = select(ProjectMember.project_id).where(
-        ProjectMember.user_id == principal.user_id, ProjectMember.role.in_(ROLES))
-    query = select(Project.id).where(or_(Project.owner_id == principal.user_id, Project.id.in_(memberships)))
-    if principal.organization_id:
-        query = query.where(Project.organization_id == principal.organization_id)
+    query = select(Project.id).where(Project.owner_id == principal.user_id)
+    query = query.where(Project.organization_id == principal.organization_id)
     if not include_deleted:
         query = query.where(Project.deleted_at.is_(None))
     return list(session.scalars(query))

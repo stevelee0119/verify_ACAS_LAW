@@ -158,6 +158,20 @@ class User(Base):
     quota_warning_sent_at = Column(DateTime, nullable=True)     # 70% 경고 메일 발송 일시
 
 
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+    id = Column(String(40), primary_key=True, default=lambda: new_uuid("mail_"))
+    user_id = Column(String(40), ForeignKey("users.id"), nullable=False, index=True)
+    kind = Column(String(20), nullable=False)
+    status = Column(String(24), nullable=False, default="QUEUED", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    payload = Column(JSONType, default=dict)
+    error_code = Column(String(80), default="")
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    attempted_at = Column(DateTime)
+    finished_at = Column(DateTime)
+
+
 class SessionToken(Base):
     """로그인 세션. 토큰 원문이 아니라 해시를 보관한다.
 
@@ -204,6 +218,15 @@ class Project(Base):
     deleted_by = Column(String(80))
 
     documents = relationship("Document", back_populates="project", cascade="all, delete-orphan")
+
+
+class LegacyProjectOwnership(Base):
+    __tablename__ = "legacy_project_ownership"
+    project_id = Column(String(40), primary_key=True)
+    previous_owner_id = Column(String(40))
+    previous_organization_id = Column(String(40))
+    target_owner_id = Column(String(40))
+    migrated_at = Column(DateTime)
 
 
 class ProjectMember(Base):
