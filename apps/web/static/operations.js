@@ -193,15 +193,19 @@ const operationsUI = (() => {
   async function selectRun(run) {
     if (run.project_id !== state.project?.id) return;
     clearTimeout(state.timer); const generation=++state.generation;
+    state.pollError=null;state.pollFailures=0;
     state.run=run;state.findings=[];state.result={};renderProject();
-    await loadResults(generation);
-    if(!terminal(run))pollRun(generation);
+    renderFindings();renderAIVerification();
+    if(terminal(run))await loadResults(generation);
+    else pollRun(generation,0);
   }
   async function jobDetails(run) {
     const job=await api(`/verification-runs/${run.id}/job`), content=node("div",null,"full");
     content.append(node("p",`${label(job.state)} · 시도 ${job.attempts}/${job.max_attempts}`));
     if(job.next_dispatch_at && !terminal(job))content.append(node("p",`다음 실행 확인 ${dateText(job.next_dispatch_at)}`,"muted"));
     if(job.last_error)content.append(node("p",job.last_error,"error"));
+    if(job.last_error==="EXECUTION_SETTINGS_CHANGED")content.append(node("p",
+      "이전 실행 이후 분석 엔진 설정이 변경되었습니다. 같은 입력으로 재시도하면 원래 자료와 사건 조건을 현재 엔진으로 다시 분석합니다.","muted"));
     // 임차가 만료됐을 때 마지막 갱신이 언제였는지가 원인을 가른다.
     // 시작 직후까지만 갱신됐다면 갱신이 끊긴 것이고, 만료 직전까지 갱신됐다면
     // 작업 프로세스가 갑자기 죽은 것이다. 원인도 조치도 서로 다르다.
@@ -236,7 +240,7 @@ const operationsUI = (() => {
       const cancelled=await api(`/verification-runs/${run.id}/cancel`,{method:"POST"});await selectRun(cancelled);
     }));
     if(["FAILED","CANCELLED","PARTIAL_COMPLETED"].includes(run.state))root.append(button("같은 입력으로 재시도",async()=>{
-      if(await ask("검증 재시도","당시 자료와 설정으로 새 검증을 실행합니다. 외부 AI 요청이 다시 발생할 수 있습니다.")===null)return;
+      if(await ask("검증 재시도","당시 자료와 사건 조건을 현재 분석 엔진으로 다시 검증합니다. 기존 보안 정책과 누적 비용 한도는 유지하며, 외부 AI 요청이 다시 발생할 수 있습니다.")===null)return;
       const retry=await api(`/verification-runs/${run.id}/retry`,{method:"POST"});await selectRun(retry);
     }));
   }

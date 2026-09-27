@@ -173,6 +173,23 @@ def _job_for(run, snapshot, *, force=False, retry_of=None, budget_run_id=None):
     )
 
 
+def _retry_snapshot(job):
+    if snapshot_hash(job.snapshot) != job.snapshot_hash:
+        raise JobConflict("저장된 분석 입력의 무결성을 확인할 수 없어 재시도할 수 없습니다")
+    snapshot = copy.deepcopy(job.snapshot)
+    previous = snapshot["execution"]
+    execution = execution_settings_snapshot()
+    # A manual retry uses today's engine, but cannot reset its spending limits or enable network access.
+    execution["budget"] = copy.deepcopy(previous["budget"])
+    execution["settings"]["allow_network"] &= previous["settings"].get("allow_network", False)
+    if execution != previous:
+        snapshot["execution"] = execution
+        settings = get_settings()
+        snapshot["versions"] = {**snapshot.get("versions", {}), "rule": settings.rule_version,
+                                "prompt": settings.prompt_version, "model_config": settings.model_config_version()}
+    return snapshot
+
+
 def enqueue_run(session, run, *, force=False):
     """Add an UNSAVED VerificationRun and its job atomically; caller commits.
 
@@ -413,13 +430,13 @@ class JobStore:
         attempt.state, attempt.finished_at = str(result.state), self.clock()
         attempt.error = "\n".join(result.errors or [])
 
-    def _failed(self, session, job, error):
+    def _failed(self, session, job, error, *, retryable=True):
         now = self.clock()
         attempt = session.execute(select(JobAttempt).where(
             JobAttempt.run_id == job.run_id, JobAttempt.fence == job.fence)).scalar_one_or_none()
         if attempt:
             attempt.state, attempt.error, attempt.finished_at = "FAILED", error, now
-        retry = job.attempts < job.max_attempts
+        retry = retryable and job.attempts < job.max_attempts
         job.state = "BACKOFF" if retry else "FAILED"
         job.owner, job.lease_expires_at, job.dispatch_until = None, None, None
         job.available_at = now + timedelta(seconds=min(300, self.backoff_seconds * 2 ** min(job.attempts - 1, 16)))
@@ -433,14 +450,16 @@ class JobStore:
         run.stage_message = (
             f"오류가 발생해 {wait}초 뒤 다시 시도합니다({job.attempts}/{job.max_attempts}회)"
             if retry else f"{job.max_attempts}회 시도가 모두 실패했습니다")
+        if not retryable:
+            run.stage_message = "실행 설정이 변경되어 중단했습니다. 같은 입력으로 재시도하면 현재 엔진으로 분석합니다."
         run.finished_at = None if retry else now
         session.add(VerificationCheck(run_id=job.run_id, name="JOB_ATTEMPT", state=job.state,
                                       detail={"error": error, "attempt": job.attempts, "fence": job.fence}))
 
-    def fail(self, lease, error):
+    def fail(self, lease, error, *, retryable=True):
         with write_session(self.factory) as session:
             self.fence(session, lease)
-            self._failed(session, session.get(DurableJob, lease.run_id), str(error))
+            self._failed(session, session.get(DurableJob, lease.run_id), str(error), retryable=retryable)
 
     def recover(self):
         """Expired workers lose ownership before any retry becomes dispatchable."""
@@ -521,30 +540,45 @@ class JobStore:
 
     def retry(self, run_id, *, actor="system"):
         with write_session(self.factory) as session:
-            session.execute(update(DurableJob).where(DurableJob.run_id == run_id).values(updated_at=self.clock()))
             source = session.get(VerificationRun, run_id)
             if source is None:
                 raise KeyError(run_id)
             project = lock_project(session, source.project_id)
             if project is None or project.deleted_at is not None:
                 raise JobConflict("Project is in the trash or unavailable")
-            existing = session.execute(select(DurableJob).where(DurableJob.retry_of == run_id)).scalar_one_or_none()
-            if existing:
-                return existing.run_id
+            # Serialize the whole retry chain, including requests made from different history entries.
+            seen = set()
+            while True:
+                if source.id in seen or len(seen) >= 256:
+                    raise JobConflict("재시도 이력 연결을 확인할 수 없습니다")
+                seen.add(source.id)
+                existing = session.execute(select(DurableJob).where(DurableJob.retry_of == source.id)).scalar_one_or_none()
+                if existing is None:
+                    break
+                if existing.project_id != project.id:
+                    raise JobConflict("재시도 이력의 프로젝트가 일치하지 않습니다")
+                if existing.state not in {"FAILED", "CANCELLED", "PARTIAL_COMPLETED"}:
+                    return existing.run_id
+                source = session.get(VerificationRun, existing.run_id)
+                if source is None or source.project_id != project.id:
+                    raise JobConflict("재시도 이력의 분석을 찾을 수 없습니다")
             if source.state not in {"FAILED", "CANCELLED", "PARTIAL_COMPLETED"}:
                 raise JobConflict("Only failed, cancelled, or partially completed runs can be retried")
-            source_job = session.get(DurableJob, run_id)
+            source_job = session.get(DurableJob, source.id)
             if source_job is None:
-                raise JobConflict("Legacy run has no durable execution snapshot; create a new verification")
+                raise JobConflict("이전 분석의 입력 기록이 없어 같은 입력으로 재시도할 수 없습니다. 자료를 선택해 새 검증을 시작해 주세요.")
+            snapshot = _retry_snapshot(source_job)
+            key = source.verification_key if snapshot == source_job.snapshot else snapshot_hash(snapshot)
             child = VerificationRun(project_id=source.project_id, document_ids=copy.deepcopy(source.document_ids),
-                profile=source.profile, verification_key=source.verification_key, state="QUEUED",
-                input_snapshot=copy.deepcopy(source.input_snapshot))
+                profile=source.profile, verification_key=key, state="QUEUED",
+                input_snapshot=snapshot)
             session.add(child)
             session.flush()
-            session.add(_job_for(child, copy.deepcopy(source_job.snapshot), force=True, retry_of=run_id,
+            session.add(_job_for(child, copy.deepcopy(snapshot), force=True, retry_of=source.id,
                                  budget_run_id=source_job.budget_run_id))
             session.add(VerificationCheck(run_id=child.id, name="RETRY", state="QUEUED",
-                                          detail={"actor": actor, "retry_of": run_id}))
+                                          detail={"actor": actor, "retry_of": source.id, "requested_run_id": run_id,
+                                                  "execution_refreshed": snapshot != source_job.snapshot}))
             return child.id
 
     def status(self, run_id):
@@ -574,7 +608,7 @@ def _status_error(error):
         return ""
     code = str(error).split(":", 1)[0]
     return code if code in {"WORKER_LEASE_EXPIRED", "BUDGET_ADMISSION_FAILED", "INVALID_RESPONSE_SCHEMA",
-                           "PROVIDER_EXCEPTION", "PROVIDER_POLICY_BLOCKED"} else "JOB_ATTEMPT_FAILED"
+                           "PROVIDER_EXCEPTION", "PROVIDER_POLICY_BLOCKED", "EXECUTION_SETTINGS_CHANGED"} else "JOB_ATTEMPT_FAILED"
 
 
 def _next_dispatch_at(job):

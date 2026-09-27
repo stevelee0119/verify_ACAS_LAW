@@ -178,6 +178,10 @@ class WorkerAuditChain(AuditChain):
                                              "submission": self.submission}, **kwargs)
 
 
+class ExecutionSettingsChanged(ValueError):
+    pass
+
+
 def snapshot_settings(snapshot):
     current = get_settings()
     execution = snapshot["execution"]
@@ -185,7 +189,7 @@ def snapshot_settings(snapshot):
     # These parsers still read global settings; refuse drift rather than silently retry new inputs.
     for name, value in saved.items():
         if name not in {"allow_network", "http_timeout"} and getattr(current, name) != value:
-            raise ValueError("Snapshot execution setting changed: " + name)
+            raise ExecutionSettingsChanged("EXECUTION_SETTINGS_CHANGED: " + name)
     providers = {name: ProviderConfig(**value) for name, value in execution["providers"].items()}
     values = {**saved, "allow_network": saved["allow_network"] and current.allow_network}
     return replace(current, **values, providers=providers, pricing=copy.deepcopy(execution["pricing"]))
@@ -288,6 +292,11 @@ def execute(run_id, *, store=None):
                 run.result_json = {**run.result_json, "effective_security": copy.deepcopy(security),
                                    "security_restricted": restricted}
                 store.complete(session, lease, result, reusable=not restricted)
+    except ExecutionSettingsChanged as exc:
+        try:
+            store.fail(lease, str(exc), retryable=False)
+        except JobOwnershipLost:
+            pass
     except JobOwnershipLost as exc:
         # 임차가 아직 살아 있다면 여기서 실패를 기록해야 만료를 기다리지 않고
         # 곧바로 다음 시도로 넘어간다. 그동안 화면은 마지막 단계에 멈춘 채로
