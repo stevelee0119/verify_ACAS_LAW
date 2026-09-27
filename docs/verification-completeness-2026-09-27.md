@@ -29,6 +29,8 @@ The new regression inputs omit test-case titles and expected answers. Existing i
 
 The base main CI run `36291043587` failed three startup expectations because the implementation passed `timeout=120` and the tests expected only `check=True`. This change retains the timeout and updates the test contract, rather than weakening the startup bound.
 
+The first work-branch CI run `36296189734` failed one existing bare-basis regression. The parenthetical-content guard was too broad and treated a short case-specific conclusion as a statement of statutory content. The follow-up exempts only complete, case-scoped admissibility conclusions, explicitly without validating the conclusion itself. Substantive qualifications, general rules, and additional sentences remain unverified. The original regression assertion is retained and positive/negative controls cover the distinction.
+
 ## Remaining Work
 
 - Run authenticated production analysis to verify current Drive revisions, provider executions and accepted quote pairs. Unit mocks and public health do not establish this integration.
