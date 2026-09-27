@@ -40,9 +40,10 @@ function labeledButton(element, text) { return find(element, child => child.tagN
 function submit(dialog) { return dialog.querySelector("form").onsubmit({preventDefault() {}}); }
 const principal = {user_id:"u1", organization_id:"org1", role:"ADMIN", authentication:"password"};
 
-function harness(me = principal, adminUsers = []) {
+function harness(me = principal) {
   const body = new Element("body"), requests = [], apiRequests = [], responses = [], views = [];
-  const ids = new Map(); let reloads = 0;
+  const adminCalls = [];
+  const ids = new Map(); let reloads = 0, identityError = null;
   for (const id of ["settingsButton", "progress"]) { const element = new Element("div"); element.id = id; ids.set(id, element); body.append(element); }
   const node = (tag, text, cls) => new Element(tag, text, cls);
   const button = (text, callback, cls) => { const element = node("button", text, cls); element.type = "button"; element.onclick = callback; return element; };
@@ -52,6 +53,7 @@ function harness(me = principal, adminUsers = []) {
   };
   const context = vm.createContext({
     console, Promise, Error,
+    adminUI: {init() {adminCalls.push("init");}, setIdentity(me) {adminCalls.push(me);}, open() {adminCalls.push("open");}},
     node, button, iconButton: (icon, title, callback) => button(title, callback),
     document: {body}, location: {reload() { reloads++; }},
     $: id => ids.get(id) || descendants(body).find(element => element.id === id),
@@ -60,15 +62,14 @@ function harness(me = principal, adminUsers = []) {
       modal(title, fields, save) {
         const dialog = node("dialog"), form = node("form"), grid = node("div"), submit = button("save", () => {});
         grid.append(...fields); form.append(grid, submit); dialog.append(form); body.append(dialog);
-        const view = {title, dialog, form, grid, submit, save}; views.push(view); return view;
+        const view = {title, dialog, form, grid, submit, save, readOnly() {submit.hidden = true;}}; views.push(view); return view;
       },
       table() { return node("table"); }
     },
     api: async (url, options = {}) => {
       apiRequests.push({url, options});
-      if (url === "/identity/me") return me;
+      if (url === "/identity/me") {if (identityError) throw identityError; return me;}
       if (url === "/identity/users" && !options.method) return [];
-      if (url.startsWith("/admin/users?") && !options.method) return adminUsers;
       return {};
     },
     fetch: async (url, options) => {
@@ -83,7 +84,8 @@ function harness(me = principal, adminUsers = []) {
   vm.runInContext(source, context);
   const ui = vm.runInContext("operationsUI", context);
   ui.init();
-  return {ui, body, requests, apiRequests, responses, views, get reloads() {return reloads;},
+  return {ui, body, requests, apiRequests, responses, views, adminCalls, get reloads() {return reloads;},
+    failIdentity: () => {identityError = new Error("Identity unavailable");},
     loginDialog: () => find(body, element => element.tagName === "dialog" && element.className.includes("login-dialog")),
     account: () => find(body, element => element.id === "accountButton").click()};
 }
@@ -190,21 +192,18 @@ test("password change validates confirmation and handles a wrong current passwor
   assert.equal(h.reloads, 1);
 });
 
-test("administrators can create password accounts or keep token-only provisioning", async () => {
-  for (const password of ["", "initial-password"]) {
-    const h = harness(); await h.account(); await labeledButton(h.views[0].grid, "조직 사용자").click();
-    await labeledButton(h.views[1].grid, "사용자 등록").click();
-    await h.views[2].save({email:"new@example.test", display_name:"Reviewer", role:"MEMBER", password});
-    const request = h.apiRequests.find(item => item.options.method === "POST");
-    assert.equal(request.url, password ? "/auth/users" : "/identity/users");
-    assert.equal(request.options.body.password, password || undefined);
-  }
+test("admin navigation closes the account dialog before opening the management workspace", async () => {
+  const h = harness(); await h.account();
+  await labeledButton(h.views[0].grid, "사용자 관리").click();
+  assert.equal(h.views[0].dialog.open, false);
+  assert.equal(h.views.length, 1);
+  assert.deepEqual(h.adminCalls, ["init", principal, "open"]);
 });
 
 test("merged page retains every workbench and no script persists authentication secrets", () => {
   const html = readFileSync(path.join(root, "apps/web/index.html"), "utf8");
   const app = readFileSync(path.join(root, "apps/web/static/app.js"), "utf8");
-  for (const file of ["workflow.js", "operations.js", "report-workbench.js", "calculation-workbench.js"]) assert.ok(html.includes(file));
+  for (const file of ["workflow.js", "admin.js", "operations.js", "report-workbench.js", "calculation-workbench.js"]) assert.ok(html.includes(file));
   assert.ok(html.includes("ACASia_LAW"));
   assert.ok(html.includes("법률문서 검증시스템"));
   // 엠블럼은 상단바와 빈 상태 화면 양쪽에 있어야 한다.
@@ -218,13 +217,22 @@ test("merged page retains every workbench and no script persists authentication 
   assert.doesNotMatch(source + app + html, /<<<<<<<|=======|>>>>>>>/);
 });
 
-test("invalid metrics response displays an error and reload action instead of empty statistics", async () => {
-  const h = harness(principal, {});
-  await h.account();
-  await labeledButton(h.views[0].grid, "조직 사용자").click();
-  assert.ok(find(h.views[1].grid, element => element.className === "error").textContent);
-  assert.ok(labeledButton(h.views[1].grid, "다시 불러오기"));
-  assert.equal(descendants(h.views[1].grid).filter(element => element.tagName === "table").length, 0);
+test("identity refresh failure clears admin data but retains account-switch protection", async () => {
+  const h = harness(); await h.ui.refreshIdentity(); h.failIdentity();
+  await assert.rejects(h.ui.refreshIdentity(), /Identity unavailable/);
+  assert.equal(h.adminCalls.at(-1), null);
+  const pending = h.ui.authenticate(), rejected = assert.rejects(pending, /다른 계정/);
+  loginSuccess(h, {...principal, user_id:"u2"});
+  await submit(h.loginDialog()); await rejected;
+  assert.equal(h.reloads, 1);
+});
+
+test("login establishes the admin identity without opening an unsolicited approval modal", async () => {
+  const h = harness(), pending = h.ui.authenticate(), dialog = h.loginDialog();
+  loginSuccess(h); await submit(dialog); await pending;
+  assert.deepEqual(h.adminCalls, ["init", principal]);
+  assert.equal(h.apiRequests.length, 0);
+  assert.equal(h.views.length, 0);
 });
 
 function networkHarness(fetch, authenticate = async () => {}, authVersion = () => 0) {

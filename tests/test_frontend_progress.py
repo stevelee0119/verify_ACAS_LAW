@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import pytest
+
 from playwright.sync_api import expect, sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -185,7 +187,8 @@ def test_expired_poll_pauses_and_explicit_login_resumes_same_results(tmp_path):
             browser.close()
 
 
-def test_missing_ui_module_is_not_shown_as_empty_data(tmp_path):
+@pytest.mark.parametrize("module,label", [("operations.js", "로그인·계정"), ("admin.js", "사용자 관리")])
+def test_missing_ui_module_is_not_shown_as_empty_data(tmp_path, module, label):
     """구성요소 하나가 로드되지 않았을 때 "자료 없음"처럼 보이면 안 된다.
 
     실제로 operations.js가 오지 않아 "operationsUI is not defined"와 빈
@@ -199,7 +202,7 @@ def test_missing_ui_module_is_not_shown_as_empty_data(tmp_path):
 
     def respond(route):
         path = urlsplit(route.request.url).path
-        if path == "/static/operations.js":
+        if path == f"/static/{module}":
             route.abort("failed")
         elif path in files:
             route.fulfill(path=str(files[path]))
@@ -219,7 +222,7 @@ def test_missing_ui_module_is_not_shown_as_empty_data(tmp_path):
             page.goto("http://loadfail.test/")
             empty = page.locator("#emptyState")
             expect(empty).to_contain_text("불러오지 못했습니다", timeout=7000)
-            expect(empty).to_contain_text("로그인·계정")
+            expect(empty).to_contain_text(label)
             expect(empty).to_contain_text("영향을 받지 않습니다")
             expect(page.get_by_role("button", name="새로고침")).to_be_visible()
             assert "검토할 프로젝트가 없습니다" not in empty.inner_text()

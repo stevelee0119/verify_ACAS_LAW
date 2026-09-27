@@ -529,7 +529,7 @@ td {
 
 .empty>.empty-emblem {
   display: block;
-  width: 280px;
+  width: 128px;
   max-width: 100%;
   height: auto;
   aspect-ratio: 1;
@@ -538,10 +538,9 @@ td {
   margin: 0 auto 18px;
 }
 
-/* 엠블럼이 제품명을 이미 보여 주므로 아래에는 시스템 이름만 둔다. */
 .empty-title {
   margin: 0 0 22px;
-  font-family: "ACAS Title", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font-family: inherit;
   font-size: 22px;
   font-weight: 600;
   color: #234540
@@ -1311,6 +1310,8 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   font-size: 13px;
   color: var(--text, #1e293b);
   font-weight: 600;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 .register-btn {
@@ -1371,5 +1372,112 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   font-weight: bold;
   font-size: 14px;
   margin-bottom: 10px;
+}
+
+/* Administration is a separate workspace; in-flight project state stays mounted. */
+.topbar {height:64px;}
+.workspace {min-height:calc(100vh - 64px);}
+.empty {padding:44px 16px;}
+.workspace-groups {display:flex; gap:4px; border-bottom:1px solid var(--line); margin-top:24px;}
+.workspace-groups button {border:0; border-radius:4px 4px 0 0; min-height:44px; padding:10px 20px; background:transparent; color:var(--muted);}
+.workspace-groups button[aria-pressed="true"] {background:#e7f3ed; color:#105844; font-weight:600;}
+.workspace-groups + .tabs {margin-top:0;}
+body.admin-active .workspace {grid-template-columns:minmax(0,1fr);}
+body.admin-active #sidebar,
+body.admin-active #emptyState,
+body.admin-active #projectView,
+body.admin-active #menuButton {display:none !important;}
+body.admin-active main {width:100%; max-width:1360px;}
+#adminNavigation {white-space:nowrap; flex-shrink:0;}
+#adminNavigation[aria-pressed="true"] {color:#105844; background:#e7f3ed; border-color:#a4cbbb;}
+#adminView {min-width:0;}
+.admin-heading {display:flex; gap:20px; align-items:center; margin-bottom:24px;}
+.admin-heading h1 {font-size:22px; line-height:1.35; margin:0;}
+.admin-tabs {display:flex; gap:24px; border-bottom:1px solid var(--line); margin-bottom:24px;}
+.admin-tabs button {border:0; border-radius:0; background:transparent; border-bottom:3px solid transparent; padding:12px 4px; min-height:48px; font-weight:600;}
+.admin-tabs button[aria-selected="true"] {color:#105844; border-bottom-color:var(--green);}
+.admin-toolbar {display:flex; flex-wrap:wrap; align-items:end; gap:12px;}
+.admin-toolbar label, .admin-pagination label, .admin-form label {display:grid; gap:6px; font-size:12px; min-width:0;}
+.admin-toolbar label {flex:0 1 136px;}
+.admin-toolbar .admin-search {flex:1 1 240px;}
+.admin-toolbar input, .admin-toolbar select, .admin-form input, .admin-form select, .admin-form textarea {width:100%; min-width:0;}
+.admin-toolbar input, .admin-toolbar select {height:38px;}
+.admin-summary {display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; min-height:64px; font-size:12px;}
+.admin-summary p {margin-left:auto;}
+.admin-feedback {padding:12px 0; color:#105844; border-bottom:1px solid var(--line);}
+.admin-feedback.error {color:#a22838;}
+.admin-rows {min-height:180px;}
+.admin-table {width:100%; min-width:0; table-layout:fixed; border-collapse:collapse; background:#fff;}
+.admin-table th, .admin-table td {padding:14px 12px; text-align:left; vertical-align:middle; overflow-wrap:anywhere; border-bottom:1px solid var(--line);}
+.admin-table th {background:#eef2f3; font-size:12px; color:#4a585a;}
+.admin-table th:first-child {width:30%;}
+.admin-table th:last-child {width:64px;}
+.admin-table tbody tr:hover {background:#f5f9f7;}
+.admin-table .icon {flex-shrink:0;}
+.admin-user {display:grid; gap:4px; min-width:0; overflow-wrap:anywhere;}
+.admin-user small {color:var(--muted); font-size:12px; line-height:1.45;}
+.admin-name {padding:0; min-height:24px; height:auto; border:0; background:transparent; color:#174e74; text-align:left; display:block; line-height:1.5; font-weight:600; overflow-wrap:anywhere;}
+.admin-name:hover {text-decoration:underline; background:transparent;}
+.admin-badge {display:inline-flex; align-items:center; width:fit-content; max-width:100%; padding:4px 7px; border-radius:4px; font-size:12px; line-height:1.4; color:#505b60; background:#edf0f2;}
+.admin-badge[data-state="ACTIVE"], .admin-badge[data-state="SMTP_ACCEPTED"] {color:#105844; background:#e7f3ed;}
+.admin-badge[data-state="PENDING"], .admin-badge[data-state="QUEUED"], .admin-badge[data-state="UNKNOWN"] {color:#755100; background:#fff3ce;}
+.admin-badge[data-state="SENDING"] {color:#175a88; background:#eaf3fb;}
+.admin-badge[data-state="FAILED"], .admin-badge[data-state="UNAVAILABLE"], .admin-badge[data-state="REJECTED"] {color:#9c283b; background:#fcecef;}
+.admin-pagination {display:flex; justify-content:flex-end; align-items:center; gap:12px; padding:20px 0; font-size:12px;}
+.admin-pagination label {margin-right:auto; grid-template-columns:auto auto; align-items:center;}
+.admin-pagination span {min-width:90px; text-align:center;}
+.admin-empty {padding:40px 0; color:var(--muted); text-align:center;}
+dialog.admin-detail {position:fixed; inset:0; margin:0 0 0 auto; width:460px; max-width:100%; height:100dvh; max-height:100dvh; padding:0; border:0; border-left:1px solid var(--line); border-radius:0; box-shadow:-8px 0 36px #202b2a1a;}
+dialog.admin-detail[open] {display:flex; flex-direction:column;}
+.admin-detail .dialog-heading {padding:20px 24px; margin:0; border-bottom:1px solid var(--line); flex-shrink:0;}
+.admin-detail .dialog-heading h2 {font-size:18px; line-height:1.5; overflow-wrap:anywhere; min-width:0;}
+.admin-detail .dialog-heading .icon {flex-shrink:0;}
+.admin-detail-body {padding:24px; overflow:auto; min-height:0; flex:1;}
+.admin-detail-footer {display:flex; flex-wrap:wrap; justify-content:flex-end; gap:8px; padding:16px 24px; border-top:1px solid var(--line); flex-shrink:0;}
+.admin-facts {display:grid; grid-template-columns:116px minmax(0,1fr); gap:16px 12px; margin:24px 0; font-size:13px; line-height:1.6;}
+.admin-facts dt {color:var(--muted);}
+.admin-facts dd {margin:0; overflow-wrap:anywhere; white-space:pre-wrap;}
+.admin-form {display:grid; gap:18px;}
+.admin-form textarea {min-height:120px;}
+.admin-form label:has(input[type="checkbox"]) {display:flex; flex-direction:row; align-items:center;}
+.admin-form input[type="checkbox"] {width:18px; height:18px;}
+.admin-form .error:empty {display:none;}
+.admin-month {border-bottom:1px solid var(--line); padding:12px 0;}
+.admin-month h3 {font-size:14px;}
+@media(max-width:1050px) {
+  .topbar>#adminNavigation {margin-left:auto;}
+  .topbar:has(#adminNavigation:not([hidden]))>#accountButton {margin-left:0;}
+}
+@media(max-width:700px) {
+  #sidebar {top:64px; min-height:calc(100vh - 64px);}
+  .workspace-groups {gap:0;}
+  .workspace-groups button {flex:1; padding:10px 8px; font-size:13px;}
+  .topbar:has(#adminNavigation:not([hidden])) .brand-sub {display:none;}
+  .topbar:has(#adminNavigation:not([hidden])) .brand-emblem {width:126px;}
+  #adminNavigation {font-size:0; width:38px; height:38px; padding:8px; gap:0;}
+  .admin-heading {gap:16px; margin-bottom:16px;}
+  .admin-heading h1 {font-size:20px;}
+  .admin-tabs {gap:0; justify-content:space-between; margin-bottom:20px;}
+  .admin-tabs button {font-size:13px; padding:12px 4px;}
+  .admin-toolbar {gap:10px;}
+  .admin-toolbar .admin-search {flex-basis:100%;}
+  .admin-toolbar label {flex:1 1 120px;}
+  .admin-toolbar button {min-height:44px;}
+  .admin-summary {padding:12px 0;}
+  .admin-summary p {margin:0;}
+  .admin-table .admin-secondary {display:none;}
+  .admin-table th:first-child {width:52%;}
+  .admin-table th:last-child {width:50px;}
+  .admin-table td, .admin-table th {padding:12px 8px;}
+  .admin-table .icon {width:36px; height:44px; padding:8px;}
+  .admin-name {min-height:32px;}
+  .admin-pagination {gap:6px;}
+  .admin-pagination label {gap:4px;}
+  .admin-pagination select {padding:8px 4px;}
+  .admin-pagination .icon {width:36px; height:44px;}
+  dialog.admin-detail {width:100%; border:0;}
+  .admin-detail .dialog-heading, .admin-detail-body {padding:20px;}
+  .admin-detail-footer {padding:16px 20px;}
+  .admin-detail button {min-height:44px;}
 }
 

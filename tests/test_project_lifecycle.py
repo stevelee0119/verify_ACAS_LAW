@@ -62,8 +62,8 @@ def test_trash_hides_resources_and_restore_preserves_originals_and_results(works
         assert session.query(AuditEventRow).count() == audit_count + 1
 
 
-@pytest.mark.parametrize("user,status", [("member", 403), ("viewer", 403), ("other", 404)])
-def test_only_project_administrators_can_delete_or_restore(workspace, user, status):
+@pytest.mark.parametrize("user,status", [("member", 404), ("viewer", 404), ("other", 404)])
+def test_nonowners_cannot_delete_or_restore(workspace, user, status):
     s = workspace
     assert s.client.delete("/api/projects/pa", headers=s.headers(user)).status_code == status
     s.client.delete("/api/projects/pa", headers=s.headers("admin"))
@@ -78,6 +78,21 @@ def test_member_can_delete_own_project_and_cannot_inject_deletion_fields(workspa
     assert created["can_delete"] and created["deleted_at"] is None
     assert s.client.delete(f"/api/projects/{created['id']}", headers=headers).status_code == 204
     assert s.client.post(f"/api/projects/{created['id']}/restore", headers=headers).status_code == 200
+
+
+def test_viewer_owner_can_read_but_cannot_delete_restore_or_purge(workspace):
+    s = workspace
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = "viewer"
+        session.commit()
+    headers = s.headers("viewer")
+    assert s.client.get("/api/projects/pa", headers=headers).status_code == 200
+    assert s.client.delete("/api/projects/pa", headers=headers).status_code == 403
+    with s.factory() as session:
+        session.get(Project, "pa").deleted_at = datetime.utcnow()
+        session.commit()
+    assert s.client.post("/api/projects/pa/restore", headers=headers).status_code == 403
+    assert s.client.delete("/api/projects/pa/purge", headers=headers).status_code == 403
 
 
 @pytest.mark.parametrize("state", ["QUEUED", "VERIFYING", "RUNNING", "EXTRACTING"])
@@ -125,6 +140,9 @@ def test_deleted_project_rejects_new_jobs_retries_and_worker_execution(workspace
 
 def test_background_summary_is_scoped_compact_and_survives_project_switches(workspace):
     s = workspace
+    with s.factory() as session:
+        session.get(Project, "pa").owner_id = "member"
+        session.commit()
     add_run(s, "mine-active", state="VERIFYING")
     add_run(s, "other-org", project="pb", state="VERIFYING")
     add_run(s, "private", project="private", state="VERIFYING")
@@ -143,7 +161,8 @@ def test_background_summary_is_scoped_compact_and_survives_project_switches(work
         session.get(VerificationRun, "mine-active").state = "COMPLETED"
         session.get(VerificationRun, "mine-active").finished_at = datetime.utcnow()
         session.commit()
-    assert s.client.delete("/api/projects/pa", headers=s.headers("admin")).status_code == 204
+    assert s.client.delete("/api/projects/pa", headers=s.headers("admin")).status_code == 404
+    assert s.client.delete("/api/projects/pa", headers=s.headers("member")).status_code == 204
     assert s.client.get("/api/verification-runs", headers=s.headers("member")).json() == {"active_count": 0, "runs": []}
 
 
@@ -216,8 +235,8 @@ def test_purge_removes_the_project_rows_and_files_but_keeps_audit_and_other_proj
     assert s.client.delete("/api/projects/pa/purge", headers=headers).status_code == 404
 
 
-@pytest.mark.parametrize("user,status", [("member", 403), ("viewer", 403), ("other", 404)])
-def test_only_project_administrators_can_purge(purge_case, user, status):
+@pytest.mark.parametrize("user,status", [("member", 404), ("viewer", 404), ("other", 404)])
+def test_nonowners_cannot_purge(purge_case, user, status):
     s, storage, kept, _ = purge_case
     s.client.delete("/api/projects/pa", headers=s.headers("admin"))
     assert s.client.delete("/api/projects/pa/purge", headers=s.headers(user)).status_code == status

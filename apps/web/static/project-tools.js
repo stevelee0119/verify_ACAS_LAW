@@ -45,7 +45,7 @@ const projectTools = (() => {
   async function trash() {
     const root = node("div", null, "full project-trash");
     const view = workflowUI.modal("프로젝트 휴지통", [root], async () => {}, true);
-    view.submit.hidden = true;
+    view.readOnly();
     async function draw() {
       const projects = await api("/projects?deleted=true");
       if (!root.isConnected) return;
@@ -154,7 +154,7 @@ const projectTools = (() => {
     if (authRequired) await operationsUI.authenticate();
     const root = node("div", null, "full background-jobs");
     const view = workflowUI.modal("검증 작업", [root], async () => {}, true);
-    view.submit.hidden = true; jobsRoot = root;
+    view.readOnly(); jobsRoot = root;
     drawJobs(); await refresh();
   }
 

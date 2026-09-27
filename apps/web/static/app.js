@@ -201,10 +201,11 @@ function safeLink(url, text) {
 }
 
 function dateText(value) {
-  return value ? new Date(value.endsWith?.("Z") ? value : `${value}Z`).toLocaleString("ko-KR") : "";
+  return value ? new Date(/(Z|[+-]\d{2}:\d{2})$/i.test(value) ? value : `${value}Z`).toLocaleString("ko-KR") : "";
 }
 
 function switchTab(tab) {
+  workflowUI.syncNavigation(tab);
   document.querySelectorAll("[data-tab]").forEach(el => {
     el.classList.toggle("active", el.dataset.tab === tab);
     el.setAttribute("aria-current", el.dataset.tab === tab ? "page" : "false");
@@ -633,7 +634,7 @@ function explainDialog(title, children) {
   const root = node("div", null, "full metric-explainer");
   root.append(...children);
   const view = workflowUI.modal(title, [root], async () => {}, true);
-  view.submit.hidden = true;
+  view.readOnly();
   return view;
 }
 
@@ -1737,6 +1738,7 @@ $("calculationForm").onsubmit = action(async e => {
 function missingModules() {
   return [
     [typeof operationsUI, "로그인·계정"],
+    [typeof adminUI, "사용자 관리"],
     [typeof workflowUI, "검토 작업"],
     [typeof projectTools, "프로젝트 관리"],
     [typeof calculationWorkbench, "금액 계산"],

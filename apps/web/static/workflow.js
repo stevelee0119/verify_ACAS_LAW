@@ -3,6 +3,34 @@
 const workflowUI = (() => {
   let projectId = null, matrix = null, issues = [], workflows = new Map(), generation = 0;
   const selected = new Set();
+  const groups = {
+    documents:{title:"자료", icon:"files", tabs:["documents", "compare"]},
+    review:{title:"검증·검토", icon:"scan-search", tabs:["ai-verification", "review", "issues", "timeline", "calculations", "search"]},
+    reports:{title:"보고서", icon:"file-chart-column", tabs:["reports", "audit"]},
+  };
+  const lastTabs = Object.fromEntries(Object.entries(groups).map(([key, group]) => [key, group.tabs[0]]));
+  function syncNavigation(tab) {
+    const selectedGroup = Object.keys(groups).find(key => groups[key].tabs.includes(tab));
+    if (!selectedGroup) return;
+    lastTabs[selectedGroup] = tab;
+    document.querySelectorAll("[data-workspace-group]").forEach(control => {
+      control.setAttribute("aria-pressed", String(control.dataset.workspaceGroup === selectedGroup));
+    });
+    document.querySelectorAll(".tabs [data-tab]").forEach(control => {
+      control.hidden = !groups[selectedGroup].tabs.includes(control.dataset.tab);
+    });
+  }
+  function initNavigation() {
+    const nav = node("nav", null, "workspace-groups"); nav.id = "workspaceGroups";
+    nav.setAttribute("aria-label", "검토 업무");
+    Object.entries(groups).forEach(([key, group]) => {
+      const control = button(group.title, () => switchTab(lastTabs[key]));
+      control.dataset.workspaceGroup = key;
+      const glyph = node("i"); glyph.dataset.lucide = group.icon; control.prepend(glyph); nav.append(control);
+    });
+    document.querySelector(".tabs").before(nav);
+    syncNavigation("documents");
+  }
   const states = {NOT_STARTED:"미검토", IN_PROGRESS:"검토 중", ACTION_REQUIRED:"조치 필요", COMPLETED:"검토 완료", DEFERRED:"판단 보류"};
   const decisions = {UNDECIDED:"판단 전", AGREED:"동의", FALSE_POSITIVE:"오탐", PARTLY_AGREED:"일부 동의"};
   const positions = {UNASSESSED:"검토 전", ASSERTED:"주장", ADMITTED:"인정", DENIED:"부인", UNKNOWN:"불지", CONDITIONAL:"가정적 주장", ALTERNATIVE:"예비적 주장"};
@@ -32,7 +60,8 @@ const workflowUI = (() => {
     const error = node("p", "", "error"); error.setAttribute("role", "alert");
     const footer = node("div", null, "dialog-footer");
     const submit = node("button", "저장", "primary"); submit.type = "submit";
-    footer.append(button("취소", () => dialog.close()), submit);
+    const cancel = button("취소", () => dialog.close());
+    footer.append(cancel, submit);
     form.append(header, grid, error, footer);
     form.onsubmit = async event => {
       event.preventDefault(); submit.disabled = true; error.textContent = "";
@@ -41,7 +70,11 @@ const workflowUI = (() => {
       finally { submit.disabled = false; }
     };
     dialog.append(form); dialog.addEventListener("close", () => dialog.remove(), {once:true});
-    document.body.append(dialog); dialog.showModal(); icons(); return {dialog, form, grid, submit};
+    document.body.append(dialog); dialog.showModal(); icons();
+    return {dialog, form, grid, submit, readOnly() {
+      submit.hidden = true; cancel.textContent = "닫기";
+      form.onsubmit = event => event.preventDefault();
+    }};
   }
   function table(headers, rows) {
     const wrap = node("div", null, "table-wrap workflow-table");
@@ -265,7 +298,7 @@ const workflowUI = (() => {
     const content=node("div",null,"full");
     for (const item of entries) { const row=node("div",null,"row-item"); row.append(node("strong",`${item.actor} · ${dateText(item.created_at)}`),node("pre",JSON.stringify({before:item.before,after:item.after},null,2),"technical"));content.append(row); }
     if (!entries.length) content.append(node("p","변경 이력이 없습니다."));
-    const view=modal("검토 변경 이력",[content],async()=>{}); view.submit.hidden=true;
+    const view=modal("검토 변경 이력",[content],async()=>{}); view.readOnly();
   }
   async function activate(tab) {
     if (tab === "issues" || tab === "review") {await refresh(); if(tab === "review") renderFindings();}
@@ -358,7 +391,8 @@ const workflowUI = (() => {
     const bulk=button("선택 항목 검토 (0)",bulkEditor);bulk.id="batchReview";
     const controls=node("div",null,"toolbar workflow-filters");controls.append(filter,assignee,bulk,iconButton("history","검토 이력",()=>showHistory()));reviewToolbar.after(controls);
     addTab("compare","버전 비교").id="comparePanel";addTab("search","근거 찾기").id="searchPanel";
+    initNavigation();
     const submitted=field("submitted_on","제출일","","date");$("documentForm").querySelector(".form-grid").append(submitted);
   }
-  return {init,refresh,activate,matches,priority,decorateFinding,enhanceFinding,field,modal,table,located};
+  return {init,refresh,activate,syncNavigation,matches,priority,decorateFinding,enhanceFinding,field,modal,table,located};
 })();

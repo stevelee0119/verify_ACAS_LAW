@@ -64,6 +64,7 @@ def test_findings_from_one_citation_are_grouped(tmp_path):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.route("**/*", respond)
             page.goto("http://groups.test/")
+            page.get_by_role("button", name="검증·검토", exact=True).click()
             page.locator("[data-tab='review']").click()
             rows = page.locator("#findings > article.row-item")
             expect(rows).to_have_count(2)

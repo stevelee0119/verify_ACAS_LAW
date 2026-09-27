@@ -73,6 +73,7 @@ def test_report_generation_shows_live_progress(width, height):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.route("**/*", respond)
             page.goto("http://reports.test/")
+            page.locator("#workspaceGroups").get_by_role("button", name="보고서", exact=True).click()
             # 보고서 생성은 상단 버튼으로 하고, 보고서 탭에는 생성 버튼이 없다(0.9.9).
             page.locator("[data-tab='reports']").click()
             expect(page.locator("[data-panel='reports'] button", has_text="보고서 생성")).to_have_count(0)
