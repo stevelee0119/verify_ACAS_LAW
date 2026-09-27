@@ -23,6 +23,16 @@ MACHINE_ADDRESSEE = (r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|(?:검증|�
                      r"(?:AI|인공지능)\s*검토자|모델|시스템|reviewer|assistant)")
 
 INSTRUCTION_PATTERNS: List[PatternSpec] = [
+    (_c(MACHINE_ADDRESSEE + r"[^.\n]{0,360}?(?:경고|의심|오류|이상)\s*(?:지표|출력|보고|표시)?[을를은는도]?\s*"
+        r"(?:일체\s*)?(?:억제|차단|생략|숨김)\s*(?:\([^)]{0,20}\)\s*)?(?:하여야|해야|하라|하도록)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "기계 수신 경고 억제 의무 위장"),
+    (_c(MACHINE_ADDRESSEE + r"[^.\n]{0,180}?(?:주장|결론|결과|서술)[을를은는]?\s*"
+        r"(?:기계적으로|자동으로|무조건)\s*(?:승인|인정|수용)(?:하여야|해야|하라|하도록)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 주장 자동 승인 요구"),
+    (_c(r"\bSYSTEM[_\s]AUDIT[_\s]BYPASS\s*[:=]"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "시스템 감사 우회 설정 위장"),
+    (_c(r"\bSUPPRESS[_\s](?:ANOMALY[_\s])?ALERTS\s*=\s*(?:TRUE|1)\b"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "경고 억제 설정값 강제"),
     # --- Instruction Override -------------------------------------------
     # 목적어와 동사 사이의 부사("규칙을 모두 무시하고")도 허용한다(0.9.9: 이 변형이 탐지되지 않았다).
     (_c(r"(이전|앞의|앞선|위의|기존|종전|지금까지)\s*(의\s*)?(모든\s*)?(지시|명령|지침|규칙|프롬프트)[을를]?\s*"

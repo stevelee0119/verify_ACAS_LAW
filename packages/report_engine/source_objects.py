@@ -12,6 +12,8 @@ def compact_sources(payload):
     memo = {}
 
     def intern(value):
+        if isinstance(value, dict) and value.get("source_object_ref"):
+            return None  # Keep pooled records flat even when their inline excerpt is large.
         if id(value) in memo:
             return memo[id(value)]
         encoded = json.dumps(to_jsonable(value), ensure_ascii=False, sort_keys=True,
@@ -60,6 +62,24 @@ def compact_sources(payload):
     out = {**payload, "documents": documents}
     if pool:
         out.update(source_objects=pool, source_object_schema="sha256-json-v1")
+    refs = set()
+
+    def collect_refs(value):
+        if isinstance(value, dict):
+            if value.get("source_object_ref"):
+                refs.add(str(value["source_object_ref"]))
+            for key, child in value.items():
+                if key != "source_objects":
+                    collect_refs(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_refs(child)
+
+    collect_refs(out)
+    if refs:
+        missing = sorted(refs - set(pool))
+        out["source_object_integrity"] = {"status": "UNRESOLVED" if missing else "RESOLVED",
+                                          "references": len(refs), "missing_refs": missing}
     return out
 
 

@@ -46,3 +46,23 @@ def test_saved_report_reexport_keeps_original_source_pool():
     record = second["documents"][0]["engine_data"]["legal_verdicts"][0]["official_record"]
     assert resolve_source(second, record) == raw
     assert second["source_objects"] == first["source_objects"]
+
+
+def test_large_inline_excerpt_does_not_create_nested_source_refs():
+    raw = {"law_id": "synthetic", "full_text": "source " * 3000}
+    payload = {"documents": [{"engine_data": {"legal_verdicts": [{"official_record": raw,
+        "review": {"provision": {"text": "article " * 2000}}}]}}]}
+    first = compact_sources(payload)
+    second = compact_sources(first)
+    assert second == first
+    assert len(second["source_objects"]) == 1
+    assert second["source_object_integrity"]["status"] == "RESOLVED"
+    assert resolve_source(second, second["documents"][0]["engine_data"]["legal_verdicts"][0]["official_record"]) == raw
+
+
+def test_legacy_export_missing_source_objects_is_explicitly_incomplete():
+    payload = {"documents": [{"engine_data": {"legal_verdicts": [
+        {"official_record": {"source_object_ref": "missing", "text": "excerpt"}}]}}]}
+    result = compact_sources(payload)
+    assert result["source_object_integrity"] == {"status": "UNRESOLVED", "references": 1,
+                                                 "missing_refs": ["missing"]}

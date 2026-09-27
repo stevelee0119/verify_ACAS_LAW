@@ -523,7 +523,8 @@ function referenceSection(docs) {
     return section;
   }
   const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
-    ADVISORY_REVIEWED: "근거 인용 대조 완료 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
+    ADVISORY_REVIEWED: "근거 인용 대조 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
+    REVIEWED_NO_ADVICE: "AI 대조 응답 완료 · 추가 의견 없음(적법성 확인 아님)",
     NOT_RELEVANT: "관련 자료 없음 · Drive 자료 미활용",
     INCOMPLETE_COVERAGE: "관련 자료 검토 범위 미완결",
     RETRIEVED_ONLY: "검색 완료 · AI 대조 미실행", UNVERIFIED: "대조 미완료", SKIPPED: "대조 제외"};
@@ -571,6 +572,10 @@ function referenceSection(docs) {
     const details = node("details");
     details.append(node("summary", `${doc.filename}: ${statuses[review.status] || review.status}`));
     if (review.reason) details.append(node("p", review.reason, "muted"));
+    if (typeof review.model_response_accepted === "boolean") {
+      details.append(node("p", `모델 호출 ${review.model_executed ? "있음" : "없음"} · 응답 채택 ${review.model_response_accepted ? "성공" : "미완료"} · 근거 확인 의견 ${(review.observations || []).length}건 · 제외 의견 ${(review.rejected_observations || []).length}건`, "muted"));
+      if (review.model_executed && !review.review_completed) details.append(node("p", "일부 입력 또는 모델 응답의 검토가 완료되지 않았습니다.", "warning-text"));
+    }
     if (review.document_truncated) details.append(node("p", "문서 앞부분 12,000자 기준 검색·대조", "warning-text"));
     const selection = review.selection;
     if (selection) {

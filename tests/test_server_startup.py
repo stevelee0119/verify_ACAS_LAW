@@ -31,7 +31,7 @@ def test_migrate_before_server_with_explicit_arguments(monkeypatch, launch, port
         monkeypatch.setenv("PORT", port)
     assert start_server.main() == 0
     assert launch == [
-        ("migration", ["/path with spaces/python", "-m", "alembic", "upgrade", "head"], {"check": True}),
+        ("migration", ["/path with spaces/python", "-m", "alembic", "upgrade", "head"], {"check": True, "timeout": 120}),
         ("server", "/path with spaces/python", [
             "/path with spaces/python", "-m", "uvicorn", "apps.api.main:app",
             "--host", "0.0.0.0", "--port", expected,
@@ -56,6 +56,16 @@ def test_migration_failure_prevents_server(monkeypatch, launch, capsys, exit_cod
     assert start_server.main() == expected
     assert not launch
     assert "API was not started" in capsys.readouterr().err
+
+
+def test_migration_timeout_prevents_server(monkeypatch, launch, capsys):
+    def timeout(args, **kwargs):
+        assert kwargs["timeout"] == 120
+        raise subprocess.TimeoutExpired(args, 120)
+    monkeypatch.setattr(start_server.subprocess, "run", timeout)
+    assert start_server.main() == 1
+    assert not launch
+    assert "timed out after 120 seconds; API was not started" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("explicit,expected", [(None, "*"), ("10.0.0.0/8", "10.0.0.0/8"), ("", "")])

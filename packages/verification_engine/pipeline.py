@@ -403,7 +403,8 @@ class VerificationPipeline:
                                   "drive_used": False, "error": type(exc).__name__}
                         document_result.engine_data["rag"] = review
                     stage.note = review["status"]
-                    if review["status"] not in ("ADVISORY_REVIEWED", "NOT_RELEVANT"):
+                    if (review["status"] not in ("ADVISORY_REVIEWED", "REVIEWED_NO_ADVICE", "NOT_RELEVANT")
+                            or not review.get("review_completed", True) and review["status"] != "NOT_RELEVANT"):
                         stage.skip_reason = review["reason"]
                         document_result.unverified_items.append({"kind": "reference_review",
                             "document_id": document_result.document_id,
@@ -785,7 +786,7 @@ class VerificationPipeline:
 
         # 외부 모델에 보내는 본문은 의미·적용 검토와 같은 기준으로 가린다. 문서 속 지시문 구간은 정책과 무관하게
         # 모델 입력에서 뺀다(v6 P3: 격리 문서도 지시문을 뺀 나머지 본문은 검토한다).
-        _, instruction_texts = injection_parts(result.findings)
+        _, instruction_texts = injection_parts(result.findings, doc)
         result.engine_data["model_input"] = {"instructions_removed": len(instruction_texts),
                                              "quarantined": result.quarantined}
 
@@ -824,7 +825,11 @@ class VerificationPipeline:
               )
               result.findings.extend(arg_validity.findings)
               result.ai_hallucination_table = [r.to_dict() for r in arg_validity.rows]
-              result.argument_validity_summary = arg_validity.overall_validity_summary
+              from packages.legal_engine.argument_validity_verifier import summarize_argument_findings
+
+              argument_review = summarize_argument_findings(result.findings, arg_validity.overall_validity_summary)
+              result.argument_validity_summary = argument_review["summary"]
+              result.engine_data["argument_review"] = argument_review
               result.engine_data["ai_hallucination_table"] = result.ai_hallucination_table
               result.engine_data["argument_validity_summary"] = result.argument_validity_summary
               if not arg_validity.rows:
@@ -846,8 +851,7 @@ class VerificationPipeline:
         metadata_hint = bool(assessment.signals.get("provenance_metadata"))
         emit(JobState.VERIFYING, f"{document.filename} AI 작성 정황 분석", base + span * 0.92)
         # 문서 속 지시문은 공격 탐지의 근거일 뿐 작성 주체의 근거가 아니다.
-        injection_texts = [str((f.confidence_features or {}).get("observed_text") or "")
-                           for f in result.findings if f.type in ADVERSARIAL_FINDING_TYPES and not f.advisory_only]
+        injection_texts = instruction_texts
         with manifest.stage("ai_residue", result.findings, inputs=len(doc.body_blocks()), unit="본문 블록",
                             document_id=document.document_id) as stage:
             residues = scan_residue(build_reading_text(doc).text)

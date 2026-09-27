@@ -149,7 +149,10 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
     if matched:
         return {"status": "VERIFIED", "basis": "NUMERIC", "matched": matched}
     terms = list(dict.fromkeys(_terms(claim)))
-    if numbers_only or not terms:
+    if numbers_only and terms:
+        return {"status": "UNVERIFIED", "basis": "PARENTHETICAL_CLAIM",
+                "reason": "괄호 인용 앞 주장의 법적 효과·적용 범위는 수치 대조만으로 확인할 수 없다(내용 검토 필요)"}
+    if not terms:
         return {"status": "NOT_ASSERTED", "reason": "문서가 조문 내용을 주장하지 않고 근거로만 표시했다"}
     compact_body = body.replace(" ", "")
     found = [t for t in terms if t in compact_body]
