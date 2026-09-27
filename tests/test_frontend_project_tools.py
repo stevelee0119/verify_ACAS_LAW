@@ -5,6 +5,7 @@ from urllib.parse import urlsplit, parse_qs
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -80,6 +81,7 @@ def test_background_wake_and_project_trash(tmp_path, width, height):
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/*", respond)
             page.goto("http://workspace.test/")
+            select_first_project(page)
             expect(page.locator("#projectTitle")).to_have_text("Background case")
             expect(page.locator("#deleteProject")).to_be_disabled()
             expect(page.locator("#backgroundJobsButton")).to_contain_text("1")

@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = {"release_gate": "BLOCK", "hallucination_risk": 72,
@@ -49,6 +50,7 @@ def test_gate_reasons_are_shown_open_and_readable(width, height):
             page = browser.new_page(viewport={"width": width, "height": height})
             page.route("**/*", respond)
             page.goto("http://gate.test/")
+            select_first_project(page)
             reasons = page.get_by_role("region", name="배포가능 판정 사유")
             expect(reasons).to_contain_text("배포 차단 — 사유 6건")
             assert page.locator("#summary details").count() == 0, "접힌 상자에 숨기지 않는다"

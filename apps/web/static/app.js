@@ -1803,8 +1803,6 @@ async function init() {
     projectTools.start();
     $("connection").textContent = `${identity.authentication === "local" ? "로컬" : "조직"} 작업 공간 · v${health.version}`;
     await loadProjects();
-    const id = localStorage.getItem("acas-project");
-    if (state.projects.length) await openProject(state.projects.some(p => p.id === id) ? id : state.projects[0].id);
   } catch (error) {
     $("connection").textContent = "연결 확인 필요";
     toast(error.message);

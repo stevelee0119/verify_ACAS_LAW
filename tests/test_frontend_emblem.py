@@ -68,17 +68,17 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 expect(page.locator("#emptyState")).not_to_contain_text("created by")
                 lettering = page.locator(".empty-lettering")
                 expect(lettering).to_be_visible()
-                expect(lettering).to_have_attribute("src", "/static/img/acas-lettering.png")
-                expect(lettering).to_have_attribute("alt", "Army Consolidate Administrative School, SMART and HARMONY")
+                expect(lettering).to_have_attribute("src", "/static/img/acas-lettering.png?v=20260927-2")
+                expect(lettering).to_have_attribute("alt", "육군 종합행정학교, Army Consolidate Administrative School, SMART and HARMONY")
                 page.wait_for_function("""() => {
                     const image = document.querySelector('.empty-lettering');
-                    return image.complete && image.naturalWidth === 2171 && image.naturalHeight === 724;
+                    return image.complete && image.naturalWidth === 2172 && image.naturalHeight === 724;
                 }""")
                 assert lettering.evaluate("""el => {
                     const rect = el.getBoundingClientRect(), emblem = el.previousElementSibling.getBoundingClientRect();
                     return Math.abs(rect.width / emblem.width - 1.2) < .01 && rect.top >= emblem.bottom
                         && Math.abs(rect.left + rect.width / 2 - emblem.left - emblem.width / 2) < 1
-                        && Math.abs(rect.width / rect.height - 2171 / 724) < .02
+                        && Math.abs(rect.width / rect.height - 2172 / 724) < .02
                         && rect.left >= 0 && rect.right <= innerWidth && emblem.width >= 200
                         && Math.abs(emblem.width - Math.min(280, rect.width / 1.2)) < 1;
                 }""")

@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 UNVERIFIED = [
@@ -69,6 +70,7 @@ def test_pending_and_status_metrics_explain_themselves(width, height):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.route("**/*", respond)
             page.goto("http://metrics.test/")
+            select_first_project(page)
             pending = page.locator(".metric-explain", has_text="확인 전 항목")
             expect(pending).to_contain_text("3")
             pending.click()

@@ -5,6 +5,7 @@
 이유를 알린다.
 """
 import os
+import json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -16,27 +17,37 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("width,height", [(1440, 960), (390, 844)])
-def test_clicking_an_existing_project_gives_feedback_and_opens_it(width, height):
+@pytest.mark.parametrize("remembered_project,login_required", [(None, False), ("alpha", False), ("deleted-project", False), ("alpha", True)])
+def test_clicking_an_existing_project_gives_feedback_and_opens_it(width, height, remembered_project, login_required, tmp_path):
     static = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
     projects = {pid: {"id": pid, "name": name, "can_delete": True, "document_count": 1,
                       "external_ai_policy": "LOCAL_ONLY", "scope_revision": 0, "deleted_at": None}
                 for pid, name in (("alpha", "첫 사건"), ("beta", "느린 사건"), ("gamma", "고장난 사건"))}
-    held, errors = [], []
+    held, errors, project_reads = [], [], []
+    authenticated = not login_required
 
     def respond(route):
+        nonlocal authenticated
         path = urlsplit(route.request.url).path
         if path in files:
             return route.fulfill(path=str(files[path]))
         if path == "/api/health":
             return route.fulfill(json={"status": "ok", "version": "0.5.0"})
         if path == "/api/identity/me":
+            if not authenticated:
+                return route.fulfill(status=401, json={"detail": "Login required"})
             return route.fulfill(json={"user_id": "u", "role": "ADMIN", "authentication": "password"})
+        if path == "/api/auth/login":
+            authenticated = True
+            return route.fulfill(json={"ok": True})
         if path == "/api/verification-runs":
             return route.fulfill(json={"active_count": 0, "runs": []})
         if path == "/api/projects":
             return route.fulfill(json=list(projects.values()))
+        if path.startswith("/api/projects/") and len(path.split("/")) == 4:
+            project_reads.append(path)
         if path.startswith("/api/projects/beta"):
             return held.append(route)  # 느린 서버: 테스트가 풀어 줄 때까지 응답하지 않는다.
         if path == "/api/projects/gamma":
@@ -59,7 +70,22 @@ def test_clicking_an_existing_project_gives_feedback_and_opens_it(width, height)
             page = browser.new_page(viewport={"width": width, "height": height})
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/*", respond)
+            if remembered_project is not None:
+                page.add_init_script(f"localStorage.setItem('acas-project', {json.dumps(remembered_project)})")
             page.goto("http://open.test/")
+            if login_required:
+                login = page.get_by_role("dialog", name="작업 공간 로그인")
+                login.get_by_label("이메일", exact=True).fill("viewer@example.test")
+                login.get_by_label("비밀번호", exact=True).fill("test-only-password")
+                login.get_by_role("button", name="로그인", exact=True).click()
+                expect(login).not_to_be_visible()
+            expect(page.locator("#projectList > button")).to_have_count(3)
+            expect(page.locator("#emptyState .empty-emblem")).to_be_visible()
+            expect(page.locator("#emptyState .empty-lettering")).to_be_visible()
+            expect(page.locator("#projectView")).to_be_hidden()
+            assert project_reads == [] and page.evaluate("state.project") is None
+            page.screenshot(path=str(tmp_path / f"workspace-home-{width}.png"), full_page=True)
+            project_button(page, "첫 사건").click()
             expect(page.locator("#projectTitle")).to_have_text("첫 사건")
 
             slow = project_button(page, "느린 사건")
@@ -89,6 +115,12 @@ def test_clicking_an_existing_project_gives_feedback_and_opens_it(width, height)
             project_button(page, "첫 사건").click()
             expect(page.locator("#projectTitle")).to_have_text("첫 사건")
             assert errors == []
+            project_reads.clear()
+            page.reload()
+            expect(page.locator("#projectList > button")).to_have_count(3)
+            expect(page.locator("#emptyState")).to_be_visible()
+            expect(page.locator("#projectView")).to_be_hidden()
+            assert project_reads == [] and page.evaluate("state.project") is None
             page.close()
         finally:
             browser.close()

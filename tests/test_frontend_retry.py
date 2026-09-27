@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -61,6 +62,7 @@ def test_retry_button_tracks_the_new_run_until_completion(tmp_path, width, heigh
             page.on("pageerror", lambda error: errors.append(str(error)))
             page.route("**/*", respond)
             page.goto("http://retry.test/")
+            select_first_project(page)
             page.get_by_role("button", name="같은 입력으로 재시도", exact=True).click()
             dialog = page.get_by_role("dialog", name="검증 재시도", exact=True)
             expect(dialog).to_contain_text("현재 분석 엔진")

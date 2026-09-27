@@ -382,6 +382,7 @@ def test_check_script_prints_delete_candidates(tmp_path):
 
 
 def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
+    from frontend_helpers import select_first_project
     import os
     from pathlib import Path
     from urllib.parse import urlsplit
@@ -440,6 +441,7 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
             page = browser.new_page(viewport={"width": 1280, "height": 1400})
             page.route("**/*", respond)
             page.goto("http://drive.test/")
+            select_first_project(page)
             page.wait_for_function("state.result && state.result.documents && state.result.documents.length === 1")
             page.evaluate("switchTab('ai-verification')")
             section = page.locator(".reference-section")

@@ -4,6 +4,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -64,6 +65,7 @@ def test_findings_from_one_citation_are_grouped(tmp_path):
             page.on("pageerror", lambda e: errors.append(str(e)))
             page.route("**/*", respond)
             page.goto("http://groups.test/")
+            select_first_project(page)
             page.get_by_role("button", name="검증·검토", exact=True).click()
             page.locator("[data-tab='review']").click()
             rows = page.locator("#findings > article.row-item")

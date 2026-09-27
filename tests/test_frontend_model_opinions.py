@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 ROOT = Path(__file__).resolve().parents[1]
 GATE = {"release_gate": "BLOCK", "hallucination_risk": 72,
@@ -85,6 +86,7 @@ def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
             page = browser.new_page(viewport={"width": width, "height": height})
             page.route("**/*", respond)
             page.goto("http://models.test/")
+            select_first_project(page)
             page.wait_for_function("state.result && state.result.documents && state.result.documents.length === 2")
             page.evaluate("switchTab('ai-verification')")
             cards = page.locator("#aiSummaryCards")

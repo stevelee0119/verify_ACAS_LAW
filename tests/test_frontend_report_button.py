@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 from test_frontend_report_progress import REPORT
 
@@ -70,6 +71,7 @@ def test_top_button_generates_and_reports_tab_only_downloads(width, height):
             page.route("**/*", serve("COMPLETED", seen))
             page.goto("http://reports.test/")
             button = page.locator("#reportBtn")
+            select_first_project(page)
             expect(button).to_have_text("보고서 생성")
             expect(button).to_be_enabled()
             expect(page.locator("[data-panel='documents']")).to_be_visible()     # 다른 탭에서도 바로 생성한다
@@ -99,6 +101,7 @@ def test_top_button_waits_for_a_finished_run(state):
         try:
             page.route("**/*", serve(state, seen))
             page.goto("http://reports.test/")
+            select_first_project(page)
             expect(page.locator("#projectTitle")).to_have_text("시험 사건")
             expect(page.locator("#reportBtn")).to_be_disabled()
             expect(page.locator("#reportBtn")).to_have_attribute("title", "검증이 끝나면 보고서를 생성할 수 있습니다")

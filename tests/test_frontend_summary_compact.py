@@ -6,6 +6,7 @@ from urllib.parse import urlsplit
 
 import pytest
 from playwright.sync_api import expect, sync_playwright
+from frontend_helpers import select_first_project
 
 from test_frontend_metric_explain import FINDINGS, UNVERIFIED
 
@@ -50,6 +51,7 @@ def test_summary_metrics_are_compact(width, height, max_cell):
             page = browser.new_page(viewport={"width": width, "height": height})
             page.route("**/*", respond)
             page.goto("http://summary.test/")
+            select_first_project(page)
             first = page.locator(".metric", has_text="검토에 포함")
             expect(first).to_be_visible()
             sizes = page.locator(".metric").evaluate_all("""cells => cells.map(cell => ({
