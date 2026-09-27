@@ -96,6 +96,20 @@ def _imperative_near(text: str, hit: PatternHit, window: int = 24) -> bool:
     return bool(IMPERATIVE_RE.search(hit.matched_text + tail))
 
 
+# 한국어 과거·완료 서술 어미(…하였다, 했고, 되었으나). 사건 경위를 적은 문장의 표지다.
+NARRATIVE_PAST_RE = re.compile(r"(?:였|었|았|했|됐)(?:다|고|으며|으나|는데|지만|음)")
+
+
+def _narrative_sentence(text: str, hit: PatternHit) -> bool:
+    """지시형 낱말이 든 문장이 한국어 과거 서술로 끝나는지 본다("…규칙을 무시하고 영업을 계속하였다").
+
+    영어 등 다른 언어의 명령문은 여기에 해당하지 않는다(명령형 판별이 한국어 어미 기준이기 때문)."""
+    start = max((text.rfind(mark, 0, hit.start) for mark in ".!?。\n"), default=-1) + 1
+    ends = [i for i in (text.find(mark, hit.end) for mark in ".!?。\n") if i >= 0]
+    sentence = text[start:min(ends) if ends else len(text)]
+    return bool(NARRATIVE_PAST_RE.search(sentence)) and not IMPERATIVE_RE.search(sentence)
+
+
 def _mentions_only(text: str, hits: List[PatternHit]) -> bool:
     """모든 지시형 낱말이 명령이 아니라 주제로 언급된 것인지 판정한다.
 
@@ -195,6 +209,8 @@ def classify(
         "raw_score": round(score, 3),
         # 명령형 어미가 있었는지, 지시형 낱말이 주제로만 언급됐는지. 둘 다 근거로 남긴다.
         "imperative": imperative,
+        # 모든 지시형 낱말이 한국어 과거 서술 문장 안에 있는지(사건 경위 서술). 심각도 승격 여부에 쓴다.
+        "narrative_past": bool(hits) and all(_narrative_sentence(text, h) for h in hits),
         "descriptive_mention": descriptive,
         "directive_target": "AI_OR_VERIFIER" if addresses_ai else "UNSPECIFIED",
         "matched_patterns": [{"text": h.matched_text, "description": h.description, "intent": str(h.intent),
@@ -259,11 +275,12 @@ def severity_for(classification: Classification, *, in_ocr_layer: bool = False) 
     if classification.label == AdversarialClass.BENIGN_CONTENT:
         return base
     # 권한·역할 전이나 판정값 조작 의도가 확인되면 최소 HIGH로 본다.
-    # 다만 지시 무시·결론 지정 표현이 명령형도 아니고 보조 신호도 없으면 사건 서술일 수 있다
+    # 다만 지시 무시·결론 지정 표현이 한국어 과거 서술 문장 안에 있고 명령형도 보조 신호도 없으면 사건 서술이다
     # ("피고는 종전 규칙을 무시하고 영업을 계속하였다"). 이런 단일 서술은 승격하지 않는다(0.9.9:
     # 판례집 같은 참고자료가 파일째 격리되고 대조군 문서에 HIGH가 붙는 원인이었다).
     intents = set(classification.intents)
-    narrative = (not classification.features.get("imperative")
+    narrative = (classification.features.get("narrative_past")
+                 and not classification.features.get("imperative")
                  and not classification.features.get("corroborating_signals")
                  and InjectionIntent.ROLE_OVERRIDE not in intents)
     if intents & ESCALATING_INTENTS and not narrative:
