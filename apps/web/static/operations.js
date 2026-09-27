@@ -51,12 +51,15 @@ const operationsUI = (() => {
         modeButtons.push(tab); modes.append(tab);
       }
       const submit = node("button", "로그인", "primary"); submit.type = "submit";
+      const registerBtn = node("button", "신규 사용자 등록 신청", "button link register-btn");
+      registerBtn.type = "button";
+      registerBtn.onclick = () => registerUserModal();
       const emblem = node("div", null, "brand-emblem"), emblemImage = node("img");
       emblemImage.src = "/static/acas-law-emblem.jpg"; emblemImage.alt = "ACASia LAW";
       emblemImage.width = 1280; emblemImage.height = 640; emblem.append(emblemImage);
       const heading = node("div", null, "login-heading");
       heading.append(emblem, node("h2", "법률문서 검증시스템"));
-      form.append(heading, modes, passwordPanel, tokenPanel, error, submit);
+      form.append(heading, modes, passwordPanel, tokenPanel, error, submit, registerBtn);
       dialog.append(form); document.body.append(dialog);
       let authenticated = false;
       dialog.addEventListener("cancel", event => {if (submit.disabled) event.preventDefault();});
@@ -73,6 +76,13 @@ const operationsUI = (() => {
           const nextIdentity = await authRequest("/identity/me");
           const changedUser = identity && identity.user_id !== nextIdentity.user_id;
           identity = nextIdentity; authenticated = true; dialog.close();
+          if (nextIdentity && nextIdentity.role === "ADMIN") {
+            try {
+              api("/admin/pending-registrations").then(res => {
+                if (res && res.count > 0) showPendingRegistrationsModal(res);
+              }).catch(() => {});
+            } catch (e) {}
+          }
           if (changedUser) { location.reload(); reject(new Error("다른 계정으로 로그인하여 작업 공간을 새로 불러옵니다.")); }
           else {
             authVersion += 1;
@@ -124,12 +134,135 @@ const operationsUI = (() => {
     view.submit.textContent = "변경 후 다시 로그인";
     view.dialog.addEventListener("close", () => {for (const field of [current, next, confirmation]) field.querySelector("input").value = "";}, {once:true});
   }
+  function registerUserModal() {
+    const email = workflowUI.field("email", "이메일", "", "email");
+    const password = workflowUI.field("password", "비밀번호 (10자 이상)", "", "password");
+    const passwordConfirm = workflowUI.field("password_confirm", "비밀번호 확인", "", "password");
+    const name = workflowUI.field("display_name", "성명");
+    const phone = workflowUI.field("phone_number", "연락처 (예: 010-4724-1500)");
+    const affil = workflowUI.field("affiliation", "소속", "종합행정학교 법무교육단");
+    const reason = workflowUI.field("registration_reason", "등록 사유", "법률문서 검증 업무");
+
+    email.querySelector("input").required = true;
+    password.querySelector("input").required = true;
+    password.querySelector("input").minLength = 10;
+    passwordConfirm.querySelector("input").required = true;
+    passwordConfirm.querySelector("input").minLength = 10;
+    name.querySelector("input").required = true;
+
+    const view = workflowUI.modal("신규 사용자 등록 신청", [email, password, passwordConfirm, name, phone, affil, reason], async values => {
+      if (values.password !== values.password_confirm) {
+        throw new Error("비밀번호가 서로 일치하지 않습니다.");
+      }
+      await authRequest("/auth/register", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          email: values.email.trim(),
+          password: values.password,
+          display_name: values.display_name.trim(),
+          phone_number: (values.phone_number || "").trim(),
+          affiliation: (values.affiliation || "").trim(),
+          registration_reason: (values.registration_reason || "").trim()
+        })
+      });
+      toast("사용자 등록 신청이 접수되었습니다. 관리자 승인 후 안내 메일이 발송됩니다.");
+    });
+    view.submit.textContent = "신청서 제출";
+  }
+
+  function showPendingRegistrationsModal(res, onUpdate) {
+    if (!res || !res.count) {
+      toast("대기 중인 사용자 등록 신청이 없습니다.");
+      return;
+    }
+    const content = node("div", null, "full");
+    const desc = node("p", `승인 대기 중인 신규 사용자 등록 신청이 ${res.count}건 있습니다.`, "strong-notice");
+    content.append(desc);
+
+    const rows = res.users.map(u => {
+      const actions = node("div", null, "actions");
+      const approveBtn = button("승인", async () => {
+        approveBtn.disabled = true;
+        try {
+          await api(`/admin/users/${u.id}/approve`, {method: "POST"});
+          toast(`${u.display_name || u.email} 사용자의 가입이 승인되었습니다.`);
+          view.dialog.close();
+          if (typeof onUpdate === "function") onUpdate();
+        } catch (e) {
+          toast(e.message);
+          approveBtn.disabled = false;
+        }
+      }, "primary");
+
+      const rejectBtn = button("반려", async () => {
+        try {
+          await api(`/admin/users/${u.id}/reject`, {method: "POST", body: {reason: "관리자 검토 반려"}});
+          toast(`${u.display_name || u.email} 가입 신청이 반려되었습니다.`);
+          view.dialog.close();
+          if (typeof onUpdate === "function") onUpdate();
+        } catch (e) {
+          toast(e.message);
+        }
+      });
+      actions.append(approveBtn, rejectBtn);
+
+      const userText = `${u.display_name || "미입력"} (${u.email})`;
+      return [userText, u.affiliation || "-", u.phone_number || "-", u.registration_reason || "-", actions];
+    });
+
+    content.append(workflowUI.table(["신청자", "소속", "연락처", "등록사유", "승인관리"], rows));
+    const view = workflowUI.modal(`신규 가입 승인 대기 (${res.count}건)`, [content], async () => {}, true);
+    view.submit.hidden = true;
+  }
+
+  async function showUserMonthlyHistoryModal(userId, userName) {
+    try {
+      const stats = await api(`/admin/users/${userId}/monthly-stats?months=12`);
+      const content = node("div", null, "full");
+      const title = node("p", `${userName}님의 최근 12개월간 활동 및 자원 사용 통계`, "strong-title");
+      content.append(title);
+
+      const rows = (Array.isArray(stats) ? stats : []).map(s => {
+        const ym = `${s.year}년 ${s.month}월`;
+        const logins = `${s.login_count ?? 0}회`;
+        const verifys = `${s.verification_count ?? 0}건`;
+        const uploads = `${s.monthly_upload_mb ?? 0} MB`;
+        const storage = `${s.storage_used_mb ?? 0} MB (${s.storage_usage_percent ?? 0}%)`;
+        const compute = `${s.compute_minutes ?? 0}분 (${s.compute_seconds ?? 0}초)`;
+        return [ym, logins, verifys, uploads, storage, compute];
+      });
+
+      content.append(workflowUI.table(["연월", "접속횟수", "분석건수", "신규업로드", "누적저장용량(사용률)", "컴퓨팅연산시간"], rows));
+      const view = workflowUI.modal("월별 상세 사용 통계", [content], async () => {}, true);
+      view.submit.hidden = true;
+    } catch (e) {
+      toast("통계 데이터를 불러오지 못했습니다: " + e.message);
+    }
+  }
+
   async function users() {
     const content = node("div", null, "full");
     const view = workflowUI.modal("조직 사용자", [content], async()=>{}, true); view.submit.hidden = true;
+    const now = new Date();
+    let currentYear = now.getFullYear();
+    let currentMonth = now.getMonth() + 1;
+
     async function draw() {
-      const list = await api("/identity/users"); content.replaceChildren();
-      content.append(button("사용자 등록", () => {
+      const list = await api("/identity/users");
+      let statsMap = {};
+      try {
+        const adminUsers = await api(`/admin/users?year=${currentYear}&month=${currentMonth}`);
+        if (Array.isArray(adminUsers) && adminUsers.length) {
+          for (const u of adminUsers) statsMap[u.id] = u;
+        }
+      } catch (e) {}
+
+      content.replaceChildren();
+
+      const topToolbar = node("div", null, "toolbar user-toolbar");
+
+      topToolbar.append(button("사용자 등록", () => {
         const email = workflowUI.field("email", "이메일", "", "email"); email.querySelector("input").required = true;
         const password = workflowUI.field("password", "초기 비밀번호 (선택, 10자 이상)", "", "password");
         password.querySelector("input").minLength = 10; password.querySelector("input").autocomplete = "new-password";
@@ -140,14 +273,52 @@ const operationsUI = (() => {
         });
         view.dialog.addEventListener("close", () => {password.querySelector("input").value = "";}, {once:true});
       }));
-      content.append(workflowUI.table(["사용자","역할","상태","관리"],list.map(user=>{
-        const actions = node("div",null,"actions");
-        actions.append(button("수정",()=>workflowUI.modal("사용자 권한", [workflowUI.field("role","역할",user.role,"text",roles),workflowUI.field("enabled","계정 활성",user.enabled,"checkbox")], async (values,form)=>{
-          await api(`/identity/users/${user.id}`,{method:"PATCH",body:{role:values.role,enabled:form.elements.enabled.checked}});await draw();
-        })),button("접속 토큰",()=>tokens(user.id)),button("SSO 연결",()=>workflowUI.modal("SSO 사용자 연결",[workflowUI.field("subject","인증 제공자의 사용자 식별자 (sub)")],async values=>{
-          await api(`/identity/users/${user.id}/oidc`,{method:"POST",body:values});toast("SSO 사용자를 연결했습니다.");
-        })));
-        return [user.display_name || user.email, roles[user.role],user.enabled?"사용 중":"중지",actions];
+
+      topToolbar.append(button("가입 승인 대기 확인", async () => {
+        try {
+          const res = await api("/admin/pending-registrations");
+          showPendingRegistrationsModal(res, draw);
+        } catch (e) {
+          toast(e.message);
+        }
+      }));
+
+      topToolbar.append(button("가입·통계 CSV 다운로드", () => {
+        if (typeof window !== "undefined" && window.location) {
+          window.location.href = `/api/admin/users/export.csv?year=${currentYear}&month=${currentMonth}`;
+        }
+      }));
+
+      content.append(topToolbar);
+
+      content.append(workflowUI.table(["사용자 / 소속", "역할 / 상태", `접속수 (${currentMonth}월)`, `분석빈도 (${currentMonth}월)`, "저장용량 (한도)", `컴퓨팅 (${currentMonth}월)`, "관리"], list.map(user => {
+        const m = statsMap[user.id]?.monthly_metrics || {};
+        const meta = statsMap[user.id] || {};
+        const affil = meta.affiliation || user.affiliation || "소속 미지정";
+        const appStatus = meta.approval_status || (user.enabled ? "APPROVED" : "PENDING");
+        const statusText = appStatus === "APPROVED" ? (user.enabled ? "사용 중" : "중지") : (appStatus === "PENDING" ? "승인 대기" : "반려");
+
+        const userCol = `${user.display_name || user.email} (${affil})`;
+        const roleCol = `${roles[user.role] || user.role} (${statusText})`;
+        const loginText = `${m.login_count ?? 0}회`;
+        const verifyText = `${m.verification_count ?? 0}건`;
+        const storageText = `${m.storage_used_mb ?? 0} MB (${m.storage_usage_percent ?? 0}%)`;
+        const computeText = `${m.compute_minutes ?? 0}분`;
+
+        const actions = node("div", null, "actions");
+        actions.append(
+          button("통계 추이", () => showUserMonthlyHistoryModal(user.id, user.display_name || user.email)),
+          button("수정", () => workflowUI.modal("사용자 권한", [workflowUI.field("role", "역할", user.role, "text", roles), workflowUI.field("enabled", "계정 활성", user.enabled, "checkbox")], async (values, form) => {
+            await api(`/identity/users/${user.id}`, {method: "PATCH", body: {role: values.role, enabled: form.elements.enabled.checked}});
+            await draw();
+          })),
+          button("접속 토큰", () => tokens(user.id)),
+          button("SSO 연결", () => workflowUI.modal("SSO 사용자 연결", [workflowUI.field("subject", "인증 제공자의 사용자 식별자 (sub)")], async values => {
+            await api(`/identity/users/${user.id}/oidc`, {method: "POST", body: values});
+            toast("SSO 사용자를 연결했습니다.");
+          }))
+        );
+        return [userCol, roleCol, loginText, verifyText, storageText, computeText, actions];
       })));
     }
     await draw();

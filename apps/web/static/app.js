@@ -216,6 +216,24 @@ function switchTab(tab) {
 async function loadProjects() {
   state.projects = await api("/projects");
   renderProjects();
+  updateSidebarHeader();
+}
+
+async function updateSidebarHeader() {
+  try {
+    const me = await api("/auth/me");
+    const sideTitleEl = document.querySelector("#sidebar .side-title h2");
+    if (sideTitleEl && me && me.email) {
+      const affil = me.affiliation || "종합행정학교 법무교육단";
+      const name = me.display_name || me.email.split("@")[0];
+      sideTitleEl.replaceChildren(
+        node("span", affil, "user-affil"),
+        node("span", `${name}님의 프로젝트`, "user-proj-msg")
+      );
+    }
+  } catch (e) {
+    // 로컬 환경 또는 미인증 시 무시
+  }
 }
 
 function renderProjects() {

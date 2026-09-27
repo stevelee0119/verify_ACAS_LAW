@@ -26,6 +26,7 @@ PUBLIC_PATHS = {
     ("GET", "/"),
     ("GET", "/api/health"),
     ("POST", "/api/auth/login"),
+    ("POST", "/api/auth/register"),
 }
 
 

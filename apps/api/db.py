@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Generator
 
 from sqlalchemy import (
+    BigInteger,
     Boolean,
     Column,
     DateTime,
@@ -124,6 +125,12 @@ class Organization(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class UserApprovalStatus:
+    PENDING = "PENDING"      # 승인 대기
+    APPROVED = "APPROVED"    # 승인 완료
+    REJECTED = "REJECTED"    # 반려
+
+
 class User(Base):
     __tablename__ = "users"
     id = Column(String(40), primary_key=True, default=lambda: new_uuid("usr_"))
@@ -138,6 +145,17 @@ class User(Base):
     failed_login_count = Column(Integer, default=0, nullable=False)
     locked_until = Column(DateTime)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+    # 사용자 관리 확장 필드 (가입 정보, 승인 상태, 쿼터)
+    phone_number = Column(String(30), default="")               # 연락처(전화번호)
+    affiliation = Column(String(150), default="")               # 소속 (예: 종합행정학교 법무교육단)
+    registration_reason = Column(Text, default="")              # 등록 사유
+    approval_status = Column(String(20), default=UserApprovalStatus.APPROVED, nullable=False, index=True) # 기본값은 APPROVED (신규 신청은 PENDING으로 명시 지정)
+    approved_at = Column(DateTime, nullable=True)               # 승인 일시
+    approved_by = Column(String(40), nullable=True)             # 승인한 관리자 user_id
+    rejection_reason = Column(Text, default="")                 # 반려 사유
+    storage_quota_bytes = Column(BigInteger, default=1073741824, nullable=False) # 기본 1GB (1,073,741,824 바이트)
+    quota_warning_sent_at = Column(DateTime, nullable=True)     # 70% 경고 메일 발송 일시
 
 
 class SessionToken(Base):

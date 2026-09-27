@@ -1291,3 +1291,55 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   font-size: inherit;
   overflow-wrap: anywhere
 }
+
+/* 사용자 관리 및 개별 격리 UI 스타일 */
+#sidebar .side-title h2 {
+  font-size: 13px;
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+}
+
+#sidebar .side-title h2 .user-affil {
+  font-size: 11px;
+  color: var(--muted, #64748b);
+  font-weight: 500;
+  letter-spacing: -0.3px;
+}
+
+#sidebar .side-title h2 .user-proj-msg {
+  font-size: 13px;
+  color: var(--text, #1e293b);
+  font-weight: 600;
+}
+
+.register-btn {
+  margin-top: 8px;
+  background: none;
+  border: none;
+  color: var(--primary, #1a365d);
+  font-size: 13px;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 6px;
+}
+
+.user-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.strong-notice {
+  font-weight: bold;
+  color: var(--primary, #1a365d);
+  margin-bottom: 8px;
+}
+
+.strong-title {
+  font-weight: bold;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+

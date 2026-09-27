@@ -145,8 +145,8 @@ def _authorize(session, request, principal, route, params, payload):
         if not read:
             raise HTTPException(403, "Global settings changes require local administration")
         return
-    if template.startswith("/api/admin/storage"):
-        # 사용량 조회와 공간 회수(VACUUM). 사건 내용은 다루지 않지만 테이블을 잠글 수 있어 관리자만.
+    if template.startswith("/api/admin/"):
+        # 관리자 전용 경로 (사용자 관리, 가입 승인 대기, 텔레메트리 CSV, 스토리지 등)
         if principal.role != "ADMIN":
             raise HTTPException(403, "Administrator required")
         return
@@ -324,8 +324,8 @@ async def workspace_access(request, call_next):
         if (mode == "multi-user" or os.getenv("LV_ACCESS_TOKEN")) and not secure and not loopback:
             raise HTTPException(403, "HTTPS is required for multi-user authentication")
         request.state.secure_transport = secure
-        if mode == "multi-user" and request.method == "POST" and request.url.path.rstrip("/") == "/api/auth/login":
-            # Login CSRF must be checked even though no principal exists yet.
+        if mode == "multi-user" and request.method == "POST" and request.url.path.rstrip("/") in {"/api/auth/login", "/api/auth/register"}:
+            # Login and registration CSRF must be checked even though no principal exists yet.
             check_origin(request, secure=secure,
                          required=bool(request.headers.get("sec-fetch-site") or request.headers.get("cookie")))
             response = await forward(request)

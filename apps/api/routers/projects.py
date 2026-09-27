@@ -328,7 +328,7 @@ def upload_document(
 def _store_document(project_id: str, file: UploadFile, document_kind: str,
                     is_own_document: bool, session: Session) -> DocumentOut:
     """업로드 → 검증 → SHA-256 → Immutable Original 저장 (제6장, 제15.1장)."""
-    require_project(session, project_id, "MEMBER")
+    project = require_project(session, project_id, "MEMBER")
 
     settings = get_settings()
     filename = _safe_filename(file.filename or "unnamed")
@@ -354,6 +354,39 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
     issue = scan_upload(filename, data)
     if issue:
         raise HTTPException(400, issue)
+
+    # 저장소 용량 쿼터(1GB) 검사 및 70% 초과 경고 (요구사항 7)
+    owner_id = project.owner_id
+    if owner_id:
+        from ..db import User
+        from ..storage_quota import get_user_storage_usage_bytes
+        owner = session.get(User, owner_id)
+        if owner is not None:
+            quota = getattr(owner, "storage_quota_bytes", 1073741824) or 1073741824
+            current_usage = get_user_storage_usage_bytes(session, owner_id)
+            if current_usage + len(data) > quota:
+                raise HTTPException(
+                    413,
+                    f"개인 저장소 용량 한도({quota / (1024**3):.1f}GB)를 초과하여 업로드할 수 없습니다. "
+                    "기존 자료를 정리한 후 다시 시도하십시오."
+                )
+            # 70% 초과 여부 확인 및 24시간 내 1회 경고 메일 비동기 발송
+            if (current_usage + len(data)) >= quota * 0.7:
+                warning_sent = getattr(owner, "quota_warning_sent_at", None)
+                now = datetime.utcnow()
+                if not warning_sent or (now - warning_sent).total_seconds() > 86400:
+                    owner.quota_warning_sent_at = now
+                    session.flush()
+                    try:
+                        from packages.notification_engine.mailer import send_quota_warning_email_background
+                        send_quota_warning_email_background(
+                            to_email=owner.email,
+                            user_name=owner.display_name or owner.email,
+                            used_bytes=current_usage + len(data),
+                            quota_bytes=quota,
+                        )
+                    except Exception as mail_err:
+                        logger.error("Failed to trigger quota warning email: %s", mail_err)
 
     digest = sha256_bytes(data)
     lock_project(session, project_id)

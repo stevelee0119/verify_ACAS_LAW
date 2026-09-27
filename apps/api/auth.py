@@ -167,6 +167,11 @@ def authenticate(session: Session, email: str, password: str) -> User:
         # 계정 없음과 비밀번호 오류를 구분해 주지 않는다
         raise HTTPException(401, "이메일 또는 비밀번호가 올바르지 않다")
 
+    if getattr(user, "approval_status", "APPROVED") == "PENDING":
+        raise HTTPException(403, "가입 승인 대기 중입니다. 관리자 승인 후 이용하실 수 있습니다.")
+    if getattr(user, "approval_status", "APPROVED") == "REJECTED":
+        reason = f" (사유: {user.rejection_reason})" if getattr(user, "rejection_reason", None) else ""
+        raise HTTPException(403, f"가입 신청이 반려되었습니다.{reason}")
     if not user.is_active:
         raise HTTPException(403, "비활성화된 계정이다")
     identity.principal_for_user(session, user.id, "password")
@@ -296,7 +301,26 @@ def bootstrap_admin_from_env(session: Session) -> Optional[User]:
     identity.auth_mode()
     identity.reconcile_password_accounts(session)
     session.commit()
+    admin_name = os.getenv("LV_BOOTSTRAP_ADMIN_NAME", "이창민")
+    admin_affiliation = "종합행정학교 법무교육단"
+    admin_phone = "010-4724-1500"
+    admin_reason = "프로그램 개발"
+
     if identity.has_provisioned_users(session):
+        # 기존 가입되어 있는 관리자 정보 갱신 및 보장 (요구사항 2)
+        existing_admin = session.scalars(select(User).where(User.role == ROLE_ADMIN)).first()
+        if existing_admin:
+            if not existing_admin.display_name or existing_admin.display_name == "관리자":
+                existing_admin.display_name = admin_name
+            if not getattr(existing_admin, "affiliation", None):
+                existing_admin.affiliation = admin_affiliation
+            if not getattr(existing_admin, "phone_number", None):
+                existing_admin.phone_number = admin_phone
+            if not getattr(existing_admin, "registration_reason", None):
+                existing_admin.registration_reason = admin_reason
+            if getattr(existing_admin, "approval_status", None) != "APPROVED":
+                existing_admin.approval_status = "APPROVED"
+            session.commit()
         return None
     email = (os.getenv("LV_BOOTSTRAP_ADMIN_EMAIL") or "").strip().lower()
     password = os.getenv("LV_BOOTSTRAP_ADMIN_PASSWORD") or ""
@@ -307,15 +331,20 @@ def bootstrap_admin_from_env(session: Session) -> Optional[User]:
         raise ValueError("Multiple organizations exist; provision an administrator explicitly")
     organization = organizations[0] if organizations else None
     if organization is None:
-        organization = Organization(name=os.getenv("LV_ORG_NAME", "기본 기관"))
+        organization = Organization(name=os.getenv("LV_ORG_NAME", "종합행정학교 법무교육단"))
         session.add(organization)
         session.flush()
     user = User(
         email=email,
-        display_name=os.getenv("LV_BOOTSTRAP_ADMIN_NAME", "관리자"),
+        display_name=admin_name,
         role=ROLE_ADMIN,
         organization_id=organization.id,
         password_hash=hash_password(password),
+        phone_number=admin_phone,
+        affiliation=admin_affiliation,
+        registration_reason=admin_reason,
+        approval_status="APPROVED",
+        approved_at=datetime.utcnow(),
     )
     session.add(user)
     session.flush()

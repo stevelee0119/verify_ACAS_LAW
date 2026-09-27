@@ -491,8 +491,7 @@ def project_role(session: Session, project: Project, principal: Principal | None
         return "ADMIN"
     if project.organization_id != principal.organization_id:
         return None
-    if principal.role == "ADMIN" and principal.organization_id:
-        return "ADMIN"
+    # 사용자별 격리 (요구사항 6): 본인이 소유자(owner_id)이거나 명시적 멤버인 경우만 접근 허용
     member = session.scalar(select(ProjectMember).where(
         ProjectMember.project_id == project.id, ProjectMember.user_id == principal.user_id))
     role = "ADMIN" if project.owner_id == principal.user_id else (member.role if member else None)
@@ -529,13 +528,14 @@ def visible_project_ids(session: Session, principal: Principal | None = None, *,
         return None
     if principal.role not in ROLES:
         return []
-    query = select(Project.id).where(Project.organization_id == principal.organization_id)
+    # 사용자별 격리 (요구사항 6): 본인이 소유자(owner_id)인 프로젝트(또는 참여 멤버)만 조회
+    memberships = select(ProjectMember.project_id).where(
+        ProjectMember.user_id == principal.user_id, ProjectMember.role.in_(ROLES))
+    query = select(Project.id).where(or_(Project.owner_id == principal.user_id, Project.id.in_(memberships)))
+    if principal.organization_id:
+        query = query.where(Project.organization_id == principal.organization_id)
     if not include_deleted:
         query = query.where(Project.deleted_at.is_(None))
-    if principal.role != "ADMIN" or not principal.organization_id:
-        memberships = select(ProjectMember.project_id).where(
-            ProjectMember.user_id == principal.user_id, ProjectMember.role.in_(ROLES))
-        query = query.where(or_(Project.owner_id == principal.user_id, Project.id.in_(memberships)))
     return list(session.scalars(query))
 
 
