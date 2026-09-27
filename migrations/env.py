@@ -28,7 +28,9 @@ target_metadata = Base.metadata
 
 
 def get_url() -> str:
-    return os.getenv("LV_DATABASE_URL") or get_settings().database_url
+    from packages.common.config import normalize_database_url
+    raw = os.getenv("LV_DATABASE_URL") or get_settings().database_url
+    return normalize_database_url(raw)
 
 
 def run_migrations_offline() -> None:

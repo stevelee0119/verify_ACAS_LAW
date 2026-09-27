@@ -17,9 +17,13 @@ def main() -> int:
 
     print("Applying database migrations...", flush=True)
     try:
-        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True)
+        # DB 연결 지연이나 락에 의한 무한 대기(hang) 방지를 위해 120초 타임아웃 부여
+        subprocess.run([sys.executable, "-m", "alembic", "upgrade", "head"], check=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        print("Database migration timed out after 120 seconds; API was not started.", file=sys.stderr, flush=True)
+        return 1
     except subprocess.CalledProcessError as exc:
-        print("Database migration failed; API was not started.", file=sys.stderr)
+        print(f"Database migration failed (code {exc.returncode}); API was not started.", file=sys.stderr, flush=True)
         return exc.returncode if exc.returncode > 0 else 1
 
     # Render terminates TLS at its proxy; other hosts trust only loopback by default.
