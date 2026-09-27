@@ -257,9 +257,16 @@ aside {
 
 .side-title {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px
+}
+
+.sidebar-create {
+  width: 100%;
+  min-height: 44px;
+  justify-content: center;
+  font-size: 15px;
 }
 
 #projectList {
@@ -527,23 +534,32 @@ td {
   margin-bottom: 22px
 }
 
-.empty>.empty-emblem {
+.empty-brand {
+  width: 280px;
+  max-width: 100%;
+  margin: 0 auto;
+}
+
+.empty-emblem {
   display: block;
-  width: 128px;
+  width: 100%;
   max-width: 100%;
   height: auto;
   aspect-ratio: 1;
   object-fit: contain;
   background: transparent;
-  margin: 0 auto 18px;
+  margin: 0 auto;
 }
 
-.empty-title {
-  margin: 0 0 22px;
-  font-family: inherit;
-  font-size: 22px;
-  font-weight: 600;
-  color: #234540
+.emblem-credit {
+  width: 100%;
+  margin: 16px 0 0;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--muted);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  text-wrap: balance;
 }
 
 .empty-small {
@@ -1181,6 +1197,15 @@ table {
 .project-trash-item>button, .project-trash-actions { flex-shrink: 0; }
 .project-trash-actions { display: flex; gap: 8px; }
 .project-trash-actions .project-purge { color: #a13d37; }
+.project-trash-toolbar {display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;}
+.project-trash-toolbar .danger {color:#a13d37;}
+.project-trash-status, .project-trash-results {overflow-wrap:anywhere; font-size:14px; line-height:1.6;}
+.project-trash-status {margin:0 0 12px;}
+.project-trash-results:empty {display:none;}
+@media(max-width:700px) {
+  .project-trash-item {align-items:stretch; flex-direction:column; gap:12px;}
+  .project-trash-actions {justify-content:flex-end;}
+}
 .background-job { overflow-wrap: anywhere; }
 .background-job>.badge { margin-left: 10px; }
 .background-job progress { display: block; width: 100%; height: 6px; }
@@ -1293,21 +1318,26 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
 
 /* 사용자 관리 및 개별 격리 UI 스타일 */
 #sidebar .side-title h2 {
-  font-size: 13px;
-  line-height: 1.35;
+  font-size: 18px;
+  line-height: 1.5;
   display: flex;
   flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  margin: 0;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
 }
 
 #sidebar .side-title h2 .user-affil {
-  font-size: 11px;
+  font-size: 14px;
   color: var(--muted, #64748b);
   font-weight: 500;
   letter-spacing: 0;
 }
 
 #sidebar .side-title h2 .user-proj-msg {
-  font-size: 13px;
+  font-size: 18px;
   color: var(--text, #1e293b);
   font-weight: 600;
   word-break: keep-all;

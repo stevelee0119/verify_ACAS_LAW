@@ -1,6 +1,7 @@
 """Offline visual regression for the supplied emblem and compact header."""
 import io
 import os
+import pytest
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -62,6 +63,14 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 expect(dialog).not_to_be_visible()
                 square = page.locator("#emptyState .empty-emblem")
                 expect(square).to_be_visible()
+                expect(page.locator("#emptyState button, #emptyCreate, .empty-title")).to_have_count(0)
+                credit = page.locator(".emblem-credit")
+                expect(credit).to_have_text("created by 스티브, 아나스타샤, 스텔라, 에이미, 쏘니")
+                assert credit.evaluate("""el => {
+                    const text = el.getBoundingClientRect(), image = el.previousElementSibling.getBoundingClientRect();
+                    return Math.abs(text.width - image.width) < 1 && text.top >= image.bottom
+                        && el.scrollWidth <= el.clientWidth && image.width >= 200;
+                }""")
                 expect(square).to_have_attribute("src", "/static/img/acas-law-square-transparent.png")
                 page.wait_for_function("""() => {
                     const image = document.querySelector('#emptyState .empty-emblem');
@@ -116,5 +125,80 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                     expect(page.locator("#sidebar")).to_be_visible()
                 assert errors == []
                 page.close()
+        finally:
+            browser.close()
+
+
+@pytest.mark.parametrize("width,height", [(1440, 960), (390, 844)])
+def test_sidebar_is_the_only_project_creation_entry(tmp_path, width, height):
+    projects = []
+    defaults = {"name": "새 사건", "creation_key": "test-create-once", "parties": [],
+                "requested_issues": [], "external_ai_policy": "LOCAL_ONLY", "verification_profile": "STANDARD"}
+    def respond(route):
+        path = urlsplit(route.request.url).path
+        if path == "/":
+            route.fulfill(path=str(ROOT / "apps/web/index.html"))
+        elif path.startswith("/static/"):
+            route.fulfill(path=str(ROOT / "apps/web" / path.lstrip("/")))
+        elif path == "/api/health":
+            route.fulfill(json={"version": "test", "status": "ok"})
+        elif path == "/api/identity/me":
+            route.fulfill(json={"user_id": "member", "role": "MEMBER", "authentication": "password"})
+        elif path == "/api/auth/me":
+            route.fulfill(json={"email": "synthetic@example.test", "affiliation": "합성 법무교육단 문서 검증 담당부서",
+                                "display_name": "테스트사용자"})
+        elif path == "/api/verification-runs":
+            route.fulfill(json={"runs": [], "active_count": 0})
+        elif path == "/api/project-defaults":
+            route.fulfill(json=defaults)
+        elif path == "/api/projects":
+            if route.request.method == "POST":
+                projects.append({**route.request.post_data_json, "id": "created", "can_delete": True,
+                                 "document_count": 0, "scope_revision": 0})
+                route.fulfill(status=201, json=projects[-1])
+            else:
+                route.fulfill(json=projects)
+        elif path == "/api/projects/created":
+            route.fulfill(json=projects[0])
+        elif path.endswith("/case-matrix"):
+            route.fulfill(body="null", content_type="application/json")
+        else:
+            route.fulfill(json=[])
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
+            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
+        browser = playwright.chromium.launch(**options)
+        try:
+            page = browser.new_page(viewport={"width": width, "height": height})
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.route("**/*", respond)
+            page.goto("https://workspace.test/")
+            expect(page.locator(".user-proj-msg")).to_have_text("테스트사용자님의 프로젝트")
+            expect(page.locator("#emptyState button")).to_have_count(0)
+            expect(page.get_by_text("검토 프로젝트", exact=True)).to_have_count(0)
+            page.screenshot(path=str(tmp_path / f"landing-{width}.png"), full_page=True)
+            if width <= 700:
+                page.get_by_role("button", name="프로젝트 목록", exact=True).click()
+            create = page.get_by_role("button", name="새 프로젝트", exact=True)
+            expect(create).to_have_count(1)
+            expect(create).to_have_text("새프로젝트")
+            assert create.evaluate("""el => {
+                const button = el.getBoundingClientRect(), title = el.previousElementSibling.getBoundingClientRect();
+                return button.top >= title.bottom && Math.abs(button.width - title.width) < 1 && button.width >= 200;
+            }""")
+            for selector, minimum in ((".user-affil", 14), (".user-proj-msg", 18)):
+                assert page.locator(selector).evaluate("el => parseFloat(getComputedStyle(el).fontSize)") >= minimum
+                assert page.locator(selector).evaluate("el => el.scrollWidth <= el.clientWidth")
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.screenshot(path=str(tmp_path / f"sidebar-{width}.png"), full_page=True)
+            create.click()
+            expect(page.locator("#projectDialog")).to_be_visible()
+            page.locator('#projectForm [name="name"]').fill("통합 생성 경로 검증")
+            page.locator("#projectSubmit").click()
+            expect(page.locator("#projectTitle")).to_have_text("통합 생성 경로 검증")
+            expect(page.locator("#emptyState")).to_be_hidden()
+            assert len(projects) == 1 and not errors
         finally:
             browser.close()

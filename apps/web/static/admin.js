@@ -209,7 +209,7 @@ const adminUI = (() => {
       }));
     } else {
       const table = node("table", null, "admin-table"), head = node("thead"), tr = node("tr"), body = node("tbody");
-      const headers = tab === "usage" ? ["사용자", "로그인", "분석", "활성 원본 / 한도 (MiB)", "처리 경과시간 (분)", "상세"]
+      const headers = tab === "usage" ? ["사용자", "로그인", "분석", "원본·휴지통 / 한도 (MiB)", "처리 경과시간 (분)", "상세"]
         : tab === "mail" ? ["수신자", "전송 상태", "종류", "시도", "최근 처리", "상세"]
         : tab === "pending" ? ["신청자", "상태", "신청일", "상세"] : ["사용자", "상태", "역할", "연락처", "상세"];
       const secondary = tab === "usage" ? [2, 3, 4] : tab === "mail" ? [2, 3, 4] : tab === "pending" ? [2] : [2, 3];
@@ -223,7 +223,7 @@ const adminUI = (() => {
           () => tab === "mail" ? showMail(item) : showUser(user));
         const metric = user.monthly_metrics || {};
         const cells = tab === "usage" ? [name, number(metric.login_count), number(metric.verification_count),
-          number(metric.storage_used_mb) + " / " + number(metric.storage_quota_mb), number(metric.compute_minutes), more]
+          number(metric.storage_used_mb) + " / " + (metric.storage_unlimited === true ? "제한 없음" : number(metric.storage_quota_mb)), number(metric.compute_minutes), more]
           : tab === "mail" ? [name, badge(mailStates[item.status], item.status), item.kind === "APPROVAL" ? "가입 승인" : "용량 경고",
             item.attempts + "/3", stamp(item.finished_at || item.attempted_at || item.created_at), more]
           : tab === "pending" ? [name, badge(accountStates.PENDING, "PENDING"), stamp(item.created_at), more]
@@ -312,8 +312,8 @@ const adminUI = (() => {
     if (user.monthly_metrics) {
       const m = user.monthly_metrics;
       facts(view.content, [["집계월 (UTC)", preferences.usage.period], ["로그인 성공", number(m.login_count) + "회"],
-        ["검증 분석", number(m.verification_count) + "건"], ["현재 활성 원본", number(m.storage_used_mb) + " MiB"],
-        ["저장 한도", number(m.storage_quota_mb) + " MiB"], ["월별 업로드", number(m.monthly_upload_mb) + " MiB"],
+        ["검증 분석", number(m.verification_count) + "건"], ["현재 원본 (휴지통 포함)", number(m.storage_used_mb) + " MiB"],
+        ["저장 한도", m.storage_unlimited === true ? "제한 없음" : number(m.storage_quota_mb) + " MiB"], ["월별 업로드", number(m.monthly_upload_mb) + " MiB"],
         ["처리 경과시간 (대기 포함)", number(m.compute_minutes) + "분"]]);
       view.footer.append(command("월별 추이", "history", () => history(user)));
     }

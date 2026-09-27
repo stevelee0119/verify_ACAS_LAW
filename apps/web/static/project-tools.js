@@ -46,47 +46,105 @@ const projectTools = (() => {
     const root = node("div", null, "full project-trash");
     const view = workflowUI.modal("프로젝트 휴지통", [root], async () => {}, true);
     view.readOnly();
+    let projects = [], pending = false, loaded = false;
+    const problems = new Map();
+    const toolbar = node("div", null, "project-trash-toolbar"), count = node("span");
+    const status = node("p", "", "project-trash-status"); status.setAttribute("role", "status");
+    const results = node("div", null, "project-trash-results");
+    const list = node("div"), loadError = node("p", "", "error"); loadError.setAttribute("role", "alert");
+    const retry = button("다시 조회", async () => {
+      if (pending) return;
+      setPending(true);
+      try { await draw(); } finally { setPending(false); }
+    });
+    const clear = button("휴지통 비우기", () => purge([...projects], true), "danger");
+    const clearIcon = node("i"); clearIcon.dataset.lucide = "trash-2"; clear.prepend(clearIcon);
+    toolbar.append(count, clear); root.append(toolbar, status, results, loadError, retry, list);
+    view.dialog.addEventListener("cancel", event => {if (pending) event.preventDefault();});
+    function setPending(value) {
+      pending = value;
+      view.dialog.querySelectorAll("button").forEach(control => control.disabled = value);
+      list.querySelectorAll("button").forEach(control => control.disabled = value || !loaded);
+      clear.disabled = value || !loaded || !projects.length;
+      root.setAttribute("aria-busy", String(value));
+    }
     async function draw() {
-      const projects = await api("/projects?deleted=true");
+      loaded = false; loadError.hidden = retry.hidden = true;
+      try {
+        const response = await api("/projects?deleted=true", {interactiveAuth:false, timeoutMs:15000});
+        if (!Array.isArray(response)) throw new Error("휴지통 목록을 읽지 못했습니다.");
+        projects = response;
+        loaded = true;
+      } catch (error) {
+        loadError.textContent = `휴지통을 조회하지 못했습니다: ${error.message}`;
+        loadError.hidden = retry.hidden = false;
+      }
       if (!root.isConnected) return;
-      root.replaceChildren();
-      if (!projects.length) return empty(root, "삭제된 프로젝트가 없습니다.");
+      count.textContent = loaded ? `${projects.length}개 프로젝트` : "목록 확인 필요";
+      list.replaceChildren();
+      if (!projects.length && loaded) empty(list, "삭제된 프로젝트가 없습니다.");
       for (const project of projects) {
         const row = node("div", null, "row-item project-trash-item");
         const info = node("div");
         info.append(node("h3", project.name), node("p", `자료 ${project.document_count}개 · 삭제 ${dateText(project.deleted_at)}`, "muted"));
         const restore = button("복원", async () => {
-          restore.disabled = true;
+          if (pending) return;
+          setPending(true);
           try {
-            await api(`/projects/${project.id}/restore`, {method:"POST"});
+            await api(`/projects/${project.id}/restore`, {method:"POST", interactiveAuth:false});
+            problems.delete(project.id);
             await loadProjects(); await draw();
             if (!state.project) await openProject(project.id);
             toast("프로젝트를 복원했습니다.");
-          } finally { restore.disabled = false; }
+          } finally { setPending(false); }
         });
         const icon = node("i"); icon.dataset.lucide = "rotate-ccw"; restore.prepend(icon);
-        // 영구 삭제는 되돌릴 수 없으므로 한 번 더 묻는다. 감사기록은 서버가 남긴다.
-        const purge = button("영구 삭제", async () => {
-          if (await ask("프로젝트 영구 삭제", `‘${project.name}’ 프로젝트의 자료·검증 결과·보고서·검토 기록과 업로드 원본을 모두 지웁니다. 되돌릴 수 없습니다. 삭제했다는 사실은 감사기록에 남습니다.`) === null) return;
-          purge.disabled = restore.disabled = true; problem.hidden = true;
-          try {
-            const result = await api(`/projects/${project.id}/purge`, {method:"DELETE"});
-            await draw();
-            toast(result.file_errors?.length ? `프로젝트를 영구 삭제했지만 일부 파일을 지우지 못했습니다: ${result.file_errors.join(", ")}` : "프로젝트를 영구 삭제했습니다.");
-          } catch (error) {
-            // 삭제하지 못한 사유(보고서 생성 중 등)를 해당 항목 바로 아래에 보인다.
-            problem.textContent = `영구 삭제하지 못했습니다: ${error.message}`; problem.hidden = false;
-          } finally { purge.disabled = restore.disabled = false; }
-        }, "danger project-purge");
-        const purgeIcon = node("i"); purgeIcon.dataset.lucide = "trash-2"; purge.prepend(purgeIcon);
-        const actions = node("div", null, "project-trash-actions"); actions.append(restore, purge);
-        const problem = node("p", "", "error project-trash-error"); problem.setAttribute("role", "alert"); problem.hidden = true;
+        const remove = button("영구 삭제", () => purge([project]), "danger project-purge");
+        const purgeIcon = node("i"); purgeIcon.dataset.lucide = "trash-2"; remove.prepend(purgeIcon);
+        const actions = node("div", null, "project-trash-actions"); actions.append(restore, remove);
+        const problem = node("p", problems.get(project.id) || "", "error project-trash-error");
+        problem.setAttribute("role", "alert"); problem.hidden = !problems.has(project.id);
         info.append(problem);
-        row.append(info, actions); root.append(row);
+        row.append(info, actions); list.append(row);
       }
-      icons();
+      setPending(pending); icons();
     }
-    try { await draw(); } catch (error) { root.replaceChildren(node("p", error.message, "error")); }
+    async function purge(targets, all = false) {
+      if (pending || !loaded || !targets.length) return;
+      setPending(true);
+      try {
+        const title = all ? "휴지통 비우기" : "프로젝트 영구 삭제";
+        const subject = all ? `현재 휴지통의 프로젝트 ${targets.length}개` : `‘${targets[0].name}’ 프로젝트`;
+        if (await ask(title, `${subject}의 자료·검증 결과·보고서·검토 기록과 업로드 원본을 모두 지웁니다. 되돌릴 수 없습니다. 삭제 사실은 감사기록에 남으며, 사용 중인 프로젝트는 남겨둡니다.`) === null) return;
+        let deleted = 0, failed = 0, attempted = 0;
+        const warnings = [];
+        results.replaceChildren();
+        // Freeze the confirmed list and reuse each project's authorization, lock and audit path.
+        for (const project of targets) {
+          status.textContent = `영구 삭제 중 ${++attempted} / ${targets.length}`;
+          problems.delete(project.id);
+          try {
+            const result = await api(`/projects/${project.id}/purge`, {method:"DELETE", interactiveAuth:false, timeoutMs:60000});
+            if (result?.purged !== true) throw new Error("삭제 완료를 확인하지 못했습니다. 목록을 다시 확인하세요.");
+            deleted++;
+            if (result.file_errors?.length) warnings.push(`${project.name}: 일부 파일을 지우지 못했습니다 (${result.file_errors.join(", ")}).`);
+          } catch (error) {
+            failed++;
+            const message = `영구 삭제하지 못했습니다: ${error.message}`;
+            problems.set(project.id, message);
+            results.append(node("p", `${project.name}: ${message}`, "error"));
+            if (!error.status || error.status === 401 || error.status === 403 || error.status >= 500) break;
+          }
+        }
+        const unattempted = targets.length - attempted;
+        status.textContent = `영구 삭제 ${deleted}개 · 실패 또는 확인 필요 ${failed}개` + (unattempted ? ` · 미시도 ${unattempted}개` : "");
+        for (const warning of warnings) results.append(node("p", warning, "error"));
+        await draw();
+        toast(status.textContent + (warnings.length ? " · 일부 파일 정리 확인 필요" : ""));
+      } finally { setPending(false); }
+    }
+    setPending(true);
+    try { await draw(); } finally { setPending(false); }
   }
 
   function drawJobs() {

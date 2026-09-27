@@ -36,6 +36,7 @@ from ..identity import (PASSWORD_SESSION_COOKIE, SESSION_COOKIE, auth_mode, curr
                         set_account_enabled, user_is_enabled)
 from ..services import make_audit
 from ..session_policy import session_lifetimes
+from ..storage_quota import USER_STORAGE_QUOTA_BYTES, get_user_storage_limit_bytes
 
 router = APIRouter(tags=["auth"])
 
@@ -79,7 +80,8 @@ class UserOut(BaseModel):
     registration_reason: str = ""
     approval_status: str = "APPROVED"
     approved_at: Optional[str] = None
-    storage_quota_bytes: int = 1073741824
+    storage_quota_bytes: Optional[int] = USER_STORAGE_QUOTA_BYTES
+    storage_unlimited: bool = False
     monthly_metrics: Optional[Dict[str, Any]] = None
 
 
@@ -160,7 +162,8 @@ def _out(user: User, metrics: Optional[Dict[str, Any]] = None) -> UserOut:
         registration_reason=getattr(user, "registration_reason", "") or "",
         approval_status=getattr(user, "approval_status", "APPROVED") or "APPROVED",
         approved_at=user.approved_at.isoformat() if getattr(user, "approved_at", None) else None,
-        storage_quota_bytes=getattr(user, "storage_quota_bytes", 1073741824) or 1073741824,
+        storage_quota_bytes=get_user_storage_limit_bytes(user),
+        storage_unlimited=get_user_storage_limit_bytes(user) is None,
         monthly_metrics=metrics,
     )
 
@@ -504,7 +507,7 @@ def export_users_csv(
     header = [
         "사용자ID", "성명", "이메일", "연락처", "소속", "등록사유",
         "승인상태", "역할", "등록일시", "승인일시", "승인자",
-        "현재활성원본용량(MiB)", "저장소한도(MiB)", "용량사용률(%)",
+        "현재원본용량_휴지통포함(MiB)", "저장소한도(MiB)", "용량사용률(%)",
         f"[{target_year}년{target_month}월]접속횟수",
         f"[{target_year}년{target_month}월]검증분석횟수",
         f"[{target_year}년{target_month}월]신규업로드(MiB)",
@@ -527,8 +530,8 @@ def export_users_csv(
             u.approved_at.strftime("%Y-%m-%d %H:%M:%S") if getattr(u, "approved_at", None) else "",
             getattr(u, "approved_by", "") or "",
             m.get("storage_used_mb", 0.0),
-            m.get("storage_quota_mb", 1024.0),
-            f"{m.get('storage_usage_percent', 0.0)}%",
+            "제한 없음" if m.get("storage_unlimited") else m.get("storage_quota_mb", 1024.0),
+            "해당 없음" if m.get("storage_unlimited") else f"{m.get('storage_usage_percent', 0.0)}%",
             m.get("login_count", 0),
             m.get("verification_count", 0),
             m.get("monthly_upload_mb", 0.0),

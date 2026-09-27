@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from apps.api.db import AuditEventRow, Base, Document, Organization, Project, User, VerificationRun
 from apps.api.user_metrics import get_all_users_monthly_metrics
+from apps.api.storage_quota import check_user_quota
 from apps.api.workspace import ReportJob
 
 
@@ -52,6 +53,19 @@ def test_metrics_sql_with_real_database(tmp_path):
                     assert metrics["verification_count"] == 1
                     assert metrics["compute_seconds"] == pytest.approx(90, abs=0.1)
                     assert metrics["storage_used_mb"] == metrics["monthly_upload_mb"] == 1
+                    project.deleted_at = at
+                    session.flush()
+                    metrics = get_all_users_monthly_metrics(session, 2026, 8, org.id)[user.id]
+                    assert metrics["storage_used_mb"] == 1
+                    assert metrics["storage_quota_mb"] == 1024
+                    assert check_user_quota(session, user, 1073741824)[0] is True
+                    user.role = "ADMIN"
+                    session.flush()
+                    metrics = get_all_users_monthly_metrics(session, 2026, 8, org.id)[user.id]
+                    assert metrics["storage_used_mb"] == 1
+                    assert metrics["storage_unlimited"] is True
+                    assert metrics["storage_quota_mb"] is None
+                    assert check_user_quota(session, user, 1073741824)[0] is False
             finally:
                 transaction.rollback()
     finally:

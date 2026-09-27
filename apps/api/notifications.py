@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import select, update
 
 from .db import User, UserNotification, get_session_factory
+from .storage_quota import get_user_storage_limit_bytes
 from packages.notification_engine.mailer import (
     send_approval_email, send_quota_warning_email, smtp_configuration,
 )
@@ -24,6 +25,9 @@ def queue_notification(session, user, kind, payload=None):
 
 
 def queue_quota_warning(session, user, used_bytes):
+    quota = get_user_storage_limit_bytes(user)
+    if quota is None:
+        return None
     now = datetime.utcnow()
     # The owner row is locked by the upload transaction. Failed attempts also
     # throttle automatic mail; explicit administrator retry remains available.
@@ -33,7 +37,7 @@ def queue_quota_warning(session, user, used_bytes):
     if recent or (user.quota_warning_sent_at and user.quota_warning_sent_at > now - timedelta(hours=24)):
         return None
     return queue_notification(session, user, "QUOTA", {"used_bytes": used_bytes,
-                                                     "quota_bytes": user.storage_quota_bytes})
+                                                     "quota_bytes": quota})
 
 
 def notification_out(row):
@@ -68,6 +72,10 @@ def dispatch_once():
         user = session.get(User, row.user_id)
         if not user or not user.is_active or user.approval_status != "APPROVED":
             row.status, row.error_code, row.finished_at = "CANCELLED", "ACCOUNT_UNAVAILABLE", now
+            session.commit()
+            return True
+        if row.kind == "QUOTA" and get_user_storage_limit_bytes(user) is None:
+            row.status, row.error_code, row.finished_at = "CANCELLED", "QUOTA_NOT_APPLICABLE", now
             session.commit()
             return True
         recipient, name, kind, payload = user.email, user.display_name, row.kind, row.payload

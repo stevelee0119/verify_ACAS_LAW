@@ -225,11 +225,14 @@ def test_strict_tenant_isolation(client, bootstrap_data):
     assert all(p["id"] not in (proj_a_id, proj_b_id) for p in list_admin)
 
 
-def test_storage_quota_calculation_and_limit(bootstrap_data):
+@pytest.mark.parametrize("role", ["ADMIN", "MEMBER", "VIEWER"])
+def test_storage_quota_calculation_and_limit(bootstrap_data, role):
     """요구사항 7: 1GB 쿼터 및 사용량 집계 검증."""
     factory = get_session_factory()
     with factory() as session:
         user = session.get(User, bootstrap_data["admin_id"])
+        user.role = role
+        user.storage_quota_bytes = 100  # Legacy values do not override the role policy.
         # 현재 사용량은 0
         used = get_user_storage_usage_bytes(session, user.id)
         assert used == 0
@@ -237,11 +240,11 @@ def test_storage_quota_calculation_and_limit(bootstrap_data):
         # 1GB 이하 추가는 허용
         exceeded, cur, quota = check_user_quota(session, user, additional_bytes=500 * 1024 * 1024)
         assert not exceeded
-        assert quota == 1073741824
+        assert quota == (None if role == "ADMIN" else 1073741824)
 
         # 1GB 초과 추가는 차단
         exceeded_over, _, _ = check_user_quota(session, user, additional_bytes=1073741824 + 1)
-        assert exceeded_over
+        assert exceeded_over is (role != "ADMIN")
 
 
 def test_monthly_activity_metrics_and_csv_export(client, bootstrap_data):
@@ -267,7 +270,10 @@ def test_monthly_activity_metrics_and_csv_export(client, bootstrap_data):
     assert len(user_list) >= 1
     admin_user = next(u for u in user_list if u["id"] == bootstrap_data["admin_id"])
     assert admin_user["monthly_metrics"] is not None
-    assert admin_user["monthly_metrics"]["storage_quota_mb"] == 1024.0
+    assert admin_user["storage_quota_bytes"] is None
+    assert admin_user["storage_unlimited"] is True
+    assert admin_user["monthly_metrics"]["storage_quota_mb"] is None
+    assert admin_user["monthly_metrics"]["storage_usage_percent"] is None
 
     # 3. 특정 사용자 12개월 추이 API (GET /api/admin/users/{user_id}/monthly-stats)
     history_res = client.get(f"/api/admin/users/{bootstrap_data['admin_id']}/monthly-stats?months=12", headers=admin_headers)
@@ -285,7 +291,8 @@ def test_monthly_activity_metrics_and_csv_export(client, bootstrap_data):
     assert "사용자ID" in csv_text
     assert "성명" in csv_text
     assert "이메일" in csv_text
-    assert "현재활성원본용량(MiB)" in csv_text
+    assert "현재원본용량_휴지통포함(MiB)" in csv_text
+    assert "제한 없음" in csv_text
     assert "접속횟수" in csv_text
     assert "검증분석횟수" in csv_text
     assert "처리경과시간_대기포함(분)" in csv_text
@@ -425,13 +432,15 @@ def test_metrics_count_only_login_success_and_csv_is_safe(client, bootstrap_data
 
 
 def test_quota_duplicate_and_rollback_do_not_send_false_warning(client, bootstrap_data, monkeypatch):
-    from apps.api.db import UserNotification
+    from apps.api.db import Document, UserNotification
     from apps.api.notifications import dispatch_once
     from packages.notification_engine.mailer import MailResult
     headers = _auth(bootstrap_data["admin_token"])
     project = client.post("/api/projects", headers=headers, json={"name":"Quota test"}).json()
     with get_session_factory()() as session:
-        session.get(User, bootstrap_data["admin_id"]).storage_quota_bytes = 100
+        session.get(User, bootstrap_data["admin_id"]).role = ROLE_MEMBER
+        session.add(Document(project_id=project["id"], filename="retained.txt", sha256="a"*64,
+                             storage_key="retained", size_bytes=1073741824 - 100))
         session.commit()
     content = b"Legal document test. " * 4
     url = f"/api/projects/{project['id']}/documents"
@@ -447,6 +456,67 @@ def test_quota_duplicate_and_rollback_do_not_send_false_warning(client, bootstra
     assert dispatch_once()
     with get_session_factory()() as session:
         assert session.get(User, bootstrap_data["admin_id"]).quota_warning_sent_at is not None
+
+
+def test_admin_unlimited_upload_and_legacy_warning_cancelled(client, bootstrap_data, monkeypatch):
+    from apps.api.db import Document, UserNotification
+    from apps.api.notifications import dispatch_once, queue_notification, queue_quota_warning
+    headers = _auth(bootstrap_data["admin_token"])
+    project = client.post("/api/projects", headers=headers, json={"name": "Unlimited"}).json()
+    with get_session_factory()() as session:
+        user = session.get(User, bootstrap_data["admin_id"])
+        session.add(Document(project_id=project["id"], filename="large.txt", sha256="a"*64,
+                             storage_key="large", size_bytes=2 * 1073741824))
+        assert queue_quota_warning(session, user, 2 * 1073741824) is None
+        notice = queue_notification(session, user, "QUOTA", {"used_bytes": 100, "quota_bytes": 100})
+        notice_id = notice.id
+        session.commit()
+    response = client.post(f"/api/projects/{project['id']}/documents", headers=headers,
+                           files={"file": ("new.txt", b"Another legal document.", "text/plain")})
+    assert response.status_code == 201, response.text
+    def unexpected_mail(*args):
+        pytest.fail("An unlimited administrator must not receive quota warnings")
+    monkeypatch.setattr("apps.api.notifications.send_quota_warning_email", unexpected_mail)
+    assert dispatch_once()
+    with get_session_factory()() as session:
+        rows = session.scalars(select(UserNotification)).all()
+        assert len(rows) == 1
+        assert session.get(UserNotification, notice_id).status == "CANCELLED"
+        assert session.get(UserNotification, notice_id).error_code == "QUOTA_NOT_APPLICABLE"
+    me = client.get("/api/auth/me", headers=headers).json()
+    assert me["storage_unlimited"] and me["storage_quota_bytes"] is None
+
+
+def test_member_storage_counts_trash_until_permanent_deletion(client, bootstrap_data):
+    from apps.api.db import Document
+    headers = _auth(bootstrap_data["admin_token"])
+    with get_session_factory()() as session:
+        user = session.get(User, bootstrap_data["admin_id"])
+        user.role = ROLE_MEMBER
+        user.storage_quota_bytes = 10 * 1073741824
+        session.commit()
+    old = client.post("/api/projects", headers=headers, json={"name": "Retained"}).json()["id"]
+    new = client.post("/api/projects", headers=headers, json={"name": "Current"}).json()["id"]
+    with get_session_factory()() as session:
+        session.add(Document(project_id=old, filename="full.txt", sha256="b"*64,
+                             storage_key="retained-original", size_bytes=1073741824))
+        session.commit()
+    assert client.delete(f"/api/projects/{old}", headers=headers).status_code == 204
+    with get_session_factory()() as session:
+        assert get_user_storage_usage_bytes(session, bootstrap_data["admin_id"]) == 1073741824
+        now = datetime.utcnow()
+        metrics = get_user_monthly_metrics(session, bootstrap_data["admin_id"], now.year, now.month)
+        assert metrics["storage_used_mb"] == 1024
+        assert metrics["storage_usage_percent"] == 100
+        assert metrics["storage_unlimited"] is False
+    url = f"/api/projects/{new}/documents"
+    files = {"file": ("extra.txt", b"New legal document", "text/plain")}
+    assert client.post(url, headers=headers, files=files).status_code == 413
+    assert client.post(f"/api/projects/{old}/restore", headers=headers).status_code == 200
+    assert client.post(url, headers=headers, files=files).status_code == 413
+    assert client.delete(f"/api/projects/{old}", headers=headers).status_code == 204
+    assert client.delete(f"/api/projects/{old}/purge", headers=headers).status_code == 200
+    assert client.post(url, headers=headers, files=files).status_code == 201
 
 
 def test_stale_smtp_claim_is_not_automatically_resent(bootstrap_data):

@@ -1551,7 +1551,7 @@ document.querySelectorAll("[data-close]").forEach(el => el.onclick = () => el.cl
 document.querySelectorAll("[data-tab]").forEach(el => el.onclick = () => switchTab(el.dataset.tab));
 $("menuButton").onclick = () => $("sidebar").classList.toggle("open");
 $("projectSearch").oninput = renderProjects;
-for (const id of ["newProjectBtn", "emptyCreate"]) $(id).onclick = action(() => editProject(true));
+$("newProjectBtn").onclick = action(() => editProject(true));
 for (const id of ["editProject", "editIssues"]) $(id).onclick = action(() => editProject());
 $("projectForm").onsubmit = saveProject;
 $("scopeFilter").onchange = renderDocuments;

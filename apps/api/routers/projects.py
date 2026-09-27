@@ -367,20 +367,19 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
     owner_id = project.owner_id
     if owner_id:
         from ..db import User
-        from ..storage_quota import get_user_storage_usage_bytes
+        from ..storage_quota import check_user_quota
         owner = session.scalar(select(User).where(User.id == owner_id).with_for_update()
                                .execution_options(populate_existing=True))
         if owner is not None:
-            quota = getattr(owner, "storage_quota_bytes", 1073741824) or 1073741824
-            current_usage = get_user_storage_usage_bytes(session, owner_id)
-            if current_usage + len(data) > quota:
+            exceeded, current_usage, quota = check_user_quota(session, owner, len(data))
+            if exceeded:
                 raise HTTPException(
                     413,
                     f"개인 저장소 용량 한도({quota / (1024**3):.1f}GB)를 초과하여 업로드할 수 없습니다. "
-                    "기존 자료를 정리한 후 다시 시도하십시오."
+                    "휴지통의 불필요한 프로젝트를 영구 삭제한 후 다시 시도하십시오."
                 )
             # The outbox commits with the upload; no SMTP on an uncommitted file.
-            if (current_usage + len(data)) >= quota * 0.7:
+            if quota is not None and (current_usage + len(data)) >= quota * 0.7:
                 from ..notifications import queue_quota_warning
                 queue_quota_warning(session, owner, current_usage + len(data))
 

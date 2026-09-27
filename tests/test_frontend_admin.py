@@ -17,7 +17,8 @@ def admin_page():
          "approval_status": "PENDING" if i >= 43 else "APPROVED", "enabled": i < 43,
          "registration_reason": "문서 검토", "created_at": "2026-09-27T00:00:00",
          "monthly_metrics": {"login_count": 2, "verification_count": 3, "storage_used_mb": 5,
-                             "storage_quota_mb": 100, "compute_minutes": 4, "monthly_upload_mb": 6}}
+                             "storage_quota_mb": None if i == 0 else 1024, "storage_unlimited": i == 0,
+                             "compute_minutes": 4, "monthly_upload_mb": 6}}
         for i in range(45)
     ]
     control = {"role": "ADMIN", "users": users, "mutations": [], "metrics_error": False, "deferred": [],
@@ -112,6 +113,18 @@ def admin_page():
 def select_tab(page, name):
     page.get_by_role("tab", name=name, exact=True).click()
     expect(page.locator("#adminPanel")).to_have_attribute("aria-busy", "false")
+
+
+def test_storage_policy_is_explicit_in_usage_table_and_details(admin_page):
+    page, _ = admin_page
+    select_tab(page, "이용 통계")
+    row = page.locator(".admin-table tbody tr").filter(has_text="reviewer00@example.test")
+    expect(row).to_contain_text("5 / 제한 없음")
+    expect(page.locator(".admin-table tbody tr").filter(has_text="reviewer01@example.test")).to_contain_text("5 / 1,024")
+    row.get_by_role("button", name="상세 보기: 검토자 00").click()
+    detail = page.get_by_role("dialog", name="검토자 00", exact=True)
+    expect(detail).to_contain_text("제한 없음")
+    expect(detail).to_contain_text("현재 원본 (휴지통 포함)")
 
 
 def test_search_filters_pagination_and_workspace_context(admin_page):

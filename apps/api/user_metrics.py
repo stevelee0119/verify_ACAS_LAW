@@ -9,6 +9,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 
 from .db import AuditEventRow, Document, Project, User, VerificationRun
 from .workspace import ReportJob
+from .storage_quota import get_user_storage_limit_bytes
 
 
 def get_month_range(year, month):
@@ -46,7 +47,7 @@ def _monthly_metrics(session, users, year, month):
     ).group_by(Project.owner_id)).all())
     storage = dict(session.execute(select(Project.owner_id, func.sum(Document.size_bytes)
     ).join(Document, Document.project_id == Project.id).where(
-        Project.owner_id.in_(ids), Project.deleted_at.is_(None),
+        Project.owner_id.in_(ids),
     ).group_by(Project.owner_id)).all())
     uploads = dict(session.execute(select(Project.owner_id, func.sum(Document.size_bytes)
     ).join(Document, Document.project_id == Project.id).where(
@@ -54,7 +55,7 @@ def _monthly_metrics(session, users, year, month):
     ).group_by(Project.owner_id)).all())
     results = {}
     for user in users:
-        used, quota = int(storage.get(user.id) or 0), int(user.storage_quota_bytes or 1073741824)
+        used, quota = int(storage.get(user.id) or 0), get_user_storage_limit_bytes(user)
         uploaded = int(uploads.get(user.id) or 0)
         count, seconds = runs.get(user.id, (0, 0))
         seconds = float(seconds) + float(reports.get(user.id, 0))
@@ -62,9 +63,10 @@ def _monthly_metrics(session, users, year, month):
             "year": year, "month": month, "timezone": "UTC",
             "login_count": int(logins.get(user.id, 0)), "verification_count": int(count),
             "storage_used_bytes": used, "storage_used_mb": round(used / 1048576, 2),
-            "storage_quota_bytes": quota, "storage_quota_mb": round(quota / 1048576, 2),
-            "storage_usage_percent": round(used / quota * 100, 1) if quota else 0,
-            "storage_measurement": "CURRENT_ACTIVE_ORIGINALS",
+            "storage_quota_bytes": quota, "storage_quota_mb": round(quota / 1048576, 2) if quota is not None else None,
+            "storage_unlimited": quota is None,
+            "storage_usage_percent": round(used / quota * 100, 1) if quota is not None else None,
+            "storage_measurement": "CURRENT_ORIGINALS_INCLUDING_TRASH",
             "monthly_upload_bytes": uploaded, "monthly_upload_mb": round(uploaded / 1048576, 2),
             "compute_seconds": round(seconds, 1), "compute_minutes": round(seconds / 60, 1),
             "compute_measurement": "ELAPSED_JOB_TIME_INCLUDING_WAIT",
