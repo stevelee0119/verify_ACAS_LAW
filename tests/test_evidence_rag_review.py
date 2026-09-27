@@ -115,6 +115,17 @@ def test_reference_extraction_falls_back_when_native_engine_is_unavailable(tmp_p
     assert parsed["fallback_pages"] == [1, 2]
 
 
+def test_native_pdf_extraction_in_resource_limited_subprocess(tmp_path):
+    from packages.rag_engine.library import isolated_extract
+
+    path = book(tmp_path / "isolated.pdf", 30, {})
+    parsed = isolated_extract(path.read_bytes(), path.name, "application/pdf",
+                              directory=tmp_path, timeout=30)
+    assert parsed["text_parser"] == "pypdfium2"
+    assert parsed["read_pages"] == 30 and not parsed["partial"]
+    assert parsed["fallback_pages"] == [] and parsed["scan_findings"] == []
+
+
 def test_reference_extraction_keeps_encryption_boundary(tmp_path):
     from pypdf import PdfWriter
     writer = PdfWriter(clone_from=book(tmp_path / "plain.pdf", 1, {}))
