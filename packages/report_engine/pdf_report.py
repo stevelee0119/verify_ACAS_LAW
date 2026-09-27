@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.common.enums import MM4_ADVISORY_TYPES, Severity
-from packages.legal_engine.reasoning_format import row_cell_text
+from packages.legal_engine.reasoning_format import row_cell_text, format_context_review
 from .snapshot import json_lines, technical_payload, xml_text
 from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, component_line, detail_level, evidence_summary,
                       grouped_citations, grouped_unverified, reviewed_workflow)
@@ -258,7 +258,8 @@ def build_report_pdf(
                 d.filename + " " + str(row.get("location", "")),
                 str(row.get("claim_text", ""))[:120] + "\n(" + str(row.get("cited_authority", "")) + ")",
                 "[평가] " + str(row.get("validity_verdict", "") or "확인 필요") + "\n"
-                + str(row.get("ai_generation_basis", ""))[:120],
+                + str(row.get("ai_generation_basis", ""))[:120] + "\n"
+                + format_context_review(row.get("context_review")),
                 row_cell_text(row, limit=900),  # 항목별 줄바꿈. 모델 의견이 잘리지 않게 칸 전체가 아닌 부분별로 자른다
             ])
     if all_hallucination_rows:
@@ -370,7 +371,7 @@ def build_report_pdf(
     from packages.rag_engine.review import report_lines
     reference_lines = report_lines(run_result)
     if reference_lines:
-        story.append(Paragraph("Drive 참고자료 검색·대조", styles["h1"]))
+        story.append(Paragraph("주요 참고문헌 검토 결과(RAG)", styles["h1"]))
         for line in reference_lines:
             story.append(Paragraph(_escape(line), styles["small"]))
 

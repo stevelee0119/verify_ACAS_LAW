@@ -4,7 +4,7 @@ from __future__ import annotations
 import io
 import json
 
-from packages.legal_engine.reasoning_format import row_cell_text
+from packages.legal_engine.reasoning_format import row_cell_text, format_context_review
 from packages.common.terminology import EDITABLE_COPY_NOTICE, REVIEW_NOTICE
 from .snapshot import json_lines, technical_payload, xml_text
 from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, detail_level, evidence_summary,
@@ -196,7 +196,8 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
             all_hallucination_rows.append([
                 d.filename + " " + str(row.get("location", "")),
                 str(row.get("claim_text", "")) + f"\n({row.get('cited_authority', '')})",
-                f"[평가] {row.get('validity_verdict', '') or '확인 필요'}\n{row.get('ai_generation_basis', '')}",
+                f"[평가] {row.get('validity_verdict', '') or '확인 필요'}\n{row.get('ai_generation_basis', '')}\n"
+                + format_context_review(row.get("context_review")),
                 row_cell_text(row),  # 검토 결과·AI 교차검증·모델별 의견·대응 방안을 줄마다 나눈다
             ])
     if all_hallucination_rows:
@@ -207,7 +208,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
     from packages.rag_engine.review import report_lines
     reference_lines = report_lines(run_result)
     if reference_lines:
-        doc.add_heading("Drive 참고자료 검색·대조", 1)
+        doc.add_heading("주요 참고문헌 검토 결과(RAG)", 1)
         for line in reference_lines:
             paragraph(line)
 

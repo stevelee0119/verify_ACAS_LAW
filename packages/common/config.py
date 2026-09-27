@@ -140,7 +140,9 @@ class Settings:
     # 공급자 수만큼 호출 비용이 늘어나므로 예산 설정과 함께 본다.
     llm_cross_check: str = field(
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
-    rule_version: str = "2026.09.27.5"
+    authorship_max_chars: int = field(default_factory=lambda: max(6000, min(48000,
+        int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
+    rule_version: str = "2026.09.27.6"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

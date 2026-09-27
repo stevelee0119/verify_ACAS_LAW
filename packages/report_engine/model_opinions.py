@@ -12,7 +12,7 @@ PROVIDER_NAMES = {"openai": "OpenAI", "anthropic": "Anthropic", "gemini": "Gemin
 VERDICT_LABELS = {
     "AI_FULL_GENERATION_LIKELY": "AI 임의 전체 작성 유력",
     "AI_PARTIAL_GENERATION": "일부 AI 작성·인용",
-    "HUMAN_AUTHORED_LIKELY": "사람 작성 유력",
+    "HUMAN_AUTHORED_LIKELY": "판단 보류 (사람 작성 근거 미확인)",
     "UNCERTAIN": "판단 보류",
 }
 
@@ -64,7 +64,9 @@ def model_opinion_rows(documents: List[Any]) -> List[List[str]]:
             rows.append([name, model_label(opinion.get("provider", ""), opinion.get("model", "")),
                          VERDICT_LABELS.get(opinion.get("verdict"), str(opinion.get("verdict", ""))),
                          f"{float(opinion.get('score') or 0):.2f}",
-                         "\n".join(f"- {reason}" for reason in opinion.get("reasons") or []) or "설명 없음"])
+                         (opinion.get("admissibility_note") or ("문체·AI 흔적 부재는 사람 작성의 증거가 아님. 모델 원래 설명:\n"
+                          if opinion.get("verdict") == "HUMAN_AUTHORED_LIKELY" else "")) + "\n"
+                         + ("\n".join(f"- {reason}" for reason in opinion.get("reasons") or []) or "설명 없음")])
         failure_models = signals.get("llm_failure_models") or {}
         for provider, why in (signals.get("llm_failures") or {}).items():
             rows.append([name, model_label(provider, failure_models.get(provider, "")), "응답 없음", "-", str(why)])

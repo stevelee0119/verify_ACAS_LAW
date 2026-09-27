@@ -349,7 +349,8 @@ class ReferenceLibrary:
                              if parsed.get("chunk_count") else "PARSE_FAILED",
                              reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
                              read_pages=parsed.get("read_pages"))
-                for key in ("excluded_pages", "scan_findings"):
+                for key in ("excluded_pages", "scan_findings", "no_text_pages", "unprocessed_pages", "coverage_note",
+                            "text_parser", "fallback_pages"):
                     if parsed.get(key):
                         entry[key] = parsed[key]
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
@@ -421,22 +422,35 @@ class ReferenceLibrary:
         log["corpus_chunks"] = total
         counts = set(relevance.query_tokens(text[:24000]))
         names = relevance.name_weights(self.eligible)
+        priority_ids = sorted(k for k, v in self.eligible.items() if relevance.priority_reference(v, text))
+        log["priority_references"] = [{"file_id": k, "title": self.eligible[k].get("title"),
+                                      "searched": False, "search_reason": "NOT_EXECUTED" if i < 12 else "SEARCH_LIMIT"}
+                                     for i, k in enumerate(priority_ids)]
         with self.connect() as db:
             deadline = time.monotonic() + 5
             db.set_progress_handler(lambda: int(time.monotonic() > deadline), 10000)
             frequency = {}
-            for term in counts:
-                row = db.execute("SELECT doc FROM chunk_terms WHERE term=?", (term,)).fetchone()
-                if row:
-                    frequency[term] = row[0]
-            profile = relevance.query_profile(text[:24000], frequency, total)
-            present = [t for t in profile if t in frequency]
+            terms = sorted(counts)
+            for offset in range(0, len(terms), 500):
+                batch = terms[offset:offset + 500]
+                frequency.update(db.execute("SELECT term, doc FROM chunk_terms WHERE term IN ("
+                                            + ",".join("?" for _ in batch) + ")", batch).fetchall())
+            profiles = relevance.query_profiles(text[:24000], frequency, total)
+            profile = profiles[0]
+            # Round-robin window terms keeps one issue from consuming the query budget.
+            present = list(dict.fromkeys(t for rank in range(relevance.QUERY_TERMS)
+                for p in profiles for t in list(p)[rank:rank + 1] if t in frequency))[:160]
+            log["query_windows"] = len(profiles) - 1
+            log["topic_window_chars"] = relevance.TOPIC_WINDOW
+            log["topic_step_chars"] = relevance.TOPIC_STEP
             log["query_terms"] = [{"term": t, "weight": round(profile[t], 3), "chunks": frequency.get(t, 0)}
                                   for t in list(profile)[:20] if t in frequency]
             if not present:
                 if pending:
                     log["decision"] = "INCOMPLETE_COVERAGE"
                 log["reason"] = "NO_SHARED_KEY_TERMS"
+                for item in log["priority_references"]:
+                    item["search_reason"] = "NO_SHARED_KEY_TERMS"
                 log["ms"] = round((time.monotonic() - mark) * 1000)
                 return log
             db.execute("CREATE TEMP TABLE eligible (id TEXT PRIMARY KEY, revision TEXT)")
@@ -445,19 +459,28 @@ class ReferenceLibrary:
                 "JOIN eligible e ON e.id=chunks.file_id AND e.revision=chunks.revision "
                 "WHERE chunks MATCH ? ORDER BY bm25(chunks) LIMIT ?",
                 (" OR ".join('"' + term + '"' for term in present), relevance.CANDIDATE_CHUNKS)).fetchall()
+            # A large, relevant casebook must not disappear behind the global top-chunk limit.
+            for index, file_id in enumerate(priority_ids[:12]):
+                rows.extend(db.execute("SELECT file_id, page, start, text, terms FROM chunks "
+                    "WHERE chunks MATCH ? AND file_id=? AND revision=? ORDER BY bm25(chunks) LIMIT 40",
+                    (" OR ".join('"' + term + '"' for term in present), file_id,
+                     self.eligible[file_id]["revision"])).fetchall())
+                log["priority_references"][index].update(searched=True, search_reason="SEARCH_COMPLETED")
         # A short query cannot share more terms than it has.
         required = min(relevance.MIN_MATCHED_TERMS, len(profile))
         log["required_shared_terms"] = required
         files = {}
-        for file_id, page, start, excerpt, terms in rows:
-            score, matched = relevance.coverage(profile, set(terms.split()))
+        for file_id, page, start, excerpt, terms in dict.fromkeys(rows):
+            chunk_terms = set(terms.split())
+            scores = [(*relevance.coverage(p, chunk_terms), index) for index, p in enumerate(profiles)]
+            score, matched, window = max(scores, key=lambda s: (len(s[1]) >= required, s[0], len(s[1])))
             entry = files.setdefault(file_id, {"chunks": []})
-            entry["chunks"].append((score, len(matched), int(page), int(start), excerpt))
+            entry["chunks"].append((score, len(matched), int(page), int(start), excerpt, window))
         candidates = []
         for file_id, entry in files.items():
             source = self.eligible[file_id]
             name_score, name_hits = relevance.name_coverage(names.get(file_id, {}), counts)
-            best = max(entry["chunks"], key=lambda c: (c[0], c[1]))
+            best = max(entry["chunks"], key=lambda c: (c[1] >= required and c[0] >= relevance.MIN_CHUNK_COVERAGE, c[0], c[1]))
             metadata_bonus = min(0.05, (source.get("metadata_score") or 0) / 1000)
             file_score = best[0] + relevance.META_WEIGHT * name_score + metadata_bonus
             reasons = []
@@ -471,6 +494,7 @@ class ReferenceLibrary:
                                "text_coverage": round(best[0], 3), "shared_terms": best[1],
                                "name_coverage": round(name_score, 3), "name_terms": name_hits[:8],
                                "metadata_bonus": round(metadata_bonus, 3),
+                               "matched_query_window": best[5],
                                "file_score": round(file_score, 3), "selected": not reasons, "rejected_because": reasons,
                                "_name": name_score, "_chunks": entry["chunks"]})
         candidates.sort(key=lambda c: (-c["file_score"], c["file_id"]))
@@ -483,8 +507,14 @@ class ReferenceLibrary:
             excerpts.extend((c[0] + relevance.META_WEIGHT * candidate["_name"] + candidate["metadata_bonus"],
                              candidate["file_id"], c) for c in usable)
         excerpts.sort(key=lambda e: (-e[0], e[1], e[2][2], e[2][3]))
+        reserved, reserved_ids = [], set()
+        for excerpt in excerpts:
+            if excerpt[1] in priority_ids[:12] and excerpt[1] not in reserved_ids:
+                reserved.append(excerpt)
+                reserved_ids.add(excerpt[1])
+        excerpts = reserved + [e for e in excerpts if e not in reserved]
         result, seen = [], set()
-        for score, file_id, (coverage, shared, page, start, excerpt) in excerpts:
+        for score, file_id, (coverage, shared, page, start, excerpt, window) in excerpts:
             # Identical copies cannot occupy every retrieval slot.
             digest = hashlib.sha256(excerpt.encode()).hexdigest()
             if digest in seen:
@@ -492,14 +522,24 @@ class ReferenceLibrary:
             seen.add(digest)
             result.append({**self.eligible[file_id], "source_id": "R" + str(len(result) + 1), "page": page,
                            "start": start, "text": excerpt, "relevance": round(score, 3),
-                           "text_coverage": round(coverage, 3), "shared_terms": shared})
+                           "text_coverage": round(coverage, 3), "shared_terms": shared,
+                           "matched_query_window": window})
             if len(result) >= limit:
                 break
         for candidate in candidates:
             candidate.pop("_name"), candidate.pop("_chunks")
         log["candidates"] = candidates
         log["candidates_total"] = len(candidates)
-        log["files_selected"] = len(chosen)
+        log["files_qualified"] = len(chosen)
+        selected_ids = {s["file_id"] for s in result}
+        log["files_selected"] = len(selected_ids)
+        for candidate in candidates:
+            candidate["qualified"] = candidate["selected"]
+            candidate["selected"] = candidate["file_id"] in selected_ids
+            if candidate["qualified"] and not candidate["selected"]:
+                candidate["rejected_because"] = ["EXCERPT_BUDGET_OR_DUPLICATE"]
+        for item in log["priority_references"]:
+            item["selected"] = item["file_id"] in selected_ids
         log["sources"] = result
         log["decision"] = "USED" if result else "INCOMPLETE_COVERAGE" if pending else "NOT_USED"
         log["reason"] = "RELEVANT_REFERENCE_FOUND" if result else (

@@ -19,6 +19,20 @@ REVIEW_LABEL = "타당성 검토 결과"
 AI_LABEL = "AI 교차검증 결과 참고"
 
 
+def format_context_review(review):
+    if not review:
+        return ""
+    lines = ["인용 취지·맥락 검토 (AI 참고 의견)", str(review.get("reason") or "판단 유보")]
+    for opinion in review.get("opinions") or []:
+        stage = {"primary": "1차 검토", "critic": "독립 교차검토", "grounder": "근거 대조"}.get(opinion.get("stage"), "모델 의견")
+        lines.append(f"{stage}: {opinion.get('rationale', '')}")
+        lines.extend(f"공식 원문 근거: {q}" for q in opinion.get("evidence_quotes") or [])
+    if review.get("source_truncated"):
+        lines.append("공식 원문 일부 범위에 대한 의견이며 전문 전체 검토가 아닙니다.")
+    lines.append("문구 일치, 법리 취지, 구체적 사안 적용은 별개이며 작성 주체 판정에는 사용하지 않습니다.")
+    return "\n".join(lines)
+
+
 def provider_name(provider: Any) -> str:
     key = str(provider or "").strip()
     return PROVIDER_NAMES.get(key.lower(), key or "모델")

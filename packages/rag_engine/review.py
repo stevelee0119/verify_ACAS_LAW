@@ -158,15 +158,20 @@ def report_lines(run_result):
     library = (getattr(run_result, "run_manifest", {}) or {}).get("reference_library", {})
     if not library or library.get("status") == "DISABLED":
         return []
-    lines = [f"Drive 참고자료: {library.get('status')} / 조회 {library.get('checked_at')} / "
+    lines = [f"주요 참고문헌 검토 결과(RAG): {library.get('status')} / 조회 {library.get('checked_at')} / "
              f"색인 {library.get('files_indexed', 0)}건 / 목록 {library.get('files_seen', 0)}건",
+             "색인은 검색 가능한 텍스트 범위이며 책 전체 AI 검토가 아니다. 실제 대조는 선택된 발췌문에 한정된다.",
              "검색 기반 AI 참고 의견이며 공식 출처 확인, AI 작성 여부, 위조 여부 판정을 대체하지 않는다."]
-    for issue in library.get("issues", [])[:20]:
-        lines.append(f"미처리 자료: {issue.get('name', issue.get('file_id', 'Drive'))} / {issue.get('reason')}")
+    recorded = {item.get("file_id") for item in library.get("inventory", []) if item.get("file_id")}
+    for issue in [i for i in library.get("issues", []) if not i.get("file_id") or i["file_id"] not in recorded][:20]:
+        lines.append(f"공통·기타 제한: {issue.get('name', issue.get('file_id', 'Drive'))} / {issue.get('reason')}")
     for item in library.get("inventory", [])[:100]:
-        if item.get("status") in ("SELECTED_PENDING", "UNAVAILABLE", "PARSE_FAILED", "INDEXED_PARTIAL"):
-            lines.append(f"미검토·부분처리: {item.get('folder_path', '')}/{item.get('name')} / "
-                         f"{item.get('status')} / {item.get('reason')} (자동 백그라운드 작업 아님)")
+        reasons = list(dict.fromkeys(filter(None, [item.get("reason"), *[
+            i.get("reason") for i in library.get("issues", []) if i.get("file_id") == item.get("file_id")]])))
+        coverage = f" / 텍스트 색인 {item.get('read_pages', 0)}/{item['pages']}쪽" if item.get("pages") else ""
+        missing = f" / 텍스트 미추출 쪽 {item['no_text_pages']}" if item.get("no_text_pages") else ""
+        lines.append(f"자료별 처리: {item.get('folder_path', '')}/{item.get('name')} / "
+                     f"{item.get('status')} / {' · '.join(reasons)}{coverage}{missing}")
     if len(library.get("inventory", [])) > 100:
         lines.append("자료별 처리 기록은 앞 100건만 표시했다. 전체 기록은 결과 JSON에 보존되어 있다.")
     for group in library.get("duplicates", [])[:20]:

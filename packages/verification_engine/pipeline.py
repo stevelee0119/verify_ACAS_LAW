@@ -821,6 +821,7 @@ class VerificationPipeline:
                       router=self.router,
                       external_ai_policy=context.external_ai_policy,
                       mask=mask_for_models,
+                      semantic_reviews=result.engine_data.get("semantic_reviews", []),
                   )
               )
               result.findings.extend(arg_validity.findings)
@@ -1140,7 +1141,10 @@ class VerificationPipeline:
                 source_text = pii.mask_text(source_text).masked_text
                 document_text = pii.mask_text(document_text).masked_text
             outcome = asyncio.run(self.router.cascade(
-                question="인용된 판결의 취지와 문서의 주장이 부합하는지, 사실관계 차이와 적용상 한계를 검토하라. 반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라.",
+                question=("인용된 판결과 문서 주장을 대조하라. rationale에서 ① 띄어쓰기·어절 등 문구의 차이 "
+                          "② 핵심 법리와 취지·맥락의 동일 여부 ③ 사실관계·적용 요건의 차이와 확인 한계를 구분하라. "
+                          "표현 차이만으로 취지 왜곡이라고 판단하지 말고, 부정·예외·적용 조건을 확인하라. "
+                          "반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라."),
                 evidence={"official": {"case_number": official.get("case_number"), "full_text": source_text},
                           "document": document_text},
                 profile=context.profile, policy=context.external_ai_policy))

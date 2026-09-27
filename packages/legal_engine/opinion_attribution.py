@@ -59,7 +59,8 @@ def _bigrams(text: str) -> set:
 
 def _claim_core(claim: str) -> str:
     """서면 문장에서 '…라고 판시하였다' 같은 전달 표현을 뗀 주장 부분."""
-    return REPORTING_TAIL_RE.sub("", (claim or "").strip()).strip()
+    core = re.sub(r"\s*\(\s*(?:(?:등\s*)?참조|등)?\s*\)\s*\.?\s*$", "", (claim or "").strip())
+    return REPORTING_TAIL_RE.sub("", core).strip()
 
 
 def _containment(claim: str, section: str) -> float:
@@ -153,7 +154,8 @@ def _overlap(a: str, b: str) -> float:
 
 
 def _clause_negated(text: str) -> bool:
-    compact = re.sub(r"(?:지|는지|인지|한지|할지)$", "", _compact(text))
+    # Keep the predicate intact: trimming '는지' moves '없는 때' into the final window.
+    compact = re.sub(r"지$", "", _compact(_claim_core(text)))
     return bool(FINAL_NEGATION_RE.search(compact[-FINAL_WINDOW:]))
 
 

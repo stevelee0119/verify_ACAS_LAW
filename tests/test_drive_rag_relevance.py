@@ -397,7 +397,10 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
     project = {"id": "p1", "name": "합성 사건", "can_delete": True, "document_count": 1,
                "external_ai_policy": "MASKED", "scope_revision": 0}
     copy_entry = {"file_id": "reference900001", "name": "행정법 표준판례.pdf의 사본", "folder_path": "판례", "size": 2048}
-    library = {"status": "READY", "files_indexed": 2, "files_seen": 3, "checked_at": "2026-09-26T00:00:00Z", "issues": [],
+    library = {"status": "PARTIAL", "files_indexed": 2, "files_seen": 3, "checked_at": "2026-09-26T00:00:00Z",
+               "issues": [{"file_id": "partial00001", "name": "부분색인.pdf", "reason": "REFERENCE_PARTIALLY_READ"}],
+               "inventory": [{"file_id": "partial00001", "name": "부분색인.pdf", "status": "INDEXED_PARTIAL",
+                              "reason": "REFERENCE_PARTIALLY_READ", "pages": 30, "read_pages": 29, "no_text_pages": [2]}],
                "health": {"credential_mode": "api_key", "listing_succeeded": True, "http_calls": 9, "http_errors": 0,
                           "sync_ms": 2300},
                "duplicates": [{"keep": {"file_id": "reference000001", "name": "행정법 표준판례.pdf", "folder_path": "판례"},
@@ -440,6 +443,10 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
             page.wait_for_function("state.result && state.result.documents && state.result.documents.length === 1")
             page.evaluate("switchTab('ai-verification')")
             section = page.locator(".reference-section")
+            expect(section.locator("h3")).to_have_text("주요 참고문헌 검토 결과(RAG)")
+            expect(section.locator("p", has_text="부분색인.pdf")).to_have_count(1)
+            expect(section).to_contain_text("텍스트 색인 29/30쪽")
+            expect(section).to_contain_text("텍스트 미추출 쪽: 2")
             expect(section).to_contain_text("인증 api_key · 목록 조회 성공 · API 호출 9건(오류 0건)")
             expect(section).to_contain_text("중복 사본 1묶음")
             link = section.locator("a", has_text="삭제 후보: 판례/행정법 표준판례.pdf의 사본")

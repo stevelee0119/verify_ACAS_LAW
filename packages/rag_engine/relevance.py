@@ -25,6 +25,8 @@ META_WEIGHT = 0.5           # folder/file-name coverage bonus, applied only to t
 MIN_FILE_SCORE = 0.25       # best chunk coverage + META_WEIGHT x name coverage
 PER_FILE_EXCERPTS = 3
 CANDIDATE_CHUNKS = 300
+TOPIC_WINDOW = 800
+TOPIC_STEP = 600
 
 COPY_MARK = re.compile(r"의\s*사본|\s*-\s*복사본|복사본|\s*\(\d{1,3}\)|^\s*사본\s*-\s*|^\s*copy of\s+|\s+-\s*copy\b",
                        re.IGNORECASE)
@@ -80,17 +82,42 @@ def query_profile(text, document_frequency, total_chunks):
     return dict(top)
 
 
+def query_profiles(text, document_frequency, total_chunks):
+    """Multi-issue pleadings need local queries; unrelated terms retain their weight in every window."""
+    profiles = [query_profile(text, document_frequency, total_chunks)]
+    if len(text) > 1200:
+        for start in range(0, len(text), TOPIC_STEP):
+            part = text[start:start + TOPIC_WINDOW]
+            if len(part) < 160:
+                continue
+            profile = query_profile(part, document_frequency, total_chunks)
+            if len(profile) >= MIN_MATCHED_TERMS:
+                profiles.append(profile)
+    return profiles
+
+
 QUERY_NOISE = frozenset("으로 에서 관한 관하여 대하여 따라 위한 위한 것은 되는 하는 있습니다 합니다 원고 피고 제호 호증".split())
+QUERY_NOISE_TOKENS = frozenset(tokens(" ".join(QUERY_NOISE)))
+FORMAL_ENDING = re.compile(r"(?:하였|되었|이었|였|있|없|않|합|됩|입|습)?(?:습니다|습니까|니다|니까)(?=\s|[.,!?;:)]|$)")
 
 
 def query_text(text):
+    text = FORMAL_ENDING.sub("", text)
     text = re.sub(r"(?:갑|을|병|정)\s*제?\s*\d+(?:\s*[,~]\s*\d+)*\s*호증(?:의\s*\d+)?", " ", text)
     text = re.sub(r"\d[\d,.]*\s*(?:원|년|월|일|%)(?:정)?", " ", text)
     return text
 
 
 def query_tokens(text):
-    return [term for term in tokens(query_text(text)) if term not in QUERY_NOISE and not term.isdigit()]
+    return [term for term in tokens(query_text(text)) if term not in QUERY_NOISE_TOKENS and not term.isdigit()]
+
+
+def priority_reference(item, text):
+    """Search subject-matching standard casebooks independently, without waiving body relevance."""
+    title = re.sub(r"\s+", "", item.get("title") or item.get("name") or "")
+    subjects = re.findall(r"([가-힣]{1,20}법)표준판례", title)
+    compact = re.sub(r"\s+", "", text)
+    return any(subject in compact for subject in subjects)
 
 
 def metadata_priority(item, text):

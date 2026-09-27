@@ -437,7 +437,7 @@ function authorshipVerdict(verdict) {
   return {
     AI_FULL_GENERATION_LIKELY: ["AI 전체 작성 가능성 높음", "badge CRITICAL"],
     AI_PARTIAL_GENERATION: ["일부 AI 작성 가능성", "badge HIGH"],
-    HUMAN_AUTHORED_LIKELY: ["인간(변호사/당사자) 작성 유력", "badge VERIFIED"]
+    HUMAN_AUTHORED_LIKELY: ["판단 보류 · 사람 작성 근거 미확인", "badge INFO"]
   }[verdict] || ["판단 보류", "badge INFO"];
 }
 
@@ -455,6 +455,9 @@ function modelOpinions(opinions, failures, failureModels = {}) {
     head.append(node("strong", modelTitle(o.provider, o.model)), node("span", verdictLabel, badgeClass),
                 node("small", `점수 ${Math.round((o.score || 0) * 100)}%${o.model ? ` · ${o.model}` : ""}`, "muted"));
     block.append(head);
+    if (o.admissibility_note || o.verdict === "HUMAN_AUTHORED_LIKELY") {
+      block.append(node("p", o.admissibility_note || "문체와 AI 흔적 부재만으로 사람 작성이라고 확인할 수 없습니다. 아래는 모델의 원래 설명입니다.", "muted"));
+    }
     const list = node("ul", null, "reason-list");
     for (const r of o.reasons || []) list.append(node("li", r));
     if (!(o.reasons || []).length) list.append(node("li", "설명 없음", "muted"));
@@ -538,16 +541,17 @@ function referenceSection(docs) {
   if (library.status === "DISABLED") {
     if (!library.health) return null;
     const keys = library.health.credentials_configured || {};
-    section.append(node("h3", "Drive 참고자료"), node("p", `비활성 · 폴더 설정 없음(${library.health.disabled_reason || "설정 없음"}) · 인증 설정 ${keys.api_key ? "API 키 있음" : keys.service_account_file ? "서비스 계정 있음" : "없음"}`, "muted"));
+    section.append(node("h3", "주요 참고문헌 검토 결과(RAG)"), node("p", `비활성 · 폴더 설정 없음(${library.health.disabled_reason || "설정 없음"}) · 인증 설정 ${keys.api_key ? "API 키 있음" : keys.service_account_file ? "서비스 계정 있음" : "없음"}`, "muted"));
     return section;
   }
-  const statuses = {READY: "동기화 완료", PARTIAL: "일부 자료 미처리", UNAVAILABLE: "연결·조회 실패",
+  const statuses = {READY: "동기화 완료", PARTIAL: "부분 처리·제한 있음", UNAVAILABLE: "연결·조회 실패",
     ADVISORY_REVIEWED: "근거 인용 대조 · AI 참고 의견", NO_MATCH: "관련 근거 미검색",
     REVIEWED_NO_ADVICE: "AI 대조 응답 완료 · 추가 의견 없음(적법성 확인 아님)",
     NOT_RELEVANT: "관련 자료 없음 · Drive 자료 미활용",
     INCOMPLETE_COVERAGE: "관련 자료 검토 범위 미완결",
     RETRIEVED_ONLY: "검색 완료 · AI 대조 미실행", UNVERIFIED: "대조 미완료", SKIPPED: "대조 제외"};
-  section.append(node("h3", "Drive 참고자료"), node("p", `${statuses[library.status] || library.status} · 색인 ${library.files_indexed || 0}/${library.files_seen || 0}건 · 조회 ${library.checked_at || "미확인"}`));
+  section.append(node("h3", "주요 참고문헌 검토 결과(RAG)"), node("p", `${statuses[library.status] || library.status} · 색인 ${library.files_indexed || 0}/${library.files_seen || 0}건 · 조회 ${library.checked_at || "미확인"}`));
+  section.append(node("p", "색인은 검색 가능한 텍스트 범위이며 책 전체에 대한 AI 검토를 뜻하지 않습니다. 실제 대조에 사용한 발췌문은 문서별 결과에 표시합니다.", "muted"));
   const health = library.health;
   if (health) {
     section.append(node("p", `연결 점검 · 인증 ${health.credential_mode || "없음"} · 목록 조회 ${health.listing_succeeded ? "성공" : "실패"} · API 호출 ${health.http_calls}건(오류 ${health.http_errors}건) · 동기화 ${Math.round((health.sync_ms || 0) / 100) / 10}초`, "muted"));
@@ -570,17 +574,23 @@ function referenceSection(docs) {
     }
     section.append(details);
   }
-  if (library.issues?.length) {
+  const recordedIds = new Set((library.inventory || []).map(item => item.file_id).filter(Boolean));
+  const generalIssues = (library.issues || []).filter(issue => !issue.file_id || !recordedIds.has(issue.file_id));
+  if (generalIssues.length) {
     const details = node("details");
-    details.append(node("summary", `미처리·제한 ${library.issues.length}건`));
-    for (const issue of library.issues) details.append(node("p", `${issue.name || issue.file_id || "Drive"}: ${issue.reason}`));
+    details.append(node("summary", `공통·기타 제한 ${generalIssues.length}건`));
+    for (const issue of generalIssues) details.append(node("p", `${issue.name || issue.file_id || "Drive"}: ${issue.reason}`));
     section.append(details);
   }
   if (library.inventory?.length) {
     const details = node("details");
     details.append(node("summary", `자료별 처리 기록 ${library.inventory.length}건`));
     for (const item of library.inventory.slice(0, 100)) {
-      details.append(node("p", `${[item.folder_path, item.name].filter(Boolean).join("/")} · ${item.status} · ${item.reason}`, "muted"));
+      const reasons = [...new Set([item.reason, ...(library.issues || []).filter(i => i.file_id === item.file_id).map(i => i.reason)].filter(Boolean))];
+      const coverage = item.pages ? ` · 텍스트 색인 ${item.read_pages || 0}/${item.pages}쪽` : "";
+      const missing = item.no_text_pages?.length ? ` · 텍스트 미추출 쪽: ${item.no_text_pages.join(", ")}` : "";
+      const excluded = item.excluded_pages?.length ? ` · 보안 제외 쪽: ${item.excluded_pages.join(", ")}` : "";
+      details.append(node("p", `${[item.folder_path, item.name].filter(Boolean).join("/")} · ${item.status} · ${reasons.join(" · ")}${coverage}${missing}${excluded}${item.coverage_note ? " · " + item.coverage_note : ""}`, "muted"));
     }
     if (library.inventory.length > 100) details.append(node("p", "전체 자료별 처리 기록은 결과 JSON에 보존되어 있습니다.", "muted"));
     section.append(details);
@@ -600,12 +610,16 @@ function referenceSection(docs) {
     if (selection) {
       if (selection.coverage === "INCOMPLETE_COVERAGE") {
         details.append(node("p", "관련 후보 자료가 미처리 또는 일부만 읽힌 상태입니다. 관련 자료가 없다는 뜻이 아닙니다.", "warning-text"));
-        for (const item of (selection.unreviewed_candidates || []).slice(0, 50)) {
+        details.append(node("p", `미처리 후보 ${(selection.unreviewed_candidates || []).length}건의 제한 사유는 위 자료별 처리 기록을 참조합니다.`, "muted"));
+        for (const item of (selection.unreviewed_candidates || []).filter(i => !recordedIds.has(i.file_id)).slice(0, 50)) {
           details.append(node("p", `${[item.folder_path, item.name].filter(Boolean).join("/")} · ${item.status} · ${item.reason}`, "muted"));
         }
         details.append(node("p", "미처리 자료는 다음 분석에서 재확인합니다. 자동 백그라운드 작업은 예약되지 않았습니다.", "muted"));
       }
       details.append(node("p", `자료 선정: ${selection.decision === "USED" ? "관련 자료 사용" : "Drive 자료 미활용"} · 후보 ${selection.candidates_total || 0}개 중 ${selection.files_selected || 0}개 선정 (${selection.reason})`, "muted"));
+      for (const item of selection.priority_references || []) {
+        details.append(node("p", `분야 표준판례집: ${item.title} · ${item.searched ? "개별 본문 검색 완료" : "개별 검색 미실행: " + (item.search_reason || "기록 없음")} · ${item.selected ? "발췌 사용" : "발췌 미사용(관련성·발췌 한도 확인 필요)"}`, "muted"));
+      }
       for (const candidate of (selection.candidates || []).slice(0, 5)) {
         details.append(node("p", `${candidate.selected ? "선정" : "제외"} · ${[candidate.folder_path, candidate.title].filter(Boolean).join("/")} · 본문 ${candidate.text_coverage} · 폴더·파일명 ${candidate.name_coverage} · 점수 ${candidate.file_score}`, "muted"));
       }
@@ -1264,6 +1278,8 @@ function renderAIVerification() {
       const dist = Object.entries(res.signals?.verdict_distribution || {}).filter(([, n]) => n);
       if (dist.length) item.append(node("p", `모델별 판단 분포: ${dist.map(([v, n]) => `${authorshipVerdict(v)[0]} ${n}`).join(", ")}`, "muted"));
       if (res.signals?.score_definition) item.append(node("p", `추정치: ${res.signals.score_definition} 신뢰도: ${res.signals.confidence_definition}`, "muted metric-definition"));
+      const coverage = res.signals?.coverage;
+      if (coverage) item.append(node("p", `작성 주체 검토 범위: ${coverage.inspected_chars || 0}/${coverage.total_chars || 0}자 · ${coverage.is_full_coverage ? "대상 본문 전체" : "일부 표본 또는 미실행"}. 직접 인용·문서 속 지시문은 작성 주체 근거에서 제외합니다.`, "muted"));
       const opinions = res.signals?.llm_opinions || res.model_opinions || res.opinions || [];
       const failures = Object.entries(res.signals?.llm_failures || {});
       // 모델별 설명은 모델 블록에서 모두 보이므로 요약에서는 뺀다. 예전 결과처럼
@@ -1312,6 +1328,22 @@ function renderAIVerification() {
       node("span", r.validity_verdict || "확인 필요", `${verdictCls} validity-verdict`),
       node("p", r.ai_generation_basis || "공식 소스 미존재", "basis-text")
     );
+    if (r.context_review?.reason) {
+      const review = r.context_review;
+      const context = node("div", null, "citation-context-review");
+      context.append(node("strong", "인용 취지·맥락 검토 (AI 참고 의견)"), node("p", review.reason || "판단 유보"));
+      for (const opinion of review.opinions || []) {
+        const stage = {primary: "1차 검토", critic: "독립 교차검토", grounder: "근거 대조"}[opinion.stage] || opinion.stage;
+        context.append(node("p", `${stage}: ${opinion.rationale}`));
+        const evidence = node("details");
+        evidence.append(node("summary", "공식 원문 근거"));
+        for (const quote of opinion.evidence_quotes || []) evidence.append(node("blockquote", quote));
+        context.append(evidence);
+      }
+      if (review.source_truncated) context.append(node("p", "공식 원문 일부 범위에 대한 의견입니다.", "muted"));
+      context.append(node("small", "문구 일치, 법리 취지, 구체적 사안 적용은 별개이며 작성 주체 판정에는 사용하지 않습니다.", "muted"));
+      tdBasis.append(context);
+    }
     const tdReason = node("td");
     tdReason.append(
       reasoningBlock(r),

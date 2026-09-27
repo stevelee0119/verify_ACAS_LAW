@@ -29,6 +29,39 @@ from packages.llm_router.providers import LLMRequest
 ENGINE_NAME = "legal_engine.argument_validity"
 
 
+def _context_review(verdict, reviews, mask=None):
+    """Reuse only the grounded review of this citation and official record, never infer from status alone."""
+    result = {"status": "UNVERIFIED", "advisory_only": True, "opinions": [],
+              "reason": "공식 원문에 근거한 의미·맥락 검토가 완료되지 않아 취지 동일 여부는 판단 유보합니다."}
+    source = str((verdict.get("official_record") or {}).get("full_text") or "")
+    if mask and source:
+        source = mask(source)
+    for review in reviews:
+        if (review.get("citation_id") != verdict.get("citation_id")
+                or review.get("review_id") != verdict.get("review_id")):
+            continue
+        result["reason"] = review.get("reason") or result["reason"]
+        quotes = review.get("evidence_quotes") or []
+        if not (source and review.get("model_executed") and review.get("source_quotes_validated")
+                and quotes and all(isinstance(q, str) and q.strip() and q in source for q in quotes)):
+            result["reason"] = "공식 원문과 근거 인용을 확인하지 못해 취지 동일 여부는 판단 유보합니다."
+            continue
+        opinions = []
+        for stage in review.get("stages") or []:
+            opinion = stage.get("verdict") or {}
+            evidence = opinion.get("evidence_quotes") or []
+            if (stage.get("used") and opinion.get("rationale") and evidence
+                    and all(isinstance(q, str) and q.strip() and q in source for q in evidence)):
+                opinions.append({"stage": stage.get("name", "model"), "status": opinion.get("status"),
+                                 "rationale": opinion["rationale"], "evidence_quotes": evidence})
+        if opinions:
+            result.update(status="ADVISORY_REVIEWED", opinions=opinions,
+                          source_record_ids=review.get("source_record_ids", []),
+                          source_truncated=bool(review.get("source_truncated")), source_quotes_validated=True)
+        break
+    return result
+
+
 def _fabrication_row(c: Any) -> "HallucinationTableRow":
     """사건번호가 성립할 수 없는 경우. 여기서는 단정해도 된다."""
     return HallucinationTableRow(
@@ -104,11 +137,15 @@ class HallucinationTableRow:
     # 표시용: 모델 의견을 붙이기 전의 검토 문장과 교차검증 요약. 칸 안을 항목별로 줄 나눠 그리는 데 쓴다.
     review_text: str = ""
     ai_label: str = ""
+    citation_id: str = ""
+    context_review: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         review = self.review_text or self.legal_reasoning
         opinions = self.ai_opinions if self.ai_label else []
         return {
+            "citation_id": self.citation_id,
+            "context_review": self.context_review,
             "ai_opinions": self.ai_opinions,
             "ai_agreement": self.ai_agreement,
             # 검토 결과·AI 교차검증 요약·모델별 의견을 나눈 구조(웹 화면이 항목별로 그린다)
@@ -158,6 +195,7 @@ async def verify_argument_validity(
     router: Optional[LLMRouter] = None,
     external_ai_policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
     mask: Optional[Callable[[str], str]] = None,
+    semantic_reviews: Optional[List[Dict[str, Any]]] = None,
 ) -> ArgumentValidityResult:
     """허위 판례 인용 및 법률 주장에 대한 타당성 종합 검토를 수행하고 대조표를 생성한다."""
     result = ArgumentValidityResult()
@@ -207,6 +245,8 @@ async def verify_argument_validity(
         if basis == "FABRICATION_SUSPECTED":
             row = _fabrication_row(c)
             row.item_id = index
+            row.citation_id = c.citation_id
+            row.context_review = _context_review(item["verdict"], semantic_reviews or [], mask)
             result.rows.append(row)
             result.findings.append(_fabrication_finding(c, doc))
             continue
@@ -216,7 +256,7 @@ async def verify_argument_validity(
             location=f"{c.page or 1}면",
             claim_text=c.context[:150] if c.context else f"{c.raw_text}에 기반한 법률적 주장",
             cited_authority=c.raw_text,
-            authority_exists=False,
+            authority_exists=bool(item["verdict"].get("official_record")),
             basis=item.get("basis", "UNCONFIRMED"),
             ai_generation_basis=(
                 ("공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
@@ -246,6 +286,8 @@ async def verify_argument_validity(
                  "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음.")),
         )
         row.item_id = index
+        row.citation_id = c.citation_id
+        row.context_review = _context_review(item["verdict"], semantic_reviews or [], mask)
         result.rows.append(row)
 
         feats = {"deterministic_rule": True, "unconfirmed_citation": c.raw_text, "citation_id": c.citation_id,

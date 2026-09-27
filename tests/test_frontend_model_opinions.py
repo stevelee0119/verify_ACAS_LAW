@@ -35,7 +35,7 @@ SINGLE = {"verdict": "UNCERTAIN", "score": 0.3, "used_llm": True, "reasons": ["[
 
 
 @pytest.mark.parametrize("width,height", [(1440, 1400), (390, 2400)])
-def test_each_model_verdict_and_explanation_is_shown(width, height):
+def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
     static = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
@@ -49,7 +49,10 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
          "engine_data": {"adversarial": {"scanned_layers": ["visible_text", "metadata"], "adversarial_risk": "NONE"}},
          "findings": [], "ai_hallucination_table": [
              {"location": "2면", "cited_authority": "대법원 2099다1 판결", "basis": "FABRICATION_SUSPECTED",
-              "claim_text": "c", "ai_generation_basis": "b", "legal_reasoning": "r", "validity_verdict": "근거 결여"},
+              "claim_text": "c", "ai_generation_basis": "b", "legal_reasoning": "r", "validity_verdict": "근거 결여",
+              "context_review": {"reason": "취지는 부합하나 사안 적용은 확인 필요", "source_truncated": True,
+                  "opinions": [{"stage": "primary", "rationale": "표현 차이만으로 법리 왜곡은 아님",
+                                "evidence_quotes": ["<em>공식 원문 근거</em>"]}]}},
              {"location": "3면", "cited_authority": "대법원 2011모1839 결정", "basis": "UNCONFIRMED",
               "claim_text": "c", "ai_generation_basis": "b", "legal_reasoning": "r", "validity_verdict": "공식 DB 미확인"}]},
         {"filename": "second.png", "ai_detector_result": SINGLE, "quarantined": True,
@@ -124,6 +127,12 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
             basis = page.locator("#aiVerificationRows tr").first.locator("td").nth(2)
             expect(basis.locator(".validity-verdict")).to_have_text("근거 결여")
             expect(basis).to_contain_text("b")
+            expect(basis).to_contain_text("인용 취지·맥락 검토 (AI 참고 의견)")
+            expect(basis).to_contain_text("취지는 부합하나 사안 적용은 확인 필요")
+            expect(basis).to_contain_text("공식 원문 일부 범위")
+            basis.locator("details").evaluate("e => e.open = true")
+            expect(basis.locator("blockquote")).to_have_text("<em>공식 원문 근거</em>")
+            expect(basis.locator("blockquote em")).to_have_count(0)
             widths = page.locator(".ai-table thead th").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
             assert widths[3] == max(widths), widths
             if width > 900:
@@ -136,6 +145,15 @@ def test_each_model_verdict_and_explanation_is_shown(width, height):
                 tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
                 assert tops == sorted(tops) and len(set(tops)) == 3, "좁은 화면은 세로로 쌓는다"
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            basis.scroll_into_view_if_needed()
+            page.screenshot(path=str(tmp_path / f"citation-context-{width}.png"), full_page=True)
+            page.evaluate("""() => {
+                state.result.documents[0].ai_detector_result.signals.llm_opinions = [{provider:'gemini',
+                    verdict:'HUMAN_AUTHORED_LIKELY', score:0.01, reasons:['전문적인 문체']}];
+                renderAIVerification();
+            }""")
+            expect(cards.locator(".model-opinion").first).to_contain_text("사람 작성 근거 미확인")
+            expect(cards.locator(".model-opinion").first).to_contain_text("사람 작성이라고 확인할 수 없습니다")
             page.close()
         finally:
             browser.close()

@@ -589,7 +589,14 @@ def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_ca
     result["documents"] = [{**result["documents"][0], "ai_hallucination_table": [{
         "location": "3쪽", "claim_text": "처분은 위법하다", "cited_authority": "대법원 2099. 1. 1. 선고 2099두1 판결",
         "ai_generation_basis": "공식 DB에서 확인되지 않음", "legal_reasoning": "법리 검토 본문",
-        "recommended_counteraction": "원문 제출 요구", "validity_verdict": "근거 결여"}]}]
+        "recommended_counteraction": "원문 제출 요구", "validity_verdict": "근거 결여",
+        "context_review": {"reason": "법리 취지는 일치하나 사안 적용은 확인 필요", "source_truncated": True,
+                           "opinions": [{"stage": "primary", "rationale": "표현과 맥락을 구분한다. " * 60,
+                                         "evidence_quotes": ["공식 원문에 있는 검증용 문구"]}]}}]}]
+    result["run_manifest"] = {"reference_library": {"status": "PARTIAL", "files_seen": 1, "files_indexed": 1,
+        "issues": [{"file_id": "ref1", "name": "검증용문헌.pdf", "reason": "REFERENCE_PARTIALLY_READ"}],
+        "inventory": [{"file_id": "ref1", "name": "검증용문헌.pdf", "status": "INDEXED_PARTIAL",
+                       "reason": "REFERENCE_PARTIALLY_READ", "read_pages": 9, "pages": 10}]}}
     case.run.result_json = result
     case.session.commit()
     report = create(case, ["docx", "pdf"])
@@ -599,6 +606,8 @@ def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_ca
     assert header == ["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"]
     basis = table.rows[1].cells[2].text
     assert "[평가] 근거 결여" in basis and "공식 DB에서 확인되지 않음" in basis
+    assert "인용 취지·맥락 검토" in basis and "사안 적용은 확인 필요" in basis
+    assert "공식 원문에 있는 검증용 문구" in basis and "공식 원문 일부 범위" in basis
     widths = [c.width for c in table.rows[0].cells]
     assert widths[3] == max(widths)
     # 칸 안 줄바꿈 위치와 가운뎃점 글리프(·/・)는 설치된 글꼴에 따라 달라지므로 공백·가운뎃점을 빼고 비교한다.
@@ -606,6 +615,8 @@ def test_citation_error_table_merges_the_verdict_into_the_basis_column(report_ca
                    for p in PdfReader(io.BytesIO(download(case, report, "pdf"))).pages)
     text = text.replace("·", "").replace("・", "")
     assert "평가]근거결여" in text and "인용오류미확인근거및주장평가" in text
+    assert "인용취지맥락검토" in text and "공식원문에있는검증용문구" in text
+    assert "주요참고문헌검토결과(RAG)" in text
 
 
 # --- 고정본의 큰 부분은 DB 밖(파일 저장소)에 내용 주소로 보관한다 --------------------------

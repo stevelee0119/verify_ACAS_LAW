@@ -80,6 +80,11 @@ def find_pattern_hits(text: str) -> List[PatternHit]:
                 prefix = text[max(0, m.start() - 30) : m.start()]
                 if WORKPLACE_SUPERVISOR_RE.search(prefix) and not _commanding_sentence(text, m.start(), m.end()):
                     continue
+            if description == "특정 결론 강제(한국어)" and not _commanding_sentence(text, m.start(), m.end()):
+                # A legal conclusion ("적법하다고 평가할 수 없다") is not an output command.
+                tail = text[m.end():m.end() + 40]
+                if re.match(r"할\s*수\s*(?:없|있)", tail):
+                    continue
             hits.append(PatternHit(intent, m.group(0), description, weight, m.start(), m.end()))
     return hits
 

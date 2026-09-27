@@ -106,11 +106,11 @@ class AgreeingRouter:
 
 
 def test_long_document_sample_does_not_claim_whole_document_authorship():
-    text = "AI 언어 모델로서 학습 데이터 기준으로 작성합니다. " + "가" * 16000
+    text = "AI 언어 모델로서 학습 데이터 기준으로 작성합니다. " + "가" * 48000
     router = AgreeingRouter()
     result = asyncio.run(detect_ai_document(document(text), [], router=router))
     coverage = result.signals["coverage"]
-    assert coverage["inspected_chars"] == 6000
+    assert coverage["inspected_chars"] == 24000
     assert coverage["inspected_chars"] + coverage["omitted_chars"] == coverage["total_chars"]
     assert coverage["model_executed"] and not coverage["is_full_coverage"]
     assert result.verdict == "UNCERTAIN"
@@ -128,7 +128,7 @@ def test_failed_model_review_does_not_claim_document_coverage(raises):
     result = asyncio.run(detect_ai_document(document("가" * 16000), [], router=UnavailableRouter()))
     coverage = result.signals["coverage"]
     assert not result.used_llm and not coverage["model_executed"]
-    assert coverage["requested_chars"] == 6000 and coverage["inspected_chars"] == 0
+    assert coverage["requested_chars"] == 16000 and coverage["inspected_chars"] == 0
     assert coverage["omitted_chars"] == coverage["total_chars"]
     assert not coverage["is_full_coverage"]
 

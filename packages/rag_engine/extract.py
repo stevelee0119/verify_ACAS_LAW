@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import closing
 import json
 from pathlib import Path
 import sys
@@ -13,7 +14,7 @@ from packages.document_engine.registry import parse_document
 
 MAX_CHARS = 3_000_000
 MAX_PAGES = 1500
-EXTRACTOR_VERSION = "drive-text-v2"
+EXTRACTOR_VERSION = "drive-text-v3"
 EXCLUDE_MIN_TOTAL = 10       # 이보다 짧은 파일은 쪽 단위로 빼지 않고 전체를 격리한다
 EXCLUDE_MAX_SHARE = 0.02     # 전체 쪽수의 2%까지(최소 1쪽)
 EXCLUDE_MAX_PAGES = 3        # 그리고 3쪽까지만 해당 쪽을 빼고 색인한다
@@ -48,12 +49,33 @@ def extract(path, filename, mime):
         doc.metadata = dict(reader.metadata or {})
         doc.raw_layers["metadata_text"] = str(doc.metadata)
         total, count = len(reader.pages), 0
-        for number, page in enumerate(reader.pages[:MAX_PAGES], 1):
-            text = page.extract_text() or ""
-            count += len(text)
-            if count > MAX_CHARS:
-                break
-            doc.pages.append(Page(number, blocks=[Block(f"p{number}", text, number)]))
+        native, fallback_pages = None, []
+        try:
+            import pypdfium2 as pdfium
+            native = pdfium.PdfDocument(path)
+        except Exception:
+            pass  # Retain the existing parser if the native engine cannot open this PDF.
+        try:
+            for number in range(1, min(total, MAX_PAGES) + 1):
+                text = None
+                if native is not None:
+                    try:
+                        with closing(native[number - 1]) as page, closing(page.get_textpage()) as textpage:
+                            text = textpage.get_text_range()
+                    except Exception:
+                        text = None
+                if text is None or not text.strip():
+                    fallback_pages.append(number)
+                    text = reader.pages[number - 1].extract_text() or ""
+                count += len(text)
+                if count > MAX_CHARS:
+                    break
+                doc.pages.append(Page(number, blocks=[Block(f"p{number}", text, number)]))
+        finally:
+            if native is not None:
+                native.close()
+        doc.structure.update(text_parser="pypdfium2" if native is not None else "pypdf",
+                             fallback_pages=fallback_pages)
     else:
         doc = parse_document(str(path), document_id="reference", filename=filename,
                              mime_type=mime, sha256=digest)
@@ -73,12 +95,13 @@ def extract(path, filename, mime):
     if flagged and whole_file:
         return {"chunks": [], "sha256": digest, "reason": "REFERENCE_QUARANTINED", "partial": True,
                 "scan_findings": evidence, "pages": total}
-    chunks, read_pages = [], 0
+    chunks, read_pages, no_text_pages = [], 0, []
     for page in doc.pages:
         if page.page_number in pages_hit:
             continue
         text = "\n".join(b.text for b in page.blocks if b.visible and b.source_layer == "visible_text")
         if not text.strip():
+            no_text_pages.append(page.page_number)
             continue
         read_pages += 1
         for start in range(0, len(text), 1040):
@@ -92,6 +115,12 @@ def extract(path, filename, mime):
               "REFERENCE_PARTIALLY_READ" if partial else "")
     return {"chunks": chunks, "sha256": digest, "partial": partial,
             "excluded_pages": sorted(pages_hit), "scan_findings": evidence,
+            "no_text_pages": no_text_pages,
+            "text_parser": doc.structure.get("text_parser", doc.parser_name),
+            "fallback_pages": doc.structure.get("fallback_pages", []),
+            "unprocessed_pages": list(range(len(doc.pages) + 1, total + 1)),
+            "coverage_note": ("텍스트 미추출 쪽은 빈 쪽 또는 스캔 쪽일 수 있으며 전문 확인으로 간주하지 않음"
+                              if no_text_pages else ""),
             "page_numbers_reliable": doc.structure.get("page_numbers_reliable", path.suffix.lower() not in (".hwp", ".hwpx")),
             "body_extraction_scope": doc.structure.get("body_extraction_scope", "TEXT_EXTRACTION"),
             "pages": total, "read_pages": read_pages,
