@@ -52,9 +52,15 @@ def model_opinion_rows(documents: List[Any]) -> List[List[str]]:
     """[문서, 모델, 판정, 점수, 근거] 행. 응답하지 못한 모델은 사유를 근거 칸에 적는다."""
     rows: List[List[str]] = []
     for document in documents:
-        signals = (getattr(document, "ai_detector_result", {}) or {}).get("signals") or {}
-        name = getattr(document, "filename", "")
-        for opinion in signals.get("llm_opinions") or []:
+        if isinstance(document, dict):
+            det = document.get("ai_detector_result") or document.get("engine_data", {}).get("ai_detector_result") or {}
+            name = document.get("filename", "")
+        else:
+            det = getattr(document, "ai_detector_result", None) or (getattr(document, "engine_data", {}) or {}).get("ai_detector_result") or {}
+            name = getattr(document, "filename", "")
+        signals = det.get("signals") or {}
+        opinions = signals.get("llm_opinions") or det.get("model_opinions") or det.get("opinions") or []
+        for opinion in opinions:
             rows.append([name, model_label(opinion.get("provider", ""), opinion.get("model", "")),
                          VERDICT_LABELS.get(opinion.get("verdict"), str(opinion.get("verdict", ""))),
                          f"{float(opinion.get('score') or 0):.2f}",

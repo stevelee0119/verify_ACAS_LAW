@@ -871,9 +871,12 @@ class VerificationPipeline:
                   )
               )
               result.ai_detector_result = ai_detector_res.to_dict()
+              opinions = (result.ai_detector_result or {}).get("model_opinions") or (
+                  result.ai_detector_result or {}).get("signals", {}).get("llm_opinions") or []
+              result.ai_detector_result["model_opinions"] = opinions
+              result.ai_detector_result["opinions"] = opinions
               result.engine_data["ai_detector_result"] = result.ai_detector_result
               result.findings.extend(create_ai_detector_findings(doc, ai_detector_res))
-              opinions = (result.ai_detector_result or {}).get("model_opinions") or []
               stage.note = f"모델 의견 {len(opinions)}건"
               if not any(o.get("available", True) for o in opinions if isinstance(o, dict)) and opinions:
                   stage.note = "AI 모델 의견 없음(규칙 기반 신호만)"

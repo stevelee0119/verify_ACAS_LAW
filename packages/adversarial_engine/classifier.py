@@ -54,6 +54,12 @@ WORKPLACE_SUPERVISOR_RE = re.compile(
     r"(?:팀장|상사|회사|사용자|업무|직장|관리자|인사권자|대표이사|대표|부서장|선임|감독자|원고|피고)(?:의|\s*)\s*$"
 )
 
+# 공식 기관 및 실무 가이드라인 사칭 패턴 (공식 권위를 빌려 검증 우회/출력 조작 시도)
+OFFICIAL_GUIDELINE_RE = re.compile(
+    r"(?:대한변호사협회|변협|법무부|국방부|대법원|행정안전부|법제처|감사원|검찰청|공식|실무|심사|검토)\s*"
+    r"(?:실무\s*)?(?:가이드라인|지침|기준|매뉴얼|요령|수칙)(?:에\s*(?:따라|의거하여|의하여)|상)?"
+)
+
 
 def _commanding_sentence(text: str, start: int, end: int) -> bool:
     """start~end가 든 문장에 명령·요청 어미 또는 AI(검토 시스템) 호명이 있는가."""
@@ -183,9 +189,10 @@ def classify(
         score += 0.6
     if source_layer == "metadata":
         score += 0.6
+    guideline_impersonation = bool(hits and OFFICIAL_GUIDELINE_RE.search(text))
     if quoted:
         score -= 1.2
-    if benign_context and not is_hidden and not addresses_ai:
+    if benign_context and not is_hidden and not addresses_ai and not guideline_impersonation:
         score -= 0.8
     if citation_context and not is_hidden and not addresses_ai:
         score -= 0.5
@@ -215,6 +222,8 @@ def classify(
         "directive_target": "AI_OR_VERIFIER" if addresses_ai else "UNSPECIFIED",
         "matched_patterns": [{"text": h.matched_text, "description": h.description, "intent": str(h.intent),
                               "span": [h.start, h.end]} for h in hits],
+        "guideline_impersonation": bool(hits and OFFICIAL_GUIDELINE_RE.search(text)),
+        "adversarial_subtype": "GUIDELINE_IMPERSONATION" if bool(hits and OFFICIAL_GUIDELINE_RE.search(text)) else None,
     }
 
     # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다

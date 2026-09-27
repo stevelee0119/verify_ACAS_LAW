@@ -235,7 +235,8 @@ class AdversarialScanner:
                     meta_message_type=MetaMessageType.MM1_MACHINE_INSTRUCTION,
                     adversarial_class=classification.label,
                     forensic_level=self._forensic_level(classification),
-                    tags=[str(i) for i in classification.intents] + [_injection_path(block)] + kinds,
+                    tags=[str(i) for i in classification.intents] + [_injection_path(block)] + kinds + (
+                        ["GUIDELINE_IMPERSONATION"] if classification.features.get("guideline_impersonation") else []),
                     evidence=[
                         Evidence.create(
                             description=f"{block.source_layer} 레이어에서 관찰된 지시형 문자열",
@@ -279,6 +280,9 @@ class AdversarialScanner:
     def _detail_for(block: Block, classification: Classification) -> str:
         reason = block.attributes.get("hidden_reason")
         where = f"{block.source_layer}" + (f"/{reason}" if reason else "")
+        guideline_note = ""
+        if classification.features.get("guideline_impersonation"):
+            guideline_note = " 공식 가이드라인·실무 지침(변협, 부처 지침 등)을 원용·사칭하여 검증 우회나 결과 조작을 시도한 정황이 감지되었다."
         if classification.features.get("descriptive_mention"):
             return (
                 f"{where} 위치의 문구가 지시형 낱말을 포함하지만 명령형 어미 없이 표제·명사구·설명 문맥으로 "
@@ -286,7 +290,7 @@ class AdversarialScanner:
                 "본 문자열은 자료로만 취급되며 시스템 지침이나 Tool 권한을 변경하지 않는다."
             )
         return (
-            f"{where} 위치에서 지시형 문자열이 관찰되었다. "
+            f"{where} 위치에서 지시형 문자열이 관찰되었다.{guideline_note} "
             f"분류={classification.label}, 점수={classification.score}, "
             f"보조신호={classification.features.get('corroborating_signals')}개. "
             "본 문자열은 자료로만 취급되며 시스템 지침이나 Tool 권한을 변경하지 않는다."

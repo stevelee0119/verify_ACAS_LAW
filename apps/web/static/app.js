@@ -1212,8 +1212,9 @@ function renderAIVerification() {
 
   for (const d of docs) {
     if (d.quarantined) hasQuarantine = true;
-    if (d.ai_detector_result && d.ai_detector_result.verdict) {
-      detectorResults.push({ filename: d.filename, ...d.ai_detector_result });
+    const det = (d.ai_detector_result && d.ai_detector_result.verdict) ? d.ai_detector_result : (d.engine_data && d.engine_data.ai_detector_result && d.engine_data.ai_detector_result.verdict ? d.engine_data.ai_detector_result : null);
+    if (det) {
+      detectorResults.push({ filename: d.filename, ...det });
     }
     if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
       for (const row of d.ai_hallucination_table) {
@@ -1239,7 +1240,7 @@ function renderAIVerification() {
       const dist = Object.entries(res.signals?.verdict_distribution || {}).filter(([, n]) => n);
       if (dist.length) item.append(node("p", `모델별 판단 분포: ${dist.map(([v, n]) => `${authorshipVerdict(v)[0]} ${n}`).join(", ")}`, "muted"));
       if (res.signals?.score_definition) item.append(node("p", `추정치: ${res.signals.score_definition} 신뢰도: ${res.signals.confidence_definition}`, "muted metric-definition"));
-      const opinions = res.signals?.llm_opinions || [];
+      const opinions = res.signals?.llm_opinions || res.model_opinions || res.opinions || [];
       const failures = Object.entries(res.signals?.llm_failures || {});
       // 모델별 설명은 모델 블록에서 모두 보이므로 요약에서는 뺀다. 예전 결과처럼
       // 모델별 기록이 없으면 근거를 자르지 않고 모두 보인다.

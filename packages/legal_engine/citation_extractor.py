@@ -97,9 +97,10 @@ AGENCY_RE = r"[가-힣]{1,20}?(?:부|처|청|원|위원회|본부|사령부|총�
 ADMIN_RULE_REF_RE = re.compile(
     rf"(?P<agency>{AGENCY_RE})\s*(?P<kind>{_KIND})\s*제\s*(?P<number>\d+(?:\s*-\s*\d+)?)\s*호"
 )
-BRACKET_NAME_RE = re.compile(r"[「『](?P<name>[^」』]{2,60})[」』]")
+# 행정규칙 이름 인용부호: 낫표(「」『』) 및 따옴표(' " ‘ ’ “ ”) 지원
+BRACKET_NAME_RE = re.compile(r"(?:[「『]|['\"‘“])(?P<name>[^」』'\"’”\n]{2,60})(?:[」』]|['\"’”])")
 EFFECTIVE_RE = re.compile(rf"(?P<date>{DATE_RE})\s*(?:부터\s*)?시행")
-ARTICLE_RE = re.compile(r"제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<sub>\d+))?(?:\s*제\s*(?P<paragraph>\d+)\s*항)?")
+ARTICLE_RE = re.compile(r"제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<sub>\d+))?(?:\s*\([^)\n]{1,40}\))?(?:\s*제\s*(?P<paragraph>\d+)\s*항)?")
 # 문서가 위임 근거로 드는 법령 조문. "「병역법」 제5조의 위임에 따라", "…제5조에 근거하여"
 DELEGATION_RE = re.compile(
     r"(?P<basis>[「『]?[가-힣A-Za-z·\s]{2,40}?(?:법|법률|령|규칙)[」』]?\s*제\s*\d+\s*조(?:\s*의\s*\d+)?"

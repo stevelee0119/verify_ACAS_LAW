@@ -266,14 +266,15 @@ def _article_absent(verdict, official, provision, as_of):
     scope = (f"{official.get('law_name') or citation.law_name} 시행 버전 {version or '미상'}"
              f"(시행 {effective or '미상'})의 전체 조문 {provision.get('searched_articles')}개")
     basis = "기준일 " + str(as_of) if as_of else "기준일이 없어 현행 버전"
-    verdict.notes.append(f"{scope}를 대조했으나 제{citation.article}조가 없다({basis} 기준). "
+    compared = compared_label(citation)
+    verdict.notes.append(f"{scope}를 대조했으나 {compared}에 해당하는 제{citation.article}조가 없다({basis} 기준). "
                          "다른 시행 버전·부칙에 있었는지는 확인하지 않았다")
     ids = [r.source_record_id for r in verdict.source_records]
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.NOT_FOUND,
         severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.A,
-        title=f"조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함: {citation.raw_text}",
-        detail=(f"법령은 공식 기록으로 확인했다. {scope}를 모두 대조했으나 제{citation.article}조는 없다. "
+        title=f"조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함: {compared}",
+        detail=(f"법령은 공식 기록으로 확인했다. {scope}를 모두 대조했으나 {compared}에 해당하는 제{citation.article}조는 없다. "
                 f"({basis} 기준) 조문 번호 오기, 다른 시행 버전의 조문, 부칙 조항일 수 있으므로 "
                 "허위 인용으로 단정하지 않는다."),
         document_id=citation.document_id, block_id=citation.block_id, page=citation.page,
@@ -414,10 +415,15 @@ def verify_admin_rule_source(verifier, citation):
     name = citation.law_name or attrs.get("rule_name")
     search = getattr(verifier.registry.law, "search_admin_rule", None)
     fetch = getattr(verifier.registry.law, "fetch_admin_rule", None)
-    if not name or search is None or fetch is None:
-        verdict.notes.append("행정규칙명 또는 행정규칙 공식 조회 경로가 없어 확인하지 못했다")
+    if search is None or fetch is None:
+        verdict.notes.append("행정규칙 공식 조회 경로가 지원되지 않아 확인하지 못했다")
+        verdict.findings.append(verifier._unverified_finding(citation, verdict.notes[-1]))
         return verdict
-    response = search(name)
+    agency = attrs.get("issuing_agency")
+    kind = attrs.get("rule_kind")
+    number = attrs.get("rule_number")
+    query = name or f"{agency or ''} {kind or ''}".strip() or citation.raw_text
+    response = search(query)
     verdict.source_records.extend(response.source_records)
     if not response.ok or not response.complete:
         verdict.notes.append(response.message or "행정규칙 공식 목록 검색을 완료하지 못했다")
@@ -425,13 +431,16 @@ def verify_admin_rule_source(verifier, citation):
         return verdict
     from packages.source_adapters.law_go_kr import _same_law_name
 
-    named = [r for r in response.records if _same_law_name(name, r.get("rule_name"))]
-    number = attrs.get("rule_number")
-    exact = [r for r in named if not number or str(r.get("number") or "").replace(" ", "") == number]
-    if not named:
+    if name:
+        matched = [r for r in response.records if _same_law_name(name, r.get("rule_name"))]
+    else:
+        matched = [r for r in response.records if (not agency or agency in str(r.get("agency") or ""))
+                   and (not kind or kind in str(r.get("rule_kind") or ""))]
+    exact = [r for r in matched if not number or str(r.get("number") or "").replace(" ", "") == number]
+    if not matched or (number and not exact):
         verdict.status = VerificationStatus.NOT_FOUND
         verdict.levels["existence"] = "NOT_FOUND"
-        verdict.notes.append(f"공식 행정규칙 목록 {len(response.records)}건에서 이름이 같은 규칙을 찾지 못했다"
+        verdict.notes.append(f"공식 행정규칙 목록 {len(response.records)}건에서 일치하는 규칙을 찾지 못했다"
                              "(조회 범위 내 미발견). 폐지·명칭 변경·미수록일 수 있어 부존재로 단정하지 않는다")
         ids = [r.source_record_id for r in verdict.source_records]
         verdict.findings.append(Finding.create(
@@ -440,14 +449,15 @@ def verify_admin_rule_source(verifier, citation):
             title=f"조회 범위 내에서 찾지 못한 행정규칙 인용: {citation.raw_text}",
             detail=verdict.notes[-1], document_id=citation.document_id, block_id=citation.block_id,
             page=citation.page, span=citation.span, engine="legal_engine", source_record_ids=ids,
-            confidence_features={"absence_scope": "SEARCHED_SCOPE_ONLY", "searched_records": len(response.records)},
+            confidence_features={"absence_scope": "SEARCHED_SCOPE_ONLY", "searched_records": len(response.records),
+                                 "searched_query": query},
             tags=["LEGAL", "ADMIN_RULE"],
         ))
         return verdict
     if len(exact) != 1:
-        verdict.notes.append("이름이 같은 행정규칙이 여러 건이거나 발령번호가 일치하는 기록이 없어 하나로 특정하지 못했다")
+        verdict.notes.append("일치하는 행정규칙이 여러 건이거나 발령번호가 일치하는 기록이 없어 하나로 특정하지 못했다")
         verdict.review["candidates"] = [{k: r.get(k) for k in ("rule_name", "number", "agency", "effective_from")}
-                                        for r in named[:10]]
+                                        for r in matched[:10]]
         return verdict
     official = dict(exact[0])
     verdict.official_record = official

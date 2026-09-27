@@ -286,13 +286,13 @@ def _missing_notice(doc: NormalizedDocument, missing: List[Dict[str, Any]]) -> F
     return Finding.create(
         type=FindingType.EVIDENCE_REFERENCE_MISSING, status=VerificationStatus.UNVERIFIED, severity=Severity.INFO,
         evidence_grade=EvidenceGrade.C, title=f"첨부 증거 {len(missing)}건이 입력에 없음 — 목록 보기",
-        detail=("이번 실행에는 증거 파일이 함께 입력되지 않아 첨부 자료와 대조하지 않았다. 목록: "
+        detail=("이번 실행에는 증거 파일이 함께 입력되지 않아 첨부 자료와 대조하지 않았다(미제출 상태). 목록: "
                 + "; ".join(listing[:30]) + (f" 외 {len(listing) - 30}건" if len(listing) > 30 else "")
-                + ". 자료가 없다는 사실만으로 주장이 허위이거나 자료가 위조되었다고 판단하지 않는다."),
+                + ". 내용 불일치(모순)가 아니며 자료 미제출로 인한 미확인이다. 자료가 없다는 사실만으로 주장이 허위이거나 자료가 위조되었다고 판단하지 않는다."),
         document_id=doc.document_id, engine=ENGINE_NAME,
         confidence_features={"attachment_status": "NOT_UPLOADED", "missing_items": listing,
-                             "rule_id": "EVI.ATTACHMENTS_NOT_UPLOADED"},
-        tags=["EVIDENCE", "ATTACHMENT"],
+                             "rule_id": "EVI.ATTACHMENTS_NOT_UPLOADED", "evidence_state": "NOT_UPLOADED"},
+        tags=["EVIDENCE", "ATTACHMENT", "MISSING_EVIDENCE"],
         evidence=[Evidence.create(description="입력되지 않은 첨부 증거 목록", grade=EvidenceGrade.C,
                                   document_id=doc.document_id, excerpt="; ".join(listing)[:300])])
 
@@ -314,12 +314,13 @@ def _findings(doc: NormalizedDocument, items: List[Dict[str, Any]], hashes: List
             status=VerificationStatus.UNVERIFIED, severity=Severity.LOW, evidence_grade=EvidenceGrade.C,
             title=(f"근거 자료가 입력되지 않음(문서가 미첨부를 밝힘): {item['name']}" if provided
                    else f"첨부·증거로 적힌 자료를 입력 파일에서 찾지 못함: {item['name']}"),
-            detail=(f"{item['basis']}. 이 자료에 기댄 사실 주장은 검증되지 않은 사실로 남는다. "
+            detail=(f"{item['basis']}. 이 자료에 기댄 사실 주장은 미제출로 인하여 검증되지 않은 사실(내용 불일치가 아닌 미제출)로 남는다. "
                     "자료가 없다는 사실만으로 주장이 허위이거나 자료가 위조되었다고 판단하지 않는다."),
             document_id=doc.document_id, page=item.get("page"), engine=ENGINE_NAME,
             confidence_features={"attachment_status": item["status"], "linked_claim_ids": item["linked_claim_ids"],
-                                 "table_ref": item.get("table_ref"), "row": item.get("row")},
-            tags=["EVIDENCE", "ATTACHMENT"],
+                                 "table_ref": item.get("table_ref"), "row": item.get("row"),
+                                 "evidence_state": "NOT_PROVIDED" if provided else "REFERENCE_MISSING"},
+            tags=["EVIDENCE", "ATTACHMENT", "MISSING_EVIDENCE"],
             evidence=[Evidence.create(description="문서의 첨부·증거 기재", grade=EvidenceGrade.C,
                                       document_id=doc.document_id, page=item.get("page"),
                                       excerpt=(item["mentions"][0].get("stated_status") or item["name"])[:300])],

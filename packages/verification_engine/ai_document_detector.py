@@ -45,12 +45,15 @@ class AIDetectorResult:
     used_llm: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
+        opinions = self.signals.get("llm_opinions", [])
         return {
             "verdict": self.verdict,
             "score": round(self.score, 3),
             "reasons": self.reasons,
             "suspicious_excerpts": self.suspicious_excerpts,
             "signals": self.signals,
+            "model_opinions": opinions,
+            "opinions": opinions,
             "used_llm": self.used_llm,
         }
 
@@ -395,8 +398,9 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         verdict = opinions[0]["verdict"]
         if verdict.startswith("AI_") and not objective:
             verdict, held_reason = "UNCERTAIN", (
-                "모든 모델이 AI 작성 가능성을 높게 보았으나 문체·형식 밖의 객관적 작성 흔적이 없어 "
-                "판단을 유보함(문체·표준 형식·인용 오류만으로 작성 주체를 정하지 않음)")
+                "모든 모델이 AI 작성 가능성을 유력하게 판단(점수 중앙값 반영)하였으나, 문체·형식 밖의 객관적 작성 흔적"
+                "(도구 메타데이터·챗봇 응답 잔재·프롬프트 토큰)이 없어 사법적 판단을 유보함"
+                "(단순 문체·표준 서식·판례 인용 오류만으로 작성 주체를 단정하지 않음)")
     elif agreement == "SINGLE":
         verdict = opinions[0]["verdict"]
         if _VERDICT_RANK[verdict] > _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"]):
