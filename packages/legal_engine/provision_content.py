@@ -43,6 +43,11 @@ TERM_OVERLAP = 0.6
 MANDATE_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?(?:하여야|해야|하여야만)\s*(?:한다|하며|하고|함|할\s*것)")
 DISCRETION_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?할\s*수\s*있(?:다|으며|고|음|을\s*뿐)")
 NO_DUTY_RE = re.compile(r"(?P<act>[가-힣]{2,6}?)(?:(?:을|를)\s)?할\s*(?:의무가|의무는)\s*(?:없|아니)")
+# Only a complete, case-scoped conclusion is exempt from statutory text comparison.
+BARE_CASE_CONCLUSION_RE = re.compile(
+    r"(?:이|본|해당)\s*사건\s*(?:소|소송|청구|신청|항소|상고)(?:은|는|이|가)\s*"
+    r"(?:적법|부적법)(?:하다|합니다|함|한\s*것이다|한\s*것입니다)\s*[.!]?"
+)
 
 
 def _acts(pattern: "re.Pattern[str]", text: str) -> set:
@@ -149,7 +154,13 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
     if matched:
         return {"status": "VERIFIED", "basis": "NUMERIC", "matched": matched}
     terms = list(dict.fromkeys(_terms(claim)))
-    if numbers_only or not terms:
+    if numbers_only and BARE_CASE_CONCLUSION_RE.fullmatch(claim):
+        return {"status": "NOT_ASSERTED", "basis": "CASE_CONCLUSION_ONLY",
+                "reason": "조문 내용을 서술하지 않은 사안의 결론이다(그 결론의 적정성을 확인한 것은 아님)"}
+    if numbers_only and terms:
+        return {"status": "UNVERIFIED", "basis": "PARENTHETICAL_CLAIM",
+                "reason": "괄호 인용 앞 주장의 법적 효과·적용 범위는 수치 대조만으로 확인할 수 없다(내용 검토 필요)"}
+    if not terms:
         return {"status": "NOT_ASSERTED", "reason": "문서가 조문 내용을 주장하지 않고 근거로만 표시했다"}
     compact_body = body.replace(" ", "")
     found = [t for t in terms if t in compact_body]

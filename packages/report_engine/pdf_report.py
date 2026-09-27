@@ -74,6 +74,8 @@ GLYPH_FALLBACK = {
 
 
 def _sanitize(text: str) -> str:
+    if _register_font() != KOREAN_FONT:
+        return text
     for source, target in GLYPH_FALLBACK.items():
         text = text.replace(source, target)
     return text

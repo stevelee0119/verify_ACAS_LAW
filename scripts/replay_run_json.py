@@ -20,25 +20,41 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 def replay(run: dict) -> dict:
     from packages.adversarial_engine import AdversarialScanner
-    from packages.common.schemas import Block, NormalizedDocument, Page
+    from packages.common.schemas import BBox, Block, NormalizedDocument, Page
     from packages.legal_engine.citation_extractor import extract_citations
     from packages.legal_engine.legal_rules import review_legal_rules
+    from packages.legal_engine.claim_review import review_claims
+    from packages.verification_engine.sanitized_input import sanitized_reading_text
 
     out = {}
     for doc in run.get("documents", []):
-        pages = [Page(p["page_number"], blocks=[
+        pages = [Page(p["page_number"], width=p.get("width", 0), height=p.get("height", 0), blocks=[
             Block(b["block_id"], b["text"], b.get("page") or p["page_number"],
+                  bbox=BBox(*b["bbox"]) if b.get("bbox") else None,
                   source_layer=b.get("source_layer") or "visible_text",
-                  block_type=b.get("block_type") or "paragraph", visible=b.get("visible", True))
+                  block_type=b.get("block_type") or "paragraph", visible=b.get("visible", True),
+                  attributes=b.get("attributes") or {})
             for b in p.get("blocks", [])]) for p in doc.get("pages", [])]
         nd = NormalizedDocument(doc["document_id"], doc.get("filename", ""), "application/pdf",
                                 doc.get("sha256") or "0", pages=pages)
         scan = AdversarialScanner().scan(nd)
+        legal = review_legal_rules(nd)
+        legal += review_claims(nd, skip_sentences=[f.confidence_features.get("claim", "") for f in legal])
+        clean, sanitization = sanitized_reading_text(nd, scan.findings)
+        sanitized_doc = NormalizedDocument("sanitized", "sanitized.txt", "text/plain", "0",
+                                          pages=[Page(1, blocks=[Block("clean", clean, 1)])])
         out[doc.get("filename") or doc["document_id"]] = {
+            "scope": "SAVED_VISIBLE_TEXT_ONLY_NO_LIVE_SOURCES_OR_MODELS",
+            "sha256": nd.sha256,
+            "sanitization": sanitization,
+            "remaining_instruction_findings": [str(f.type) for f in AdversarialScanner().scan(sanitized_doc).findings
+                                               if not f.advisory_only],
             "laws": sorted({c.law_name for c in extract_citations(nd) if getattr(c, "law_name", None)}),
             "adversarial": sorted({f"{f.type.value}:{f.severity.value}" for f in scan.findings
                                    if not f.advisory_only and f.severity.value in ("MEDIUM", "HIGH", "CRITICAL")}),
-            "rules": sorted({str(f.confidence_features.get("rule_id")) for f in review_legal_rules(nd)}),
+            "rules": sorted({str(f.confidence_features.get("rule_id")) for f in legal}),
+            "legal_findings": [{"rule_id": f.confidence_features.get("rule_id"),
+                                "status": str(f.status), "page": f.page, "title": f.title} for f in legal],
         }
     return out
 

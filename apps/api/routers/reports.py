@@ -79,6 +79,7 @@ class _RunView:
         self.input_snapshot = run.input_snapshot or {}
         self.model_executions = (run.result_json or {}).get("model_executions", [])
         self.run_manifest = (run.result_json or {}).get("run_manifest", {})
+        self.source_objects = (run.result_json or {}).get("source_objects", {})
         self.documents = documents
         self.project_findings = [f for f in findings if not f.document_id]
         self._findings = findings
@@ -103,6 +104,9 @@ class _DocumentView:
         self.masked_preview = entry.get("masked_preview", {})
         self.warnings = entry.get("warnings", [])
         self.engine_data = entry.get("engine_data", {})
+        self.ai_detector_result = entry.get("ai_detector_result", self.engine_data.get("ai_detector_result", {}))
+        self.ai_hallucination_table = entry.get("ai_hallucination_table", self.engine_data.get("ai_hallucination_table", []))
+        self.argument_validity_summary = entry.get("argument_validity_summary", self.engine_data.get("argument_validity_summary", ""))
         self.findings = findings
         self.source_records = entry.get("source_records", [])
         self.pages = entry.get("pages", [])

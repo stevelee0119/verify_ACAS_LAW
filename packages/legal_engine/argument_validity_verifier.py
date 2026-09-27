@@ -190,7 +190,7 @@ async def verify_argument_validity(
 
     # 2. 가짜 판례가 하나도 없고 주장도 없으면 기본 정상 반환
     if not unverified_cases and not claims:
-        result.overall_validity_summary = "공식 소스에서 확인되지 않은 인용이나 중대한 법률 주장 결함이 발견되지 않았습니다."
+        result.overall_validity_summary = "인용 근거 대조표에 표시할 항목이 없습니다. 법률 주장 전체의 적정성이 확인되었다는 뜻은 아닙니다."
         return result
 
     # 3. 판정은 규칙 기반으로만 만든다.
@@ -300,9 +300,24 @@ async def verify_argument_validity(
             summary += f" {result.ai_summary}"
         result.overall_validity_summary = summary
     else:
-        result.overall_validity_summary = "중대한 법률적 주장 결함이 발견되지 않았습니다."
+        result.overall_validity_summary = "인용 근거 대조표에 표시할 항목이 없습니다. 법률 주장 전체의 적정성이 확인되었다는 뜻은 아닙니다."
 
     return result
+
+
+def summarize_argument_findings(findings, citation_summary: str) -> Dict[str, Any]:
+    """Summarize all legal claim engines, without treating silence as clearance."""
+    relevant = [f for f in findings if not f.advisory_only and f.type in (
+        FindingType.LEGAL_ARGUMENT_INVALID, FindingType.UNSUPPORTED_GENERALIZATION,
+        FindingType.OVERCLAIM, FindingType.LEGAL_REQUIREMENT_OMITTED, FindingType.REASONING_GAP)]
+    contradicted = sum(f.status == VerificationStatus.CONTRADICTED for f in relevant)
+    pending = len(relevant) - contradicted
+    summary = (f"법률 주장 검토: 근거와 모순되는 항목 {contradicted}건, 추가 확인 필요 {pending}건. "
+               if relevant else "자동 규칙으로 확인한 법률 주장 경고는 없습니다. ")
+    return {"summary": summary + citation_summary,
+            "scope": "DETECTED_CLAIMS_ONLY", "complete_legal_validation": False,
+            "contradicted_count": contradicted, "review_required_count": pending,
+            "finding_ids": [f.finding_id for f in relevant]}
 
 
 _BASIS_LABEL = {

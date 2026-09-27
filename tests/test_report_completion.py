@@ -33,6 +33,14 @@ from packages.common.terminology import TERMINOLOGY_VERSION, term_label
 from packages.report_engine.snapshot import canonical_hash
 
 
+def test_cid_glyph_substitution_does_not_corrupt_embedded_korean_font(monkeypatch):
+    from packages.report_engine import pdf_report
+    monkeypatch.setattr(pdf_report, "_register_font", lambda: "ACASKorean")
+    assert pdf_report._sanitize("인용 오류·미확인 근거") == "인용 오류·미확인 근거"
+    monkeypatch.setattr(pdf_report, "_register_font", lambda: pdf_report.KOREAN_FONT)
+    assert pdf_report._sanitize("인용 오류·미확인 근거") == "인용 오류・미확인 근거"
+
+
 @pytest.fixture()
 def report_case(tmp_path, monkeypatch):
     engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)

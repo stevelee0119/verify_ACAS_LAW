@@ -46,7 +46,7 @@ CERTAIN_RE = re.compile(r"명백(?:히|하게|한|하다)|분명(?:히|하게|�
 STANDARD_OF_REVIEW_RE = re.compile(r"\s*(?:에|과|와)\s*(?:위반|위배|반하|반한|어긋|저촉)")
 CONSTITUTION_ITSELF_RE = re.compile(r"헌법\s*(?:조항|규정|조문)\s*(?:그\s*)?자체")
 # 헌법 조항 바로 뒤에 주어 조사와 '위헌'이 오면 그 조항 자체를 위헌이라고 한 것이다('헌법 제10조 자체가 위헌').
-SUBJECT_UNCON_RE = re.compile(r"\s*(?:\(\s*[^)]{0,20}\))?\s*(?:자체|그\s*자체)?\s*(?:가|이|은|는)\s*[^.,]{0,15}?위헌")
+SUBJECT_UNCON_RE = re.compile(r"\s*(?:\(\s*[^)]{0,20}\))?\s*(?:자체|그\s*자체)?\s*(?:가|이|은|는)\s*[^.,]{0,80}?위헌")
 
 QUANTIFIER_RE = re.compile(
     r"어떠한\s*경우(?:에도|라도|에라도)|어떤\s*경우(?:에도|라도)|언제나|항상|예외\s*(?:없이|없는|를\s*불문)|"
@@ -180,7 +180,9 @@ def _unconstitutionality(sentence: str, lookup: Optional[HistoryLookup]) -> Opti
     subject_const = [m for m in provisions if _is_constitution(m.group("law")) and SUBJECT_UNCON_RE.match(sentence, m.end())]
     if subject_const:
         targets = subject_const
-    if itself or (targets and all(_is_constitution(m.group("law")) for m in targets)):
+    # A constitutional citation can be the standard of review for a contract,
+    # not the provision being challenged. Require an explicit grammatical target.
+    if subject_const or (itself and SUBJECT_UNCON_RE.match(sentence, itself.end())):
         if not itself and not targets:
             return None
         label = targets[0].group(0) if targets else "헌법 조항"
@@ -349,6 +351,64 @@ def requirement_mismatches(doc: NormalizedDocument, provisions: Sequence[Dict[st
 
 
 # --- 문서 단위 ----------------------------------------------------------------------
+def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
+    """Flag a missing inference step for human review, not a merits determination."""
+    compact = re.sub(r"\s+", "", sentence)
+    context = re.sub(r"\s+", "", previous + " " + sentence)
+    if (re.search(r"사기죄(?:를|가|의)?(?:구성|성립|해당)", compact)
+            and re.search(r"채무불이행|납기.{0,10}(?:지연|지체)|이행지체|대금미지급", context)
+            and (re.search(r"만으로|곧바로|자동으로|당연히", compact) or compact.startswith("이는"))):
+        return ClaimMatch("CIVIL_FRAUD_INFERENCE", sentence, 0, "채무불이행에서 사기 고의로의 추론 검토", "C", "SUSPICIOUS",
+            [_source("사기죄의 행위 당시 판단 기준")],
+            "사후의 지체·불이행만으로 계약 당시 기망이나 편취 고의를 확정할 수 없다. 계약 체결 당시의 "
+            "의사·능력, 기망행위, 처분행위와의 관계를 뒷받침하는 별도 사실과 증거를 확인해야 한다.")
+    if (re.search(r"자유심증|입증책임|증명책임|반증하지못", compact)
+            and re.search(r"청구(?:금액|액)|손해액|법정손해", compact)
+            and re.search(r"당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
+        return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "손해액의 자동 확정·입증책임 전환 근거 확인", "C", "SUSPICIOUS",
+            [_source("민사소송법 제202조의2")],
+            "손해 발생과 손해액의 증명은 구분해야 한다. 자유심증주의나 손해액 인정 규정만으로 청구액 전액이 "
+            "자동 확정되거나 입증책임이 일반적으로 전환되지는 않는다. 개별 추정·법정손해배상 규정과 적용 요건을 확인해야 한다.")
+    if (re.search(r"법인|회사", compact) and re.search(r"임직원|직원|근로자", compact)
+            and re.search(r"정신적?고통|위자료", context) and re.search(r"대위|동일하므로|합산하여.{0,8}청구", compact)
+            and not re.search(r"채권양도|선정당사자|선정당사자의|채권자대위.{0,12}요건", compact)):
+        return ClaimMatch("THIRD_PARTY_DAMAGE", sentence, 0, "법인과 임직원 개인의 손해·청구권 구분", "C", "SUSPICIOUS",
+            [_source("민법 제751조")],
+            "법인 고유의 무형손해와 임직원 개인의 정신적 손해는 청구권자·손해 발생 근거를 구분해야 한다. "
+            "직원들의 청구권을 회사가 행사한다면 양도·대위·선정당사자 등 권한과 요건을 확인해야 한다. "
+            "법인에게 재산 외 손해가 발생할 수 없다고 단정하는 판단은 아니다.")
+    if (re.search(r"계약|약정|사적자치", context) and re.search(r"헌법|기본권", compact)
+            and re.search(r"심리없이|심리할필요없이", compact) and re.search(r"각하|기각|배척", compact)):
+        return ClaimMatch("PRIVATE_CONSTITUTIONAL_EFFECT", sentence, 0, "사법상 약정의 효력과 절차적 결론의 연결 검토", "C", "SUSPICIOUS",
+            [_source("민법 제103조")],
+            "기본권이 사법관계에 미치는 영향과 구체적 약정의 효력은 별도 검토가 필요하다. 기본권 침해 주장만으로 "
+            "상대방 항변을 심리 없이 각하하는 결론이 도출되지는 않는다. 적용 법률과 심리·재판 형식을 확인해야 한다.")
+    return None
+
+
+def _provisional_relief_references(text: str) -> List[ClaimMatch]:
+    relief = _relief_span(text)
+    if not relief or CRIMINAL_DOC_RE.search(text[:3000]):
+        return []
+    body = text[relief[0]:relief[1]]
+    starts = list(re.finditer(r"(?<!\d)(\d{1,2})\.\s*", body))
+    items = [(m.group(1), m.start(), body[m.end():starts[i + 1].start() if i + 1 < len(starts) else len(body)])
+             for i, m in enumerate(starts)]
+    criminal = {number for number, _, content in items if re.search(
+        r"(?:징역|금고|벌금|형사\s*처벌)[^.]{0,80}(?:처한다|처하라|선고하라)", content)}
+    out = []
+    for _, start, content in items:
+        if not re.search(r"가집행할\s*수\s*있", content):
+            continue
+        refs = set(re.findall(r"제\s*(\d+)\s*항", content)) & criminal
+        if refs:
+            out.append(ClaimMatch("CRIMINAL_PROVISIONAL_EXECUTION", " ".join(content.split()), relief[0] + start,
+                "형벌 청구 항목을 참조한 가집행 청구", "B", "CONTRADICTED", [_source("민사소송법 제213조")],
+                "가집행 대상으로 참조한 청구 항목에 형벌 청구가 포함되어 있다. 민사 가집행선고는 재산권상 청구에 관한 "
+                "판결을 대상으로 하며 형벌 청구에는 적용할 수 없다.", {"referenced_relief_items": sorted(refs)}))
+    return out
+
+
 def _relief_span(text: str):
     relief = RELIEF_HEAD_RE.search(text)
     if not relief:
@@ -367,7 +427,8 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
         if not sentence:
             continue
         in_relief = bool(relief and relief[0] <= start < relief[1])
-        for check in (lambda s: _unconstitutionality(s, lookup), lambda s: _generalization(s, previous),
+        for check in (lambda s: _unconstitutionality(s, lookup), lambda s: _civil_inference(s, previous),
+                      lambda s: _generalization(s, previous),
                       lambda s: _remedy(s, in_relief, criminal_doc), _unsourced_standard,
                       lambda s: _requirement_exclusion(s, previous)):
             match = check(sentence)
@@ -383,6 +444,10 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
 
 # 유형마다 '명제'로 볼 부분: (앞 부분, 명제 끝을 정하는 뒷부분). 극성은 명제 끝 뒤의 글로 판별한다.
 _CLAIM_SPANS = {
+    "CIVIL_FRAUD_INFERENCE": (re.compile(r"사기죄"), re.compile(r"구성|성립|해당")),
+    "DAMAGE_PROOF_INFERENCE": (re.compile(r"확정|간주|인정"), None),
+    "THIRD_PARTY_DAMAGE": (re.compile(r"대위|동일|합산"), None),
+    "PRIVATE_CONSTITUTIONAL_EFFECT": (re.compile(r"각하|기각|배척"), None),
     "UNCONSTITUTIONALITY": (UNCON_RE, None),
     "UNSUPPORTED_GENERALIZATION": (QUANTIFIER_RE, LEGAL_EFFECT_RE),
     "NO_BASIS_REMEDY": (PUNITIVE_RE, None),
@@ -409,13 +474,15 @@ def _author_asserts(match: ClaimMatch, previous: str) -> bool:
     return result == ASSERTED
 
 
-def _to_finding(doc: NormalizedDocument, match: ClaimMatch) -> Finding:
+def _to_finding(doc: NormalizedDocument, match: ClaimMatch, reading) -> Finding:
+    block, _ = reading.locate(match.start)
     kind = (FindingType.UNSUPPORTED_GENERALIZATION if match.claim_type == "UNSUPPORTED_GENERALIZATION"
             else FindingType.LEGAL_ARGUMENT_INVALID)
     grade = {"A": EvidenceGrade.A, "B": EvidenceGrade.B, "C": EvidenceGrade.C}.get(match.grade, EvidenceGrade.C)
     human = match.grade == "C" or match.status in ("SUSPICIOUS", "UNVERIFIED")
     evidence = [Evidence.create(description="서면의 주장", grade=EvidenceGrade.B, document_id=doc.document_id,
-                                excerpt=match.sentence[:300], supports=False)]
+                                excerpt=match.sentence[:300], supports=False,
+                                page=block.page if block else None, block_id=block.block_id if block else None)]
     for source in match.basis:
         evidence.append(Evidence.create(description=f"근거: {source['name']}" + (f" ({source['url']})" if source.get("url") else ""),
                                         grade=EvidenceGrade.A if source.get("text") else EvidenceGrade.U,
@@ -431,11 +498,15 @@ def _to_finding(doc: NormalizedDocument, match: ClaimMatch) -> Finding:
                              "claim_type": match.claim_type, "judgment": match.judgment, "claim": match.sentence[:300],
                              "basis": match.basis, "human_review": human, **match.extra},
         document_id=doc.document_id, engine=ENGINE_NAME,
+        page=block.page if block else None, block_id=block.block_id if block else None,
         tags=["LEGAL_CLAIM", f"CLAIM.{match.claim_type}"] + (["HUMAN_REVIEW"] if human else []),
         evidence=evidence)
 
 
-_TYPE_LABELS = {"UNCONSTITUTIONALITY": "위헌 주장", "UNSUPPORTED_GENERALIZATION": "전칭 일반화",
+_TYPE_LABELS = {"CIVIL_FRAUD_INFERENCE": "채무불이행과 사기", "DAMAGE_PROOF_INFERENCE": "손해 증명",
+                "THIRD_PARTY_DAMAGE": "타인 손해 청구", "PRIVATE_CONSTITUTIONAL_EFFECT": "사법상 기본권 적용",
+                "CRIMINAL_PROVISIONAL_EXECUTION": "가집행 참조 대상",
+                "UNCONSTITUTIONALITY": "위헌 주장", "UNSUPPORTED_GENERALIZATION": "전칭 일반화",
                 "NO_BASIS_REMEDY": "근거 없는 청구 유형", "REQUIREMENT_MISMATCH": "조문 요건 불일치",
                 "UNSOURCED_STANDARD": "출처 불명 기준", "LITIGATION_REQUIREMENT_EXCLUSION": "소송요건 배제"}
 
@@ -443,16 +514,20 @@ _TYPE_LABELS = {"UNCONSTITUTIONALITY": "위헌 주장", "UNSUPPORTED_GENERALIZAT
 def review_claims(doc: NormalizedDocument, *, lookup: Optional[HistoryLookup] = None,
                   provisions: Sequence[Dict[str, Any]] = (), skip_sentences: Iterable[str] = ()) -> List[Finding]:
     """문서의 법리 주장을 유형별로 검토한다. skip_sentences: 다른 규칙이 이미 판정한 문장(이중 판정 방지)."""
-    text = build_reading_text(doc).text
-    skip = {" ".join(s.split())[:80] for s in skip_sentences if s}
-    matches = classify_claims(text, lookup) + requirement_mismatches(doc, provisions)
+    reading = build_reading_text(doc)
+    text = reading.text
+    skip = {re.sub(r"\s+", "", s) for s in skip_sentences if s}
+    matches = classify_claims(text, lookup) + requirement_mismatches(doc, provisions) + _provisional_relief_references(text)
     out, seen = [], set()
     for match in matches:
-        key = match.sentence[:80]
-        if key in skip or key in seen:
+        sentence_key = re.sub(r"\s+", "", match.sentence)
+        key = (match.claim_type, sentence_key)
+        if (key in seen or sentence_key in skip
+                or (match.claim_type == "NO_BASIS_REMEDY" and any(
+                    len(s) >= 20 and (s in sentence_key or sentence_key in s) for s in skip))):
             continue
         seen.add(key)
-        out.append(_to_finding(doc, match))
+        out.append(_to_finding(doc, match, reading))
     return out
 
 

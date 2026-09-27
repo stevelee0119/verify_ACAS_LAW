@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable, List, Set, Tuple
 
 from packages.common.enums import ADVERSARIAL_FINDING_TYPES
@@ -14,7 +15,7 @@ from packages.document_engine.reading_text import build_reading_text
 PLACEHOLDER = "[문서 속 지시문 제외]"
 
 
-def injection_parts(findings: Iterable) -> Tuple[Set[str], List[str]]:
+def injection_parts(findings: Iterable, doc=None) -> Tuple[Set[str], List[str]]:
     """탐지된 지시문의 블록 ID와 관찰 문자열(긴 것부터)."""
     blocks: Set[str] = set()
     texts: List[str] = []
@@ -26,19 +27,31 @@ def injection_parts(findings: Iterable) -> Tuple[Set[str], List[str]]:
         observed = str(features.get("observed_text") or "").strip()
         if observed:
             texts.append(observed)
+    if doc is not None:
+        texts.extend(b.text for b in doc.blocks if b.block_id in blocks and b.text.strip())
     return blocks, sorted(set(texts), key=len, reverse=True)
 
 
 def strip_injections(text: str, texts: Iterable[str]) -> str:
     for observed in texts:
-        if observed and observed in text:
-            text = text.replace(observed, PLACEHOLDER)
+        needle = re.sub(r"\s+", "", observed)
+        if not needle:
+            continue
+        positions = [i for i, char in enumerate(text) if not char.isspace()]
+        compact = "".join(text[i] for i in positions)
+        spans, start = [], 0
+        while (start := compact.find(needle, start)) >= 0:
+            end = start + len(needle)
+            spans.append((positions[start], positions[end - 1] + 1))
+            start = end
+        for start, end in reversed(spans):
+            text = text[:start] + PLACEHOLDER + text[end:]
     return text
 
 
 def sanitized_reading_text(doc, findings) -> Tuple[str, dict]:
     """지시문 블록을 빼고 이어 읽은 본문과, 무엇을 뺐는지에 대한 기록."""
-    blocks, texts = injection_parts(findings)
+    blocks, texts = injection_parts(findings, doc)
     kept = [b for b in doc.body_blocks() if b.block_id not in blocks]
     text = strip_injections(build_reading_text(doc, blocks=kept).text, texts)
     return text, {"mode": "SANITIZED_EXCLUDING_INSTRUCTIONS", "excluded_blocks": sorted(blocks),

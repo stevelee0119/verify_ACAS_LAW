@@ -24,24 +24,44 @@ SCHEMA = {"type": "object", "additionalProperties": True, "required": ["observat
             "explanation": {"type": "string", "minLength": 1, "maxLength": 800}}}}}}
 
 
-def grounded_observations(parsed, document, sources):
+ITEM_SCHEMA = SCHEMA["properties"]["observations"]["items"]
+# The router validates the envelope; evidence is accepted independently per item.
+ENVELOPE_SCHEMA = {"type": "object", "required": ["observations"], "properties": {
+    "observations": {"type": "array", "maxItems": 5}}}
+
+
+def grounded_observations(parsed, document, sources, *, rejected=None):
     try:
-        validate(parsed, SCHEMA)
+        validate(parsed, ENVELOPE_SCHEMA)
     except (ValidationError, TypeError):
+        if rejected is not None:
+            rejected.append({"reason": "INVALID_ENVELOPE"})
         return None
     by_id = {source["source_id"]: source for source in sources}
-    for item in parsed["observations"]:
+    accepted = []
+    for index, item in enumerate(parsed["observations"]):
+        try:
+            validate(item, ITEM_SCHEMA)
+        except (ValidationError, TypeError):
+            if rejected is not None:
+                rejected.append({"index": index, "reason": "INVALID_ITEM_SCHEMA"})
+            continue
         source = by_id.get(item["source_id"])
         if (not source or item["source_quote"] not in source["text"]
                 or item["claim_quote"] not in document
                 or not item["source_quote"].strip() or not item["claim_quote"].strip()):
-            return None
-    return parsed["observations"]
+            if rejected is not None:
+                rejected.append({"index": index, "reason": "QUOTE_NOT_GROUNDED"})
+            continue
+        if item not in accepted:
+            accepted.append(item)
+    return accepted if accepted or not parsed["observations"] else None
 
 
 def review_document(result, library, router, context, pii):
     review = {"status": "UNVERIFIED", "advisory_only": True, "source_quotes_validated": False,
-              "model_executed": False, "drive_used": False, "sources": [], "observations": [],
+              "model_executed": False, "model_response_accepted": False, "review_completed": False,
+              "rejected_observations": [], "drive_used": False, "sources": [], "observations": [],
               "snapshot_hash": library.summary["snapshot_hash"],
               "reason": "", "document_truncated": False, "selection": None}
     result.engine_data["rag"] = review
@@ -51,7 +71,9 @@ def review_document(result, library, router, context, pii):
     if library.summary["status"] not in ("READY", "PARTIAL"):
         review["reason"] = "REFERENCE_LIBRARY_UNAVAILABLE"
         return review
-    if result.quarantined:
+    from packages.verification_engine.sanitized_input import injection_parts
+
+    if result.quarantined or any(injection_parts(result.findings)):
         # 격리 문서는 지시문 블록·문자열을 뺀 본문으로만 검색·대조한다(v6 P3).
         from packages.verification_engine.sanitized_input import sanitized_reading_text
 
@@ -96,27 +118,36 @@ def review_document(result, library, router, context, pii):
                 "각 의견마다 문서의 실제 claim_quote와 참고자료의 실제 source_quote, source_id를 적어라. "
                 "두 인용을 대조한 한계 있는 의견만 적고 자료 밖 사실은 생성하지 마라. "
                 "무관하거나 근거가 없으면 observations를 빈 배열로 반환하라. URL이나 도구 호출은 출력하지 마라. "
-                "의견은 최대 5개, explanation은 두 문장 이내로 쓰고 JSON 객체 하나로만 답하라."),
+                "의견은 최대 5개, explanation은 두 문장 이내로 쓰고 JSON 객체 하나로만 답하라. "
+                "출력 항목의 형식: " + json.dumps(ITEM_SCHEMA, ensure_ascii=False)),
         user=json.dumps({"document": document, "untrusted_references": [
             {k: s[k] for k in ("source_id", "title", "text", "page")} for s in sources]}, ensure_ascii=False),
-        schema=SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory"})
+        schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory"})
     # One selected provider; the existing router bounds each call and its transient retries.
     outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                          policy=context.external_ai_policy, expected_task="참고자료 검토"))
     result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
+    review["model_executed"] = bool(outcome.executions or outcome.used)
     failed = [e.provider for e in outcome.executions if getattr(e, "provider", "") and not e.ok]
     if not outcome.used and failed:
         # 한 공급자가 실패(형식 오류·잘림·일시 장애)하면 다른 공급자로 한 번만 다시 묻는다.
         retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
                                        exclude=failed, expected_task="참고자료 검토"))
         result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
+        review["model_executed"] |= bool(retry.executions or retry.used)
         if retry.executions:
             review["retried_after"] = failed
             outcome = retry
-    review["model_executed"] = outcome.used
-    observations = grounded_observations(outcome.parsed, document, sources) if outcome.used and not outcome.quarantined else None
+    review["model_response_accepted"] = bool(outcome.used and not outcome.quarantined)
+    observations = grounded_observations(outcome.parsed, document, sources,
+        rejected=review["rejected_observations"]) if review["model_response_accepted"] else None
+    if observations is None:
+        review["reason"] = ("NO_GROUNDED_MODEL_ADVICE" if outcome.used else
+                            "MODEL_RESPONSE_REJECTED" if review["model_executed"] else "MODEL_UNAVAILABLE")
+        return review
+    review["review_completed"] = not review["rejected_observations"] and not review["document_truncated"]
     if not observations:
-        review["reason"] = "NO_GROUNDED_MODEL_ADVICE" if outcome.used else "MODEL_UNAVAILABLE"
+        review.update(status="REVIEWED_NO_ADVICE", reason="MODEL_RETURNED_NO_ADVICE_NOT_LEGAL_CLEARANCE")
         return review
     review.update(status="ADVISORY_REVIEWED", source_quotes_validated=True, observations=observations,
                   reason="EXACT_QUOTES_CHECKED_NOT_ENTAILMENT_OR_LEGAL_VALIDITY")
