@@ -535,15 +535,15 @@ td {
 }
 
 .empty-brand {
-  width: 280px;
+  width: 336px;
   max-width: 100%;
   margin: 0 auto;
 }
 
 .empty-emblem {
   display: block;
-  width: 100%;
-  max-width: 100%;
+  width: 83.333333%;
+  max-width: 280px;
   height: auto;
   aspect-ratio: 1;
   object-fit: contain;
@@ -551,15 +551,15 @@ td {
   margin: 0 auto;
 }
 
-.emblem-credit {
+.empty-lettering {
+  display: block;
   width: 100%;
-  margin: 16px 0 0;
-  font-size: 12px;
-  line-height: 1.7;
-  color: var(--muted);
-  word-break: keep-all;
-  overflow-wrap: anywhere;
-  text-wrap: balance;
+  max-width: 100%;
+  height: auto;
+  aspect-ratio: 2171 / 724;
+  object-fit: contain;
+  margin: 8px auto 0;
+  mix-blend-mode: multiply;
 }
 
 .empty-small {

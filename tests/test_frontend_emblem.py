@@ -64,13 +64,27 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
                 square = page.locator("#emptyState .empty-emblem")
                 expect(square).to_be_visible()
                 expect(page.locator("#emptyState button, #emptyCreate, .empty-title")).to_have_count(0)
-                credit = page.locator(".emblem-credit")
-                expect(credit).to_have_text("created by 스티브, 아나스타샤, 스텔라, 에이미, 쏘니")
-                assert credit.evaluate("""el => {
-                    const text = el.getBoundingClientRect(), image = el.previousElementSibling.getBoundingClientRect();
-                    return Math.abs(text.width - image.width) < 1 && text.top >= image.bottom
-                        && el.scrollWidth <= el.clientWidth && image.width >= 200;
+                expect(page.locator(".emblem-credit")).to_have_count(0)
+                expect(page.locator("#emptyState")).not_to_contain_text("created by")
+                lettering = page.locator(".empty-lettering")
+                expect(lettering).to_be_visible()
+                expect(lettering).to_have_attribute("src", "/static/img/acas-lettering.png")
+                expect(lettering).to_have_attribute("alt", "Army Consolidate Administrative School, SMART and HARMONY")
+                page.wait_for_function("""() => {
+                    const image = document.querySelector('.empty-lettering');
+                    return image.complete && image.naturalWidth === 2171 && image.naturalHeight === 724;
                 }""")
+                assert lettering.evaluate("""el => {
+                    const rect = el.getBoundingClientRect(), emblem = el.previousElementSibling.getBoundingClientRect();
+                    return Math.abs(rect.width / emblem.width - 1.2) < .01 && rect.top >= emblem.bottom
+                        && Math.abs(rect.left + rect.width / 2 - emblem.left - emblem.width / 2) < 1
+                        && Math.abs(rect.width / rect.height - 2171 / 724) < .02
+                        && rect.left >= 0 && rect.right <= innerWidth && emblem.width >= 200
+                        && Math.abs(emblem.width - Math.min(280, rect.width / 1.2)) < 1;
+                }""")
+                with Image.open(io.BytesIO(lettering.screenshot())).convert("RGB") as rendered:
+                    assert sum(max(pixel) - min(pixel) > 50 and min(pixel) < 160
+                               for pixel in rendered.getdata()) > 100
                 expect(square).to_have_attribute("src", "/static/img/acas-law-square-transparent.png")
                 page.wait_for_function("""() => {
                     const image = document.querySelector('#emptyState .empty-emblem');
