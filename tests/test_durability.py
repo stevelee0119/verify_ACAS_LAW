@@ -14,13 +14,16 @@ from apps.api.durability import AT_RISK, DURABLE, UNKNOWN, durability_report, lo
 
 
 @pytest.fixture(autouse=True)
-def clean_env(monkeypatch, tmp_path):
+def clean_env(monkeypatch, tmp_path, request):
     from packages.common.config import reset_settings
 
     for name in ("LV_DATABASE_URL", "DATABASE_URL", "LV_STORAGE_ROOT", "LV_DATA_DIR",
                  "RENDER_SERVICE_ID", "K_SERVICE", "DYNO", "WEBSITE_SITE_NAME",
                  "FLY_APP_NAME", "RAILWAY_SERVICE_ID"):
         monkeypatch.delenv(name, raising=False)
+    if "client" in request.fixturenames:
+        # The API fixture must never open a developer's existing default database.
+        monkeypatch.setenv("LV_DATABASE_URL", f"sqlite:///{tmp_path}/diagnostics.db")
     reset_settings()
     yield
     reset_settings()

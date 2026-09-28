@@ -130,10 +130,14 @@ def _factual_axis(documents: List[Any], consistency: List[Any], evidence: List[A
     not_provided = sum(r in ("EVIDENCE_NOT_PROVIDED", "REFERENCE_MISSING") for r in relations)
     attached = sum(r == "ATTACHED_NOT_ASSESSED" for r in relations)
     issues = consistency + evidence
+    rag_issues = [i for d in documents for i in d.engine_data.get("rag", {}).get("issues", [])]
+    unclassified = sum((c.get("attributes") or {}).get("classification_status") == "UNCLASSIFIED" for c in claims)
     if not facts:
         coverage = "NOT_ASSESSED"          # 사실 주장을 찾지 못했다. '이상 없음'이 아니다.
     elif issues:
         coverage = "ISSUES_FOUND"
+    elif rag_issues:
+        coverage = "ADVISORY_REVIEWED"
     elif attached or any(d.engine_data.get("attachments", {}).get("items") for d in documents):
         coverage = "NO_ISSUES_IN_SCOPE"    # 검사한 범위 안에서는 이상이 없었다
     else:
@@ -143,6 +147,10 @@ def _factual_axis(documents: List[Any], consistency: List[Any], evidence: List[A
         "contradiction_issues": len(consistency),
         "evidence_issues": len(evidence),
         "fact_claims": len(facts),
+        "unclassified_claims": unclassified,
+        "rag_advisory_issues": len(rag_issues),
+        "rag_linked_claims": len({cid for i in rag_issues for cid in i.get("claim_ids", [])}),
+        "rag_advice_is_truth_verification": False,
         "facts_without_provided_evidence": not_provided,
         "facts_with_attached_evidence": attached,
         "coverage": coverage,

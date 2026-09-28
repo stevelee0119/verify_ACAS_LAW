@@ -142,7 +142,7 @@ class Settings:
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
     authorship_max_chars: int = field(default_factory=lambda: max(6000, min(48000,
         int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
-    rule_version: str = "2026.09.27.6"
+    rule_version: str = "2026.09.28.1"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

@@ -205,6 +205,9 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
         table(["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"],
               all_hallucination_rows, [1.0, 1.7, 1.6, 2.7])
 
+    from packages.legal_engine.related_authorities import report_lines as related_lines
+    for line in related_lines(run_result.documents):
+        paragraph(line)
     from packages.rag_engine.review import report_lines
     reference_lines = report_lines(run_result)
     if reference_lines:

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.mark.parametrize("width,height,max_cell", [(1440, 1000, 80), (768, 1024, 80), (390, 1200, 80)])  # 종전 97~117px
-def test_summary_metrics_are_compact(width, height, max_cell):
+def test_summary_metrics_are_compact(width, height, max_cell, tmp_path):
     static = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
@@ -37,7 +37,13 @@ def test_summary_metrics_are_compact(width, height, max_cell):
         if path in replies:
             return route.fulfill(json=replies[path])
         if path.endswith("/result"):
-            return route.fulfill(json={"documents": [{"document_id": "d1", "filename": "준비서면.pdf"}]})
+            return route.fulfill(json={"documents": [{"document_id": "d1", "filename": "준비서면.pdf",
+                "engine_data": {"related_authorities": {"status": "SOURCE_REVIEW_ONLY", "note": "직접 인용과 별도 검토",
+                    "candidates": [{"citation_id": "related1", "raw_text": "민법 제492조"}], "verdicts": []},
+                    "rag": {"status": "RETRIEVED_ONLY", "observation_limit_reached": True,
+                        "contract_review": {"calculations": [{"outputs": {"delay_days": "12", "daily_penalty": "60000", "penalty": "720000"},
+                            "stated_days_match": True, "note": "자료상 날짜의 조건부 검산. 적법성 확정 아님."}]}}}}],
+                "run_manifest": {"reference_library": {"status": "READY"}}})
         if path.endswith("/case-matrix"):
             return route.fulfill(body="null", content_type="application/json")
         return route.fulfill(json=[])
@@ -69,5 +75,13 @@ def test_summary_metrics_are_compact(width, height, max_cell):
             for title in ("배포가능 상태", "검증위험 지수", "AI 작성 진단"):
                 expect(page.locator(".metric", has_text=title)).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.evaluate("switchTab('ai-verification')")
+            page.get_by_text("준비서면.pdf: 추가 관련 법조문 검토", exact=True).click()
+            page.get_by_text("준비서면.pdf: 검색 완료 · AI 대조 미실행", exact=True).click()
+            expect(page.get_by_text("민법 제492조", exact=False)).to_contain_text("별도 검토 필요")
+            expect(page.get_by_text("12일 × 60000원 = 720000원", exact=True)).to_be_visible()
+            expect(page.get_by_text("의견 5건 한도 도달 · 전체 주장 검토 완료 아님", exact=True)).to_be_visible()
+            assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
+            page.screenshot(path=str(tmp_path / f"evidence-review-{width}.png"), full_page=True)
         finally:
             browser.close()

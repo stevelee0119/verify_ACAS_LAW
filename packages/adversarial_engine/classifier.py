@@ -178,6 +178,14 @@ def classify(
     # 숨김·인코딩·유니코드 은닉·AI 호명이 있으면 '설명'이라는 겉모습을 믿지 않는다.
     descriptive = (not (is_hidden or encoded or unicode_obfuscated or cross_layer_only or addresses_ai)
                    and _mentions_only(text, hits))
+    # Quoted commands in an explicit security lesson are observations, not execution evidence.
+    outside_quotes = text
+    for left, right in QUOTE_WRAPPERS[:6]:
+        outside_quotes = re.sub(re.escape(left) + r"[^\n]*?" + re.escape(right), "", outside_quotes)
+    educational_quote = (outside_quotes != text and re.search(r"보안\s*교육|인젝션\s*(?:예시|사례|설명)", outside_quotes)
+                         and not IMPERATIVE_RE.search(outside_quotes) and not find_pattern_hits(outside_quotes))
+    if educational_quote and not (is_hidden or encoded or unicode_obfuscated or cross_layer_only):
+        descriptive = True
 
     score = sum(h.weight for h in hits)
     if addresses_ai:

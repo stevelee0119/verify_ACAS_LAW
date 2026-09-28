@@ -47,6 +47,21 @@ def shareable_snapshot(snapshot):
                 name = entity.get("text") or entity.get("name") or entity.get("value")
                 if isinstance(name, str) and len(name) > 1:
                     names.add(name)
+    def collect_names(value):
+        if isinstance(value, dict):
+            for item in value.values():
+                collect_names(item)
+        elif isinstance(value, list):
+            if value and all(isinstance(item, dict) and isinstance(item.get("text"), str) for item in value):
+                names.update(m.text for m in detect("\n".join(item["text"] for item in value))
+                             if m.kind in {"PERSON", "COMPANY"} and m.confidence >= 0.6)
+            for item in value:
+                collect_names(item)
+        elif isinstance(value, str):
+            names.update(m.text for m in detect(value) if m.kind in {"PERSON", "COMPANY"} and m.confidence >= 0.6)
+    # Detect before omitting raw pages, so a later unlabelled quotation of the
+    # same identified person cannot reintroduce their name in a shareable export.
+    collect_names(source)
     ordered_names = sorted(names, key=len, reverse=True)
     internal_fields = {"review_note", "memo", "assignee", "lead_reviewer", "represented_party",
                        "storage_key", "path", "raw_response", "response_body", "request_body"}
@@ -114,6 +129,17 @@ def view_from_snapshot(snapshot, snapshot_hash):
         # 필드가 추가되기 전에 저장된 검증 결과에는 일부 키가 없다. 없는 값 때문에
         # 형식마다 AttributeError로 산출물이 빠지지 않도록 빈 값으로 채운다.
         doc = SimpleNamespace(**(_DOCUMENT_DEFAULTS | item))
+        # Derive presentation from authoritative levels, leaving the frozen input untouched.
+        from packages.legal_engine.components import citation_components
+        citations = {c.get("citation_id"): c for c in doc.citations}
+        for verdict in doc.engine_data.get("legal_verdicts", []):
+            citation = citations.get(verdict.get("citation_id"), {})
+            kind = verdict.get("type") or citation.get("type")
+            if kind and verdict.get("levels"):
+                derived = citation_components(kind, verdict["levels"],
+                    article_cited=bool(citation.get("article")) if citation else True)
+                if derived:
+                    verdict["components"] = derived
         doc.normalized = SimpleNamespace(sha256=item.get("sha256"), parser_name=item.get("parser"))
         doc.findings = [FrozenFinding(f) for f in item.get("findings", [])]
         view.documents.append(doc)

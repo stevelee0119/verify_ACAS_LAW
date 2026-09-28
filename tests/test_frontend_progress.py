@@ -43,6 +43,7 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
         browser = playwright.chromium.launch(**options)
         try:
             for width, height in ((1440, 960), (390, 844)):
+                disconnected[0] = False
                 protection_requests.clear()
                 page = browser.new_page(viewport={"width": width, "height": height})
                 errors = []
@@ -66,7 +67,7 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 # generation을 올려야 이미 날아간 조회의 응답도 무시된다.
                 # clearTimeout은 다음 예약만 취소하고 진행 중인 요청은 못 막는다.
                 page.evaluate("state.generation += 1; clearTimeout(state.timer); "
-                              "state.pollError = null; state.progressSeen.at -= 65000; "
+                              "state.pollError = null; state.pollFailures = 0; state.progressSeen.at -= 65000; "
                               "renderProgressNotice()")
                 expect(notice).to_contain_text("변경되지 않았습니다")
                 disconnected[0] = True
@@ -75,7 +76,8 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
                 assert notice.evaluate("el => el.scrollWidth <= el.clientWidth")
                 page.screenshot(path=str(tmp_path / f"progress-reconnect-{width}.png"), full_page=True)
                 disconnected[0] = False
-                expect(notice).to_contain_text("서버 응답은 정상", timeout=5000)
+                # First failed poll backs off for 4 seconds; allow runner scheduling overhead.
+                expect(notice).to_contain_text("서버 응답은 정상", timeout=10000)
                 assert protection_requests == ["POST"]
                 page.evaluate("pollRun(state.generation, 0)")
                 page.wait_for_timeout(250)

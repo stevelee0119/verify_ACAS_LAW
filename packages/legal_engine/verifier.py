@@ -1086,7 +1086,14 @@ class LegalVerifier:
 
     @staticmethod
     def _unverified_finding(citation: Citation, message: str, record: Optional[SourceRecord]) -> Finding:
-        features = {"heuristic_only": False, "source_count": 0}
+        reason = ("IDENTITY_AMBIGUOUS" if "ambiguous exact law identity" in message
+                  else "RATE_LIMITED" if "429" in message
+                  else "SOURCE_TIMEOUT" if any(s in message.lower() for s in ("timeout", "timed out"))
+                  else "SOURCE_UNAVAILABLE")
+        features = {"heuristic_only": False, "source_count": 0, "reason_code": reason,
+                    "retryable": reason in ("RATE_LIMITED", "SOURCE_TIMEOUT")}
+        explanation = ("공식 목록의 법령 식별자가 없거나 모호하여 정확한 법령을 선택하지 못했다. "
+                       if reason == "IDENTITY_AMBIGUOUS" else "공식 Source 조회를 완료하지 못했다. ")
         return Finding.create(
             type=FindingType.CASE_NOT_FOUND if citation.type == CitationType.CASE else FindingType.LAW_CITATION_ERROR,
             status=VerificationStatus.UNVERIFIED,
@@ -1094,7 +1101,7 @@ class LegalVerifier:
             evidence_grade=EvidenceGrade.U,
             title=f"검증하지 못한 인용: {citation.raw_text}",
             detail=(
-                f"{message} 공식 Source를 사용할 수 없어 이 항목은 미검증으로 남는다. "
+                f"{message} {explanation}이 항목은 미검증으로 남는다. "
                 "미검증은 오류가 없다는 의미가 아니다."
             ),
             confidence=confidence_score(features),

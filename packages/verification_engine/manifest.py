@@ -8,8 +8,35 @@
 from __future__ import annotations
 
 import time
+import hashlib
+import os
+import re
+import subprocess
+from functools import lru_cache
+from pathlib import Path
 from contextlib import contextmanager
 from typing import Any, Dict, Iterator, List, Optional
+
+
+@lru_cache(maxsize=1)
+def implementation_identity():
+    root = Path(__file__).resolve().parents[2]
+    commit = os.getenv("RENDER_GIT_COMMIT") or os.getenv("GITHUB_SHA") or ""
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", commit):
+        try:
+            commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+                                    text=True, timeout=2, check=True).stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            commit = ""
+    files = ("packages/pii_engine/detector.py", "packages/llm_router/privacy.py",
+             "packages/document_engine/docx_parser.py", "packages/document_engine/analysis_text.py",
+             "packages/claim_engine/classification.py", "packages/claim_engine/attachments.py",
+             "packages/rag_engine/review.py", "packages/rag_engine/contract_facts.py",
+             "packages/legal_engine/semantic_consensus.py", "packages/legal_engine/normalize.py")
+    hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files if (root / name).is_file()}
+    return {"git_commit": commit if re.fullmatch(r"[0-9a-fA-F]{40}", commit) else None,
+            "implementation_hashes": hashes, "masking_policy": "payload-pii-v1",
+            "analysis_text_contract": "analysis-text-v1"}
 
 
 class StageHandle:
@@ -105,6 +132,7 @@ class RunManifest:
             "ocr_engine_available": bool((effective_environment.get("resources") or {}).get("korean_ocr")),
             "missing_resources": effective_environment.get("missing_required", []),
             "versions": dict(versions or {}),
+            "implementation": implementation_identity(),
             # 실행 환경 점검 결과와 환경 지문(v5 2-1). 두 실행의 지문이 같아야 결과를 곧바로 비교할 수 있다.
             "environment": effective_environment,
             "engines": engines,

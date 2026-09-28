@@ -39,16 +39,18 @@ def test_fact_remarks_are_separated_from_the_authorship_finding():
     assert all(str(r.status) == "UNVERIFIED" for r in remarks)
 
 
-def _deterministic(rule, kind=FindingType.ARITHMETIC_MISMATCH):
+def _deterministic(rule, title, kind=FindingType.ARITHMETIC_MISMATCH):
     return Finding.create(type=kind, status=VerificationStatus.CONTRADICTED, severity=Severity.HIGH,
-                          evidence_grade=EvidenceGrade.A, title="재계산 결과", detail="",
+                          evidence_grade=EvidenceGrade.A, title=title, detail="",
                           confidence_features={"rule_id": rule}, document_id="d")
 
 
 def test_confirmed_remarks_are_folded_into_the_deterministic_verdict():
     findings = create_ai_detector_findings(_doc(), _result(REASONS)) + [
-        _deterministic("CALC.DATE_RANGE_DAYS"), _deterministic("CALC.SUM"),
-        _deterministic("EVI.EVIDENCE_TIMELINE_INVERSION", FindingType.EVIDENCE_TIMELINE_INVERSION)]
+        _deterministic("CALC.DATE_RANGE_DAYS", "입원기간 2025. 3. 2. ~ 2025. 3. 13.의 일수 오류"),
+        _deterministic("CALC.SUM", "합계 오류: 33,000,000원 / 26,350,000원"),
+        _deterministic("EVI.EVIDENCE_TIMELINE_INVERSION", "진술서 작성일 2026. 10. 15.이 서면보다 늦음",
+                       FindingType.EVIDENCE_TIMELINE_INVERSION)]
     out = reconcile_model_fact_remarks(findings)
     assert not [f for f in out if f.type == FindingType.MODEL_FACT_REMARK]
     confirmed = [f for f in out if f.confidence_features.get("model_remarks")]

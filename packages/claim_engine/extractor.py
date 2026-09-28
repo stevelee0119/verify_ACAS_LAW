@@ -14,7 +14,8 @@ from packages.common.schemas import Claim, Citation, Entity, Event, NormalizedDo
 from packages.common.textutil import sentences
 
 from .calculation import parse_amounts
-from .classification import classify_sentence, document_kind, segment_kind
+from .classification import (classify_sentence, document_kind, segment_kind, assertion_mode,
+                             event_role, NOMINAL_FACT_RE, OPINION_RE as EXPLICIT_OPINION_RE)
 from .entity_resolution import resolve_entities
 from .structure import extract_evidence_references, structure_claim_text
 
@@ -92,7 +93,9 @@ COURT_CONTEXT_RE = re.compile(r"([가-힣]{2,10}(?:지방|고등|가정|행정|�
 
 
 def classify_claim(sentence: str) -> ClaimType:
-    if OPINION_RE.search(sentence):
+    if assertion_mode(sentence) in ("HYPOTHETICAL", "ALTERNATIVE", "QUOTED_OTHER"):
+        return ClaimType.OPINION
+    if OPINION_RE.search(sentence) or EXPLICIT_OPINION_RE.search(sentence):
         return ClaimType.OPINION
     if CASE_HOLDING_RE.search(sentence):
         return ClaimType.CASE_HOLDING
@@ -104,9 +107,29 @@ def classify_claim(sentence: str) -> ClaimType:
         return ClaimType.DOCUMENT_EXISTENCE
     if CALCULATION_RE.search(sentence) and parse_amounts(sentence):
         return ClaimType.CALCULATION
-    if FACT_RE.search(sentence):
+    if FACT_RE.search(sentence) or NOMINAL_FACT_RE.search(sentence):
         return ClaimType.FACT
     return ClaimType.OPINION
+
+
+def partial_date_candidates(sentence, block_text):
+    """Keep omitted years as contextual candidates, never confirmed event dates."""
+    full = [m.span() for m in DATE_RE.finditer(sentence)]
+    years = sorted({int(m["y"]) for m in DATE_RE.finditer(block_text)})
+    candidates = []
+    for match in re.finditer(r"(?<![\d.])(?P<m>\d{1,2})\s*[.월]\s*(?P<d>\d{1,2})\s*[.일]", sentence):
+        if any(start <= match.start() < end for start, end in full):
+            continue
+        values = []
+        for year in years:
+            try:
+                values.append(date(year, int(match["m"]), int(match["d"])).isoformat())
+            except ValueError:
+                continue
+        candidates.append({"raw_text": match.group(), "span": list(match.span()), "candidate_dates": values,
+            "status": "CONTEXT_CANDIDATE" if len(values) == 1 else "UNRESOLVED",
+            "basis": "SAME_BLOCK_EXPLICIT_YEARS", "confirmed": False})
+    return candidates
 
 
 def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] = None,
@@ -149,6 +172,12 @@ def extract_claims(doc: NormalizedDocument, citations: Optional[List[Citation]] 
                                 "evidence_relationship": "UNASSESSED",
                                 # 제목·안내·인용·OCR·표 구간을 본문과 구분해 남긴다.
                                 "segment_kind": segment, "document_kind": kind,
+                                "assertion_mode": assertion_mode(sentence), "event_role": event_role(sentence),
+                                "partial_date_candidates": partial_date_candidates(sentence, block.text),
+                                "classification_status": ("UNCLASSIFIED" if claim_type == ClaimType.OPINION
+                                    and assertion_mode(sentence) == "ASSERTED"
+                                    and not (OPINION_RE.search(sentence) or EXPLICIT_OPINION_RE.search(sentence))
+                                    else "CLASSIFIED"),
                                 "verification_target": claim_type not in (
                                     ClaimType.DOCUMENT_META, ClaimType.ADVERSARIAL_INSTRUCTION)},
                     project_id=project_id or doc.metadata.get("project_id"),

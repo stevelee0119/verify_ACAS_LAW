@@ -7,7 +7,7 @@ import json
 from jsonschema import ValidationError, validate
 
 from packages.common.enums import ExternalAIPolicy, LLMRole, VerificationProfile
-from packages.document_engine.reading_text import build_reading_text
+from packages.document_engine.analysis_text import analysis_text
 from packages.llm_router.providers import LLMRequest
 
 # 최상위에는 모델이 덧붙이는 설명 키를 허용한다(실제 실행에서 Anthropic 응답 2건이 이 이유로 거부돼 Drive 대조가
@@ -71,21 +71,11 @@ def review_document(result, library, router, context, pii):
     if library.summary["status"] not in ("READY", "PARTIAL"):
         review["reason"] = "REFERENCE_LIBRARY_UNAVAILABLE"
         return review
-    from packages.verification_engine.sanitized_input import injection_parts
-
-    if result.quarantined or any(injection_parts(result.findings)):
-        # 격리 문서는 지시문 블록·문자열을 뺀 본문으로만 검색·대조한다(v6 P3).
-        from packages.verification_engine.sanitized_input import sanitized_reading_text
-
-        text, review["input"] = sanitized_reading_text(result.normalized, result.findings)
-        if not text.strip():
-            review.update(status="SKIPPED", reason="NO_TEXT_AFTER_REMOVING_INSTRUCTIONS")
-            return review
-    else:
-        text = build_reading_text(result.normalized).text
-        review["input"] = {"mode": "FULL_TEXT"}
-    review["document_truncated"] = len(text) > 12000
-    document = text[:12000]
+    document, review["input"] = analysis_text(result.normalized, result.findings)
+    if not document.strip():
+        review.update(status="SKIPPED", reason="NO_TEXT_AFTER_REMOVING_INSTRUCTIONS")
+        return review
+    review["document_truncated"] = bool(review["input"]["omitted_chars"])
     selection = library.select(document + "\n" + "\n".join(context.requested_issues))
     hits = selection.pop("sources")
     selection["sources_used"] = [{k: h.get(k) for k in ("source_id", "file_id", "title", "folder_path", "page",
@@ -96,6 +86,12 @@ def review_document(result, library, router, context, pii):
     document = mask(document)
     sources = [{**source, "text": mask(source["text"]), "title": mask(source["title"])} for source in hits]
     review["sources"] = sources
+    eligible = [c for c in getattr(result, "claims", []) if c.get("type") not in ("DOCUMENT_META", "ADVERSARIAL_INSTRUCTION")]
+    review["claim_coverage"] = {"eligible_claims": len(eligible), "linked_claims": 0,
+        "unreviewed": [{"claim_id": c.get("claim_id"), "reason": "NO_GROUNDED_COMPARISON"} for c in eligible],
+        "all_claims_verified": False}
+    from .contract_facts import review_contract_calculations
+    review["contract_review"] = review_contract_calculations(document, sources)
     review["coverage"] = selection.get("coverage")
     if selection["decision"] == "INCOMPLETE_COVERAGE":
         review.update(status="INCOMPLETE_COVERAGE", reason="RELEVANT_REFERENCES_NOT_FULLY_READ")
@@ -117,6 +113,8 @@ def review_document(result, library, router, context, pii):
                 "제공한 참고자료는 공식 법령·판례 확인을 대체하지 않는다. AI 작성 여부나 위조 여부를 판단하지 마라. "
                 "각 의견마다 문서의 실제 claim_quote와 참고자료의 실제 source_quote, source_id를 적어라. "
                 "두 인용을 대조한 한계 있는 의견만 적고 자료 밖 사실은 생성하지 마라. "
+                "최초 기한과 변경 기한은 동시에 참일 수 있다. 기한 변경은 CONTEXT로, 최종 납품과 부분 납품은 구분하라. "
+                "예비적·가정적 주장과 별도 법률상 전제의 청구액 차이를 곧바로 산술 모순으로 판단하지 마라. "
                 "무관하거나 근거가 없으면 observations를 빈 배열로 반환하라. URL이나 도구 호출은 출력하지 마라. "
                 "의견은 최대 5개, explanation은 두 문장 이내로 쓰고 JSON 객체 하나로만 답하라. "
                 "출력 항목의 형식: " + json.dumps(ITEM_SCHEMA, ensure_ascii=False)),
@@ -145,7 +143,17 @@ def review_document(result, library, router, context, pii):
         review["reason"] = ("NO_GROUNDED_MODEL_ADVICE" if outcome.used else
                             "MODEL_RESPONSE_REJECTED" if review["model_executed"] else "MODEL_UNAVAILABLE")
         return review
-    review["review_completed"] = not review["rejected_observations"] and not review["document_truncated"]
+    from .contract_facts import link_observations
+    masked_claims = [{**c, "text": mask(c.get("text", ""))} for c in getattr(result, "claims", [])]
+    review["issues"] = link_observations(observations, sources, masked_claims)
+    linked = {claim_id for issue in review["issues"] for claim_id in issue["claim_ids"]}
+    review["claim_coverage"].update(linked_claims=len(linked),
+        unreviewed=[{"claim_id": c.get("claim_id"), "reason": "NOT_LINKED_TO_SELECTED_EXCERPTS"}
+                    for c in eligible if c.get("claim_id") not in linked])
+    review["observation_limit_reached"] = len(observations) >= 5
+    review["assessment_scope"] = "SELECTED_EXCERPTS_ONLY_NOT_ALL_CLAIMS"
+    review["review_completed"] = (not review["rejected_observations"] and not review["document_truncated"]
+                                  and not review["observation_limit_reached"])
     review["comparison_completed"] = True
     review["legal_binding_determined"] = False
     review["authority_limitation"] = "내부 안내자료에 기초한 참고 의견이며, 공식 법령·상급 규정 확인 필요"
@@ -162,7 +170,8 @@ def review_document(result, library, router, context, pii):
         review.update(status="REVIEWED_NO_ADVICE", reason="MODEL_RETURNED_NO_ADVICE_NOT_LEGAL_CLEARANCE")
         return review
     review.update(status="ADVISORY_REVIEWED", source_quotes_validated=True, observations=observations,
-                  reason="EXACT_QUOTES_CHECKED_NOT_ENTAILMENT_OR_LEGAL_VALIDITY")
+                  reason=("OBSERVATION_LIMIT_REACHED" if review["observation_limit_reached"] else
+                          "EXACT_QUOTES_CHECKED_NOT_ENTAILMENT_OR_LEGAL_VALIDITY"))
     return review
 
 
@@ -200,4 +209,10 @@ def report_lines(run_result):
         for item in review.get("observations", []):
             lines.append(f"문서: {item['claim_quote']}\n근거 {item['source_id']}: {item['source_quote']}\n"
                          f"AI 참고 의견({item['relationship']}): {item['explanation']}")
+        for calc in review.get("contract_review", {}).get("calculations", []):
+            values = calc["outputs"]
+            lines.append(f"자료 기반 조건부 검산: {values['delay_days']}일 × {values['daily_penalty']}원 = "
+                         f"{values['penalty']}원 / 기재 일수 일치: {calc['stated_days_match']} / {calc['note']}")
+        if review.get("observation_limit_reached"):
+            lines.append("참고 의견 5건 한도에 도달했다. 전체 주장 검토 완료를 의미하지 않는다.")
     return lines

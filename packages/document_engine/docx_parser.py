@@ -104,6 +104,13 @@ class DocxParser(DocumentParser):
             tracked_deletes: List[Dict[str, Any]] = []
             hidden_runs: List[Dict[str, Any]] = []
             rsids: set[str] = set()
+            table_positions = {}
+            for table_index, table in enumerate(root.iter(w("tbl"))):
+                for row_index, row in enumerate(table.findall(w("tr"))):
+                    for column_index, cell in enumerate(row.findall(w("tc"))):
+                        for paragraph in cell.iter(w("p")):
+                            table_positions[paragraph] = {"table_ref": f"docx_t{table_index}",
+                                "row": row_index, "column": column_index}
 
             for para in root.iter(w("p")):
                 text = _para_text(para, include_deleted=False)
@@ -152,6 +159,7 @@ class DocxParser(DocumentParser):
                             page=1,
                             source_layer="visible_text",
                             block_type="table" if in_table else "paragraph",
+                            attributes=dict(table_positions.get(para, {})),
                         )
                     )
                     visible_parts.append(visible_text.strip())

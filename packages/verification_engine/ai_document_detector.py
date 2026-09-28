@@ -538,7 +538,7 @@ def _fact_remark_finding(doc: NormalizedDocument, reason: str, category: str) ->
                 "결정론 엔진의 재계산 결과와 대조한다."),
         confidence=0.4, confidence_features={"category": category, "model_remark": reason,
                                              "rule_id": f"MODEL.FACT_REMARK.{category}"},
-        document_id=doc.document_id, engine=ENGINE_NAME, tags=["MODEL_REMARK", category])
+        document_id=doc.document_id, engine=ENGINE_NAME, tags=["MODEL_REMARK", category], advisory_only=True)
 
 
 # 모델 지적과 결정론 판정을 잇는 값 표지: 날짜(YYYY. M. D.), 원 단위 금액, 법령 조문(○○법 제N조).
@@ -592,8 +592,8 @@ def _anchor_cover(remark: Finding, candidates: List[Finding]) -> tuple:
 def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[str, int]] = None) -> List[Finding]:
     """모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(J2).
 
-    1) 같은 종류의 결정론 판정(재계산·작성일 대조)이 있으면 지적을 그 판정의 근거로 붙이고 지적 항목은 뺀다.
-    2) 없으면 지적에 적힌 값(날짜·금액·조문)을 결정론 판정(CONTRADICTED) 제목의 값과 맞춘다. 지적의 모순 문장이
+    1) 종류가 같다는 이유만으로 확인하지 않는다. 가정적·예비적 주장은 검토 의견으로 남긴다.
+    2) 지적에 적힌 값(날짜·금액·조문)을 결정론 판정(CONTRADICTED) 제목의 값과 맞춘다. 지적의 모순 문장이
        모두 확인되면 그 판정들의 근거로 붙이고 지적 항목은 뺀다. 일부만 확인되면 확인된 판정에 붙이되, 지적 항목은
        확인하지 못한 문장과 함께 사람 확인으로 남긴다.
     3) 어느 것으로도 확인하지 못하면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
@@ -608,21 +608,11 @@ def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[s
     out = [f for f in findings if f.type != FindingType.MODEL_FACT_REMARK]
     for remark in remarks:
         text = remark.confidence_features["model_remark"]
-        category = remark.confidence_features.get("category")
-        prefixes = CONFIRMING_RULES.get(category, ())
-        match = next((f for f in out if f.status == VerificationStatus.CONTRADICTED and f.document_id == remark.document_id
-                      and str((f.confidence_features or {}).get("rule_id", "")).startswith(prefixes)
-                      and not (f.confidence_features or {}).get("model_remarks")), None)
-        if match is None:
-            match = next((f for f in out if f.status == VerificationStatus.CONTRADICTED
-                          and f.document_id == remark.document_id
-                          and str((f.confidence_features or {}).get("rule_id", "")).startswith(prefixes)), None)
-        if match is not None:
-            match.confidence_features.setdefault("model_remarks", []).append(text)
-            counts["confirmed"] += 1
-            continue
+        from packages.claim_engine.classification import assertion_mode
+        conditional = assertion_mode(text) in {"HYPOTHETICAL", "ALTERNATIVE", "QUOTED_OTHER", "LEGAL_POSITION"}
         candidates = [f for f in out if f.status == VerificationStatus.CONTRADICTED
-                      and f.document_id == remark.document_id and (f.confidence_features or {}).get("rule_id")]
+                      and f.document_id == remark.document_id and (f.confidence_features or {}).get("rule_id")
+                      and not f.advisory_only and not conditional]
         used, unresolved = _anchor_cover(remark, candidates)
         for finding in used:
             finding.confidence_features.setdefault("model_remarks", []).append(text)

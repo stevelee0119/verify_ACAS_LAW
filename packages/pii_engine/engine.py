@@ -5,7 +5,7 @@ Original → Rule-based PII + NER Detection → Context Validation
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional
 
 from packages.common.enums import ExternalAIPolicy
@@ -48,6 +48,9 @@ class PIIEngine:
 
     def mask_text(self, text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> MaskResult:
         matches = [m for m in detect(text, block_id=block_id, page=page) if m.confidence >= MIN_CONFIDENCE]
+        return self._mask_matches(text, matches)
+
+    def _mask_matches(self, text, matches):
         if not matches:
             return MaskResult(text, [], {})
         replacements: Dict[str, str] = {}
@@ -74,8 +77,23 @@ class PIIEngine:
             ]
             return masked
 
-        for block in doc.body_blocks():
-            result = self.mask_text(block.text, block_id=block.block_id, page=block.page)
+        blocks = doc.body_blocks()
+        # Labels and their values may be different table cells. Detect across the
+        # assembled text, then map contained matches back to unchanged block spans.
+        contextual = [m for m in detect("\n".join(b.text for b in blocks)) if m.confidence >= MIN_CONFIDENCE]
+        offset = 0
+        for block in blocks:
+            matches = [m for m in detect(block.text, block_id=block.block_id, page=block.page)
+                       if m.confidence >= MIN_CONFIDENCE]
+            spans = {(m.start, m.end) for m in matches}
+            for match in contextual:
+                if offset <= match.start < match.end <= offset + len(block.text):
+                    span = (match.start - offset, match.end - offset)
+                    if span not in spans:
+                        matches.append(replace(match, start=span[0], end=span[1], block_id=block.block_id, page=block.page))
+                        spans.add(span)
+            offset += len(block.text) + 1
+            result = self._mask_matches(block.text, matches)
             masked.blocks.append(
                 {"block_id": block.block_id, "page": block.page, "text": result.masked_text,
                  "layer": block.source_layer}

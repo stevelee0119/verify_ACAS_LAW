@@ -162,7 +162,9 @@ class HallucinationTableRow:
             "basis": self.basis,
             # 이 표는 '법률 인용 오류'와 '근거가 확인되지 않은 주장'을 다룬다. 작성 주체(AI 사용
             # 여부)는 별도 축에서 판단하며, 이 표의 항목을 그 근거로 쓰지 않는다.
-            "error_category": ("LEGAL_CITATION_ERROR" if self.basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH")
+            "error_category": ("CITATION_CONTRADICTION" if self.basis == "CONTRADICTION"
+                               else "APPLICATION_DIFFERENCE" if self.basis == "DISTINGUISHABLE"
+                               else "LEGAL_CITATION_ERROR" if self.basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH")
                                else "UNSUPPORTED_LEGAL_BASIS"),
             "authorship_evidence": False,
         }
@@ -424,7 +426,7 @@ async def verify_argument_validity(
                 page=c.page,
                 engine=ENGINE_NAME,
                 tags=finding_tags,
-                advisory_only=distinguishable,
+                advisory_only=contradiction or distinguishable,
             )
         )
 

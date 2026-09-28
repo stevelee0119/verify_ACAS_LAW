@@ -90,8 +90,12 @@ PREFIX_MULTI = r"(?:원고|피고인|피고|참고인|피의자|증인|고소인
 PREFIX_SINGLE = r"(?:[부모처자](?:\s*[(（][父母妻子][)）])|\b[부모처자]\b)"
 
 NAME_RE = re.compile(
-    rf"(?<![가-힣])(?:{PREFIX_MULTI}\s+|{PREFIX_SINGLE}\s+)"
+    rf"(?<![가-힣])(?:{PREFIX_MULTI}[ \t]+|{PREFIX_SINGLE}[ \t]+)"
     r"([가-힣]{2,4}?)(?:\s*\([^)]+\))?" + JOSA + r"?(?![가-힣])"
+)
+LABELLED_NAME_RE = re.compile(
+    r"(?<![가-힣])(?:대표이사|대표자|성명|서명자)[ \t]*(?:[:：|][ \t]*|[(（][ \t]*|[ \t]+|\r?\n[ \t]*)"
+    r"([가-힣]{2,4}?)(?=[ \t]*(?:[)）|,.;\n]|$)|[ \t]+(?:서명|인|귀하))"
 )
 
 # 정상적인 법률·행정·군사·계약용어가 인명(PERSON)으로 과잉 마스킹되는 것을 방지하기 위한 Stopword 목록
@@ -121,8 +125,8 @@ MEDICAL_PRESCRIPTION_RE = re.compile(
     r"([가-힣A-Za-z0-9\s,·~]+?(?:\d+(?:\.\d+)?\s*(?:mg|g|ml|정|포|캡슐|회|일분)|흡입액|복용약|주사액)[가-힣A-Za-z0-9\s,·~]*)"
 )
 # 법인 표기. 조사·부사로 끝나는 앞말을 상호로 오인하지 않도록 stopword를 둔다.
-COMPANY_SUFFIX_RE = re.compile(r"(?<![가-힣])([가-힣A-Za-z0-9]{2,10})\s*(?:주식회사|㈜|유한회사|합자회사)")
-COMPANY_PREFIX_RE = re.compile(r"(?:주식회사|유한회사|합자회사)\s+([가-힣A-Za-z0-9]{1,20})|㈜\s*([가-힣A-Za-z0-9]{1,20})")
+COMPANY_SUFFIX_RE = re.compile(r"(?<![가-힣])([가-힣A-Za-z0-9]{2,10})[ \t]*(?:주식회사|㈜|유한회사|합자회사)")
+COMPANY_PREFIX_RE = re.compile(r"(?:주식회사|유한회사|합자회사)[ \t]+([가-힣A-Za-z0-9]{1,20})|㈜[ \t]*([가-힣A-Za-z0-9]{1,20})")
 COMPANY_STOPWORDS = {
     "따라", "대하여", "관하여", "위하여", "의하여", "그리고", "그러나", "다만", "또한",
     "상대로", "대한", "관한", "위한", "의한", "있는", "없는", "같은", "해당", "본건",
@@ -133,7 +137,7 @@ COMPANY_STOPWORDS = {
 INSPECTION_NOUNS = {"포장상태", "물품", "외관", "품질", "성능", "정밀", "현장", "서류", "합격", "규격", "가공", "검수"}
 
 NAME_TITLE_RE = re.compile(
-    r"(?<![가-힣])([가-힣]{2,4})\s*(?:씨|군|양|변호사|검사|판사|사무관|대위|중위|소령|중령|대령|병장|상병|일병|이병)(?![가-힣])"
+    r"(?<![가-힣])([가-힣]{2,4})[ \t]*(?:씨|군|양|변호사|검사|판사|사무관|대위|중위|소령|중령|대령|병장|상병|일병|이병)(?![가-힣])"
 )
 
 
@@ -237,7 +241,7 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         raw = m.group(1)
         matches.append(PIIMatch("RRN", raw, start, end, block_id, page, 0.95, "주민등록번호 라벨 문맥"))
 
-    for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON")):
+    for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON"), (LABELLED_NAME_RE, "PERSON")):
         for m in pattern.finditer(text):
             name = m.group(1).strip()
             start, end = m.start(1), m.end(1)

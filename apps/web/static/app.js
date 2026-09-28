@@ -638,6 +638,16 @@ function referenceSection(docs) {
       details.append(node("p", `문서: ${item.claim_quote}`), node("blockquote", `${item.source_id}: ${item.source_quote}`),
         node("p", `AI 참고 의견: ${item.explanation}`));
     }
+    for (const calc of review.contract_review?.calculations || []) {
+      const values = calc.outputs || {};
+      details.append(node("h4", "자료 기반 조건부 검산"),
+        node("p", `${values.delay_days}일 × ${values.daily_penalty}원 = ${values.penalty}원`),
+        node("p", calc.note, "muted"));
+      if (!calc.stated_days_match) details.append(node("p", `기록의 ${calc.stated_days}일과 날짜 검산 결과가 다릅니다.`, "warning-text"));
+    }
+    if (review.input?.contract_version) details.append(node("p",
+      `입력 범위: 본문·표 ${review.input.inspected_chars}자 · 길이 제한 제외 ${review.input.omitted_chars}자 · 기타 제외 블록 ${(review.input.excluded_blocks || []).length}개`, "muted"));
+    if (review.observation_limit_reached) details.append(node("p", "의견 5건 한도 도달 · 전체 주장 검토 완료 아님", "warning-text"));
     section.append(details);
   }
   return section;
@@ -1302,6 +1312,18 @@ function renderAIVerification() {
   cardsContainer.append(card1, injectionCard(docs, hasQuarantine));
   const references = referenceSection(docs);
   if (references) cardsContainer.append(references);
+  for (const d of docs) {
+    const related = d.engine_data?.related_authorities;
+    if (!related) continue;
+    const section = node("details", null, "detail-section");
+    section.append(node("summary", `${d.filename}: 추가 관련 법조문 검토`),
+      node("p", related.note || related.reason || "추가 확인 필요"));
+    for (const candidate of related.candidates || []) {
+      const verdict = (related.verdicts || []).find(v => v.citation_id === candidate.citation_id);
+      section.append(node("p", `${candidate.raw_text} · 출처 조회: ${label(verdict?.status || "NOT_ASSESSED")} · 사건 당시 적용·주장 타당성: 별도 검토 필요`));
+    }
+    cardsContainer.append(section);
+  }
 
   // 테이블 렌더링
   if (allRows.length === 0) {

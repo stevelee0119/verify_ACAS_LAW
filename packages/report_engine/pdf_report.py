@@ -268,6 +268,10 @@ def build_report_pdf(
         h_table_rows = [["위치", "문서 주장 / 인용", "인용 오류·미확인 근거 및 주장 평가", "법리적 타당성 검토 및 반박 근거"]]
         story.append(table(h_table_rows + all_hallucination_rows, [60, 105, 110, 215]))
 
+    from packages.legal_engine.related_authorities import report_lines as related_lines
+    for line in related_lines(run_result.documents):
+        story.append(Paragraph(_escape(line), styles["small"]))
+
     # --- 6. 문서 포렌식·전자서명 --------------------------------------------
     story.append(PageBreak())
     story.append(Paragraph(_escape("6. 문서 포렌식·전자서명"), styles["h1"]))

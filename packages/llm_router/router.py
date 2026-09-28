@@ -65,6 +65,7 @@ class ModelExecution:
     cost_usd: float = 0.0
     cost_status: str = "REPORTED"
     reservation_id: str = ""
+    input_privacy: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -359,6 +360,21 @@ class LLMRouter:
             return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 
         request = replace(request, system=f"{SYSTEM_BASE}\n[역할] {role}\n{request.system}")
+        privacy = {}
+        if provider.config.kind != "local" and policy == ExternalAIPolicy.MASKED:
+            from .privacy import inspect_request
+
+            try:
+                privacy = inspect_request(request)
+            except Exception:
+                privacy = {"status": "BLOCKED", "reason": "INSPECTION_FAILED"}
+            if privacy["status"] != "PASSED":
+                execution = ModelExecution(str(role), provider.name, provider.config.model, False,
+                    error="INPUT_PRIVACY_BLOCKED: 마스킹 후 입력 검사 불통과", cost_status="NOT_SENT",
+                    input_privacy=privacy)
+                if self.on_execution:
+                    self.on_execution(execution)
+                return RouterResult(executions=[execution], note=execution.error)
         reservation = None
         rates = None
         if provider.config.kind != "local":
@@ -437,6 +453,7 @@ class LLMRouter:
             latency_ms=response.latency_ms, prompt_version=self.settings.prompt_version,
             error=response.error, cost_usd=float(cost), cost_status=cost_status,
             reservation_id=reservation.id if reservation else "",
+            input_privacy=privacy,
         )
         self.spent_usd += cost
 

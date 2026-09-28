@@ -683,6 +683,24 @@ class VerificationPipeline:
             if not stage.inputs:
                 stage.skip_reason = "판례·결정 인용이 없음"
         self._attach_reference_dates(result, doc, context)
+        from packages.legal_engine.related_authorities import review_related_authorities
+        with manifest.stage("related_authorities", [], inputs=0, unit="추가 검토 근거",
+                            document_id=doc.document_id) as stage:
+            try:
+                related, records = review_related_authorities(doc, citations, self.legal,
+                    case_date=context.case_date, quick=context.profile == VerificationProfile.QUICK)
+                if related:
+                    result.engine_data["related_authorities"] = related
+                    result.source_records.extend(records)
+                    stage.inputs = len(related["candidates"])
+                    stage.note = related["status"]
+                else:
+                    stage.skip_reason = "관련 근거 탐색 대상 쟁점 없음"
+            except Exception as exc:
+                stage.error = type(exc).__name__
+                result.engine_data["related_authorities"] = {
+                    "status": "UNVERIFIED", "reason": "RELATED_AUTHORITY_LOOKUP_FAILED", "advisory_only": True}
+                result.unverified_items.append({"kind": "related_authority", "reason": "관련 법조문 추가 조회 미완료"})
         # 법령 적용 시점(행위시법): 시행 버전이 둘 이상인 조문에 대한 주장을 버전별로 대조한다(v4 P3)
         with manifest.stage("temporal_review", result.findings, inputs=0, unit="검토한 조문 주장", document_id=document.document_id) as stage:
             found = self._temporal_reviews(doc, citations, context)
@@ -1145,13 +1163,18 @@ class VerificationPipeline:
                           "② 핵심 법리와 취지·맥락의 동일 여부 ③ 사실관계·적용 요건의 차이와 확인 한계를 구분하라. "
                           "표현 차이만으로 취지 왜곡이라고 판단하지 말고, 부정·예외·적용 조건을 확인하라. "
                           "반드시 제공된 공식 전문의 실제 문구를 evidence_quotes에 인용하라."),
-                evidence={"official": {"case_number": official.get("case_number"), "full_text": source_text},
+                evidence={"official": {"case_number": official.get("case_number"), "full_text": source_text,
+                          "confirmed_metadata": {k: official.get(k) for k in (
+                              "court", "decision_date", "decision_type", "case_name")},
+                          "metadata_scope": "OFFICIAL_RECORD_NOT_FULL_TEXT_INFERENCE"},
                           "document": document_text},
                 profile=context.profile, policy=context.external_ai_policy))
             result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
             model_verdicts = [s["verdict"] for s in outcome.stages if s.get("used") and s.get("verdict")]
             quotes = [q for v in model_verdicts for q in v.get("evidence_quotes", [])]
-            grounded = bool(quotes) and all(q.strip() and q in source_text for q in quotes)
+            grounded = bool(model_verdicts) and all(
+                v.get("evidence_quotes") and all(isinstance(q, str) and q.strip() and q in source_text
+                    for q in v["evidence_quotes"]) for v in model_verdicts)
             # 모델이 한 번도 실행되지 않은 것과, 실행됐으나 근거 인용이 확인되지
             # 않은 것은 전혀 다르다. 둘을 같은 문구로 적으면 공급자 키·모델 ID가
             # 잘못되어 AI가 아무 일도 하지 않는 동안에도 "검토했으나 채택하지
@@ -1165,35 +1188,11 @@ class VerificationPipeline:
             else:
                 reason = (f"AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함"
                           f"({self._provider_reason(outcome.rationale)})")
-            sem_status = "UNVERIFIED"
-            if grounded:
-                # 1. 모델들의 구조화된 판정 결과 수집
-                stage_statuses = [
-                    str(s.get("verdict", {}).get("status", "")).upper()
-                    for s in outcome.stages if s.get("used") and s.get("verdict")
-                ]
-                rat = str(outcome.rationale or "")
-
-                # 2. 부정 및 동일성 표현(오탐 방지 가드)
-                has_no_distortion = any(k in rat for k in ("왜곡 없이", "왜곡이 없", "왜곡되지", "왜곡은 없", "취지와 부합", "취지와 일치", "취지와 동일"))
-                has_no_difference = any(k in rat for k in ("차이가 없", "차이 없", "다르지 않", "사실관계가 동일", "사안과 동일", "사실관계 동일"))
-
-                # 3. 모델들의 판정 결과 종합 (구조화된 verdict 우선)
-                all_verified = bool(stage_statuses) and all(st in ("SUPPORTED", "VERIFIED") for st in stage_statuses)
-
-                if all_verified and not ("CONTRADICTED" in stage_statuses or "DISTINGUISHABLE" in stage_statuses):
-                    sem_status = "SUPPORTED"
-                elif ("CONTRADICTED" in stage_statuses or "DISTORTED" in stage_statuses
-                      or ((("결론을 뒤집" in rat) or ("취지 왜곡" in rat)) and not has_no_distortion)):
-                    sem_status = "CONTRADICTED"
-                elif ("DISTINGUISHABLE" in stage_statuses
-                      or ((("사실관계" in rat and "차이" in rat) or ("사안과 다르" in rat)) and not has_no_difference)):
-                    sem_status = "DISTINGUISHABLE"
-                elif all_verified:
-                    sem_status = "SUPPORTED"
-                else:
-                    # 기본 자문 검토는 보수적 검증 계약에 따라 UNVERIFIED 유지
-                    sem_status = "UNVERIFIED"
+            from packages.legal_engine.semantic_consensus import semantic_consensus
+            consensus = semantic_consensus(outcome.stages, grounded=grounded, executions=outcome.executions)
+            sem_status = consensus["status"]
+            if consensus["disagreement"] or consensus["incomplete_models"]:
+                reason = "모델 의견 불일치 또는 일부 미완료로 전문가 검토 필요. " + reason
 
             review = {"citation_id": citation.citation_id, "status": sem_status,
                       "semantic_status": sem_status,
@@ -1201,12 +1200,15 @@ class VerificationPipeline:
                       "source_record_ids": verdict.get("source_record_ids", []),
                       "advisory_only": True, "source_quotes_validated": grounded,
                       "model_executed": model_ran,
+                      "consensus": consensus,
                       "source_truncated": len(str(official["full_text"])) > len(source_text),
                       "reason": reason,
-                      "stages": outcome.stages if grounded else [], "evidence_quotes": quotes if grounded else []}
+                      "stages": outcome.stages, "evidence_quotes": quotes if grounded else []}
             reviews.append(review)
             for level in ("level4", "level5"):
                 verdict["levels"][level] = "ADVISORY_REVIEWED" if grounded else "UNVERIFIED"
+            from packages.legal_engine.components import citation_components
+            verdict["components"] = citation_components(str(citation.type), verdict["levels"])
         result.engine_data["semantic_reviews"] = reviews
         if progress:
             progress(len(verdicts), len(verdicts))

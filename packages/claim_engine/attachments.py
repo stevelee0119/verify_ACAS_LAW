@@ -166,15 +166,15 @@ ATTACHMENT_SECTION_HEADER_RE = re.compile(
 def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     items = []
     in_attachment_section = False
-    # 표 안의 줄(table_line)은 칸 구분이 사라진 채 이어 붙어 있으므로 목록으로 읽지 않는다. 표는 셀 단위로 읽는다.
-    for block in doc.prose_blocks():
-        text = block.text.strip()
+    # A DOCX paragraph may contain the entire numbered list as line breaks.
+    lines = [(block, line.strip()) for block in doc.prose_blocks() for line in block.text.splitlines()]
+    for block, text in lines:
         # [첨부자료], [첨부서류] 등 섹션 헤더 단독 줄은 첨부 아이템으로 잡지 않고 첨부 목록 모드로 전환
         if ATTACHMENT_SECTION_HEADER_RE.match(text):
             in_attachment_section = True
             continue
         # 청구원인, 청구취지 등 새로운 주요 구역이 시작되면 첨부 섹션 종료
-        if in_attachment_section and re.match(r"^[\[【(]?(?:청구\s*취지|청구\s*원인|이\s*유|결\s*론)[\]】)]?", text):
+        if in_attachment_section and re.match(r"^[\[【(]?(?:청구\s*취지|청구\s*원인|이\s*유|결\s*론|별지|별첨|붙임)[\]】)]?", text):
             in_attachment_section = False
 
         body = NUMBERING_RE.sub("", text, count=1)
@@ -193,19 +193,19 @@ def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                 continue
             items.append({"name": name_cand, "reference": " ".join(m.group("label").split()),
                           "source": "LIST", "page": block.page, "block_id": block.block_id,
-                          "stated_status": block.text.strip()})
+                          "stated_status": text})
             continue
 
-        # 첨부 섹션 내부이거나 일반 번호 매김 첨부 목록(예: 1. 변경계약서 사본 1부)
+        # Numbered merits paragraphs are not evidence-list entries.
         num_m = re.match(r"^\s*(?P<num>\d{1,2})\s*[.)]\s*(?P<name>[^\n]{2,80})$", text)
-        if num_m and (in_attachment_section or re.search(r"(?:사본|원본|\d+부|계약서|조서|통보서|공문|합격|신청서|영수증|확인서|동의서|메모)", text)):
+        if num_m and in_attachment_section:
             items.append({
                 "name": num_m.group("name").strip(),
                 "reference": f"첨부 {num_m.group('num')}",
                 "source": "LIST",
                 "page": block.page,
                 "block_id": block.block_id,
-                "stated_status": block.text.strip(),
+                "stated_status": text,
             })
     return items
 
@@ -232,9 +232,35 @@ def _statement_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
 
 
 def _inline_key(name: str) -> str:
-    # 별지, 첨부, 번호, 부수, 괄호 등을 제거하여 인라인 별지 표제어와 대조한다
-    cleaned = re.sub(r"첨부|별지|별첨|붙임|사본|원본|\d+부|[()\[\]【】\d:·\s]", "", name or "")
+    # Preserve dates/numbers inside titles; only remove structural numbering.
+    cleaned = re.sub(r"^(?:첨부|별지|별첨|붙임)\s*\d*\s*[:.)]?", "", name or "")
+    cleaned = re.sub(r"사본|원본|\d+\s*부\s*$|[()\[\]【】:·\s]", "", cleaned)
     return _norm(cleaned)
+
+
+def _inline_sections(doc):
+    """Require actual content after an appendix heading, never a list heading."""
+    from .fact_store import ATTACHED_HEAD_RE
+
+    sections, current = [], None
+    for block in doc.prose_blocks():
+        offset = 0
+        for raw in block.text.splitlines(keepends=True):
+            text = raw.strip()
+            start = offset + len(raw) - len(raw.lstrip())
+            offset += len(raw)
+            if ATTACHMENT_SECTION_HEADER_RE.fullmatch(text):
+                current = None
+            elif ATTACHED_HEAD_RE.match(text) and len(text) <= 80:
+                current = {"name": text, "body": [], "source_refs": []}
+                sections.append(current)
+            elif re.fullmatch(r"[\[【(]?(?:청구\s*취지|청구\s*원인|이\s*유|결\s*론)[\]】)]?", text):
+                current = None
+            elif current is not None and text:
+                current["body"].append(text)
+                current["source_refs"].append({"document_id": doc.document_id, "sha256": doc.sha256,
+                    "block_id": block.block_id, "page": block.page, "span": [start, start + len(text)]})
+    return sections
 
 
 
@@ -261,28 +287,30 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                 if target.get(field_name) is None:
                     target[field_name] = item.get(field_name)
     text = doc.visible_text
-    # 같은 파일 안에 붙은 사본('첨부 진단서(사본)' 아래 원문). 입력 파일이 따로 없어도 문서 안에서 확인할 수 있다.
-    from .fact_store import segments
-    # 같은 파일 안에 붙은 사본('첨부 진단서(사본)' 또는 '[별지 1]' 아래 원문/메모).
     inline = {}
     inline_by_num = {}
-    for name, bs in segments(doc)[1:]:
+    for section in _inline_sections(doc):
+        name, body = section["name"], section["body"]
+        if not body:
+            continue
+        # A bare numbered heading followed only by a title is still not a copy.
+        if re.fullmatch(r"[\[【(]?(?:별지|별첨|붙임)\s*\d+[\]】)]?", name) and len(body) < 2:
+            continue
         k = _inline_key(name)
         if k:
-            inline[k] = name
-        # 구획 첫 번째 블록(예: '담당자 전달 메모') 및 복합 표제어도 인라인 구획 키로 등록
-        if bs:
-            first_text = (bs[0].text or "").strip()
+            inline[k] = section
+        if body:
+            first_text = body[0]
             k_first = _inline_key(first_text)
             if k_first:
-                inline[k_first] = name
+                inline[k_first] = section
             k_comb = _inline_key(f"{name} {first_text}")
             if k_comb:
-                inline[k_comb] = name
+                inline[k_comb] = section
         # 별지/별첨 번호(예: 별지 1, 별지 2) 추출 및 등록
         num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)", name)
         if num_m:
-            inline_by_num[num_m.group(1)] = name
+            inline_by_num[num_m.group(1)] = section
 
     items = []
     for key, item in merged.items():
@@ -292,14 +320,15 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
         copy = inline.get(_inline_key(item["name"]))
         if not copy:
             # 별지 번호로도 인라인 구획 대조
-            item_num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)", item["name"])
+            item_num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)",
+                                   (item.get("reference") or "") + " " + item["name"])
             if item_num_m and item_num_m.group(1) in inline_by_num:
                 copy = inline_by_num[item_num_m.group(1)]
 
         if upload:
             status, basis = "ATTACHED", f"입력 파일 '{upload.get('filename')}'과 이름이 대응한다"
         elif copy:
-            status, basis = "ATTACHED", f"같은 문서 안에 사본·별지가 붙어 있다('{copy}')"
+            status, basis = "ATTACHED", f"같은 문서 안에 사본·별지 본문이 있다('{copy['name']}')"
         elif any(m["source"] == "STATEMENT" for m in item["mentions"]) or (
                 table_status and MISSING_STATUS_RE.search(table_status)) or NOT_PROVIDED_RE.search(stated):
             status, basis = "NOT_PROVIDED", "문서 스스로 첨부·제출하지 않았다고 밝혔다"
@@ -318,6 +347,9 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
                       "row": item.get("row"), "columns": item.get("columns"),
                       "page": item.get("page"), "linked_claim_ids": linked,
                       "uploaded_document_id": upload.get("document_id") if upload else None,
+                      "availability_detail": ("UPLOADED_FILE" if upload else "INLINE_CONTENT_PRESENT" if copy else status),
+                      "authenticity": "UNVERIFIED",
+                      "source_refs": copy["source_refs"] if copy and not upload else [],
                       "mentions": item["mentions"][:5]})
     hashes = []
     for m in HASH_RE.finditer(text):

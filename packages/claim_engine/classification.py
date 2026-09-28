@@ -31,10 +31,10 @@ GUIDE_RE = re.compile(
 HEADING_PREFIX_RE = re.compile(r"^\s*(?:[IVX]+\.|\d+(?:\.\d+)*[.)]|[가-하][.)]|제\s*\d+\s*[장절]|[A-Z]-\d+|[■□▶▷◆◇●○※]|\[[^\]]{1,20}\])")
 QUOTE_SPAN_RE = re.compile(r"[\"“「『][^\"”」』]{8,}[\"”」』]")
 
-OPINION_RE = re.compile(r"(생각한다|사료된다|보아야\s*한다|타당하다|바람직하다|판단된다|여겨진다|믿는다|보인다|의문이다|의심된다)")
+OPINION_RE = re.compile(r"(생각한다|생각합니다|사료된다|사료됩니다|보아야\s*한다|타당하다|바람직하다|판단된다|판단됩니다|여겨진다|믿는다|보인다|의문이다|의심된다)")
 LEGAL_ARGUMENT_RE = re.compile(
     r"(위법(?:하다|하므로|한\s*처분|이다)|무효(?:이다|이므로|임|로\s*보아야)|취소(?:되어야|하여야|를\s*구한다)|"
-    r"부당하다|적법하다|위반(?:하였다|한다|된다|하여)|재량권[^.]{0,10}(?:일탈|남용)|하자가\s*(?:있|존재)|"
+    r"무효입니다|부당합니다|위법합니다|부당하다|적법하다|위반(?:하였다|한다|된다|하여)|재량권[^.]{0,10}(?:일탈|남용)|하자가\s*(?:있|존재)|"
     r"요건을\s*(?:갖추지|충족하지)|효력이\s*없|책임이\s*있|배상할\s*의무|청구권이\s*있)"
 )
 # 과거 사실 서술: 평서형 및 경어체/존댓말 어미 포함
@@ -45,6 +45,35 @@ PAST_FACT_RE = re.compile(
 )
 EXISTENCE_FACT_RE = re.compile(r"(있다|없다|존재한다|기재되어|적혀|입증한다|증명한다|확인된다|나타난다|수정됐|수정되었|변경됐|변경되었)")
 EVIDENCE_NOUN_RE = re.compile(r"(녹음|녹취|파일|해시|점수표|사진|영상|기록|문서|자료|보고서|계약서|영수증|진술서|메시지|원본|사본)")
+NOMINAL_FACT_RE = re.compile(r"(?:체결|납품|인수|검수|공제|지급|수령|통보|제출|변경|완료)(?:하였음|되었음|했음|함|됨)[.!。]?$")
+
+
+def assertion_mode(text):
+    if re.search(r"예비적(?:으로|인)|별도(?:의)?\s*(?:가정|전제)|가사", text):
+        return "ALTERNATIVE"
+    if re.search(r"가정(?:하면|하더라도|하여)|만약|설령|하였다고\s*(?:보더라도|가정)|일\s*경우", text):
+        return "HYPOTHETICAL"
+    if re.search(r"(?:피고|원고|상대방)[은는이가]?[^.]{0,100}(?:라고|다고)\s*주장", text):
+        return "QUOTED_OTHER"
+    if LEGAL_ARGUMENT_RE.search(text):
+        return "LEGAL_POSITION"
+    return "ASSERTED"
+
+
+def event_role(text):
+    for role, pattern in (
+        ("PRECEDENT_DECISION", r"선고|판시"),
+        ("AMENDED_DEADLINE", r"(?:변경|연장)[^.]{0,25}(?:기한|납기)|(?:기한|납기)[^.]{0,40}(?:변경|연장)"),
+        ("ORIGINAL_DEADLINE", r"(?:최초|당초|원래)[^.]{0,25}(?:기한|납기)"),
+        ("FINAL_DELIVERY", r"(?:최종|전량|마지막)[^.]{0,40}(?:납품|검사|검수|인수)"),
+        ("PARTIAL_DELIVERY", r"(?:부분|일부|추가)[^.]{0,25}(?:납품|반입)"),
+        ("ACCEPTANCE", r"검수|검사.*인수"),
+        ("SETTLEMENT", r"정산|공제|잔액.*지급"),
+        ("CONTRACT", r"계약.*체결"),
+    ):
+        if re.search(pattern, text):
+            return role
+    return "UNRESOLVED"
 
 
 def segment_kind(text: str, *, block_type: str = "paragraph", source_layer: str = "visible_text",
@@ -84,6 +113,8 @@ def classify_sentence(sentence: str, segment: str, base_rules) -> ClaimType:
         return ClaimType.ADVERSARIAL_INSTRUCTION
     if segment in ("HEADING", "DOCUMENT_GUIDE"):
         return ClaimType.DOCUMENT_META
+    if assertion_mode(sentence) in ("HYPOTHETICAL", "ALTERNATIVE", "QUOTED_OTHER"):
+        return ClaimType.OPINION
     if OPINION_RE.search(sentence):
         return ClaimType.OPINION
     rule_based = base_rules(sentence)
@@ -93,7 +124,7 @@ def classify_sentence(sentence: str, segment: str, base_rules) -> ClaimType:
         return ClaimType.LEGAL_ARGUMENT
     if rule_based in (ClaimType.DOCUMENT_EXISTENCE, ClaimType.CALCULATION):
         return rule_based
-    if PAST_FACT_RE.search(sentence) or (EXISTENCE_FACT_RE.search(sentence) and EVIDENCE_NOUN_RE.search(sentence)):
+    if PAST_FACT_RE.search(sentence) or NOMINAL_FACT_RE.search(sentence) or (EXISTENCE_FACT_RE.search(sentence) and EVIDENCE_NOUN_RE.search(sentence)):
         return ClaimType.FACT
     return rule_based
 

@@ -358,10 +358,16 @@ def delay_penalty(*, contract_amount: Input, daily_rate: Input,
     """
     amount = to_base_unit(contract_amount.value, contract_amount.unit or "원")
     rate = Decimal(str(daily_rate.value))
+    if not amount.is_finite() or not rate.is_finite() or amount < 0 or rate < 0:
+        raise CalculationError("계약금액과 지체상금률은 유한한 비음수여야 한다")
     if daily_rate.unit == "%":
         rate = rate / Decimal(100)
     elif daily_rate.unit in ("천분율", "/1000"):
         rate = rate / Decimal(1000)
+    elif daily_rate.unit not in ("", "ratio"):
+        raise CalculationError(f"알 수 없는 지체상금률 단위: {daily_rate.unit}")
+    if rate > 1:
+        raise CalculationError("지체상금률이 1을 초과한다. 단위를 확인해야 한다")
 
     days = days_between(due_date.value, delivery_date.value, count_first_day=count_first_day)
     daily_penalty = amount * rate

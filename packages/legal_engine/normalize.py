@@ -194,9 +194,19 @@ def law_name_suffix(raw: str) -> str:
 
     # 공식 제명 목록(LAW_ALIASES의 공식 명칭)이 raw 내에 완전 포함된 경우 최장 일치를 우선 보존한다
     clean_raw = re.sub(r"[「」『』]", " ", raw or "")
-    for official in sorted(set(LAW_ALIASES.values()), key=len, reverse=True):
-        if official in clean_raw:
-            return official
+    matches = []
+    for official in set(LAW_ALIASES.values()):
+        pattern = re.compile(r"(?<![가-힣])" + re.escape(official).replace(r"\ ", r"\s*")
+                             + r"(?:\s*시행(?:령|규칙))?(?=$|[^가-힣]|(?:을|를|에|의|은|는)(?:\s|$))")
+        for match in pattern.finditer(clean_raw):
+            # A later, unlisted law must not be replaced by an earlier known one.
+            tail = clean_raw[match.end():]
+            if not re.search(r"(?:법률|법|령|규칙|조례|훈령|예규|규정|고시|지침)(?=$|[^가-힣]|[을를에의은는](?:\s|$))", tail):
+                matches.append(match)
+    if matches:
+        # The rightmost complete title wins; preserve a subordinate decree/rule.
+        match = max(matches, key=lambda m: (m.end(), len(m.group())))
+        return " ".join(match.group().split())
 
     tokens = clean_raw.split()
     if not tokens:

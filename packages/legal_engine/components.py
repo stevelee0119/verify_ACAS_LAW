@@ -60,6 +60,7 @@ _MEANING = {
     "VALID": ("CONFIRMED", "형식상 성립 가능"),
     "UNVERIFIED": ("UNVERIFIED", "확인하지 못함"),
     "PENDING_LLM": ("NOT_RUN", "의미 검토 전"),
+    "ADVISORY_REVIEWED": ("ADVISORY_REVIEWED", "원문 인용에 기초한 AI 자문(법적 타당성 확정 아님)"),
     "REVIEW_NEEDED": ("REVIEW_NEEDED", "사람 검토 필요"),
     "CLAIM_NOT_VERIFIED": ("REVIEW_NEEDED", "문서의 효력 주장은 자동 확인하지 않음"),
     "MENTIONED_IN_OFFICIAL_TEXT": ("PARTIAL", "공식 본문에 근거 법령 언급 있음"),
