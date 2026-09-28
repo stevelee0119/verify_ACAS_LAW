@@ -410,9 +410,17 @@ def test_calculation_workbench_browser_desktop_mobile_and_exact_payload(tmp_path
     static = ROOT / "apps" / "web" / "static"
     with sync_playwright() as playwright:
         options = {"headless": True}
-        if os.getenv("LV_TEST_BROWSER_CHANNEL"):
-            options["channel"] = os.environ["LV_TEST_BROWSER_CHANNEL"]
-        browser = playwright.chromium.launch(**options)
+        channel = os.getenv("LV_TEST_BROWSER_CHANNEL")
+        if not channel and os.name == "nt":
+            channel = "msedge"
+        if channel:
+            options["channel"] = channel
+        try:
+            browser = playwright.chromium.launch(**options)
+        except Exception as e:
+            if "Executable doesn't exist" in str(e):
+                pytest.skip(f"Playwright 브라우저 바이너리 없음: {e}")
+            raise
         page = browser.new_page(viewport={"width": 1440, "height": 960})
         errors = []
         page.on("pageerror", lambda error: errors.append(str(error)))
