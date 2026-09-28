@@ -52,14 +52,19 @@ def test_summary_metrics_are_compact(width, height, max_cell):
             page.route("**/*", respond)
             page.goto("http://summary.test/")
             select_first_project(page)
-            first = page.locator(".metric", has_text="검토에 포함")
-            expect(first).to_be_visible()
-            sizes = page.locator(".metric").evaluate_all("""cells => cells.map(cell => ({
-                value: parseFloat(getComputedStyle(cell.querySelector('strong')).fontSize),
-                title: parseFloat(getComputedStyle(cell.querySelector('span')).fontSize),
-                height: cell.getBoundingClientRect().height}))""")
+            metrics_locator = page.locator("#summary .metric")
+            expect(metrics_locator).to_have_count(8)
+            sizes = metrics_locator.evaluate_all("""cells => cells.map(cell => {
+                const strong = cell.querySelector('strong');
+                const span = cell.querySelector('span');
+                return {
+                    value: strong ? (parseFloat(getComputedStyle(strong).fontSize) || 0) : 0,
+                    title: span ? (parseFloat(getComputedStyle(span).fontSize) || 0) : 0,
+                    height: cell.getBoundingClientRect().height
+                };
+            })""")
             assert len(sizes) == 8
-            assert all(round(s["value"]) <= 18 and round(s["title"]) <= 12 for s in sizes), sizes
+            assert all(0 < s["value"] <= 18.5 and 0 < s["title"] <= 12.5 for s in sizes), sizes
             assert all(s["height"] <= max_cell for s in sizes), [round(s["height"]) for s in sizes]
             for title in ("배포가능 상태", "검증위험 지수", "AI 작성 진단"):
                 expect(page.locator(".metric", has_text=title)).to_be_visible()
