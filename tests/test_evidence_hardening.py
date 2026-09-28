@@ -162,6 +162,10 @@ def test_actual_docx_tables_included_masked_and_coverage_not_full_document(tmp_p
     text, coverage = analysis_text(parsed)
     assert "대표자 | 김도윤" in text and "80000000원" in text
     assert coverage["included_block_counts"]["table"] == 6
+    assert coverage["mode"] == "SANITIZED_EXCLUDING_INSTRUCTIONS"
+    assert coverage["text_scope"] == "VISIBLE_PROSE_AND_TABLES"
+    assert coverage["excluded_blocks"] == [] and coverage["excluded_texts"] == 0
+    assert coverage["excluded_segments"][0]["reason"] == "RUNNING_HEAD"
     assert not coverage["is_full_document"]
     pii = PIIEngine(PseudonymStore("privacy-test", root=tmp_path))
     assert "김도윤" not in pii.mask_document(parsed).text

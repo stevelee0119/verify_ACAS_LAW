@@ -57,9 +57,11 @@ def analysis_text(doc, findings=(), *, limit=12000):
                          "span": [start, cursor], "page": blocks[0].page})
     full = "\n".join(parts)
     selected = full[:limit]
-    return selected, {"mode": "VISIBLE_PROSE_AND_TABLES", "contract_version": CONTRACT_VERSION,
+    return selected, {"mode": "SANITIZED_EXCLUDING_INSTRUCTIONS", "text_scope": "VISIBLE_PROSE_AND_TABLES",
+        "contract_version": CONTRACT_VERSION,
         "available_chars": len(full), "inspected_chars": len(selected), "omitted_chars": max(0, len(full) - limit),
         "is_full_visible_body": len(full) <= limit and not excluded_ids,
         "is_full_document": len(full) <= limit and not excluded,
         "included_block_counts": dict(Counter(b.block_type for b in kept)),
-        "excluded_blocks": excluded, "segments": segments}
+        "excluded_blocks": sorted(excluded_ids), "excluded_texts": len(instructions), "remaining_chars": len(full),
+        "excluded_segments": excluded, "segments": segments}

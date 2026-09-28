@@ -40,6 +40,8 @@
 
 ## 검증과 운영
 
+입력 범위의 기존 `mode=SANITIZED_EXCLUDING_INSTRUCTIONS`, `excluded_blocks`(지시문 블록 ID 목록), `excluded_texts`, `remaining_chars` 계약을 유지한다. 표 포함 범위는 `text_scope`, 전체 제외 사유는 `excluded_segments`로 추가한다. 기존 필드의 의미나 자료형을 새 정보로 교체하지 않는다.
+
 `tests/test_evidence_hardening.py`는 실제 생성한 DOCX 표·바닥글, 첨부 줄바꿈, 잘못된 계약 혼합, 날짜·요율 변형, 모델 불일치·실패, 전송 전 차단, 고정본 불변 등을 검사한다. 기존 법령명·보고서·권한·재시도·화면 테스트도 유지한다. 화면 검사는 데스크톱·태블릿·모바일에서 조건부 검산과 추가 근거 표시를 확인한다.
 
 기존 main CI의 법/시행령 혼동과 두 법률명 선택 실패를 함께 수정한다. 재연결 UI 테스트는 이전 실패 횟수를 초기화하고 첫 4초 백오프를 검사할 시간을 확보한다. 실제 재연결 로직은 바꾸지 않는다. 내구성 테스트의 API fixture는 개발자의 기본 DB에 연결하지 않도록 격리한다.

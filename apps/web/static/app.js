@@ -646,7 +646,7 @@ function referenceSection(docs) {
       if (!calc.stated_days_match) details.append(node("p", `기록의 ${calc.stated_days}일과 날짜 검산 결과가 다릅니다.`, "warning-text"));
     }
     if (review.input?.contract_version) details.append(node("p",
-      `입력 범위: 본문·표 ${review.input.inspected_chars}자 · 길이 제한 제외 ${review.input.omitted_chars}자 · 기타 제외 블록 ${(review.input.excluded_blocks || []).length}개`, "muted"));
+      `입력 범위: 본문·표 ${review.input.inspected_chars}자 · 길이 제한 제외 ${review.input.omitted_chars}자 · 기타 제외 블록 ${(review.input.excluded_segments || review.input.excluded_blocks || []).length}개`, "muted"));
     if (review.observation_limit_reached) details.append(node("p", "의견 5건 한도 도달 · 전체 주장 검토 완료 아님", "warning-text"));
     section.append(details);
   }
