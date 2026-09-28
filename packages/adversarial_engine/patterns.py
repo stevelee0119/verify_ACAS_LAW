@@ -129,6 +129,15 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 기재 배제 요구"),
     (_c(r"do\s+not\s+(include|mention|report|list)\s+[^.\n]{0,40}\s+in\s+(the\s+)?(report|output|summary)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 기재 배제 요구(영어)"),
+    # --- 요약 담당자/검토자 대상 조작 지시 및 결론 강요·사실 배제(실효성 개선 2차) ---
+    (_c(r"(?:시효\s*(?:만료|소멸|도과)|불가쟁력|처분\s*확정|위법\s*확정|각하)[으]?[로]?\s*(?:확정|단정)(?:하여|해|해서|할\s*것)?\s*(?:작성|정리|요약|기술|기재|보고)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "시효 만료 등 특정 법률 결론 확정 작성 강요"),
+    (_c(r"(?:불리한\s*(?:사실|사정|내용|정황|진술|자료|증거)|원고에게\s*불리한|피고에게\s*불리한)[은는을를]?\s*(?:제외|누락|배제|빼고|기재하지\s*말|작성하지\s*말|반영하지\s*말)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "불리한 사실 제외 요구"),
+    (_c(r"(?:사건번호|판례|판결문|법령|조문|기록|원문)\s*(?:확인|조회|검증|대조)[은는을를]?\s*(?:생략|건너뛰|하지\s*말|패스)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "사건번호 및 원문 확인 생략 요구"),
+    (_c(r"(?:요약\s*담당자|검토자|작성자|실무자|조사관)[은는이가]?\s*[^.\n]{0,80}?(?:결론을\s*(?:내리|확정|도출)|생략|제외|반영하지\s*말)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.9, "요약 담당자·검토자 대상 결론 강요 및 검증 생략"),
 
     # --- Verification Suppression ---------------------------------------
     (_c(r"(판례|법령|인용|날짜|사건번호|출처|실존|진위|존재)\s*(여부)?[를을]?\s*(다시|별도로|따로|추가로|직접)?\s*"

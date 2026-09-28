@@ -81,43 +81,39 @@ def scan_residual(doc: NormalizedDocument) -> List[Finding]:
 
 
 def _is_empty_or_standard_boilerplate_xml(xml_text: str) -> bool:
-    """빈 표준 Word 참고문헌 XML(bibliography) 또는 스키마 껍데기만 있는 XML인지 판별 (FP-02)."""
+    """Word 표준 참고문헌 XML(bibliography), datastoreItem 또는 스키마 껍데기 XML인지 판별 (FP-02 개선)."""
     if not xml_text or not xml_text.strip():
         return True
     try:
         import xml.etree.ElementTree as ET
         root = ET.fromstring(xml_text)
-        tag_lower = root.tag.lower()
-        if "bibliography" in tag_lower or tag_lower.endswith("sources"):
-            # 하위 요소가 없고 텍스트도 비어있는 경우
-            if len(list(root)) == 0:
-                text = (root.text or "").strip()
-                if not text:
-                    non_std_attrs = [v for k, v in root.attrib.items() if k.lower() not in ("selectedstyle", "style")]
-                    if not any(v.strip() for v in non_std_attrs):
-                        return True
-        # 일반 XML에서도 하위 태그가 없고 텍스트가 없으며 속성값도 비어있는 경우
-        if len(list(root)) == 0 and not (root.text or "").strip() and not any(v.strip() for v in root.attrib.values()):
+
+        # 1. 태그명 확인 (네임스페이스 제거)
+        tag_name = root.tag.split("}")[-1].lower() if "}" in root.tag else root.tag.lower()
+        is_standard_tag = tag_name in ("sources", "source", "datastoreitem", "schemarefs", "schemaref", "item", "properties")
+
+        # 2. 전체 텍스트 콘텐츠 추출 (자식 노드 포함)
+        all_text = "".join(root.itertext()).strip()
+
+        # 3. 표준 오피스 스키마 네임스페이스 확인
+        xml_lower = xml_text.lower()
+        is_office_schema = ("schemas.openxmlformats.org" in xml_lower or "schemas.microsoft.com" in xml_lower)
+
+        # 실질적 텍스트 콘텐츠가 없는 표준 Office customXml 구조체는 보일러플레이트로 판별
+        if is_office_schema and (not all_text or len(all_text) == 0):
+            return True
+        if is_standard_tag and not all_text:
+            return True
+        if len(list(root)) == 0 and not all_text:
             return True
     except Exception:
         pass
 
     # 파싱 실패 시 정규식 기반 fallback
     text_content = re.sub(r"<[^>]+>", "", xml_text).strip()
-    if text_content:
-        return False
-    # 속성 검사 (콜론 포함 네임스페이스 속성 처리)
-    attrs = re.findall(r'([a-zA-Z0-9_:.-]+)=["\']([^"\']*)["\']', xml_text)
-    standard_keys = {"xmlns", "selectedstyle", "version", "encoding", "standalone", "style"}
-    non_std = []
-    for k, v in attrs:
-        kl = k.lower()
-        if kl in standard_keys or kl.startswith("xmlns:") or kl.startswith("xmlns"):
-            continue
-        if v.startswith("http://") or v.startswith("https://"):
-            continue
-        non_std.append(v)
-    return not any(len(v.strip()) > 0 for v in non_std)
+    if not text_content:
+        return True
+    return False
 
 
 def _scan_ooxml(doc: NormalizedDocument) -> List[Finding]:
@@ -206,7 +202,7 @@ def _scan_ooxml(doc: NormalizedDocument) -> List[Finding]:
         empty_parts = {k: v for k, v in custom_xml.items() if _is_empty_or_standard_boilerplate_xml(v)}
 
         if sensitive_parts:
-            # 실제 데이터나 비밀, 고객정보가 포함된 customXml 파트는 특권 후보 및 봉인 처리
+            # Word 표준 껍데기가 아닌 사용자 정의 데이터 파트는 사건정보·비밀 유출 위험(특권 후보)으로 처리
             out.append(
                 _finding(
                     doc,

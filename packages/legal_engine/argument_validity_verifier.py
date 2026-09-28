@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
 
@@ -186,6 +187,49 @@ class ArgumentValidityResult:
         }
 
 
+def _extract_linked_claim(citation: Citation, doc: NormalizedDocument) -> str:
+    """인용 판례와 직접 연결된 법률적 주장 문장을 추출한다.
+
+    앞 문단의 인적사항이나 의료정보 등 무관한 내용이 잘려 들어가지 않도록
+    줄바꿈(\\n) 및 문장 경계를 엄격히 준수한다.
+    """
+    raw_text = citation.raw_text or ""
+    case_no = citation.case_number or citation.canonical_case_number or ""
+
+    # 1. context가 있을 때 줄바꿈 기준 인용구 속한 줄(문단) 우선 추출
+    if citation.context:
+        lines = [line.strip() for line in citation.context.split("\n") if line.strip()]
+        target_line = ""
+        for line in lines:
+            if (raw_text and raw_text in line) or (case_no and case_no in line):
+                target_line = line
+                break
+        if not target_line and lines:
+            target_line = lines[-1]
+
+        if target_line:
+            # 문단 내에서 문장 단위 분리
+            sentences = re.split(r"(?<=[.?!])\s+", target_line)
+            matched = [s for s in sentences if (raw_text and raw_text in s) or (case_no and case_no in s)]
+            if matched:
+                return " ".join(matched)[:200].strip()
+            return target_line[:200].strip()
+
+    # 2. span 정보 기반 전체 텍스트에서 해당 문단 영역 슬라이싱
+    full_text = getattr(doc, "full_text", "") or ""
+    if citation.span and full_text:
+        start, end = citation.span
+        prev_newline = full_text.rfind("\n", 0, start)
+        para_start = prev_newline + 1 if prev_newline != -1 else max(0, start - 150)
+        next_newline = full_text.find("\n", end)
+        para_end = next_newline if next_newline != -1 else min(len(full_text), end + 200)
+        para_text = full_text[para_start:para_end].strip()
+        if para_text:
+            return para_text[:200].strip()
+
+    return f"{raw_text}에 기반한 법률적 주장"
+
+
 async def verify_argument_validity(
     doc: NormalizedDocument,
     citations: List[Citation],
@@ -323,9 +367,11 @@ async def verify_argument_validity(
                  "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음.")
             )
 
+        linked_claim = _extract_linked_claim(c, doc)
+
         row = HallucinationTableRow(
             location=f"{c.page or 1}면",
-            claim_text=c.context[:150] if c.context else f"{c.raw_text}에 기반한 법률적 주장",
+            claim_text=linked_claim,
             cited_authority=c.raw_text,
             authority_exists=bool(item["verdict"].get("official_record")),
             basis=basis,
@@ -339,10 +385,12 @@ async def verify_argument_validity(
         row.context_review = _context_review(item["verdict"], semantic_reviews or [], mask)
         result.rows.append(row)
 
+        has_official = bool(item["verdict"].get("official_record"))
         feats = {
             "deterministic_rule": not (contradiction or distinguishable),
             "unconfirmed_citation": c.raw_text,
             "citation_id": c.citation_id,
+            "official_source_match": has_official,
             "error_category": ("CITATION_CONTRADICTION" if contradiction
                                else "APPLICATION_DIFFERENCE" if distinguishable
                                else "LEGAL_CITATION_ERROR" if mismatch else "UNSUPPORTED_LEGAL_BASIS"),

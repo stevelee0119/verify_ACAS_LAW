@@ -206,33 +206,63 @@ def _columns_by_content(cells: List[List[Any]]) -> Dict[str, int]:
 _NOT_CONTINUATION_RE = re.compile(r"^\s*(?:(?:19|20)\d{2}\s*\.|첨\s*부|위\s|원\s*고|피\s*고|대\s*리\s*인|귀\s*중|"
                                   r"\d{1,2}\s*[.)]|[가-하]\s*[.)]|[①-⑳]|[■□▶-]|입\s*증\s*방\s*법|증\s*거\s*목\s*록)")
 
-# 증거 목록 정의가 아닌 본문 인용·참조 표기 (FP-01: '중 발췌', '참조', '일부' 등)
-_EXHIBIT_REF_CONTEXT_RE = re.compile(
-    r"(?:중\s*발췌|발췌(?:본)?|참조(?:\b|$)|\(참조\)|일부\b|사본\s*발췌|앞서\s*제출한)"
+# 증거 목록 섹션 시작 헤더 (입증방법, 첨부서류, 증거목록 등)
+_EXHIBIT_SECTION_HEAD_RE = re.compile(r"^\s*(?:\[\s*)?(?:입\s*증\s*방\s*법|첨\s*부\s*서\s*류|증\s*거\s*목\s*록|소\s*명\s*방\s*법)(?:\s*\])?(?:\s*[:：])?")
+
+# 본문 서술 문맥의 단순 인용·참조 표기 (예: '중 발췌하여', '참조바람', '보더라도' 등)
+_EXHIBIT_REF_SENTENCE_RE = re.compile(
+    r"(?:중\s*발췌(?:하여|한|해|하더라도)?|참조(?:\b|(?=[,.\s]))|\(참조\)|앞서\s*제출한|에서\s*확인되는|에\s*비추어)"
 )
 
 
 def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """표가 없을 때: 문단 첫머리가 호증 번호인 목록(입증방법·증거설명 목록)을 행으로 읽는다.
 
-    - 두 단으로 짠 목록은 한 줄에 증거가 여럿 이어져 읽힌다('갑 제2호증항고장 접수증 갑 제3호증항고결정서'). 줄 안의
-      참조마다 나눈다(v5 3-1).
-    - 칸 구분이 없으므로 참조 뒤부터 첫 날짜 앞까지를 서증명, 첫 날짜를 작성일, 나머지를 작성자·입증취지로 본다.
-    - 긴 서증명이 다음 줄로 넘어가면(참조·날짜 없는 짧은 줄) 앞 행의 서증명에 잇는다.
-    - 본문 소제목이나 인용구(예: '갑 제7호증 중 발췌', '참조')는 목록 정의가 아니므로 제외한다(FP-01).
+    - 입증방법/첨부서류 구역(Section) 안의 항목은 제목에 '일부 발췌', '발췌본'이 있더라도
+      정식 증거 목록으로 인정한다(FP-01 정밀화).
+    - 본문 서술 구역에서 문장 중간에 참조되는 호증('중 발췌하여', '참조' 등)만 목록 정의에서 제외한다.
     """
     rows: List[Dict[str, Any]] = []
     reading = build_reading_text(doc)
     previous_was_item = False
+    in_exhibit_section = False
+
     for paragraph_index, paragraph in enumerate(reading.text.split("\n")):
         stripped = paragraph.strip()
-        raw_items = split_items(stripped) if parse_exhibits(stripped[:24]) and parse_exhibits(stripped)[0]["span"][0] == 0 else []
+        if not stripped:
+            continue
+
+        # 입증방법 / 첨부서류 / 증거목록 섹션 진입 감지
+        if _EXHIBIT_SECTION_HEAD_RE.search(stripped):
+            in_exhibit_section = True
+            previous_was_item = False
+            continue
+
+        # 앞머리의 번호/불릿(예: '1. ', '5. ', '- ', '가. ')을 정규화하여 호증 시작 판별
+        bullet_m = re.match(r"^(\d{1,2}\s*[.)]|[-*•·]\s*|[가-하]\s*[.)]|[①-⑳]\s*)", stripped)
+        cand_text = stripped[bullet_m.end():].strip() if bullet_m else stripped
+        cand_refs = parse_exhibits(cand_text[:24]) if cand_text else []
+        is_leading_exhibit = bool(cand_refs and cand_refs[0]["span"][0] == 0)
+
+        raw_items = split_items(cand_text) if is_leading_exhibit else []
         items = []
         for ref, rest in raw_items:
-            # 본문 발췌/인용 또는 참조 표현인 경우 서증 목록 정의에서 제외 (FP-01)
-            if _EXHIBIT_REF_CONTEXT_RE.search(rest) or _EXHIBIT_REF_CONTEXT_RE.search(stripped):
-                continue
-            items.append((ref, rest))
+            # 입증방법 구역 안이면 제목에 '발췌'가 있어도 정식 목록으로 수용
+            if in_exhibit_section:
+                items.append((ref, rest))
+            else:
+                # 본문 서술 영역에서는 서술형 참조 표현이 있으면 목록 정의에서 제외
+                if _EXHIBIT_REF_SENTENCE_RE.search(rest) or _EXHIBIT_REF_SENTENCE_RE.search(stripped):
+                    continue
+                # 날짜가 있거나 번호형 목록 구조(예: '1. 갑 제5호증')이면 본문 영역이라도 수용
+                if DATE_RE.search(rest) or re.match(r"^\d+[\.\)]", stripped):
+                    items.append((ref, rest))
+                else:
+                    # 명백한 서술 문장이 이어지는 경우 본문 참조로 간주
+                    if len(rest) > 20 and any(v in rest for v in ("하였다", "바와 같이", "살피건대", "주장한다")):
+                        continue
+                    items.append((ref, rest))
+
         if not items:
             if (previous_was_item and rows and stripped and len(stripped) <= 40 and not DATE_RE.search(stripped)
                     and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped)):

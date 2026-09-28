@@ -58,6 +58,71 @@ def _items(section: str) -> List[str]:
     return [" ".join(part.split()) for part in ITEM_SPLIT_RE.split(section) if part and part.strip()]
 
 
+def _calculate_dynamic_deadline(doc: NormalizedDocument, claim: str) -> str:
+    """문서 텍스트에서 실제 처분일, 통지일, 소제기일을 추출하여 동적으로 일수를 계산한다."""
+    from datetime import date
+    full_text = getattr(doc, "full_text", "") or ""
+    scope_text = claim + "\n" + full_text
+
+    def parse_d(m):
+        if not m:
+            return None
+        y, mo, d = int(m.group("y")), int(m.group("m")), int(m.group("d"))
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return None
+
+    # DATE_RE는 named group (?P<y>\d{4}), (?P<m>\d{1,2}), (?P<d>\d{1,2})
+    from packages.claim_engine.evidence_consistency import DATE_RE
+
+    # 1. 처분일 탐지
+    disp_date = None
+    m_disp = re.search(r"(?:처분일|원처분일|처분을\s*안\s*날|처분(?:이)?\s*있은\s*날)\s*[:：]?\s*" + DATE_RE.pattern, scope_text)
+    if m_disp:
+        disp_date = parse_d(m_disp)
+    else:
+        m_disp2 = re.search(DATE_RE.pattern + r"[^.\n]{0,25}?(?:처분|결정)을?\s*(?:받|하|내렸|고지)", scope_text)
+        if m_disp2:
+            disp_date = parse_d(m_disp2)
+
+    # 2. 통지일/통보일 탐지
+    notif_date = None
+    m_notif = re.search(r"(?:통지일|통보일|송달일|결과\s*통보)\s*[:：]?\s*" + DATE_RE.pattern, scope_text)
+    if m_notif:
+        notif_date = parse_d(m_notif)
+    else:
+        m_notif2 = re.search(DATE_RE.pattern + r"[^.\n]{0,25}?(?:통지|통보|송달)받", scope_text)
+        if m_notif2:
+            notif_date = parse_d(m_notif2)
+
+    # 3. 소제기일/작성일 탐지
+    from packages.claim_engine.evidence_consistency import document_date
+    filing_date = document_date(doc)
+    if not filing_date:
+        all_dates = [parse_d(m) for m in DATE_RE.finditer(full_text)]
+        valid_dates = [d for d in all_dates if d]
+        filing_date = max(valid_dates) if valid_dates else None
+
+    if not filing_date:
+        filing_date = date.today()
+
+    parts = []
+    if disp_date and filing_date and filing_date >= disp_date:
+        days_from_disp = (filing_date - disp_date).days
+        over_str = f"90일 도과({days_from_disp}일 경과, 각하 위험)" if days_from_disp > 90 else f"90일 이내({days_from_disp}일 경과, 기간 준수)"
+        parts.append(f"원처분일({disp_date.year}. {disp_date.month}. {disp_date.day}.) 기준: {over_str}")
+
+    if notif_date and filing_date and filing_date >= notif_date:
+        days_from_notif = (filing_date - notif_date).days
+        within_str = f"90일 이내({days_from_notif}일 경과)" if days_from_notif <= 90 else f"90일 도과({days_from_notif}일 경과)"
+        parts.append(f"이의신청 통보일({notif_date.year}. {notif_date.month}. {notif_date.day}.) 기준: {within_str}")
+
+    if parts:
+        return " [실제 일수 동적 계산] " + " / ".join(parts) + f" (소제기·작성일: {filing_date.year}. {filing_date.month}. {filing_date.day}.)"
+    return ""
+
+
 def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources: Dict[str, Any]) -> Finding:
     basis = [{"name": name, **sources.get(name, {})} for name in rule.get("basis") or []]
     grade = rule.get("grade", "C")
@@ -72,12 +137,19 @@ def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources:
     for source in basis:
         evidence.append(Evidence.create(description=f"근거: {source['name']} ({source.get('url', '')})",
                                         grade=EvidenceGrade.A, excerpt=str(source.get("text", ""))[:300]))
+
+    explanation = rule.get("explanation", "")
+    if rule.get("rule_id") == "ADMIN.DEADLINE_CALCULATION_SCENARIOS":
+        dynamic_calc = _calculate_dynamic_deadline(doc, claim)
+        if dynamic_calc:
+            explanation += dynamic_calc
+
     return Finding.create(
         type=kind, status=VerificationStatus(rule.get("status", "SUSPICIOUS")),
         severity=Severity.HIGH if grade in ("A", "B") and not rule.get("human_review") else Severity.MEDIUM,
         evidence_grade=GRADES.get(grade, EvidenceGrade.C),
         title=f"법리 검토: {rule['verdict']} — '{claim[:70]}'" + (" (사람 판단 필요)" if rule.get("human_review") else ""),
-        detail=rule.get("explanation", "") + (" 근거: " + "; ".join(b["name"] for b in basis) if basis else "")
+        detail=explanation + (" 근거: " + "; ".join(b["name"] for b in basis) if basis else "")
         + (f" 근거 조문({', '.join(rule['basis_pending'])})의 공식 원문은 아직 수집하지 않았으므로 원문 대조는 사람이 한다."
            if rule.get("basis_pending") else ""),
         confidence=CONFIDENCE.get(grade, 0.5), confidence_features=features, document_id=doc.document_id,

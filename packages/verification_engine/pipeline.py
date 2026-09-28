@@ -1167,17 +1167,29 @@ class VerificationPipeline:
                           f"({self._provider_reason(outcome.rationale)})")
             sem_status = "UNVERIFIED"
             if grounded:
-                # 모델들의 판정 및 rationale을 종합하여 상태 결정
+                # 1. 모델들의 구조화된 판정 결과 수집
                 stage_statuses = [
-                    str(s.get("verdict", {}).get("status", ""))
+                    str(s.get("verdict", {}).get("status", "")).upper()
                     for s in outcome.stages if s.get("used") and s.get("verdict")
                 ]
                 rat = str(outcome.rationale or "")
-                if "CONTRADICTED" in stage_statuses or "DISTORTED" in stage_statuses or "결론을 뒤집" in rat or "취지 왜곡" in rat:
+
+                # 2. 부정 및 동일성 표현(오탐 방지 가드)
+                has_no_distortion = any(k in rat for k in ("왜곡 없이", "왜곡이 없", "왜곡되지", "왜곡은 없", "취지와 부합", "취지와 일치", "취지와 동일"))
+                has_no_difference = any(k in rat for k in ("차이가 없", "차이 없", "다르지 않", "사실관계가 동일", "사안과 동일", "사실관계 동일"))
+
+                # 3. 모델들의 판정 결과 종합 (구조화된 verdict 우선)
+                all_verified = bool(stage_statuses) and all(st in ("SUPPORTED", "VERIFIED") for st in stage_statuses)
+
+                if all_verified and not ("CONTRADICTED" in stage_statuses or "DISTINGUISHABLE" in stage_statuses):
+                    sem_status = "SUPPORTED"
+                elif ("CONTRADICTED" in stage_statuses or "DISTORTED" in stage_statuses
+                      or ((("결론을 뒤집" in rat) or ("취지 왜곡" in rat)) and not has_no_distortion)):
                     sem_status = "CONTRADICTED"
-                elif "DISTINGUISHABLE" in stage_statuses or "PARTIALLY_VERIFIED" in stage_statuses or "사실관계" in rat or "사안과 다르" in rat:
+                elif ("DISTINGUISHABLE" in stage_statuses
+                      or ((("사실관계" in rat and "차이" in rat) or ("사안과 다르" in rat)) and not has_no_difference)):
                     sem_status = "DISTINGUISHABLE"
-                elif all(st in ("SUPPORTED", "VERIFIED") for st in stage_statuses) and stage_statuses:
+                elif all_verified:
                     sem_status = "SUPPORTED"
                 else:
                     # 기본 자문 검토는 보수적 검증 계약에 따라 UNVERIFIED 유지
