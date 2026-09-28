@@ -146,6 +146,18 @@ def review_document(result, library, router, context, pii):
                             "MODEL_RESPONSE_REJECTED" if review["model_executed"] else "MODEL_UNAVAILABLE")
         return review
     review["review_completed"] = not review["rejected_observations"] and not review["document_truncated"]
+    review["comparison_completed"] = True
+    review["legal_binding_determined"] = False
+    review["authority_limitation"] = "내부 안내자료에 기초한 참고 의견이며, 공식 법령·상급 규정 확인 필요"
+    review["stages"] = {
+        "inventory_listed": bool(getattr(library, "summary", {}).get("status") in ("READY", "PARTIAL")),
+        "text_extracted": True,
+        "sources_selected": bool(sources),
+        "model_compared": True,
+        "quotes_verified": True,
+        "advisory_formed": bool(observations),
+        "legal_binding_determined": False,
+    }
     if not observations:
         review.update(status="REVIEWED_NO_ADVICE", reason="MODEL_RETURNED_NO_ADVICE_NOT_LEGAL_CLEARANCE")
         return review
