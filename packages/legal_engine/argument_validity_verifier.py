@@ -200,9 +200,10 @@ async def verify_argument_validity(
     """허위 판례 인용 및 법률 주장에 대한 타당성 종합 검토를 수행하고 대조표를 생성한다."""
     result = ArgumentValidityResult()
 
-    # 1. 공식 DB에서 미확인된(가짜) 판례 및 불일치 판례 선별
+    # 1. 공식 DB에서 미확인된(가짜) 판례, 불일치 판례, 및 시맨틱 검토 결과(취지 모순·적용 차이) 선별
     unverified_cases: List[Dict[str, Any]] = []
     citation_by_id = {c.citation_id: c for c in citations}
+    sem_by_cid = {r.get("citation_id"): r for r in (semantic_reviews or [])}
 
     for verdict in legal_verdicts:
         cid = verdict.get("citation_id")
@@ -212,16 +213,33 @@ async def verify_argument_validity(
 
         status = str(verdict.get("status", ""))
         levels = verdict.get("levels", {})
+        sem_rev = sem_by_cid.get(cid)
+        sem_status = str(sem_rev.get("status", "")) if sem_rev and sem_rev.get("source_quotes_validated") else ""
 
-        # 판례가 공식 소스에서 발견되지 않았거나(NOT_FOUND), 심각한 불일치가 있는 경우
-        if (status in ("NOT_FOUND", "CONTRADICTED") or levels.get("level1") == "NOT_FOUND"
-                or levels.get("number_format") == "IMPOSSIBLE"):
+        # 판례가 공식 소스에서 발견되지 않았거나(NOT_FOUND), 심각한 불일치가 있거나,
+        # 시맨틱 검토에서 판례 취지 왜곡(CONTRADICTED) 또는 사실관계 적용 차이(DISTINGUISHABLE)가 확인된 경우
+        is_unverified = (status in ("NOT_FOUND", "CONTRADICTED") or levels.get("level1") == "NOT_FOUND"
+                         or levels.get("number_format") == "IMPOSSIBLE")
+        is_semantic_issue = sem_status in ("CONTRADICTED", "DISTINGUISHABLE")
+
+        if is_unverified or is_semantic_issue:
+            if not case_number_possible(citation.canonical_case_number or citation.case_number or ""):
+                basis = "FABRICATION_SUSPECTED"
+            elif sem_status == "CONTRADICTED":
+                basis = "CONTRADICTION"
+            elif sem_status == "DISTINGUISHABLE":
+                basis = "DISTINGUISHABLE"
+            elif status == "CONTRADICTED":
+                basis = "CONTENT_MISMATCH"
+            else:
+                basis = "UNCONFIRMED"
+
             unverified_cases.append({
                 "citation": citation,
                 "verdict": verdict,
-                # 조회에서 사건번호를 찾지 못한 것과, 사건은 있으나 인용 내용이
-                # 다른 것은 실무상 대응이 정반대다. 끝까지 구분한다.
-                "basis": _basis_for(citation, status),
+                "basis": basis,
+                "sem_status": sem_status,
+                "sem_review": sem_rev,
                 "quote_diff": (verdict.get("review") or {}).get("quote_diff"),
                 "context": citation.context or doc.full_text[max(0, citation.span[0] - 200) : min(len(doc.full_text), citation.span[1] + 200)] if citation.span else "",
             })
@@ -242,6 +260,11 @@ async def verify_argument_validity(
         c = item["citation"]
         basis = item.get("basis", "UNCONFIRMED")
         mismatch = basis == "CONTENT_MISMATCH"
+        contradiction = basis == "CONTRADICTION"
+        distinguishable = basis == "DISTINGUISHABLE"
+        sem_rev = item.get("sem_review") or {}
+        sem_reason = str(sem_rev.get("reason") or "")
+
         if basis == "FABRICATION_SUSPECTED":
             row = _fabrication_row(c)
             row.item_id = index
@@ -250,79 +273,114 @@ async def verify_argument_validity(
             result.rows.append(row)
             result.findings.append(_fabrication_finding(c, doc))
             continue
+
         statute = c.type in (CitationType.STATUTE, CitationType.ADMIN_RULE)
         noun = "법령" if statute else "판례"
+
+        if contradiction:
+            ai_basis = ("공식 판결 전문의 핵심 법리·취지와 정반대로 인용됨 (결론 뒤집힘). "
+                        "단순 문구 차이가 아니라 판시사항의 부정·예외 요건을 반대로 왜곡하여 인용한 것으로 확인됨.")
+            verdict_text = "판례 취지 왜곡 (판시사항과 상반 / 부당)"
+            legal_reason = (sem_reason or
+                            "공식 판결 전문의 취지와 정반대되는 내용으로 인용되어, 해당 판례를 근거로 한 주장은 법리적 타당성을 인정하기 어렵습니다.")
+            counteraction = ("대법원 판결의 명시적 판시 취지와 정반대이므로 이를 근거로 한 주장은 철회하고, "
+                             "독자적인 적법 요건이나 다른 선례를 찾아 변론을 재구성해야 함.")
+        elif distinguishable:
+            ai_basis = ("사건 자체는 실재하나, 원 판결의 사실관계(처분 유형·적용 법령)와 본 사안 사이에 "
+                        "중대한 차이가 있음. 허위 판례가 아니므로 부존재나 임의 생성으로 단정하지 않음.")
+            verdict_text = "적용 차이 (사실관계 상이 / 전문가 검토 필요)"
+            legal_reason = (sem_reason or
+                            "판례 사안과 본 건의 사실관계 및 법적 성격이 상이하여, 기존 판례의 법리가 본 건에 그대로 유추적용될 수 있는지 검토가 필요합니다.")
+            counteraction = ("판례 사안과 본 건의 사실관계 차이를 인정하고, 신뢰보호 등 일반 행정법 원칙이 "
+                             "본 사안에도 유추적용되어야 하는 구체적 당위성을 보강하여 변론할 것.")
+        elif mismatch:
+            ai_basis = (
+                "공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
+                + (f"원문과 다른 어절: {item['quote_diff']}. " if item.get("quote_diff") else "")
+                + "인용 오류·발췌 왜곡·임의 생성 가능성을 모두 열어 두고 원문과 대조가 필요함."
+            )
+            verdict_text = ("인용문 변형 (원문과 어절 차이)" if item.get("quote_diff")
+                            else "인용 내용 불일치 (원문 대조 필요)")
+            legal_reason = ("사건 자체는 확인되나 인용 내용이 공식 기록과 달라, 그 취지를 전제로 한 주장은 "
+                            "원문 대조 전까지 근거가 확정되지 않습니다.")
+            counteraction = ("공식 기록 원문과 인용 부분을 대조하고, 차이가 있으면 정확한 판시사항으로 "
+                             "정정하거나 그 취지가 주장을 뒷받침하는지 다시 검토해야 함.")
+        else:
+            ai_basis = (
+                ("국가법령정보 법령 목록에서 같은 이름의 법령·조문을 확인하지 못함. 법령명 오기·약칭·폐지 "
+                 "가능성이 있으므로 이 사실만으로 부존재나 임의 생성으로 단정하지 않음.") if statute else
+                ("국가법령정보 공식 DB 검색 결과 같은 사건번호의 기록을 확인하지 못함. "
+                 "공식 DB는 모든 재판을 수록하지 않으므로(미공개·수록범위 밖) 이 사실만으로 "
+                 "부존재나 임의 생성으로 단정하지 않음.")
+            )
+            verdict_text = "공식 DB 미확인 (원문 확인 필요)"
+            legal_reason = (f"공식 DB에서 확인하지 못한 {noun}을(를) 근거로 삼고 있어, 원문을 확인하기 전까지 "
+                            f"그 주장의 근거가 확정되지 않습니다. {noun}이(가) 존재하지 않는다는 뜻은 아닙니다.")
+            counteraction = (
+                ("정식 법령명·약칭·시행 여부를 국가법령정보센터에서 다시 확인하고, 조문 원문과 대조할 것."
+                 if statute else
+                 "판결문 사본 또는 출처를 확인하고, 대법원 종합법률정보 등 다른 공식 경로에서도 "
+                 "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음.")
+            )
+
         row = HallucinationTableRow(
             location=f"{c.page or 1}면",
             claim_text=c.context[:150] if c.context else f"{c.raw_text}에 기반한 법률적 주장",
             cited_authority=c.raw_text,
             authority_exists=bool(item["verdict"].get("official_record")),
-            basis=item.get("basis", "UNCONFIRMED"),
-            ai_generation_basis=(
-                ("공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
-                 + (f"원문과 다른 어절: {item['quote_diff']}. " if item.get("quote_diff") else "")
-                 + "인용 오류·발췌 왜곡·임의 생성 가능성을 모두 열어 두고 원문과 대조가 필요함.")
-                if mismatch else
-                ("국가법령정보 법령 목록에서 같은 이름의 법령·조문을 확인하지 못함. 법령명 오기·약칭·폐지 "
-                 "가능성이 있으므로 이 사실만으로 부존재나 임의 생성으로 단정하지 않음.") if statute else
-                ("국가법령정보 공식 DB 검색 결과 같은 사건번호의 기록을 확인하지 못함. "
-                 "공식 DB는 모든 재판을 수록하지 않으므로(미공개·수록범위 밖) 이 사실만으로 "
-                 "부존재나 임의 생성으로 단정하지 않음.")),
-            validity_verdict=("인용문 변형 (원문과 어절 차이)" if mismatch and item.get("quote_diff")
-                              else "인용 내용 불일치 (원문 대조 필요)") if mismatch else "공식 DB 미확인 (원문 확인 필요)",
-            legal_reasoning=(
-                "사건 자체는 확인되나 인용 내용이 공식 기록과 달라, 그 취지를 전제로 한 주장은 "
-                "원문 대조 전까지 근거가 확정되지 않습니다."
-                if mismatch else
-                f"공식 DB에서 확인하지 못한 {noun}을(를) 근거로 삼고 있어, 원문을 확인하기 전까지 "
-                f"그 주장의 근거가 확정되지 않습니다. {noun}이(가) 존재하지 않는다는 뜻은 아닙니다."),
-            recommended_counteraction=(
-                "공식 기록 원문과 인용 부분을 대조하고, 차이가 있으면 정확한 판시사항으로 "
-                "정정하거나 그 취지가 주장을 뒷받침하는지 다시 검토해야 함."
-                if mismatch else
-                ("정식 법령명·약칭·시행 여부를 국가법령정보센터에서 다시 확인하고, 조문 원문과 대조할 것."
-                 if statute else
-                 "판결문 사본 또는 출처를 확인하고, 대법원 종합법률정보 등 다른 공식 경로에서도 "
-                 "조회해 볼 것. 어느 경로에서도 확인되지 않을 때 비로소 부존재를 다툴 수 있음.")),
+            basis=basis,
+            ai_generation_basis=ai_basis,
+            validity_verdict=verdict_text,
+            legal_reasoning=legal_reason,
+            recommended_counteraction=counteraction,
         )
         row.item_id = index
         row.citation_id = c.citation_id
         row.context_review = _context_review(item["verdict"], semantic_reviews or [], mask)
         result.rows.append(row)
 
-        feats = {"deterministic_rule": True, "unconfirmed_citation": c.raw_text, "citation_id": c.citation_id,
-                 "error_category": "LEGAL_CITATION_ERROR" if mismatch else "UNSUPPORTED_LEGAL_BASIS"}
+        feats = {
+            "deterministic_rule": not (contradiction or distinguishable),
+            "unconfirmed_citation": c.raw_text,
+            "citation_id": c.citation_id,
+            "error_category": ("CITATION_CONTRADICTION" if contradiction
+                               else "APPLICATION_DIFFERENCE" if distinguishable
+                               else "LEGAL_CITATION_ERROR" if mismatch else "UNSUPPORTED_LEGAL_BASIS"),
+            "semantic_status": sem_status,
+        }
+        finding_status = VerificationStatus.CONTRADICTED if contradiction else VerificationStatus.UNVERIFIED
+        finding_severity = Severity.HIGH if contradiction else Severity.LOW if distinguishable else Severity.MEDIUM
+        finding_title = (
+            f"판례 취지 왜곡 인용: {c.raw_text}" if contradiction
+            else f"판례 사실관계 및 적용 차이 (전문가 검토 필요): {c.raw_text}" if distinguishable
+            else f"인용 내용이 공식 기록과 다른 판례: {c.raw_text}" if mismatch
+            else f"공식 DB에서 확인되지 않은 {noun} 인용: {c.raw_text}"
+        )
+        finding_tags = ["LEGAL", "ARGUMENT_VALIDITY"] + (
+            ["CONTRADICTION", "CITATION_DISTORTION"] if contradiction
+            else ["DISTINGUISHABLE", "APPLICATION_DIFFERENCE"] if distinguishable
+            else ["SOURCE_UNCONFIRMED"]
+        )
+
         result.findings.append(
             Finding.create(
                 type=FindingType.LEGAL_ARGUMENT_INVALID,
-                status=VerificationStatus.UNVERIFIED,
-                severity=Severity.MEDIUM,
-                evidence_grade=EvidenceGrade.C,
-                title=(f"인용 내용이 공식 기록과 다른 판례: {c.raw_text}" if mismatch
-                       else f"공식 DB에서 확인되지 않은 {noun} 인용: {c.raw_text}"),
-                detail=("사건은 확인되나 인용 내용이 공식 기록과 다릅니다. 원문 대조가 필요합니다."
-                        if mismatch else
-                        "공식 DB에서 같은 사건번호를 확인하지 못했습니다. 공식 DB는 모든 재판을 "
-                        "수록하지 않으므로 이 사실만으로 부존재나 임의 생성으로 단정하지 않습니다. "
-                        "원문 확인이 필요합니다."),
+                status=finding_status,
+                severity=finding_severity,
+                evidence_grade=EvidenceGrade.B if (contradiction or distinguishable) else EvidenceGrade.C,
+                title=finding_title,
+                detail=legal_reason,
                 confidence=confidence_score(feats),
                 confidence_features=feats,
                 document_id=doc.document_id,
                 page=c.page,
                 engine=ENGINE_NAME,
-                # 확인하지 못한 것을 환각으로 분류하지 않는다. 적극적 근거가
-                # 있을 때만 AI_HALLUCINATION을 붙인다.
-                tags=["LEGAL", "ARGUMENT_VALIDITY", "SOURCE_UNCONFIRMED"],
+                tags=finding_tags,
+                advisory_only=distinguishable,
             )
         )
 
     # 4. AI 교차검토(참고). 판정·심각도는 바꾸지 않는다.
-    #
-    # 예전에는 모델에게 "존재하지 않는 가공의 판례"라고 전제를 주고, 그 답을
-    # 그대로 '허위 판례에 근거한 주장(CONTRADICTED·HIGH)'으로 기록했다. 조회가
-    # 잠시 실패한 실재 판례도 모델 하나의 말로 허위가 됐다. 이제 모델에게는
-    # 확인 상태를 사실대로 알리고, 사용 가능한 모델 모두의 의견을 모아 일치
-    # 여부와 함께 참고 의견으로만 붙인다.
     can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
                        and hasattr(router, "consult_all")
                        and router.has_available_provider(policy=external_ai_policy))
@@ -331,13 +389,17 @@ async def verify_argument_validity(
 
     if result.rows:
         counts = {basis: sum(r.basis == basis for r in result.rows)
-                  for basis in ("FABRICATION_SUSPECTED", "CONTENT_MISMATCH", "UNCONFIRMED")}
-        parts = [f"성립할 수 없는 사건번호 {counts['FABRICATION_SUSPECTED']}건" if counts["FABRICATION_SUSPECTED"] else "",
-                 f"인용 내용이 공식 기록과 다른 판례 {counts['CONTENT_MISMATCH']}건" if counts["CONTENT_MISMATCH"] else "",
-                 f"공식 DB에서 확인되지 않은 판례·법령 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else ""]
+                  for basis in ("FABRICATION_SUSPECTED", "CONTRADICTION", "DISTINGUISHABLE", "CONTENT_MISMATCH", "UNCONFIRMED")}
+        parts = [
+            f"성립할 수 없는 사건번호 {counts['FABRICATION_SUSPECTED']}건" if counts["FABRICATION_SUSPECTED"] else "",
+            f"판례 취지 왜곡(상반 인용) {counts['CONTRADICTION']}건" if counts["CONTRADICTION"] else "",
+            f"사실관계 및 적용 차이 {counts['DISTINGUISHABLE']}건" if counts["DISTINGUISHABLE"] else "",
+            f"인용 내용이 공식 기록과 다른 판례 {counts['CONTENT_MISMATCH']}건" if counts["CONTENT_MISMATCH"] else "",
+            f"공식 DB에서 확인되지 않은 판례·법령 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else "",
+        ]
         summary = ", ".join(p for p in parts if p) + "을(를) 근거로 한 주장이 있습니다. "
         summary += ("미확인은 부존재를 뜻하지 않으므로 원문 확인이 필요합니다."
-                    if counts["UNCONFIRMED"] else "원문 대조가 필요합니다.")
+                    if counts["UNCONFIRMED"] else "원문 대조 및 법리 재검토가 필요합니다.")
         if result.ai_summary:
             summary += f" {result.ai_summary}"
         result.overall_validity_summary = summary
@@ -349,7 +411,7 @@ async def verify_argument_validity(
 
 def summarize_argument_findings(findings, citation_summary: str) -> Dict[str, Any]:
     """Summarize all legal claim engines, without treating silence as clearance."""
-    relevant = [f for f in findings if not f.advisory_only and f.type in (
+    relevant = [f for f in findings if f.type in (
         FindingType.LEGAL_ARGUMENT_INVALID, FindingType.UNSUPPORTED_GENERALIZATION,
         FindingType.OVERCLAIM, FindingType.LEGAL_REQUIREMENT_OMITTED, FindingType.REASONING_GAP)]
     contradicted = sum(f.status == VerificationStatus.CONTRADICTED for f in relevant)
@@ -366,6 +428,8 @@ _BASIS_LABEL = {
     "UNCONFIRMED": "공식 DB에서 같은 사건번호를 찾지 못함(공식 DB는 모든 재판을 수록하지 않으므로 부존재를 뜻하지 않음)",
     "CONTENT_MISMATCH": "사건은 확인되나 인용 내용이 공식 기록과 다름",
     "FABRICATION_SUSPECTED": "사건번호 형식상 성립할 수 없음(있을 수 없는 연도 또는 사건부호)",
+    "CONTRADICTION": "공식 판결 전문의 핵심 법리·취지와 정반대로 인용됨(취지 왜곡)",
+    "DISTINGUISHABLE": "공식 판결 사안과 문서 사안의 사실관계·적용 요건이 상이함(적용 차이 / 전문가 검토 필요)",
 }
 
 # 한 요청에 묻는 인용 수. 인용 1건에 Anthropic이 약 900토큰을 썼다(실측)는 전제로 4건씩 묻다가,

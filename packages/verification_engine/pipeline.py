@@ -1165,7 +1165,24 @@ class VerificationPipeline:
             else:
                 reason = (f"AI 공급자를 사용하지 못해 의미·적용 검토를 수행하지 못함"
                           f"({self._provider_reason(outcome.rationale)})")
-            review = {"citation_id": citation.citation_id, "status": "UNVERIFIED",
+            sem_status = "UNVERIFIED"
+            if grounded:
+                # 모델들의 판정 및 rationale을 종합하여 상태 결정
+                stage_statuses = [
+                    str(s.get("verdict", {}).get("status", ""))
+                    for s in outcome.stages if s.get("used") and s.get("verdict")
+                ]
+                rat = str(outcome.rationale or "")
+                if "CONTRADICTED" in stage_statuses or "DISTORTED" in stage_statuses or "결론을 뒤집" in rat or "취지 왜곡" in rat:
+                    sem_status = "CONTRADICTED"
+                elif "DISTINGUISHABLE" in stage_statuses or "PARTIALLY_VERIFIED" in stage_statuses or "사실관계" in rat or "사안과 다르" in rat:
+                    sem_status = "DISTINGUISHABLE"
+                elif all(st in ("SUPPORTED", "VERIFIED") for st in stage_statuses) and stage_statuses:
+                    sem_status = "SUPPORTED"
+                else:
+                    sem_status = "ADVISORY_REVIEWED"
+
+            review = {"citation_id": citation.citation_id, "status": sem_status,
                       "review_id": verdict.get("review_id"),
                       "source_record_ids": verdict.get("source_record_ids", []),
                       "advisory_only": True, "source_quotes_validated": grounded,
