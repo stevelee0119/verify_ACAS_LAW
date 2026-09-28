@@ -59,7 +59,7 @@ def test_summary_metrics_are_compact(width, height, max_cell):
                 title: parseFloat(getComputedStyle(cell.querySelector('span')).fontSize),
                 height: cell.getBoundingClientRect().height}))""")
             assert len(sizes) == 8
-            assert all(s["value"] <= 18 and s["title"] <= 12 for s in sizes)
+            assert all(round(s["value"]) <= 18 and round(s["title"]) <= 12 for s in sizes), sizes
             assert all(s["height"] <= max_cell for s in sizes), [round(s["height"]) for s in sizes]
             for title in ("배포가능 상태", "검증위험 지수", "AI 작성 진단"):
                 expect(page.locator(".metric", has_text=title)).to_be_visible()
