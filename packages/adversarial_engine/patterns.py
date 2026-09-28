@@ -19,8 +19,12 @@ def _c(pattern: str) -> Pattern[str]:
 
 
 # 기계(AI·모델·검토 도구·시스템)를 수신자로 부르는 말. 사람 수신자(피고·원고·귀하)와 구분한다.
-MACHINE_ADDRESSEE = (r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|(?:검증|검토|분석)\s*(?:모델|도구|시스템|엔진|AI|프로그램)|"
-                     r"(?:AI|인공지능)\s*검토자|모델|시스템|reviewer|assistant)")
+MACHINE_ADDRESSEE = (
+    r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|"
+    r"(?:검증|검토|분석)(?:하는)?\s*(?:자동화\s*)?(?:모델|도구|시스템|엔진|AI|프로그램|소프트웨어|에이전트)|"
+    r"자동화\s*(?:도구|시스템|프로그램|소프트웨어|에이전트)|"
+    r"(?:AI|인공지능)\s*검토자|모델|시스템|reviewer|assistant)"
+)
 
 INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(MACHINE_ADDRESSEE + r"[^.\n]{0,360}?(?:경고|의심|오류|이상)\s*(?:지표|출력|보고|표시)?[을를은는도]?\s*"
@@ -206,17 +210,25 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:결론|결과|판정|평가|등급)[을를]?\s*(?:바꿔|바꾸어|변경하|수정하|조정하)"
         r"(?:라|어라|여라|십시오|세요|\s*것)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 변경 명령"),
+    (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:결론|결과|판정|평가)[을를]?\s*(?:만\s*)?"
+        r"(?:출력|표시|기재|반환|제시|보고|작성)(?:하라|해라|하십시오|할\s*것)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 출력 강제"),
+    (_c(r"['\"‘“]?(?:위법|취소\s*필요|적법|정상|적합|승인|인용|기각)['\"’”]?\s*(?:라는|이라는|으로|로|하다고)?\s*"
+        r"(?:결론|판정|결과)[을를은는]?\s*(?:만\s*)?(?:출력|표시|기재|반환|제시|보고)(?:하라|해라|하십시오|할\s*것)?"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "특정 결론 지정 출력 강제"),
     (_c(MACHINE_ADDRESSEE + r"[은는이가]?\s[^.\n]{0,80}?(?:신뢰할\s*수\s*있다고|정확하다고|적법하다고|진정하다고|문제(?:가)?\s*없다고|"
         r"이상(?:이)?\s*없다고)\s*(?:보고|기재|결론|판정|평가)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 강제"),
-    (_c(r"(?:보고서|결과|요약|검증\s*결과)\s*(?:에서|에)\s*[^.\n]{0,10}?(?:제외|빼|누락)(?:하라|해라|시켜라|하십시오|할\s*것)"),
-     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 제외 명령"),
+    (_c(r"(?:보고서|결과|요약|검증\s*결과)\s*(?:에서|에)\s*[^.\n]{0,30}?(?:제외|빼|누락|생략|삭제)(?:하라|해라|시켜라|하십시오|할\s*것)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 제외·생략 명령"),
 ]
 
 # LLM·검증 시스템을 명시적으로 호명하는 표현 (메타 지시어 강한 신호)
 AI_ADDRESSING_RE = _c(
-    r"(AI|인공지능|LLM|언어\s*모델|chatgpt|gpt|claude|gemini|copilot|검증\s*(시스템|엔진|도구)|"
-    r"assistant|모델|reviewer|심사자|검토\s*시스템|automated\s+(system|reviewer|checker))"
+    r"(AI|인공지능|LLM|언어\s*모델|chatgpt|gpt|claude|gemini|copilot|"
+    r"(?:검증|검토|분석)(?:하는)?\s*(?:자동화\s*)?(?:시스템|엔진|도구|모델|프로그램|AI)|"
+    r"자동화\s*(?:도구|시스템|프로그램|소프트웨어|에이전트)|"
+    r"assistant|모델|reviewer|심사자|automated\s+(system|reviewer|checker|tool))"
 )
 
 # 정상 법률문서에서 흔한 표현 (오탐 억제)

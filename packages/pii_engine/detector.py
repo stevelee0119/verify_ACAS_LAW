@@ -52,9 +52,17 @@ RRN_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-8])(\d{
 PHONE_RE = re.compile(r"(?<!\d)(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})(?!\d)")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ACCOUNT_RE = re.compile(r"(?<!\d)\d{2,3}[-\s]\d{2,6}[-\s]\d{2,6}(?:[-\s]\d{1,6})?(?!\d)")
-MILITARY_ID_RE = re.compile(r"(?<![0-9A-Za-z])\d{2}[-\s]?\d{8}(?![0-9])|(?<![A-Za-z])[가-힣]?\d{7,8}(?=\s*군번)")
+MILITARY_ID_RE = re.compile(
+    r"(?:군번\s*[:\s]?\s*)(\d{2}[-\s]?\d{5,8})(?![0-9])|"
+    r"(?<![0-9A-Za-z])(\d{2}-\d{5,8})(?![0-9])|"
+    r"(?<![0-9A-Za-z])\d{2}[-\s]?\d{8}(?![0-9])|"
+    r"(?<![A-Za-z])[가-힣]?\d{7,8}(?=\s*군번)"
+)
 PASSPORT_RE = re.compile(r"\b[MSRODmsrod]\d{8}\b")
-DOB_RE = re.compile(r"(19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[일]?\s*(생|출생)")
+DOB_RE = re.compile(
+    r"(?:19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[.\-일\s]?\s*(?:생|출생|일생)|"
+    r"(?:생년월일|출생일)\s*[:\s]?\s*(?:19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[.\-일]?"
+)
 # 지명 앞부분의 길이를 제한한다. '[가-힣]+' 뒤에 '시|군|구'를 찾게 하면 한글이 길게
 # 이어진 구간에서 시작 위치마다 끝까지 되짚어 비용이 길이의 제곱으로 늘었다.
 # 3MB 검증 결과 한 건에 25초가 걸려 보고서 생성 요청이 끊겼다. 실제 시·도명은
@@ -62,12 +70,24 @@ DOB_RE = re.compile(r"(19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[
 ADDRESS_RE = re.compile(
     r"(?:[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도)\s*)?"
     r"[가-힣]{1,8}(?:시|군|구)\s+[가-힣0-9]{1,20}(?:읍|면|동|가|로|길)\s*[\d\-]*(?:번지|호)?"
+    r"(?:\s*,\s*|\s+)?(?:\d{1,4}동\s*\d{1,4}호|\d{1,4}호|\d{1,3}층|[가-힣0-9]{1,15}(?:아파트|빌라|오피스텔|마을|단지|타운|맨션)(?:\s*\d{1,4}동\s*\d{1,4}호)?)?"
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
 JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
 NAME_RE = re.compile(
-    r"(?<![가-힣])(?:원고|피고인|피고|참고인|피의자|증인|고소인|고발인|신청인|피신청인|채권자|채무자|망|소외)\s*"
-    r"([가-힣]{2,4}?)" + JOSA + r"?(?![가-힣])"
+    r"(?<![가-힣])(?:원고|피고인|피고|참고인|피의자|증인|고소인|고발인|신청인|피신청인|채권자|채무자|망|소외|배우자|자녀|자|부|모|처|남편|아들|딸|가족|대리인)\s*"
+    r"([가-힣]{2,4}?)(?:\s*\([^)]+\))?" + JOSA + r"?(?![가-힣])"
+)
+# 의료/질병 및 투약/처방 민감정보 탐지
+MEDICAL_DIAGNOSIS_RE = re.compile(
+    r"(?:진단|치료|투병|질환|질병|증상|환자|진료기록상)?\s*(?:소아청소년과|내과|외과|이비인후과|정신건강의학과|정형외과|안과|피부과)?\s*(?:에서)?\s*"
+    r"([가-힣A-Za-z0-9\s,·]+?(?:천식|수면장애|우울증|불안장애|공황장애|조현병|외상후스트레스|PTSD|적응장애|당뇨|고혈압|디스크|골절|암|종양|알츠하이머|비염|폐렴)"
+    r"(?:(?:\s*(?:및|또는|과|와)\s*[가-힣A-Za-z0-9\s,·]+?(?:천식|수면장애|우울증|불안장애|공황장애|조현병|외상후스트레스|PTSD|적응장애|당뇨|고혈압|디스크|골절|암|종양|알츠하이머|비염|폐렴)))?"
+    r"(?:\s*(?:치료|투병|진단|증상|환자))?)"
+)
+MEDICAL_PRESCRIPTION_RE = re.compile(
+    r"(?:처방|복용|투약|약제|약품|약물)\s*(?:내역|기록|은|는|이|가|:\s*)?\s*"
+    r"([가-힣A-Za-z0-9\s,·~]+?(?:\d+(?:\.\d+)?\s*(?:mg|g|ml|정|포|캡슐|회|일분)|흡입액|복용약|주사액)[가-힣A-Za-z0-9\s,·~]*)"
 )
 # 법인 표기. 조사·부사로 끝나는 앞말을 상호로 오인하지 않도록 stopword를 둔다.
 COMPANY_SUFFIX_RE = re.compile(r"(?<![가-힣])([가-힣A-Za-z0-9]{2,10})\s*(?:주식회사|㈜|유한회사|합자회사)")
@@ -86,10 +106,10 @@ DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("EMAIL", EMAIL_RE, 1.0),
     ("PHONE", PHONE_RE, 0.95),
     ("PASSPORT", PASSPORT_RE, 0.8),
-    ("MILITARY_ID", MILITARY_ID_RE, 0.7),
+    ("MILITARY_ID", MILITARY_ID_RE, 0.85),
     ("ACCOUNT", ACCOUNT_RE, 0.6),
     ("DOB", DOB_RE, 0.9),
-    ("ADDRESS", ADDRESS_RE, 0.8),
+    ("ADDRESS", ADDRESS_RE, 0.85),
 ]
 
 RRN_WEIGHTS = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]
@@ -175,7 +195,18 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             start, end = m.start(1), m.end(1)
             if _covered_by_span(guard_spans, start, end):
                 continue
-            matches.append(PIIMatch(kind, name, start, end, block_id, page, 0.75, "직함·당사자 표기 문맥"))
+            matches.append(PIIMatch(kind, name, start, end, block_id, page, 0.75, "직함·당사자·가족 표기 문맥"))
+
+    for pattern in (MEDICAL_DIAGNOSIS_RE, MEDICAL_PRESCRIPTION_RE):
+        for m in pattern.finditer(text):
+            idx = 1 if (m.lastindex and m.group(1)) else 0
+            med_text = (m.group(idx) or "").strip()
+            if not med_text:
+                continue
+            start, end = m.start(idx), m.end(idx)
+            if _covered_by_span(guard_spans, start, end):
+                continue
+            matches.append(PIIMatch("MEDICAL", med_text, start, end, block_id, page, 0.85, "질병·처방 등 민감 의료정보"))
 
     for pattern in (COMPANY_SUFFIX_RE, COMPANY_PREFIX_RE):
         for m in pattern.finditer(text):

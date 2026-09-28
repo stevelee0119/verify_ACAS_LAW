@@ -196,7 +196,12 @@ def classify(
         score += 0.6
     guideline_impersonation = bool(hits and OFFICIAL_GUIDELINE_RE.search(text))
     if quoted:
-        score -= 1.2
+        if addresses_ai:
+            # 인용부호나 발췌문 내부에 AI·자동화 도구를 향한 지시가 숨겨진 경우(간접 인젝션 패턴).
+            # 정상 인용문 감점을 배제하고 인젝션 위험 가중치를 부여한다.
+            score += 0.5
+        else:
+            score -= 1.2
     if benign_context and not is_hidden and not addresses_ai and not guideline_impersonation:
         score -= 0.8
     if citation_context and not is_hidden and not addresses_ai:

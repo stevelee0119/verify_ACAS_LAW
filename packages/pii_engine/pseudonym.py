@@ -33,6 +33,7 @@ KIND_PREFIX = {
     "MILITARY_ID": "MILID",
     "PASSPORT": "PASSPORT",
     "DOB": "DOB",
+    "MEDICAL": "MED",
 }
 
 
