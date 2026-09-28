@@ -1180,9 +1180,11 @@ class VerificationPipeline:
                 elif all(st in ("SUPPORTED", "VERIFIED") for st in stage_statuses) and stage_statuses:
                     sem_status = "SUPPORTED"
                 else:
-                    sem_status = "ADVISORY_REVIEWED"
+                    # 기본 자문 검토는 보수적 검증 계약에 따라 UNVERIFIED 유지
+                    sem_status = "UNVERIFIED"
 
             review = {"citation_id": citation.citation_id, "status": sem_status,
+                      "semantic_status": sem_status,
                       "review_id": verdict.get("review_id"),
                       "source_record_ids": verdict.get("source_record_ids", []),
                       "advisory_only": True, "source_quotes_validated": grounded,
