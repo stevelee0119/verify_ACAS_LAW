@@ -23,11 +23,16 @@ LEGAL_IDENTIFIER_PATTERNS = [
     re.compile(r"등기\s*번호|등록\s*번호\s*제"),
     re.compile(r"\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?"),          # 선고일자
     re.compile(r"\b(19|20)\d{2}\b"),                            # 연도
+    re.compile(r"(?:계약번호\s*)?제\s*[\d]{4}-[가-힣A-Za-z0-9]+-\d+호?"), # 계약번호
+    re.compile(r"(?:사업자|법인)(?:등록)?번호\s*[:：]?\s*[\d\-]+"),         # 사업자/법인등록번호 라벨 문맥
 ]
 
 # 법인등록번호·사업자등록번호는 사건 검증에 쓰이므로 기본 마스킹 대상에서 제외한다
 BUSINESS_NO_RE = re.compile(r"\b\d{3}-\d{2}-\d{5}\b")
 CORP_NO_RE = re.compile(r"\b\d{6}-\d{7}\b")
+CORP_LABEL_PREFIX_RE = re.compile(r"(?:법인(?:등록)?번호|법인등기번호)\s*[:：]?\s*$")
+RRN_LABEL_PREFIX_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*$")
+
 
 
 @dataclass
@@ -48,7 +53,10 @@ class PIIMatch:
 # OCR 본문은 '800101 - 1234567'처럼 하이픈 앞뒤에 공백이 붙는다. 한 글자만 허용하면
 # 이런 번호가 가려지지 않은 채 외부 모델로 나갔고, 모델이 정돈해 되돌려 준 번호 때문에
 # 응답이 출력 검사에서 격리됐다. 줄바꿈은 넘지 않는다.
-RRN_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-8])(\d{6})(?!\d)")
+# 외국인등록번호 및 가상/변형 번호(9로 시작 등)까지 포괄하도록 [1-9]로 확장한다.
+RRN_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-9])(\d{6})(?!\d)")
+# 주민등록번호 라벨이 명시된 문맥에서는 뒷자리 첫 글자와 관계없이 13자리 번호를 개인정보로 포착한다.
+RRN_LABELLED_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*(\d{2}\d{2}\d{2}[ \t]*[-–]?[ \t]*\d{7})(?!\d)")
 PHONE_RE = re.compile(r"(?<!\d)(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})(?!\d)")
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ACCOUNT_RE = re.compile(r"(?<!\d)\d{2,3}[-\s]\d{2,6}[-\s]\d{2,6}(?:[-\s]\d{1,6})?(?!\d)")
@@ -77,7 +85,8 @@ JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|
 
 # 한 글자 친족 호칭(부, 모, 처, 자)은 '부대는', '부사관이', '처분은' 등의 일반 법률/군사용어 오탐을 막기 위해
 # 반드시 한자 괄호나 공백이 뒤따르는 독립된 문맥에서만 매칭한다.
-PREFIX_MULTI = r"(?:원고|피고인|피고|참고인|피의자|증인|고소인|고발인|신청인|피신청인|채권자|채무자|망|소외|배우자|자녀|남편|아들|딸|가족|대리인)"
+# 법인/계약 문서의 대표이사, 대표자, 대표 호칭을 추가하여 대표자 성명을 보호한다.
+PREFIX_MULTI = r"(?:원고|피고인|피고|참고인|피의자|증인|고소인|고발인|신청인|피신청인|채권자|채무자|망|소외|배우자|자녀|남편|아들|딸|가족|대리인|대표이사|대표자|대표|지배인)"
 PREFIX_SINGLE = r"(?:[부모처자](?:\s*[(（][父母妻子][)）])|\b[부모처자]\b)"
 
 NAME_RE = re.compile(
@@ -85,7 +94,7 @@ NAME_RE = re.compile(
     r"([가-힣]{2,4}?)(?:\s*\([^)]+\))?" + JOSA + r"?(?![가-힣])"
 )
 
-# 정상적인 법률·행정·군사용어가 인명(PERSON)으로 과잉 마스킹되는 것을 방지하기 위한 Stopword 목록
+# 정상적인 법률·행정·군사·계약용어가 인명(PERSON)으로 과잉 마스킹되는 것을 방지하기 위한 Stopword 목록
 LEGAL_MILITARY_STOPWORDS = {
     "부대", "부사관", "처분", "행정청", "처분청", "지휘관", "사단장", "연대장", "대대장",
     "중대장", "소대장", "징계권자", "심사위원회", "소청심사", "인사위원회", "국방부", "육군본부",
@@ -96,6 +105,9 @@ LEGAL_MILITARY_STOPWORDS = {
     "고등법원", "지방법원", "행정법원", "군사법원", "헌법재판소", "국가", "대한민국", "참모총장",
     "장관", "차관", "총장", "사령관", "군단장", "여단장", "함대사령관", "비행단장", "작위", "부작위",
     "기산점", "제소기간", "불복절차", "행정심판", "입증방법", "서증", "호증", "변론", "판결", "결정",
+    # 계약·물품 납품·검수 관련 명사 (PERSON 과잉 마스킹 방지)
+    "목적물", "대금조항", "계약금액", "지체상금", "납품기한", "포장상태", "물품", "검수", "입고",
+    "납품", "검사원", "검사관", "감독관", "하자보수", "계약조건", "특약사항", "이행보증", "보증금",
 }
 # 의료/질병 및 투약/처방 민감정보 탐지
 MEDICAL_DIAGNOSIS_RE = re.compile(
@@ -114,11 +126,16 @@ COMPANY_PREFIX_RE = re.compile(r"(?:주식회사|유한회사|합자회사)\s+([
 COMPANY_STOPWORDS = {
     "따라", "대하여", "관하여", "위하여", "의하여", "그리고", "그러나", "다만", "또한",
     "상대로", "대한", "관한", "위한", "의한", "있는", "없는", "같은", "해당", "본건",
+    "목적물", "대금조항", "계약조건", "특약사항", "지체상금", "납품대금", "물품명세",
 }
+
+# 물품/공정 검사(Inspection) 명사는 직함 '검사(Prosecutor)'와 구별하여 PERSON 오탐을 방지한다
+INSPECTION_NOUNS = {"포장상태", "물품", "외관", "품질", "성능", "정밀", "현장", "서류", "합격", "규격", "가공", "검수"}
 
 NAME_TITLE_RE = re.compile(
     r"(?<![가-힣])([가-힣]{2,4})\s*(?:씨|군|양|변호사|검사|판사|사무관|대위|중위|소령|중령|대령|병장|상병|일병|이병)(?![가-힣])"
 )
+
 
 DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("RRN", RRN_RE, 1.0),
@@ -194,12 +211,16 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             confidence = base_confidence
             note = ""
             if kind == "RRN":
+                prefix_context = text[max(0, start - 20):start]
+                # 법인번호 라벨이 앞서 붙어 있는 경우 법인식별자이므로 RRN에서 제외
+                if CORP_LABEL_PREFIX_RE.search(prefix_context) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    continue
                 digits = re.sub(r"\D", "", raw)
                 if validate_rrn(digits):
                     confidence = 1.0
                     note = "검증부호 일치"
                 else:
-                    confidence = 0.7
+                    confidence = 0.8
                     note = "형식 일치, 검증부호 불일치"
             if kind == "ACCOUNT":
                 if BUSINESS_NO_RE.fullmatch(raw.strip()):
@@ -207,6 +228,14 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 if CORP_NO_RE.fullmatch(raw.strip()):
                     continue  # 법인등록번호
             matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
+
+    # 주민등록번호 라벨이 명시된 13자리 번호(변형/외국인/합성 포함) 포착
+    for m in RRN_LABELLED_RE.finditer(text):
+        start, end = m.start(1), m.end(1)
+        if _covered_by_span(guard_spans, start, end):
+            continue
+        raw = m.group(1)
+        matches.append(PIIMatch("RRN", raw, start, end, block_id, page, 0.95, "주민등록번호 라벨 문맥"))
 
     for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON")):
         for m in pattern.finditer(text):
@@ -216,6 +245,11 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 continue
             if name in LEGAL_MILITARY_STOPWORDS:
                 continue
+            if pattern is NAME_TITLE_RE:
+                full_matched = m.group(0)
+                # "포장상태 검사", "물품 검사" 등 공정·물품 검사(Inspection)인 경우 PERSON 제외
+                if "검사" in full_matched and any(word in full_matched or word in name for word in INSPECTION_NOUNS):
+                    continue
             matches.append(PIIMatch(kind, name, start, end, block_id, page, 0.75, "직함·당사자·가족 표기 문맥"))
 
     for pattern in (MEDICAL_DIAGNOSIS_RE, MEDICAL_PRESCRIPTION_RE):

@@ -157,11 +157,26 @@ def _exhibit_table_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     return items
 
 
+# [첨부자료], [첨부서류] 등 첨부 목록 표제어 인식
+ATTACHMENT_SECTION_HEADER_RE = re.compile(
+    r"^\s*[\[【(]?\s*(?:첨부|별지|별첨|붙임)\s*(?:자료|서류|목록|서류\s*등)?\s*[\]】)]?\s*$"
+)
+
+
 def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     items = []
+    in_attachment_section = False
     # 표 안의 줄(table_line)은 칸 구분이 사라진 채 이어 붙어 있으므로 목록으로 읽지 않는다. 표는 셀 단위로 읽는다.
     for block in doc.prose_blocks():
         text = block.text.strip()
+        # [첨부자료], [첨부서류] 등 섹션 헤더 단독 줄은 첨부 아이템으로 잡지 않고 첨부 목록 모드로 전환
+        if ATTACHMENT_SECTION_HEADER_RE.match(text):
+            in_attachment_section = True
+            continue
+        # 청구원인, 청구취지 등 새로운 주요 구역이 시작되면 첨부 섹션 종료
+        if in_attachment_section and re.match(r"^[\[【(]?(?:청구\s*취지|청구\s*원인|이\s*유|결\s*론)[\]】)]?", text):
+            in_attachment_section = False
+
         body = NUMBERING_RE.sub("", text, count=1)
         exhibit = parse_exhibit_label(body) if body.startswith(("갑", "을", "병", "정", "증", "피고인", "검사")) else None
         if exhibit and exhibit["span"][0] == 0 and len(_norm(exhibit["name"])) >= 2:
@@ -171,11 +186,27 @@ def _line_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             continue
         m = LIST_ITEM_RE.match(text)
         if m:
-            if re.match(r"(?:위|본|해당)\s*(?:서증|자료|첨부|문서)", m.group("name")):
+            name_cand = m.group("name").strip()
+            if re.match(r"(?:위|본|해당)\s*(?:서증|자료|첨부|문서)", name_cand):
                 continue
-            items.append({"name": m.group("name").strip(), "reference": " ".join(m.group("label").split()),
+            if ATTACHMENT_SECTION_HEADER_RE.match(name_cand):
+                continue
+            items.append({"name": name_cand, "reference": " ".join(m.group("label").split()),
                           "source": "LIST", "page": block.page, "block_id": block.block_id,
                           "stated_status": block.text.strip()})
+            continue
+
+        # 첨부 섹션 내부이거나 일반 번호 매김 첨부 목록(예: 1. 변경계약서 사본 1부)
+        num_m = re.match(r"^\s*(?P<num>\d{1,2})\s*[.)]\s*(?P<name>[^\n]{2,80})$", text)
+        if num_m and (in_attachment_section or re.search(r"(?:사본|원본|\d+부|계약서|조서|통보서|공문|합격|신청서|영수증|확인서|동의서|메모)", text)):
+            items.append({
+                "name": num_m.group("name").strip(),
+                "reference": f"첨부 {num_m.group('num')}",
+                "source": "LIST",
+                "page": block.page,
+                "block_id": block.block_id,
+                "stated_status": block.text.strip(),
+            })
     return items
 
 
@@ -201,7 +232,10 @@ def _statement_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
 
 
 def _inline_key(name: str) -> str:
-    return _norm(re.sub(r"첨부|사본|원본|[()\[\]【】]", "", name or ""))
+    # 별지, 첨부, 번호, 부수, 괄호 등을 제거하여 인라인 별지 표제어와 대조한다
+    cleaned = re.sub(r"첨부|별지|별첨|붙임|사본|원본|\d+부|[()\[\]【】\d:·\s]", "", name or "")
+    return _norm(cleaned)
+
 
 
 def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any]] = (),
@@ -229,17 +263,43 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
     text = doc.visible_text
     # 같은 파일 안에 붙은 사본('첨부 진단서(사본)' 아래 원문). 입력 파일이 따로 없어도 문서 안에서 확인할 수 있다.
     from .fact_store import segments
-    inline = {_inline_key(name): name for name, _ in segments(doc)[1:]}
+    # 같은 파일 안에 붙은 사본('첨부 진단서(사본)' 또는 '[별지 1]' 아래 원문/메모).
+    inline = {}
+    inline_by_num = {}
+    for name, bs in segments(doc)[1:]:
+        k = _inline_key(name)
+        if k:
+            inline[k] = name
+        # 구획 첫 번째 블록(예: '담당자 전달 메모') 및 복합 표제어도 인라인 구획 키로 등록
+        if bs:
+            first_text = (bs[0].text or "").strip()
+            k_first = _inline_key(first_text)
+            if k_first:
+                inline[k_first] = name
+            k_comb = _inline_key(f"{name} {first_text}")
+            if k_comb:
+                inline[k_comb] = name
+        # 별지/별첨 번호(예: 별지 1, 별지 2) 추출 및 등록
+        num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)", name)
+        if num_m:
+            inline_by_num[num_m.group(1)] = name
+
     items = []
     for key, item in merged.items():
         upload = _uploaded_match(item["name"], uploads, doc.document_id)
         stated = " ".join(m.get("stated_status") or "" for m in item["mentions"])
         table_status = next((m.get("stated_status") for m in item["mentions"] if m["source"] == "TABLE"), "")
         copy = inline.get(_inline_key(item["name"]))
+        if not copy:
+            # 별지 번호로도 인라인 구획 대조
+            item_num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)", item["name"])
+            if item_num_m and item_num_m.group(1) in inline_by_num:
+                copy = inline_by_num[item_num_m.group(1)]
+
         if upload:
             status, basis = "ATTACHED", f"입력 파일 '{upload.get('filename')}'과 이름이 대응한다"
         elif copy:
-            status, basis = "ATTACHED", f"같은 문서 안에 사본이 붙어 있다('{copy}')"
+            status, basis = "ATTACHED", f"같은 문서 안에 사본·별지가 붙어 있다('{copy}')"
         elif any(m["source"] == "STATEMENT" for m in item["mentions"]) or (
                 table_status and MISSING_STATUS_RE.search(table_status)) or NOT_PROVIDED_RE.search(stated):
             status, basis = "NOT_PROVIDED", "문서 스스로 첨부·제출하지 않았다고 밝혔다"
@@ -249,6 +309,7 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
             status, basis = "REFERENCE_MISSING", "첨부·증거로 적혀 있으나 입력 파일에서 찾지 못했다"
         else:
             status, basis = "UNVERIFIED", "첨부 여부를 판단할 단서가 부족하다"
+
         linked = [c.claim_id for c in claims
                   if _norm(item["name"]) and _norm(item["name"]) in _norm(getattr(c, "text", ""))]
         items.append({"name": item["name"], "reference": item.get("reference"), "status": status, "basis": basis,

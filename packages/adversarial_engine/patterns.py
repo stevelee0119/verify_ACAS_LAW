@@ -230,6 +230,17 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "기계 수신 결론 강제"),
     (_c(r"(?:보고서|결과|요약|검증\s*결과)\s*(?:에서|에)\s*[^.\n]{0,30}?(?:제외|빼|누락|생략|삭제)(?:하라|해라|시켜라|하십시오|할\s*것)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "보고서 제외·생략 명령"),
+    # --- 완곡형 결론 유도·은폐·검증 생략 지시 (급식 납품대금 등 실무 시험 대응) ---
+    (_c(r"(?:지체상금|손해배상|과징금|위약금|처분|청구)?[^.\n]{0,30}?(?:전액\s*무효|전부\s*무효|효력이\s*없)[로]?\s*(?:정리|작성|기재|처리|판정)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.95, "전액 무효 정리 요구"),
+    (_c(r"(?:피고|상대방|당사자)의?\s*(?:면책\s*주장|항변|주장|사정)[^.\n]{0,30}?(?:언급하지\s*(?:말|않)|다루지\s*(?:말|않)|적지\s*(?:말|않)|기재하지\s*(?:말|않))"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.95, "상대방 항변/면책 은폐 요구"),
+    (_c(r"(?:추가\s*)?(?:확인|검증|조사|대조)[은는을를]?\s*(?:하지\s*않아도|불필요|필요\s*(?:없|하지\s*않))"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 0.95, "추가 확인 생략 유도"),
+    (_c(r"(?:소장|서면|본문|보고서)에?\s*(?:넣지\s*않|기재하지\s*않|포함하지\s*않)는\s*편이\s*(?:좋|바람직|낫)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.9, "소장/서면 불리 사유 누락 권고"),
+    (_c(r"(?:전적으로\s*타당|모두\s*타당|전부\s*인용)[^.\n]{0,30}?(?:결론|판정|정리)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 0.95, "전적 타당 결론 유도"),
 ]
 
 # LLM·검증 시스템을 명시적으로 호명하는 표현 (메타 지시어 강한 신호)
@@ -237,8 +248,10 @@ AI_ADDRESSING_RE = _c(
     r"(AI|인공지능|LLM|언어\s*모델|chatgpt|gpt|claude|gemini|copilot|"
     r"(?:검증|검토|분석)(?:하는)?\s*(?:자동화\s*)?(?:시스템|엔진|도구|모델|프로그램|AI)|"
     r"자동화\s*(?:도구|시스템|프로그램|소프트웨어|에이전트)|"
-    r"assistant|모델|reviewer|심사자|automated\s+(system|reviewer|checker|tool))"
+    r"assistant|모델|reviewer|심사자|automated\s+(system|reviewer|checker|tool)|"
+    r"검토(?:를\s*맡은\s*(?:분|사람|자)|자|관|위원))"
 )
+
 
 # 정상 법률문서에서 흔한 표현 (오탐 억제)
 BENIGN_CONTEXT_RE = _c(

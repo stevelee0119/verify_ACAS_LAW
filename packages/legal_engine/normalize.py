@@ -167,8 +167,8 @@ def canonical_article(raw: str) -> str:
     return f"{base}의{int(m.group('sub'))}" if m.group("sub") else base
 
 
-# 법령명 안에서 앞말을 뒤 토큰에 잇는 말. "…에 관한 법률", "…의 처벌 등에 관한 특례법"
-LAW_NAME_LINKS = {"관한", "대한", "위한", "따른", "의한", "관하는", "및", "등", "또는"}
+# 법령명 안에서 앞말을 뒤 토큰에 잇는 말. "…에 관한 법률", "…의 처벌 등에 관한 특례법", "…를 당사자로 하는 계약에 관한 법률"
+LAW_NAME_LINKS = {"관한", "대한", "위한", "따른", "의한", "관하는", "및", "등", "또는", "하는", "당사자로"}
 # 법령명 안 토큰이 이 글자로 끝나면 뒤 토큰에 이어진다(공공기관의 / 정보공개에 / 자본시장과).
 LAW_NAME_JOINING_TAILS = set("의에과와")
 # 이 글자로 끝나는 토큰은 문장 성분(주어·목적어·부사어·어미)이다. 법령명은 여기서 끊는다.
@@ -184,13 +184,21 @@ def law_name_suffix(raw: str) -> str:
     """정규식이 법령명 앞 문장까지 함께 잡았을 때, 끝에서부터 법령명이 될 수 있는 토큰만 남긴다.
 
     "에게 폭언을 하였다는 이유로 군인사법" → "군인사법",
-    "원고는 공공기관의 정보공개에 관한 법률" → "공공기관의 정보공개에 관한 법률".
+    "원고는 공공기관의 정보공개에 관한 법률" → "공공기관의 정보공개에 관한 법률",
+    "원고는 국가를 당사자로 하는 계약에 관한 법률" → "국가를 당사자로 하는 계약에 관한 법률".
     """
     bracketed = re.search(r"[「『]([^」』]+)[」』]?\s*$", raw or "")
     if bracketed and bracketed.group(1).strip():
         # 낫표는 법령명의 경계를 표시한다. 안쪽 전체가 법령명이다(「…예방 및 대책에 관한 법률」).
         return " ".join(bracketed.group(1).split())
-    tokens = re.sub(r"[「」『』]", " ", raw or "").split()
+
+    # 공식 제명 목록(LAW_ALIASES의 공식 명칭)이 raw 내에 완전 포함된 경우 최장 일치를 우선 보존한다
+    clean_raw = re.sub(r"[「」『』]", " ", raw or "")
+    for official in sorted(set(LAW_ALIASES.values()), key=len, reverse=True):
+        if official in clean_raw:
+            return official
+
+    tokens = clean_raw.split()
     if not tokens:
         return ""
     kept = [tokens[-1]]
@@ -204,6 +212,13 @@ def law_name_suffix(raw: str) -> str:
             continue
         if token in LAW_NAME_PREFIX_NOISE:
             break
+        # '…를 당사자로 하는' 연결 구문 특수 보존
+        if token == "당사자로" and kept and kept[0] == "하는":
+            kept.insert(0, token)
+            continue
+        if token.endswith(("를", "을")) and index < len(remaining) - 1 and remaining[index + 1] == "당사자로":
+            kept.insert(0, token)
+            continue
         if token in LAW_NAME_LINKS or token[-1] in LAW_NAME_JOINING_TAILS:
             kept.insert(0, token)
             continue

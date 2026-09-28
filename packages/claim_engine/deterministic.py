@@ -346,6 +346,75 @@ def share_ratio(*, held: Input, total: Input, places: int = 4,
     )
 
 
+# --- 지체상금 (국가계약법 시행령 제74조 및 일반 계약) ------------------------------
+def delay_penalty(*, contract_amount: Input, daily_rate: Input,
+                  due_date: Input, delivery_date: Input,
+                  count_first_day: bool = False,
+                  rounding_rule: str = "TRUNCATE") -> Calculation:
+    """국가계약법 및 계약 일반 지체상금 결정론적 계산.
+
+    공식: 지체상금 = 계약금액 * 일당 지체상금율 * 지체일수
+    (예: 120,000,000원 * (0.75/1000) * 12일 = 1,080,000원)
+    """
+    amount = to_base_unit(contract_amount.value, contract_amount.unit or "원")
+    rate = Decimal(str(daily_rate.value))
+    if daily_rate.unit == "%":
+        rate = rate / Decimal(100)
+    elif daily_rate.unit in ("천분율", "/1000"):
+        rate = rate / Decimal(1000)
+
+    days = days_between(due_date.value, delivery_date.value, count_first_day=count_first_day)
+    daily_penalty = amount * rate
+    total_penalty = apply_rounding(daily_penalty * Decimal(days), rounding_rule)
+    return Calculation(
+        kind="delay_penalty",
+        formula="penalty = contract_amount * daily_rate * delay_days",
+        inputs=[contract_amount, daily_rate, due_date, delivery_date],
+        outputs={
+            "delay_days": Decimal(days),
+            "daily_penalty": daily_penalty,
+            "penalty": total_penalty,
+        },
+        rounding_rule=rounding_rule,
+        assumptions=[
+            f"일당 지체상금율: {daily_rate.value}{daily_rate.unit}",
+            f"지체일수: {days}일 ({due_date.value}부터 {delivery_date.value}까지)",
+        ],
+    )
+
+
+def delay_penalty_sensitivity(*, contract_amount: Input, daily_rate: Input,
+                              due_date_candidates: Sequence[Input],
+                              delivery_date: Input,
+                              count_first_day: bool = False,
+                              rounding_rule: str = "TRUNCATE") -> Sensitivity:
+    """납품기한 변경 등 기한 대체·대립 시 지체상금 시나리오 비교 분석."""
+    cases: List[Dict[str, Any]] = []
+    for candidate in due_date_candidates:
+        result = delay_penalty(
+            contract_amount=contract_amount,
+            daily_rate=daily_rate,
+            due_date=candidate,
+            delivery_date=delivery_date,
+            count_first_day=count_first_day,
+            rounding_rule=rounding_rule,
+        )
+        cases.append({
+            "assumption": candidate.name,
+            "due_date": candidate.value.isoformat(),
+            "source_span": candidate.source_span,
+            "support": candidate.support,
+            "relationship": "AMENDS_DEADLINE" if "변경" in candidate.name else "ORIGINAL_DEADLINE",
+            "outputs": {k: str(v) for k, v in result.outputs.items()},
+        })
+    return Sensitivity(
+        variable="due_date",
+        cases=cases,
+        note="당초 기한과 변경 합의 기한 간 대체 관계(AMENDS_DEADLINE)에 따른 지체일수 및 지체상금 산정 결과 비교",
+    )
+
+
+
 def verify_stated(calculation: Calculation, output_name: str, stated: Any,
                   *, tolerance: Decimal = Decimal("0")) -> Dict[str, Any]:
     """문서가 적은 값과 독립 계산값을 대조한다.
