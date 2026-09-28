@@ -206,6 +206,11 @@ def _columns_by_content(cells: List[List[Any]]) -> Dict[str, int]:
 _NOT_CONTINUATION_RE = re.compile(r"^\s*(?:(?:19|20)\d{2}\s*\.|첨\s*부|위\s|원\s*고|피\s*고|대\s*리\s*인|귀\s*중|"
                                   r"\d{1,2}\s*[.)]|[가-하]\s*[.)]|[①-⑳]|[■□▶-]|입\s*증\s*방\s*법|증\s*거\s*목\s*록)")
 
+# 증거 목록 정의가 아닌 본문 인용·참조 표기 (FP-01: '중 발췌', '참조', '일부' 등)
+_EXHIBIT_REF_CONTEXT_RE = re.compile(
+    r"(?:중\s*발췌|발췌(?:본)?|참조(?:\b|$)|\(참조\)|일부\b|사본\s*발췌|앞서\s*제출한)"
+)
+
 
 def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """표가 없을 때: 문단 첫머리가 호증 번호인 목록(입증방법·증거설명 목록)을 행으로 읽는다.
@@ -214,13 +219,20 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
       참조마다 나눈다(v5 3-1).
     - 칸 구분이 없으므로 참조 뒤부터 첫 날짜 앞까지를 서증명, 첫 날짜를 작성일, 나머지를 작성자·입증취지로 본다.
     - 긴 서증명이 다음 줄로 넘어가면(참조·날짜 없는 짧은 줄) 앞 행의 서증명에 잇는다.
+    - 본문 소제목이나 인용구(예: '갑 제7호증 중 발췌', '참조')는 목록 정의가 아니므로 제외한다(FP-01).
     """
     rows: List[Dict[str, Any]] = []
     reading = build_reading_text(doc)
     previous_was_item = False
     for paragraph_index, paragraph in enumerate(reading.text.split("\n")):
         stripped = paragraph.strip()
-        items = split_items(stripped) if parse_exhibits(stripped[:24]) and parse_exhibits(stripped)[0]["span"][0] == 0 else []
+        raw_items = split_items(stripped) if parse_exhibits(stripped[:24]) and parse_exhibits(stripped)[0]["span"][0] == 0 else []
+        items = []
+        for ref, rest in raw_items:
+            # 본문 발췌/인용 또는 참조 표현인 경우 서증 목록 정의에서 제외 (FP-01)
+            if _EXHIBIT_REF_CONTEXT_RE.search(rest) or _EXHIBIT_REF_CONTEXT_RE.search(stripped):
+                continue
+            items.append((ref, rest))
         if not items:
             if (previous_was_item and rows and stripped and len(stripped) <= 40 and not DATE_RE.search(stripped)
                     and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped)):
@@ -406,11 +418,16 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
     for (party, number, branch), same in seen.items():
         if len(same) < 2:
             continue
+        # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
+        distinct_names = {re.sub(r"\s", "", r.get("name") or "") for r in same}
+        distinct_names.discard("")
+        if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
+            continue
         label = f"{party} 제{number}호증" + (f"의 {branch}" if branch else "")
         names = ", ".join(r.get("name") or "(이름 없음)" for r in same)
         out.append(_finding(doc, FindingType.EVIDENCE_LIST_MISMATCH, EvidenceGrade.A, Severity.MEDIUM,
                             f"같은 호증 번호가 두 번 쓰였다: {label} — {names}",
-                            "증거 목록에서 한 번호를 서로 다른 증거(또는 같은 증거)에 두 번 붙였다. 어느 증거를 가리키는지 "
+                            "증거 목록에서 한 번호를 서로 다른 증거에 두 번 붙였다. 어느 증거를 가리키는지 "
                             "특정할 수 없으므로 번호를 바로잡아야 한다.", f"{label}: {names}",
                             features={"rule_id": "EVI.EVIDENCE_NUMBER_DUPLICATE",
                                       "defect_code": "EVIDENCE_NUMBER_DUPLICATE", "exhibit": label,

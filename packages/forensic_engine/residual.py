@@ -80,6 +80,46 @@ def scan_residual(doc: NormalizedDocument) -> List[Finding]:
     return out
 
 
+def _is_empty_or_standard_boilerplate_xml(xml_text: str) -> bool:
+    """빈 표준 Word 참고문헌 XML(bibliography) 또는 스키마 껍데기만 있는 XML인지 판별 (FP-02)."""
+    if not xml_text or not xml_text.strip():
+        return True
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(xml_text)
+        tag_lower = root.tag.lower()
+        if "bibliography" in tag_lower or tag_lower.endswith("sources"):
+            # 하위 요소가 없고 텍스트도 비어있는 경우
+            if len(list(root)) == 0:
+                text = (root.text or "").strip()
+                if not text:
+                    non_std_attrs = [v for k, v in root.attrib.items() if k.lower() not in ("selectedstyle", "style")]
+                    if not any(v.strip() for v in non_std_attrs):
+                        return True
+        # 일반 XML에서도 하위 태그가 없고 텍스트가 없으며 속성값도 비어있는 경우
+        if len(list(root)) == 0 and not (root.text or "").strip() and not any(v.strip() for v in root.attrib.values()):
+            return True
+    except Exception:
+        pass
+
+    # 파싱 실패 시 정규식 기반 fallback
+    text_content = re.sub(r"<[^>]+>", "", xml_text).strip()
+    if text_content:
+        return False
+    # 속성 검사 (콜론 포함 네임스페이스 속성 처리)
+    attrs = re.findall(r'([a-zA-Z0-9_:.-]+)=["\']([^"\']*)["\']', xml_text)
+    standard_keys = {"xmlns", "selectedstyle", "version", "encoding", "standalone", "style"}
+    non_std = []
+    for k, v in attrs:
+        kl = k.lower()
+        if kl in standard_keys or kl.startswith("xmlns:") or kl.startswith("xmlns"):
+            continue
+        if v.startswith("http://") or v.startswith("https://"):
+            continue
+        non_std.append(v)
+    return not any(len(v.strip()) > 0 for v in non_std)
+
+
 def _scan_ooxml(doc: NormalizedDocument) -> List[Finding]:
     out: List[Finding] = []
     inserts = doc.structure.get("tracked_inserts") or []
@@ -162,19 +202,38 @@ def _scan_ooxml(doc: NormalizedDocument) -> List[Finding]:
             )
         )
     if custom_xml:
-        out.append(
-            _finding(
-                doc,
-                FindingType.METADATA_ANOMALY,
-                Severity.LOW,
-                f"customXml 파트 {len(custom_xml)}건이 포함되어 있다",
-                "문서관리시스템이 삽입한 사건정보·고객정보가 남아 있을 수 있다.",
-                level=ForensicLevel.NOTABLE,
-                sealed="\n".join(f"{k}: {v[:400]}" for k, v in custom_xml.items())[:2000],
-                features={"custom_xml_parts": len(custom_xml)},
-                tags=["MM-2", "PRIVILEGE_CANDIDATE"],
+        sensitive_parts = {k: v for k, v in custom_xml.items() if not _is_empty_or_standard_boilerplate_xml(v)}
+        empty_parts = {k: v for k, v in custom_xml.items() if _is_empty_or_standard_boilerplate_xml(v)}
+
+        if sensitive_parts:
+            # 실제 데이터나 비밀, 고객정보가 포함된 customXml 파트는 특권 후보 및 봉인 처리
+            out.append(
+                _finding(
+                    doc,
+                    FindingType.METADATA_ANOMALY,
+                    Severity.LOW,
+                    f"customXml 파트 {len(sensitive_parts)}건에 내용이 포함되어 있다",
+                    "문서관리시스템이 삽입한 사건정보·고객정보·비밀 데이터가 남아 있을 수 있다.",
+                    level=ForensicLevel.NOTABLE,
+                    sealed="\n".join(f"{k}: {v[:400]}" for k, v in sensitive_parts.items())[:2000],
+                    features={"custom_xml_parts": len(sensitive_parts), "has_sensitive_content": True},
+                    tags=["MM-2", "PRIVILEGE_CANDIDATE"],
+                )
             )
-        )
+        if empty_parts and not sensitive_parts:
+            # 빈 표준 참고문헌 XML 등은 단순 관찰 정보로 기록하되 특권 차단(PRIVILEGE_CANDIDATE) 제외 (FP-02)
+            out.append(
+                _finding(
+                    doc,
+                    FindingType.METADATA_ANOMALY,
+                    Severity.INFO,
+                    f"표준 customXml 파트 {len(empty_parts)}건이 포함되어 있다",
+                    "Word 참고문헌(Bibliography) 등 표준 스키마 껍데기 파트다. 실질적 텍스트나 비밀 정보는 확인되지 않는다.",
+                    level=ForensicLevel.BENIGN,
+                    features={"custom_xml_parts": len(empty_parts), "standard_boilerplate": True},
+                    tags=["MM-2"],
+                )
+            )
     return out
 
 
