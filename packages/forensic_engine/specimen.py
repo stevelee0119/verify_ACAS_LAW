@@ -282,13 +282,13 @@ def scan_specimen(doc: NormalizedDocument) -> List[Finding]:
         findings.append(
             _finding(
                 finding_type=FindingType.INVALID_IDENTIFIER,
-                severity=Severity.HIGH,
-                grade=EvidenceGrade.A,
-                title=f"실재할 수 없는 주민등록번호가 기재되어 있다 ({len(invalid_rrns)}건)",
+                severity=Severity.MEDIUM,
+                grade=EvidenceGrade.B,
+                title=f"기존 체계 검증부호 불일치 주민등록번호 기재 ({len(invalid_rrns)}건, 실제 발급 여부 미확인)",
                 detail=(
-                    f"확인한 {len(checked)}건 중 {len(invalid_rrns)}건이 검증부호 규칙을 만족하지 않는다. "
-                    "주민등록번호 13번째 자리는 앞 12자리로부터 계산되는 검증부호이므로, "
-                    "이를 만족하지 않는 번호는 발급될 수 없다. 창작된 번호이거나 오기이다. "
+                    f"확인한 {len(checked)}건 중 {len(invalid_rrns)}건이 과거 검증부호 규칙과 일치하지 않는다. "
+                    "2020년 10월 이후 주민등록번호 부여체계 개편(뒷자리 임의번호 부여) 및 재부여 가능성을 고려할 때 "
+                    "검증부호 불일치만으로 실재할 수 없는 번호라고 단정할 수 없으며, 가상 창작 번호이거나 오기일 수 있다. "
                     f"예: {masked}"
                 ),
                 doc=doc,

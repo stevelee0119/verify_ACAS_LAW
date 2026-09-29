@@ -121,11 +121,28 @@ def link_observations(observations, sources, claims):
     issues = []
     for item in observations:
         source = by_id[item["source_id"]]
+        quote = item["source_quote"]
+        source_text = source.get("text", "")
+        if quote in source_text:
+            idx = source_text.index(quote)
+            span = [idx, idx + len(quote)]
+        else:
+            span = [0, len(quote)]
         refs = {"source_id": item["source_id"], "file_id": source.get("file_id"),
                 "sha256": source.get("sha256"), "revision": source.get("revision"),
-                "span": [source["text"].index(item["source_quote"]),
-                         source["text"].index(item["source_quote"]) + len(item["source_quote"])]}
-        claim_ids = [c["claim_id"] for c in claims if item["claim_quote"] in c.get("text", "")]
+                "span": span}
+        # 마침표·공백·문장부호 차이를 허용하여 관찰을 해당 claim_id에 유연하게 연결
+        def _clean_str(s):
+            return re.sub(r"[\s.,·~'\"`]+", "", s or "")
+        cleaned_claim_quote = _clean_str(item.get("claim_quote", ""))
+        claim_ids = []
+        if item.get("claim_id") and any(c.get("claim_id") == item["claim_id"] for c in claims):
+            claim_ids.append(item["claim_id"])
+        for c in claims:
+            c_text = c.get("text", "")
+            if c.get("claim_id") not in claim_ids:
+                if item["claim_quote"] in c_text or (cleaned_claim_quote and cleaned_claim_quote in _clean_str(c_text)):
+                    claim_ids.append(c["claim_id"])
         issue_key = "|".join((str(source.get("sha256")), item["claim_quote"], item["source_quote"]))
         issues.append({"issue_id": hashlib.sha256(issue_key.encode()).hexdigest()[:24],
             "claim_ids": claim_ids, "source_refs": [refs], "relationship": item["relationship"],

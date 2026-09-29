@@ -421,6 +421,82 @@ def delay_penalty_sensitivity(*, contract_amount: Input, daily_rate: Input,
 
 
 
+def lease_deposit_settlement(
+    *,
+    deposit: Any,
+    repair_items: Sequence[Any],
+    maintenance_amount: Any = Decimal("0"),
+    source_span: Optional[str] = None,
+    rounding_rule: str = "HALF_UP",
+) -> Calculation:
+    """임대차보증금 정산 검산 (수선비 합계, 총 공제액, 반환 잔액, 공제 비율).
+
+    공식:
+    - 수선비 합계 (repair_total) = sum(repairs)
+    - 총 공제액 (total_deductions) = repair_total + maintenance_amount
+    - 반환 잔액 (return_balance) = deposit - total_deductions
+    - 공제 비율 (deduction_rate_percent) = (total_deductions / deposit) * 100 (소수점 첫째자리 반올림)
+    """
+    dep_val = deposit.value if isinstance(deposit, Input) else Decimal(str(deposit))
+    maint_val = maintenance_amount.value if isinstance(maintenance_amount, Input) else Decimal(str(maintenance_amount))
+
+    repair_inputs = []
+    repair_total = Decimal("0")
+    for idx, item in enumerate(repair_items):
+        if isinstance(item, Input):
+            repair_inputs.append(item)
+            repair_total += item.value
+        elif isinstance(item, dict):
+            amt = Decimal(str(item.get("amount", 0)))
+            repair_total += amt
+            repair_inputs.append(Input(name=item.get("name", f"수선비_{idx+1}"), value=amt, unit="원"))
+        else:
+            amt = Decimal(str(item))
+            repair_total += amt
+            repair_inputs.append(Input(name=f"수선비_{idx+1}", value=amt, unit="원"))
+
+    total_deductions = repair_total + maint_val
+    return_balance = dep_val - total_deductions
+
+    # 공제 비율 산출: (2,058,000 / 80,000,000) * 100 = 2.5725% -> 2.6%
+    rate_raw = (total_deductions / dep_val) * Decimal("100") if dep_val > 0 else Decimal("0")
+    rule = ROUNDING_RULES.get(rounding_rule, ROUND_HALF_UP)
+    rate_percent = rate_raw.quantize(Decimal("0.1"), rounding=rule)
+
+    inputs = [
+        deposit if isinstance(deposit, Input) else Input(name="임대차보증금", value=dep_val, unit="원", source_span=source_span),
+        *repair_inputs,
+        maintenance_amount if isinstance(maintenance_amount, Input) else Input(name="미납관리비", value=maint_val, unit="원", source_span=source_span),
+    ]
+
+    invariants = [
+        InvariantCheck("보증금_일치", "return_balance + total_deductions == deposit", return_balance + total_deductions == dep_val),
+        InvariantCheck("공제액_비음수", "total_deductions >= 0", total_deductions >= 0),
+    ]
+
+    return Calculation(
+        kind="임대차보증금_정산",
+        formula="반환잔액 = 보증금 - (수선비합계 + 관리비); 공제율(%) = (총공제액 / 보증금) * 100",
+        inputs=inputs,
+        outputs={
+            "repair_total": repair_total,
+            "maintenance_total": maint_val,
+            "total_deductions": total_deductions,
+            "return_balance": return_balance,
+            "deduction_rate_raw": rate_raw,
+            "deduction_rate_percent": rate_percent,
+        },
+        rounding_rule=rounding_rule,
+        invariants=invariants,
+        assumptions=[
+            f"임대차보증금: {dep_val:,}원",
+            f"수선비 합계: {repair_total:,}원, 관리비: {maint_val:,}원",
+            f"총 공제액: {total_deductions:,}원, 반환 잔여 보증금: {return_balance:,}원",
+            "원상회복비 및 관리비 공제의 법률적 귀속과 실질 필요성 판단은 별도 유보함",
+        ],
+    )
+
+
 def verify_stated(calculation: Calculation, output_name: str, stated: Any,
                   *, tolerance: Decimal = Decimal("0")) -> Dict[str, Any]:
     """문서가 적은 값과 독립 계산값을 대조한다.

@@ -403,12 +403,13 @@ class VerificationPipeline:
                                   "drive_used": False, "error": type(exc).__name__}
                         document_result.engine_data["rag"] = review
                     stage.note = review["status"]
-                    if (review["status"] not in ("ADVISORY_REVIEWED", "REVIEWED_NO_ADVICE", "NOT_RELEVANT")
-                            or not review.get("review_completed", True) and review["status"] != "NOT_RELEVANT"):
-                        stage.skip_reason = review["reason"]
+                    # 실제 모델 비교를 실행한 경우 executed=True가 되도록 하고, 미실행 시에만 skip_reason 부여
+                    if not review.get("model_executed") and review["status"] not in ("ADVISORY_REVIEWED", "REVIEWED_NO_ADVICE"):
+                        stage.skip_reason = review.get("reason", "NOT_EXECUTED")
+                    if not review.get("review_completed", True) and review["status"] != "NOT_RELEVANT":
                         document_result.unverified_items.append({"kind": "reference_review",
                             "document_id": document_result.document_id,
-                            "reason": "Drive 참고자료 AI 대조 미완료: " + review["reason"]})
+                            "reason": "Drive 참고자료 AI 대조 미완료: " + review.get("reason", "")})
 
         self._execution_document = None
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------
@@ -1205,8 +1206,13 @@ class VerificationPipeline:
                       "reason": reason,
                       "stages": outcome.stages, "evidence_quotes": quotes if grounded else []}
             reviews.append(review)
-            for level in ("level4", "level5"):
-                verdict["levels"][level] = "ADVISORY_REVIEWED" if grounded else "UNVERIFIED"
+            verdict["semantic_status"] = sem_status
+            if sem_status == "CONTRADICTED":
+                verdict["levels"]["level4"] = "CONTRADICTED"
+                verdict["status"] = "CONTRADICTED"
+            else:
+                for level in ("level4", "level5"):
+                    verdict["levels"][level] = "ADVISORY_REVIEWED" if grounded else "UNVERIFIED"
             from packages.legal_engine.components import citation_components
             verdict["components"] = citation_components(str(citation.type), verdict["levels"])
         result.engine_data["semantic_reviews"] = reviews

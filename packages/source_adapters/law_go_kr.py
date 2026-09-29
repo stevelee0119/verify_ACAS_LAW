@@ -34,6 +34,13 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
     def api_key(self) -> Optional[str]:
         return self.settings.law_go_kr_oc
 
+    def _record_matches_case_number(self, record: dict, wanted: tuple) -> bool:
+        """레코드의 사건번호(병합 판결 포함) 중 하나라도 wanted 사건번호와 일치하는지 확인한다."""
+        from packages.legal_engine.normalize import extract_all_case_numbers
+        raw = str(record.get("case_number") or "")
+        all_cases = extract_all_case_numbers(raw)
+        return wanted in all_cases
+
     # -- 판례 -------------------------------------------------------------
     def search_case(self, case_number: str, *, court: Optional[str] = None) -> AdapterResponse:
         """사건번호로 판례를 조회한다."""
@@ -112,7 +119,7 @@ class LawGoKrAdapter(OfficialLegalMixin, SourceAdapter):
                 if wanted is None:
                     records, skipped = listed, 0
                 else:
-                    records = [r for r in listed if split_case_number(str(r.get("case_number") or "")) == wanted]
+                    records = [r for r in listed if self._record_matches_case_number(r, wanted)]
                     skipped = len(listed) - len(records)
                 matched = wanted is not None and bool(records)
                 result = AdapterResponse(

@@ -38,18 +38,36 @@ def canonical_case_number(raw: str) -> Optional[str]:
     return f"{m.group('year')}{m.group('code')}{int(m.group('serial'))}"
 
 
+def extract_all_case_numbers(text: str):
+    """문자열에 포함된 모든 사건번호를 (연도, 부호, 일련번호) 튜플 목록으로 추출한다.
+
+    병합 판결(예: '2005가합100279, 2006가합62053')이나 복수 인용을 포괄한다.
+    """
+    if not text:
+        return []
+    results = []
+    for m in CONSTITUTIONAL_RE.finditer(text):
+        results.append((m.group("year"), m.group("code"), str(int(m.group("serial")))))
+    for m in CASE_NUMBER_RE.finditer(text):
+        item = (m.group("year"), m.group("code"), str(int(m.group("serial"))))
+        if item not in results:
+            results.append(item)
+    return results
+
+
 def same_case_number(a: str, b: str) -> bool:
     """두 사건번호가 같은 사건을 가리키는지 판정한다.
 
-    공식 Source는 "서울행정법원-2021-구합-70769"처럼 법원명과 구분자를 붙여 돌려주기도 한다.
-    연도·사건부호·일련번호 세 요소가 모두 같을 때만 같은 사건으로 본다.
-    부분 일치(예: 2023다284910 vs 2024도12341)를 같은 사건으로 보면
-    존재하지 않는 판례가 "확인됨"으로 둔갑한다.
+    공식 Source는 "서울행정법원-2021-구합-70769"처럼 법원명과 구분자를 붙여 돌려주기도 하고,
+    병합 판결의 경우 "2005가합100279, 2006가합62053"처럼 여러 사건번호가 함께 수록된다.
+    어느 한쪽에 병합 사건번호가 포함된 경우에도 정확한 (연도, 부호, 일련번호) 단위의 교집합이 있으면
+    동일 사건으로 인정한다. 부분 숫자만 같은 다른 사건의 오연결은 철저히 방지한다.
     """
-    left, right = split_case_number(a or ""), split_case_number(b or "")
-    if left is None or right is None:
+    left_cases = extract_all_case_numbers(a or "")
+    right_cases = extract_all_case_numbers(b or "")
+    if not left_cases or not right_cases:
         return False
-    return left == right
+    return bool(set(left_cases) & set(right_cases))
 
 
 def split_case_number(raw: str):

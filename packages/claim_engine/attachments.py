@@ -232,9 +232,9 @@ def _statement_items(doc: NormalizedDocument) -> List[Dict[str, Any]]:
 
 
 def _inline_key(name: str) -> str:
-    # Preserve dates/numbers inside titles; only remove structural numbering.
-    cleaned = re.sub(r"^(?:첨부|별지|별첨|붙임)\s*\d*\s*[:.)]?", "", name or "")
-    cleaned = re.sub(r"사본|원본|\d+\s*부\s*$|[()\[\]【】:·\s]", "", cleaned)
+    # '별지 자료: 전자우편 발췌' 등 접두·접미 표현을 정규화하여 항목명과 인라인 구획 매칭 보장
+    cleaned = re.sub(r"^(?:첨부|별지|별첨|붙임)(?:\s*(?:자료|서류|목록))?\s*\d*\s*[:.)]?", "", name or "")
+    cleaned = re.sub(r"사본|원본|발췌|\d+\s*부\s*$|[()\[\]【】:·\s]", "", cleaned)
     return _norm(cleaned)
 
 
@@ -318,6 +318,13 @@ def analyze_attachments(doc: NormalizedDocument, uploads: Iterable[Dict[str, Any
         stated = " ".join(m.get("stated_status") or "" for m in item["mentions"])
         table_status = next((m.get("stated_status") for m in item["mentions"] if m["source"] == "TABLE"), "")
         copy = inline.get(_inline_key(item["name"]))
+        if not copy:
+            # 항목명과 인라인 구획 표제 간의 상호 부분 매칭 지원 (예: '전자우편발췌' <-> '전자우편')
+            item_k = _norm(item["name"])
+            for sec_k, sec in inline.items():
+                if item_k and (item_k in sec_k or sec_k in item_k):
+                    copy = sec
+                    break
         if not copy:
             # 별지 번호로도 인라인 구획 대조
             item_num_m = re.search(r"(?:별지|별첨|붙임)\s*(\d+)",

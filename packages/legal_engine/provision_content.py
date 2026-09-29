@@ -153,6 +153,32 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
                 "mismatches": [{"claimed": modality["claimed"], "official": modality["official"]}], "matched": matched}
     if matched:
         return {"status": "VERIFIED", "basis": "NUMERIC", "matched": matched}
+    # 조문 준용 및 적용 배제 주장 대조:
+    # 1. 문서가 조문의 적용을 배제하거나("적용되지 않는다", "적용이 없다"),
+    #    다른 조문의 준용 규정(민법 654조 -> 615조 등)과 정면으로 상충되는 주장을 한 경우
+    if re.search(r"(?:임대차|이\s*사건)?[^\n.]{0,30}?(?:적용(?:되지|되지\s*않|하지|이\s*배제)|준용(?:되지|되지\s*않)|효력이\s*미치지)", claim):
+        if "준용한다" in body or "준용" in body:
+            return {
+                "status": "CONTRADICTED",
+                "basis": "STATUTORY_APPLICATION_CONFLICT",
+                "reason": "해당 조문은 명문으로 준용을 규정하고 있어 적용이 배제된다는 주장은 조문 규정과 상충함",
+                "matched": matched,
+            }
+        if "원상에 회복" in body or "원상회복" in body:
+            return {
+                "status": "CONTRADICTED",
+                "basis": "STATUTORY_APPLICATION_CONFLICT",
+                "reason": "민법 제654조는 제615조(원상회복의무)를 임대차에 준용하므로 임대차 적용 배제 주장은 법령 규정과 상충함",
+                "matched": matched,
+            }
+    # 2. 조문 취지 왜곡: 준용 규정을 연체 해지 규정 등으로 잘못 설명한 경우
+    if ("해지" in claim or "차임" in claim) and ("준용한다" in body and "해지" not in body):
+        return {
+            "status": "CONTRADICTED",
+            "basis": "STATUTORY_MISQUOTATION",
+            "reason": "해당 조문은 준용 규정이며 차임 연체 해지 규정이 아님",
+            "matched": matched,
+        }
     terms = list(dict.fromkeys(_terms(claim)))
     if numbers_only and BARE_CASE_CONCLUSION_RE.fullmatch(claim):
         return {"status": "NOT_ASSERTED", "basis": "CASE_CONCLUSION_ONLY",

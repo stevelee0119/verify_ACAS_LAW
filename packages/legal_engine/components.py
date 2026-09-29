@@ -146,7 +146,14 @@ def component_summary(entries: List[Dict[str, Any]]) -> Dict[str, Any]:
             summary["mismatch"] += 1
         elif not entry.get("identity_confirmed"):
             summary["lookup_unverified"] += 1
-        if entry.get("status") == "VERIFIED":
+        # 판례 존재가 확인(status == VERIFIED)되었더라도 판시 취지/의미 검토가 상충이거나 미검토인 경우
+        # 총괄 fully_verified에 포함하지 않고 전문 검토 필요 항목으로 구분한다(P1 LAW02).
+        sem = entry.get("semantic_status")
+        has_semantic_issue = sem in ("UNVERIFIED", "CONTRADICTED", "DISTORTED") or any(
+            c.get("status") in ("UNVERIFIED", "MISMATCH", "CONTRADICTED")
+            for c in components if c.get("key") in ("holding_alignment", "applicability")
+        )
+        if entry.get("status") == "VERIFIED" and not has_semantic_issue:
             summary["fully_verified"] += 1
         label = entry.get("verification_label")
         if label in ("VERIFIED_CITATION", "VERIFIED_PROVISION"):
