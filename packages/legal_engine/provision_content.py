@@ -163,6 +163,7 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
                 "basis": "STATUTORY_APPLICATION_CONFLICT",
                 "reason": "해당 조문은 명문으로 준용을 규정하고 있어 적용이 배제된다는 주장은 조문 규정과 상충함",
                 "matched": matched,
+                "mismatches": [],
             }
         if "원상에 회복" in body or "원상회복" in body:
             return {
@@ -170,6 +171,7 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
                 "basis": "STATUTORY_APPLICATION_CONFLICT",
                 "reason": "민법 제654조는 제615조(원상회복의무)를 임대차에 준용하므로 임대차 적용 배제 주장은 법령 규정과 상충함",
                 "matched": matched,
+                "mismatches": [],
             }
     # 2. 조문 취지 왜곡: 준용 규정을 연체 해지 규정 등으로 잘못 설명한 경우
     if ("해지" in claim or "차임" in claim) and ("준용한다" in body and "해지" not in body):
@@ -178,6 +180,7 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
             "basis": "STATUTORY_MISQUOTATION",
             "reason": "해당 조문은 준용 규정이며 차임 연체 해지 규정이 아님",
             "matched": matched,
+            "mismatches": [],
         }
     terms = list(dict.fromkeys(_terms(claim)))
     if numbers_only and BARE_CASE_CONCLUSION_RE.fullmatch(claim):

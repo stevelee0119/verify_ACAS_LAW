@@ -166,14 +166,40 @@ def _compare_asserted_content(verdict, provision):
         return
     verdict.status = VerificationStatus.CONTRADICTED
     exact_version = verdict.levels.get("temporal") == "VERIFIED"
-    pairs = "; ".join(f"문서 {m['claimed']} / 조문 {m['official']}" for m in outcome["mismatches"])
-    # '같은 조 제2항'처럼 앞 인용을 가리킨 표현은 푼 이름으로 적는다(추가지시 G3).
     compared = compared_label(citation)
     ids = [r.source_record_id for r in verdict.source_records]
+
+    # 1) 조문의 재량/의무 왜곡 (MODALITY)
     if outcome.get("basis") == "MODALITY":
-        verdict.findings.append(_modality_finding(verdict, provision, claim, outcome["modality"], compared, ids,
+        verdict.findings.append(_modality_finding(verdict, provision, claim, outcome.get("modality", {}), compared, ids,
                                                   exact_version))
         return
+
+    # 2) 조문 준용 규정 및 적용 배제 주장 상충 (STATUTORY_APPLICATION_CONFLICT, STATUTORY_MISQUOTATION)
+    if outcome.get("basis") in ("STATUTORY_APPLICATION_CONFLICT", "STATUTORY_MISQUOTATION"):
+        verdict.findings.append(Finding.create(
+            type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.CONTRADICTED,
+            severity=Severity.HIGH, evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
+            title=f"조문 취지·준용 규정과 상충되는 주장이다: {compared}",
+            detail=(f"비교 대상 조문: {compared}. 문서의 주장: '{claim}'. "
+                    f"사유: {outcome.get('reason', '')}. "
+                    + ("" if exact_version else "기준일이 없어 현행(조회) 버전과 비교했다. 사건 당시 시행 버전이 다르면 "
+                       "결론이 달라질 수 있으므로 시행 버전을 확인해야 한다.")),
+            document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+            engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "SOURCE_TEXT", "STATUTORY_CONFLICT"],
+            confidence_features={"claim_text": claim, "reason": outcome.get("reason"),
+                                 "compared_version": (verdict.review.get("version") or {}).get("version_id")},
+            evidence=[Evidence.create(description="조회한 공식 버전의 조문 본문", grade=EvidenceGrade.A,
+                                      excerpt=(provision.get("text") or "")[:400], source_record_ids=ids),
+                      Evidence.create(description="문서의 주장", grade=EvidenceGrade.B,
+                                      document_id=citation.document_id, block_id=citation.block_id,
+                                      excerpt=claim or "")],
+        ))
+        return
+
+    # 3) 수치 불일치 (NUMERIC)
+    mismatches = outcome.get("mismatches") or []
+    pairs = "; ".join(f"문서 {m['claimed']} / 조문 {m['official']}" for m in mismatches) if mismatches else (outcome.get("reason") or "불일치")
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.CONTRADICTED,
         severity=Severity.HIGH, evidence_grade=EvidenceGrade.A if exact_version else EvidenceGrade.B,
@@ -183,7 +209,7 @@ def _compare_asserted_content(verdict, provision):
                    "결론이 달라질 수 있으므로 시행 버전을 확인해야 한다.")),
         document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
         engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "SOURCE_TEXT", "NUMERIC_MISMATCH"],
-        confidence_features={"numeric_mismatches": outcome["mismatches"], "claim_text": claim,
+        confidence_features={"numeric_mismatches": mismatches, "claim_text": claim,
                              "compared_version": (verdict.review.get("version") or {}).get("version_id")},
         evidence=[Evidence.create(description="조회한 공식 버전의 조문 본문", grade=EvidenceGrade.A,
                                   excerpt=(provision.get("text") or "")[:400], source_record_ids=ids),

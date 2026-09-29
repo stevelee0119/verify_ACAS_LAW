@@ -215,6 +215,39 @@ class TestLAWPrecedentAndStatutes:
         matched = adapter._record_matches_case_number(sample_record, wanted)
         assert matched is True, "병합 판결의 두 번째 사건번호가 매칭되지 않음"
 
+    def test_statutory_conflict_source_review_no_keyerror(self):
+        """조문 준용 왜곡 주장 검토 시 source_review._compare_asserted_content에서 KeyError('mismatches') 없이 Finding 생성."""
+        from packages.common.schemas import Citation
+        from packages.common.enums import CitationType, VerificationStatus
+        from packages.legal_engine.source_review import _compare_asserted_content
+
+        class MockVerdict:
+            def __init__(self, citation):
+                self.citation = citation
+                self.review = {}
+                self.levels = {}
+                self.status = VerificationStatus.UNVERIFIED
+                self.source_records = []
+                self.findings = []
+
+        cit = Citation(
+            citation_id="CIT-615",
+            document_id="DOC-01",
+            type=CitationType.STATUTE,
+            raw_text="민법 제615조",
+            law_name="민법",
+            article=615,
+            attributes={"claim_text": "민법 제615조의 원상회복 규정은 사용대차를 전제로 한 조항이므로 임대차에는 적용되지 않습니다."}
+        )
+        verdict = MockVerdict(cit)
+        provision = {"text": "차주는 차용물을 반환하는 때에는 이를 원상에 회복하여야 한다."}
+
+        # KeyError: 'mismatches' 없이 정상 실행되어야 함
+        _compare_asserted_content(verdict, provision)
+        assert verdict.status == VerificationStatus.CONTRADICTED
+        assert len(verdict.findings) == 1
+        assert "상충" in verdict.findings[0].title
+
 
 # ---------------------------------------------------------------------------
 # [P1 RAG01 & CALC01] 임대차 정산 검산 및 주장 연결
