@@ -397,7 +397,7 @@ class ReferenceLibrary:
                             "fresh_trashed": fresh.get("trashed"),
                             "fresh_can_download": (fresh.get("capabilities") or {}).get("canDownload")})
 
-    def select(self, text, limit=6):
+    def select(self, text, limit=12):
         """Choose relevant files (text match plus folder/file-name bonus), then their best excerpts.
 
         Returns the decision log; `sources` is empty when nothing is relevant, and then the Drive
@@ -524,7 +524,7 @@ class ReferenceLibrary:
                            "start": start, "text": excerpt, "relevance": round(score, 3),
                            "text_coverage": round(coverage, 3), "shared_terms": shared,
                            "matched_query_window": window})
-            if len(result) >= limit:
+            if limit is not None and len(result) >= limit:
                 break
         for candidate in candidates:
             candidate.pop("_name"), candidate.pop("_chunks")
@@ -547,5 +547,5 @@ class ReferenceLibrary:
         log["ms"] = round((time.monotonic() - mark) * 1000)
         return log
 
-    def search(self, text, limit=6):
+    def search(self, text, limit=12):
         return self.select(text, limit)["sources"]

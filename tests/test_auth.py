@@ -27,6 +27,7 @@ PUBLIC_PATHS = {
     ("GET", "/api/health"),
     ("POST", "/api/auth/login"),
     ("POST", "/api/auth/register"),
+    ("POST", "/api/auth/reset-password"),
 }
 
 
@@ -266,3 +267,72 @@ def test_sealed_reveal_is_denied_for_viewer(app_client, org_and_users):
     # 없는 Finding이므로 404, 권한 문제면 403. 200이 나오면 안 된다.
     assert response.status_code in (403, 404)
     assert response.status_code != 200
+
+
+def test_reset_password_with_matching_info(app_client, org_and_users):
+    """가입자 본인 확인 정보(이메일, 성명, 연락처/소속)가 일치하면 비밀번호가 재설정되고 새 비밀번호로 로그인할 수 있다."""
+    member_email = org_and_users["emails"][ROLE_MEMBER]
+    new_secret = "NewPassword1234!"
+
+    # 1. 정보 불일치 시 실패 (성명 불일치)
+    fail_res = app_client.post(
+        "/api/auth/reset-password",
+        json={
+            "email": member_email,
+            "display_name": "틀린이름",
+            "affiliation": "",
+            "phone_number": "",
+            "new_password": new_secret,
+        },
+    )
+    assert fail_res.status_code == 400
+
+    # 2. 정보 일치 시 성공 (성명 ROLE_MEMBER 일치)
+    ok_res = app_client.post(
+        "/api/auth/reset-password",
+        json={
+            "email": member_email,
+            "display_name": ROLE_MEMBER,
+            "affiliation": "",
+            "phone_number": "",
+            "new_password": new_secret,
+        },
+    )
+    assert ok_res.status_code == 200
+    assert ok_res.json().get("reset") is True
+
+    # 3. 새 비밀번호로 로그인 성공 확인
+    login_res = app_client.post(
+        "/api/auth/login",
+        json={"email": member_email, "password": new_secret},
+    )
+    assert login_res.status_code == 200
+    assert "access_token" in login_res.json()
+
+
+def test_admin_reset_user_password(app_client, org_and_users):
+    """관리자는 회원의 비밀번호를 강제 초기화할 수 있으며, 회원은 초기화된 새 비밀번호로 로그인할 수 있다."""
+    tokens = org_and_users["tokens"]
+    member_email = org_and_users["emails"][ROLE_MEMBER]
+    admin_token = tokens[ROLE_ADMIN]
+
+    # 회원 사용자 ID 조회
+    users = app_client.get("/api/auth/users", headers=_auth(admin_token)).json()
+    member_user = next(u for u in users if u["email"] == member_email)
+
+    admin_new_secret = "AdminReset9999!"
+    reset_res = app_client.post(
+        f"/api/admin/users/{member_user['id']}/reset-password",
+        json={"new_password": admin_new_secret},
+        headers=_auth(admin_token),
+    )
+    assert reset_res.status_code == 200
+    assert reset_res.json().get("reset") is True
+
+    # 초기화된 비밀번호로 로그인 성공
+    login_res = app_client.post(
+        "/api/auth/login",
+        json={"email": member_email, "password": admin_new_secret},
+    )
+    assert login_res.status_code == 200
+

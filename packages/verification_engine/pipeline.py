@@ -673,7 +673,7 @@ class VerificationPipeline:
                             document_id=document.document_id) as stage:
             if not citations:
                 stage.skip_reason = "인용이 없음"
-            self._legal_reviews(result, citations, context, progress=lambda done, total: emit(
+            self._legal_reviews(result, citations, context, doc=doc, progress=lambda done, total: emit(
                 JobState.VERIFYING, f"{document.filename} 법률 인용 확인 {done}/{total}건",
                 base + span * (0.55 + 0.20 * done / max(1, total))))
         # 형식 검사(날짜·법원–사건부호·연도)는 인용 검증 안에서 DB 조회와 무관하게 실행된다. 따로 센다.
@@ -976,27 +976,41 @@ class VerificationPipeline:
 
     @staticmethod
     def _attach_reference_dates(result, doc, context):
-        """문서의 날짜를 기준일 '후보'로만 붙인다. 사람이 확인하기 전에는 적용하지 않는다."""
+        """문서의 날짜를 기준일 후보로 붙인다. 특정된 행위일이 있으면 안내를 보강한다."""
         candidates = reference_date_candidates(doc.visible_text)
         result.engine_data["reference_date_candidates"] = candidates
         usable = [c for c in candidates if c["candidate_for_reference"]]
         if context.case_date or not usable:
             return
-        note = (f"문서에서 기준일 후보 {len(usable)}건(" + ", ".join(
-            f"{c['label']} {c['date']}" for c in usable[:3]) + ")을 찾았으나 자동 적용하지 않았다. "
-            "사건 설정에서 기준일을 확인해 입력하면 시간적 적용을 검토한다")
+
+        applied_date = None
+        applied_label = None
+        for v in result.engine_data.get("legal_verdicts", []):
+            if v.get("inferred_reference_applied"):
+                applied_date = v.get("reference_date")
+                applied_label = v.get("inferred_label")
+                break
+
+        if applied_date:
+            note = (f"문서에서 특정된 {applied_label or '법률행위일'}({applied_date})을 기준일로 특정하여 당시 시행 법령 연혁을 대조했습니다. "
+                    "사건 설정에서 다른 기준일을 지정하면 해당 시점 기준으로 재검토할 수 있습니다.")
+        else:
+            note = (f"문서에서 기준일 후보 {len(usable)}건(" + ", ".join(
+                f"{c['label']} {c['date']}" for c in usable[:3]) + ")을 찾았으나 자동 적용하지 않았다. "
+                "사건 설정에서 기준일을 확인해 입력하면 시간적 적용을 검토한다")
+
         for verdict in result.engine_data.get("legal_verdicts", []):
             temporal = next((c for c in verdict.get("components") or [] if c["key"] == "temporal_applicability"), None)
             if temporal and temporal["status"] != "CONFIRMED":
                 verdict["reference_date_candidates"] = usable[:5]
-                temporal["meaning"] = "기준일 미입력 — " + note
+                temporal["meaning"] = ("기준일 적용 — " if applied_date else "기준일 미입력 — ") + note
         for item in result.unverified_items:
             if item.get("type") == "STATUTE":
                 item["reference_date_candidates"] = usable[:5]
 
     OFFICIAL_HISTORY_LIMIT = 5  # 문서당 공식 연혁을 조회할 조문 수 상한(요청 수를 묶는다)
 
-    def _temporal_reviews(self, doc, citations, context) -> Dict[str, Any]:
+    def _temporal_reviews(self, doc, citations, context, inferred_case_date=None) -> Dict[str, Any]:
         """조문 내용을 주장한 법령 인용마다 적용 기준일을 정하고(입력·문서 서술·문서 추정), 시행 버전별 조문과 대조한다.
 
         버전은 내부 Mirror 연혁을 먼저 쓰고, 없으면 국가법령정보 법령 연혁(eflaw)에서 기준일 시행본(구법)과
@@ -1014,7 +1028,7 @@ class VerificationPipeline:
         today = today_korea()
         for citation in statutes:
             sentence = blocks.get(citation.block_id) or ""
-            reference = reference_for(citation, sentence, text, context.case_date, criminal=criminal)
+            reference = reference_for(citation, sentence, text, context.case_date or inferred_case_date, criminal=criminal)
             versions = mirror_versions(citation.law_name, citation.article) if mirror_versions else []
             for version in versions:
                 version.setdefault("source", "MIRROR")
@@ -1038,10 +1052,30 @@ class VerificationPipeline:
                   else "법령 연혁을 확보하지 못함: " + "; ".join(f"{u['citation']}({u['reason']})" for u in unavailable[:3]))
         return {"reviewed": reviewed, "reason": reason, "findings": findings, "unavailable": unavailable}
 
-    def _legal_reviews(self, result, citations, context, *, progress=None):
+    def _legal_reviews(self, result, citations, context, doc=None, *, progress=None):
         """Keep the incident-date review and every issue-date review distinct."""
         current = today_korea()
-        scopes = [("incident", None, context.case_date, citations)]
+
+        # 법률행위 시기(행위시) 자동 특정:
+        # 사용자가 기준일(case_date)을 수동 입력하지 않은 경우, 소장/서면 본문에서 특정된 행위일 후보(계약일, 처분일 등)를 자동 채택
+        inferred_case_date = context.case_date
+        inferred_label = None
+        if not inferred_case_date and doc:
+            candidates = result.engine_data.get("reference_date_candidates") or reference_date_candidates(doc.visible_text)
+            usable = [c for c in candidates if c.get("candidate_for_reference")]
+            # 계약·합의일(CONTRACT) 최우선, 그 다음 행위일(CONDUCT), 처분일(DISPOSITION), 불법행위일(TORT) 순서
+            for pref in ("CONTRACT", "CONDUCT", "DISPOSITION", "TORT"):
+                matched = next((c for c in usable if c.get("meaning") == pref), None)
+                if matched:
+                    inferred_case_date = matched["date"]
+                    inferred_label = matched.get("label") or matched.get("meaning")
+                    break
+            if not inferred_case_date and usable:
+                inferred_case_date = usable[0]["date"]
+                inferred_label = usable[0].get("label") or usable[0].get("meaning")
+
+        effective_reference = context.case_date or inferred_case_date
+        scopes = [("incident", None, effective_reference, citations)]
         statutes = [c for c in citations if c.type == CitationType.STATUTE]
         scopes.extend(("issue", issue_id, when, statutes)
                       for issue_id, when in sorted(context.issue_dates.items()))
@@ -1056,13 +1090,17 @@ class VerificationPipeline:
         for scope, issue_id, when, review_citations in scopes:
             review_id = f"issue:{issue_id}" if issue_id is not None else "incident"
             legal = self.legal.verify_citations(
-                review_citations, case_date=when, incident_date=context.case_date, current_date=current,
+                review_citations, case_date=when, incident_date=effective_reference, current_date=current,
                 progress=(lambda done, count: progress(completed + done, total)) if progress else None)
             completed += len(review_citations)
             label = {"review_id": review_id, "scope": scope, "issue_id": issue_id,
-                     "reference_date": when, "incident_date": context.case_date, "current_date": current}
+                     "reference_date": when, "incident_date": effective_reference,
+                     "inferred_case_date": inferred_case_date if not context.case_date else None,
+                     "inferred_label": inferred_label, "current_date": current}
             for verdict in legal.data.get("verdicts", []):
                 verdict.update(label)
+                if not context.case_date and inferred_case_date and when == inferred_case_date:
+                    verdict["inferred_reference_applied"] = True
                 citation = by_id.get(verdict["citation_id"])
                 if citation and citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                     review = case_applicability_review(

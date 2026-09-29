@@ -150,6 +150,49 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=10, max_length=4096)
 
 
+class ResetPasswordRequest(BaseModel):
+    """사용자 본인 확인을 통한 비밀번호 재설정 요청 모델."""
+    email: str = Field(max_length=200)
+    display_name: str = Field(min_length=1, max_length=120)
+    phone_number: str = Field(default="", max_length=30)
+    affiliation: str = Field(default="", max_length=150)
+    new_password: str = Field(min_length=10, max_length=4096)
+
+    @field_validator("email")
+    @classmethod
+    def _email(cls, v: str) -> str:
+        return _normalize_email(v)
+
+    @field_validator("display_name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("성명을 입력하세요.")
+        return value.strip()
+
+    @field_validator("new_password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        if not (any(c.isalpha() for c in value) and any(c.isdigit() for c in value)
+                and any(not c.isalnum() and not c.isspace() for c in value)):
+            raise ValueError("비밀번호는 문자, 숫자, 특수문자를 포함해야 합니다.")
+        return value
+
+
+class AdminResetPasswordRequest(BaseModel):
+    """관리자에 의한 사용자 비밀번호 초기화 요청 모델."""
+    new_password: str = Field(min_length=10, max_length=4096)
+
+    @field_validator("new_password")
+    @classmethod
+    def _password(cls, value: str) -> str:
+        if not (any(c.isalpha() for c in value) and any(c.isdigit() for c in value)
+                and any(not c.isalnum() and not c.isspace() for c in value)):
+            raise ValueError("비밀번호는 문자, 숫자, 특수문자를 포함해야 합니다.")
+        return value
+
+
+
 def _out(user: User, metrics: Optional[Dict[str, Any]] = None) -> UserOut:
     return UserOut(
         id=user.id,
@@ -317,6 +360,81 @@ def register_user(
     }
 
 
+@router.post("/api/auth/reset-password")
+def reset_password(
+    payload: ResetPasswordRequest,
+    request: Request,
+    session: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """가입자 본인 확인 정보를 검증하여 비밀번호를 재설정한다.
+
+    비밀번호 분실 시 재가입 실패(중복 오류) 없이 계정 복구가 가능하도록
+    이메일, 성명, 연락처 또는 소속 정보를 교차 검증하여 일치 시 새 비밀번호를 설정한다.
+    """
+    if auth_mode() != "multi-user":
+        raise HTTPException(409, "다중 사용자 모드에서만 비밀번호를 초기화할 수 있습니다.")
+    is_https = secure_transport(request)
+    check_origin(
+        request,
+        secure=is_https,
+        required=bool(request.headers.get("sec-fetch-site") or request.headers.get("cookie")),
+    )
+
+    email = payload.email.strip().lower()
+    user = session.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(400, "입력하신 가입 정보(이메일, 성명, 연락처 또는 소속)가 일치하지 않습니다.")
+
+    # 1. 성명 일치 여부 검증 (공백 제거 후 대조)
+    if (user.display_name or "").strip() != payload.display_name.strip():
+        raise HTTPException(400, "입력하신 가입 정보(이메일, 성명, 연락처 또는 소속)가 일치하지 않습니다.")
+
+    # 2. 계정 승인 및 활성화 상태 확인
+    if user.approval_status == UserApprovalStatus.PENDING:
+        raise HTTPException(400, "가입 승인 대기 중인 계정입니다. 관리자 승인 완료 후 이용하실 수 있습니다.")
+    if user.approval_status == UserApprovalStatus.REJECTED or not user.is_active:
+        raise HTTPException(400, "비활성화되었거나 반려된 계정입니다. 관리자에게 문의하세요.")
+
+    # 3. 등록된 연락처 또는 소속 대조 (등록 정보가 있는 경우 교차 검증)
+    u_phone = re.sub(r"[^0-9]", "", getattr(user, "phone_number", "") or "")
+    req_phone = re.sub(r"[^0-9]", "", payload.phone_number or "")
+    u_affil = (getattr(user, "affiliation", "") or "").strip().lower()
+    req_affil = (payload.affiliation or "").strip().lower()
+
+    if u_phone or u_affil:
+        matched = False
+        if u_phone and req_phone and u_phone == req_phone:
+            matched = True
+        elif u_affil and req_affil and (u_affil in req_affil or req_affil in u_affil):
+            matched = True
+        if not matched:
+            raise HTTPException(400, "입력하신 가입 정보(이메일, 성명, 연락처 또는 소속)가 일치하지 않습니다.")
+
+    # 4. 새 비밀번호 해시 저장 및 기존 세션 강제 무효화
+    user.password_hash = hash_password(payload.new_password)
+    user.is_active = True
+    set_account_enabled(session, user, True)
+    revoked = revoke_all_sessions(session, user.id)
+    session.commit()
+
+    # 감사 추적 기록 (비밀번호 원문 제외)
+    make_audit(session).record(
+        AuditEventType.API_QUERY,
+        {
+            "event": "PASSWORD_RESET_SELF",
+            "user_id": user.id,
+            "email": user.email,
+            "revoked_sessions": revoked,
+        },
+        actor=user.id,
+    )
+    return {
+        "reset": True,
+        "message": "비밀번호가 성공적으로 재설정되었습니다. 새 비밀번호로 로그인해주세요.",
+    }
+
+
+
 # --- 관리자 전용 -------------------------------------------------------------
 def _managed_user(session: Session, admin: User, user_id: str, *, pending=False, lock=True) -> User:
     require_org_admin()
@@ -444,6 +562,44 @@ def delete_user(
         actor=admin.id,
     )
     return {"deleted": True, "user_id": user_id}
+
+
+@router.post("/api/admin/users/{user_id}/reset-password")
+def admin_reset_password(
+    user_id: str,
+    payload: AdminResetPasswordRequest,
+    admin: User = Depends(require_admin),
+    session: Session = Depends(get_db),
+) -> Dict[str, Any]:
+    """관리자에 의한 사용자 비밀번호 강제 초기화.
+
+    비밀번호 분실 또는 계정 복구가 필요한 회원을 위해 관리자가 직접 새 비밀번호를
+    설정하고, 기존 세션을 강제 무효화 및 계정을 활성화한다.
+    """
+    require_org_admin()
+    user = _managed_user(session, admin, user_id, lock=True)
+    user.password_hash = hash_password(payload.new_password)
+    user.is_active = True
+    set_account_enabled(session, user, True)
+    revoked = revoke_all_sessions(session, user.id)
+    session.commit()
+
+    make_audit(session).record(
+        AuditEventType.API_QUERY,
+        {
+            "event": "ADMIN_PASSWORD_RESET",
+            "user_id": user.id,
+            "reset_by": admin.id,
+            "revoked_sessions": revoked,
+        },
+        actor=admin.id,
+    )
+    return {
+        "reset": True,
+        "user_id": user.id,
+        "message": f"{user.display_name}({user.email}) 계정의 비밀번호가 성공적으로 초기화되었습니다.",
+    }
+
 
 
 @router.get("/api/admin/users", response_model=List[UserOut])

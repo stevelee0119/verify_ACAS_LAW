@@ -110,10 +110,16 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
         partial or not article_start or (as_of and article_start > legal_date(as_of)))
     if as_of and article_start and article_start <= legal_date(as_of) and not partial:
         verdict.levels["temporal"] = "VERIFIED"
+        verdict.notes.append(f"사건 특정 기준일({as_of}) 당시 시행 법령(시행일: {official.get('effective_from') or article_start}) 제{citation.article}조 특정 검토 완료")
     else:
         verdict.notes.append("기준일·조문 시행일 또는 부분 시행 조건 확인이 필요하다")
     if not official.get("supplementary_complete") or official.get("transitional_review_needed"):
-        verdict.notes.append("부칙·경과조치의 사건 적용 여부는 검토자가 확인해야 한다")
+        supplements = official.get("supplementary_provisions") or []
+        trans_texts = [s.get("text", "").strip() for s in supplements if s.get("transitional")]
+        if trans_texts:
+            verdict.notes.append(f"부칙·경과조치의 사건 적용 여부는 검토자가 확인해야 한다 (부칙 내용: {trans_texts[0][:100]}...)")
+        else:
+            verdict.notes.append("부칙·경과조치의 사건 적용 여부는 검토자가 확인해야 한다")
         verdict.levels["temporal"] = "UNVERIFIED"
     verdict.levels["content"] = "AVAILABLE"
     verdict.status = VerificationStatus.PARTIALLY_VERIFIED

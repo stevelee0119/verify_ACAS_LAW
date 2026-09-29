@@ -267,9 +267,19 @@ async def verify_argument_validity(
         is_unverified = (status in ("NOT_FOUND", "CONTRADICTED") or levels.get("level1") == "NOT_FOUND"
                          or levels.get("number_format") == "IMPOSSIBLE")
         is_semantic_issue = sem_status in ("CONTRADICTED", "DISTINGUISHABLE")
+        # 공식 DB에서 원문이 일치 확인된 판례도 대조표에 포함(사건 적용성은 직접 검토 안내)
+        is_official_confirmed = (
+            citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL)
+            and status in ("VERIFIED", "PARTIALLY_VERIFIED")
+            and not is_unverified
+            and not is_semantic_issue
+            and bool(verdict.get("official_record"))
+        )
 
-        if is_unverified or is_semantic_issue:
-            if not case_number_possible(citation.canonical_case_number or citation.case_number or ""):
+        if is_unverified or is_semantic_issue or is_official_confirmed:
+            if is_official_confirmed:
+                basis = "OFFICIAL_CONFIRMED"
+            elif not case_number_possible(citation.canonical_case_number or citation.case_number or ""):
                 basis = "FABRICATION_SUSPECTED"
             elif sem_status == "CONTRADICTED":
                 basis = "CONTRADICTION"
@@ -339,6 +349,15 @@ async def verify_argument_validity(
                             "판례 사안과 본 건의 사실관계 및 법적 성격이 상이하여, 기존 판례의 법리가 본 건에 그대로 유추적용될 수 있는지 검토가 필요합니다.")
             counteraction = ("판례 사안과 본 건의 사실관계 차이를 인정하고, 신뢰보호 등 일반 행정법 원칙이 "
                              "본 사안에도 유추적용되어야 하는 구체적 당위성을 보강하여 변론할 것.")
+        elif basis == "OFFICIAL_CONFIRMED":
+            ai_basis = "공식DB 확인 완료 (판례 실재 및 원문 일치 — 사건 적용성은 직접 검토 필요)"
+            verdict_text = "공식 원문 일치 (사건 적용성 직접 검토 필요)"
+            legal_reason = (
+                f"대법원 공식 판례 DB에서 {c.raw_text}의 판결 요지 및 원문 일치가 확인되었습니다. "
+                f"다만, 본 판례의 법리가 당해 사건의 계약 조건(예: 감액 청구 배제 특약의 유효성, 위약벌 인정 여부 등) 및 "
+                f"구체적 사실관계에 타당하게 적용되는지(사건 적용성)는 AI 작성 여부 판단과 별개로 검토자가 직접 검토해야 합니다."
+            )
+            counteraction = "공식 판례의 원문 취지와 당해 사건의 계약 조건(손해배상액 예정 vs 위약벌 법리 등)을 직접 비교 검토할 것."
         elif mismatch:
             ai_basis = (
                 "공식 기록은 조회되었으나 인용된 내용이 공식 기록과 일치하지 않음. "
@@ -412,44 +431,51 @@ async def verify_argument_validity(
             else ["SOURCE_UNCONFIRMED"]
         )
 
-        result.findings.append(
-            Finding.create(
-                type=FindingType.LEGAL_ARGUMENT_INVALID,
-                status=finding_status,
-                severity=finding_severity,
-                evidence_grade=EvidenceGrade.B if (contradiction or distinguishable) else EvidenceGrade.C,
-                title=finding_title,
-                detail=legal_reason,
-                confidence=confidence_score(feats),
-                confidence_features=feats,
-                document_id=doc.document_id,
-                page=c.page,
-                engine=ENGINE_NAME,
-                tags=finding_tags,
-                advisory_only=contradiction or distinguishable,
+        if basis != "OFFICIAL_CONFIRMED":
+            result.findings.append(
+                Finding.create(
+                    type=FindingType.LEGAL_ARGUMENT_INVALID,
+                    status=finding_status,
+                    severity=finding_severity,
+                    evidence_grade=EvidenceGrade.B if (contradiction or distinguishable) else EvidenceGrade.C,
+                    title=finding_title,
+                    detail=legal_reason,
+                    confidence=confidence_score(feats),
+                    confidence_features=feats,
+                    document_id=doc.document_id,
+                    page=c.page,
+                    engine=ENGINE_NAME,
+                    tags=finding_tags,
+                    advisory_only=contradiction or distinguishable,
+                )
             )
-        )
 
     # 4. AI 교차검토(참고). 판정·심각도는 바꾸지 않는다.
     can_use_llm = bool(router and external_ai_policy != ExternalAIPolicy.LOCAL_ONLY
                        and hasattr(router, "consult_all")
                        and router.has_available_provider(policy=external_ai_policy))
-    if can_use_llm and unverified_cases:
-        await _attach_ai_opinions(result, unverified_cases, router, external_ai_policy, mask)
+    cases_for_ai = [item for item in unverified_cases if item.get("basis") != "OFFICIAL_CONFIRMED"]
+    if can_use_llm and cases_for_ai:
+        await _attach_ai_opinions(result, cases_for_ai, router, external_ai_policy, mask)
 
     if result.rows:
         counts = {basis: sum(r.basis == basis for r in result.rows)
-                  for basis in ("FABRICATION_SUSPECTED", "CONTRADICTION", "DISTINGUISHABLE", "CONTENT_MISMATCH", "UNCONFIRMED")}
+                  for basis in ("FABRICATION_SUSPECTED", "CONTRADICTION", "DISTINGUISHABLE", "CONTENT_MISMATCH", "UNCONFIRMED", "OFFICIAL_CONFIRMED")}
         parts = [
             f"성립할 수 없는 사건번호 {counts['FABRICATION_SUSPECTED']}건" if counts["FABRICATION_SUSPECTED"] else "",
             f"판례 취지 왜곡(상반 인용) {counts['CONTRADICTION']}건" if counts["CONTRADICTION"] else "",
             f"사실관계 및 적용 차이 {counts['DISTINGUISHABLE']}건" if counts["DISTINGUISHABLE"] else "",
             f"인용 내용이 공식 기록과 다른 판례 {counts['CONTENT_MISMATCH']}건" if counts["CONTENT_MISMATCH"] else "",
             f"공식 DB에서 확인되지 않은 판례·법령 {counts['UNCONFIRMED']}건" if counts["UNCONFIRMED"] else "",
+            f"공식 DB 확인 완료(사건 적용성 직접 검토 필요) 판례 {counts['OFFICIAL_CONFIRMED']}건" if counts.get("OFFICIAL_CONFIRMED") else "",
         ]
-        summary = ", ".join(p for p in parts if p) + "을(를) 근거로 한 주장이 있습니다. "
-        summary += ("미확인은 부존재를 뜻하지 않으므로 원문 확인이 필요합니다."
-                    if counts["UNCONFIRMED"] else "원문 대조 및 법리 재검토가 필요합니다.")
+        summary = ", ".join(p for p in parts if p) + "에 대한 검토 내용이 포함되어 있습니다. "
+        if counts["UNCONFIRMED"]:
+            summary += "미확인은 부존재를 뜻하지 않으므로 원문 확인이 필요합니다."
+        elif counts["FABRICATION_SUSPECTED"] or counts["CONTRADICTION"] or counts["CONTENT_MISMATCH"]:
+            summary += "원문 대조 및 법리 재검토가 필요합니다."
+        else:
+            summary += "공식 원문이 확인된 판례는 사안 적용성을 검토하십시오."
         if result.ai_summary:
             summary += f" {result.ai_summary}"
         result.overall_validity_summary = summary

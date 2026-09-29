@@ -44,6 +44,8 @@ DISPOSITION_AFTER_RE = re.compile(r"^[^.\n]{0,20}?(?:처분|부과|징계)")
 CRIMINAL_HINT_RE = re.compile(r"피고인|공소|형사|징역|벌금|법정형|범행")
 CRIMINAL_BASIS = ("형법 제1조 제1항(범죄의 성립과 처벌은 행위 시의 법률에 따른다) 및 제2항(범죄 후 법률 변경 시 "
                   "경한 신법)을 기준으로 어느 버전을 적용할지 사람이 검토해야 한다")
+# 계약·약정·체결 관련 키워드 정규식 (민사 계약 사건 기준일 특정용)
+CONTRACT_SENTENCE_RE = re.compile(r"계약|체결|약정|합의|용역|공급|도급|위탁|납품|발주")
 
 
 def paragraph_text(article_text: str, paragraph: Optional[str]) -> str:
@@ -86,7 +88,7 @@ def _official_values(outcome: Dict[str, Any]) -> str:
 
 
 def act_date(text: str, kind: str) -> Optional[str]:
-    """문서가 그 시점(행위·처분 등)의 날짜로 적은 날짜가 하나뿐이면 그 날짜."""
+    """문서가 그 시점(행위·처분·계약 등)의 날짜로 적은 날짜가 하나뿐이면 그 날짜."""
     found, charged = set(), set()
     for sentence in re.split(r"(?<=[다음함])\s*[.。]\s*|\n", text or ""):
         for m in DATE_RE.finditer(sentence):
@@ -101,13 +103,21 @@ def act_date(text: str, kind: str) -> Optional[str]:
                     charged.add(value)  # 심판 대상인 공소사실의 행위일이 다른 서술보다 우선한다
             elif kind == "처분" and DISPOSITION_AFTER_RE.match(sentence[m.end():]):
                 found.add(value)
+            elif kind in ("계약", "합의", "약정") and (CONTRACT_SENTENCE_RE.search(sentence[:m.start()]) or CONTRACT_SENTENCE_RE.search(sentence[m.end():])):
+                found.add(value)  # 계약 체결 관련 날짜 수집
     for dates in (charged, found):
         if len(dates) == 1:
             return next(iter(dates))
     return None
 
 
-REFERENCE_KINDS = {"OFFENSE": "범행일", "DISPOSITION": "처분일", "TORT": "불법행위일", "LOWER_JUDGMENT": "원심 선고일"}
+REFERENCE_KINDS = {
+    "CONTRACT": "계약·합의일",
+    "OFFENSE": "범행일",
+    "DISPOSITION": "처분일",
+    "TORT": "불법행위일",
+    "LOWER_JUDGMENT": "원심 선고일",
+}
 TORT_SENTENCE_RE = re.compile(r"사고|불법행위|손해가\s*발생|상해를\s*입|부상을\s*입|폭행을\s*당")
 LOWER_JUDGMENT_RE = re.compile(r"원심|제1심|1심|원판결")
 PROCEDURAL_LAW_RE = re.compile(r"소송법$|소송규칙$")
@@ -118,7 +128,7 @@ def _sentences(text: str):
 
 
 def reference_candidates(text: str) -> List[Dict[str, Any]]:
-    """문서가 적은 범행일·처분일·불법행위일·원심 선고일 후보. 같은 날짜·종류는 한 번만."""
+    """문서가 적은 계약체결일·범행일·처분일·불법행위일·원심 선고일 후보. 같은 날짜·종류는 한 번만."""
     out: List[Dict[str, Any]] = []
     seen = set()
     for sentence in _sentences(text):
@@ -137,6 +147,9 @@ def reference_candidates(text: str) -> List[Dict[str, Any]]:
                 kinds.append("LOWER_JUDGMENT")
             if TORT_SENTENCE_RE.search(sentence) and not kinds and not re.match(r"^\s*(?:에\s*)?선고", after):
                 kinds.append("TORT")
+            # 계약·약정·체결 문맥 판별 (민사 계약 분쟁용)
+            if (CONTRACT_SENTENCE_RE.search(before) or CONTRACT_SENTENCE_RE.search(after)) and not kinds and not re.match(r"^\s*(?:에\s*)?선고", after):
+                kinds.append("CONTRACT")
             for kind in kinds:
                 if (kind, value) not in seen:
                     seen.add((kind, value))
@@ -154,7 +167,8 @@ def preferred_kind(citation, candidates: List[Dict[str, Any]], *, criminal: bool
     elif criminal:
         order = ["OFFENSE"]
     else:
-        order = ["DISPOSITION", "TORT"]
+        # 민사/계약/행정 사건: 계약체결일(CONTRACT)을 최우선으로 검토
+        order = ["CONTRACT", "DISPOSITION", "TORT"]
     return next((k for k in order if k in kinds), None)
 
 

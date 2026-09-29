@@ -1344,15 +1344,30 @@ label.button[aria-disabled="true"] { opacity: .55; pointer-events: none; }
   overflow-wrap: anywhere;
 }
 
-.register-btn {
-  margin-top: 8px;
+.login-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.register-btn, .reset-pwd-btn {
   background: none;
   border: none;
   color: var(--primary, #1a365d);
   font-size: 13px;
   text-decoration: underline;
   cursor: pointer;
-  padding: 6px;
+  padding: 4px;
+}
+
+.reset-notice {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--muted, #64748b);
+  margin-bottom: 8px;
+  word-break: keep-all;
 }
 
 .user-toolbar {

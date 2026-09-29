@@ -321,7 +321,10 @@ const adminUI = (() => {
       view.footer.append(command("승인", "check", () => approve(user), "primary"),
         command("반려", "x", () => reject(user)));
     } else if (user.approval_status === "APPROVED" && user.id !== identity.user_id) {
-      view.footer.append(command("권한 수정", "pencil", () => editUser(user)));
+      view.footer.append(
+        command("권한 수정", "pencil", () => editUser(user)),
+        command("비밀번호 초기화", "lock-keyhole", () => resetUserPassword(user))
+      );
     }
     if (user.approval_status === "APPROVED") view.footer.append(command("접속 토큰", "key-round", () => {
       view.dialog.close(); return operationsUI.manageTokens(user.id);
@@ -355,6 +358,28 @@ const adminUI = (() => {
       await api("/identity/users/" + user.id, {method:"PATCH", interactiveAuth:false,
         body:{role:values.role, enabled:element.elements.enabled.checked}});
       return "계정 권한 변경 완료";
+    });
+  }
+  function resetUserPassword(user) {
+    // 관리자에 의한 사용자 비밀번호 초기화
+    const view = drawer("비밀번호 초기화");
+    facts(view.content, [["대상 사용자", user.display_name || user.email], ["이메일", user.email]]);
+    const password = workflowUI.field("new_password", "새 비밀번호 (10자 이상, 문자·숫자·특수문자)", "", "password");
+    const confirm = workflowUI.field("new_password_confirm", "새 비밀번호 확인", "", "password");
+    password.querySelector("input").required = confirm.querySelector("input").required = true;
+    password.querySelector("input").minLength = confirm.querySelector("input").minLength = 10;
+    view.dialog.addEventListener("close", () => {
+      password.querySelector("input").value = confirm.querySelector("input").value = "";
+    }, {once:true});
+    form(view, [password, confirm], "비밀번호 초기화 실행", async values => {
+      if (values.new_password !== values.new_password_confirm) throw new Error("새 비밀번호가 서로 일치하지 않습니다.");
+      const result = await api("/admin/users/" + user.id + "/reset-password", {
+        method: "POST",
+        interactiveAuth: false,
+        body: {new_password: values.new_password}
+      });
+      password.querySelector("input").value = confirm.querySelector("input").value = "";
+      return result.message || "비밀번호가 초기화되었습니다.";
     });
   }
   async function history(user) {

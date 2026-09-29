@@ -339,10 +339,10 @@ function renderSummary() {
       aiStatus = "인간 작성 유력";
     }
     // 확인하지 못한 인용과 성립 불가한 인용을 한 숫자에 섞지 않는다.
-    // 실재하는 판례가 "가짜"로 집계되면 그 서면을 쓴 변호사에게 실제 손해가 간다.
+    // 공식 DB 확인 완료 판례는 미확인 카운트에 포함하지 않는다.
     for (const row of d.ai_hallucination_table || []) {
       if (row.basis === "FABRICATION_SUSPECTED") fakeCaseCount += 1;
-      else unconfirmedCount += 1;
+      else if (row.basis !== "OFFICIAL_CONFIRMED") unconfirmedCount += 1;
     }
   }
   if (aiStatus === "미분석" && state.findings.some(f => f.type === "AI_FULL_GENERATION_SUSPECTED")) {
@@ -527,11 +527,23 @@ function renderHallucinationSummary(rows) {
     return;
   }
   const count = basis => rows.filter(r => (r.basis || "UNCONFIRMED") === basis).length;
-  const parts = [["성립할 수 없는 사건번호", count("FABRICATION_SUSPECTED")], ["인용 내용 불일치", count("CONTENT_MISMATCH")],
-                 ["공식 DB 미확인", count("UNCONFIRMED")]].filter(([, n]) => n).map(([name, n]) => `${name} ${n}건`);
-  summary.textContent = `공식 법원 DB에서 확인되지 않는 판례와 이를 전제로 한 주장이 총 ${rows.length}건입니다(${parts.join(", ")}). ` +
-    "공식 DB 미확인은 부존재를 뜻하지 않으므로 아래 표의 근거와 대응 방안을 함께 확인하세요.";
-  summary.className = "warning-text";
+  const parts = [
+    ["성립할 수 없는 사건번호", count("FABRICATION_SUSPECTED")],
+    ["판례 취지 왜곡", count("CONTRADICTION")],
+    ["사실관계 및 적용 차이", count("DISTINGUISHABLE")],
+    ["인용 내용 불일치", count("CONTENT_MISMATCH")],
+    ["공식 DB 미확인", count("UNCONFIRMED")],
+    ["공식 DB 확인 완료 (사건 적용성 검토 필요)", count("OFFICIAL_CONFIRMED")]
+  ].filter(([, n]) => n).map(([name, n]) => `${name} ${n}건`);
+  const problemCount = rows.filter(r => r.basis !== "OFFICIAL_CONFIRMED").length;
+  if (problemCount > 0) {
+    summary.textContent = `판례 인용 및 법률 주장 검토 항목이 총 ${rows.length}건입니다(${parts.join(", ")}). ` +
+      "공식 DB 미확인은 부존재를 뜻하지 않으며, 원문 일치 판례는 구체적 사건 적용성을 직접 검토하시기 바랍니다.";
+    summary.className = "warning-text";
+  } else {
+    summary.textContent = `소장 인용 판례가 공식 DB와 일치 확인되었습니다(${parts.join(", ")}). 판례의 구체적 사건 적용성은 직접 검토하시기 바랍니다.`;
+    summary.className = "safe-text";
+  }
 }
 
 function referenceSection(docs) {
@@ -1343,7 +1355,9 @@ function renderAIVerification() {
     // 주장 평가는 짧은 배지라 인용 오류·미확인 근거 칸 머리에 함께 싣고, 남는 폭은 법리 검토 칸에 준다.
     const tdBasis = node("td");
     let verdictCls = "badge HIGH";
-    if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
+    if (r.basis === "OFFICIAL_CONFIRMED") {
+      verdictCls = "badge SUCCESS";
+    } else if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
       verdictCls = "badge CRITICAL";
     }
     tdBasis.append(

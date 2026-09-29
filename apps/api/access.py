@@ -324,8 +324,8 @@ async def workspace_access(request, call_next):
         if (mode == "multi-user" or os.getenv("LV_ACCESS_TOKEN")) and not secure and not loopback:
             raise HTTPException(403, "HTTPS is required for multi-user authentication")
         request.state.secure_transport = secure
-        if mode == "multi-user" and request.method == "POST" and request.url.path.rstrip("/") in {"/api/auth/login", "/api/auth/register"}:
-            # Login and registration CSRF must be checked even though no principal exists yet.
+        if mode == "multi-user" and request.method == "POST" and request.url.path.rstrip("/") in {"/api/auth/login", "/api/auth/register", "/api/auth/reset-password"}:
+            # 로그인, 가입신청, 비밀번호 재설정은 인증 주체(Principal)가 없어도 접근 가능하되 CSRF를 사전 검증한다.
             check_origin(request, secure=secure,
                          required=bool(request.headers.get("sec-fetch-site") or request.headers.get("cookie")))
             response = await forward(request)

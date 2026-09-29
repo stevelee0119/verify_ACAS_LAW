@@ -52,15 +52,20 @@ const operationsUI = (() => {
         modeButtons.push(tab); modes.append(tab);
       }
       const submit = node("button", "로그인", "primary"); submit.type = "submit";
+      const actions = node("div", null, "login-actions");
       const registerBtn = node("button", "신규 사용자 등록 신청", "button link register-btn");
       registerBtn.type = "button";
       registerBtn.onclick = () => registerUserModal();
+      const resetBtn = node("button", "비밀번호 찾기 / 초기화", "button link reset-pwd-btn");
+      resetBtn.type = "button";
+      resetBtn.onclick = () => resetPasswordModal();
+      actions.append(registerBtn, resetBtn);
       const emblem = node("div", null, "brand-emblem"), emblemImage = node("img");
       emblemImage.src = "/static/acas-law-emblem.jpg"; emblemImage.alt = "ACASia LAW";
       emblemImage.width = 1280; emblemImage.height = 640; emblem.append(emblemImage);
       const heading = node("div", null, "login-heading");
       heading.append(emblem, node("h2", "법률문서 검증시스템"));
-      form.append(heading, modes, passwordPanel, tokenPanel, error, submit, registerBtn);
+      form.append(heading, modes, passwordPanel, tokenPanel, error, submit, actions);
       dialog.append(form); document.body.append(dialog);
       let authenticated = false;
       dialog.addEventListener("cancel", event => {if (submit.disabled) event.preventDefault();});
@@ -172,6 +177,48 @@ const operationsUI = (() => {
       password.querySelector("input").value = passwordConfirm.querySelector("input").value = "";
     }, {once:true});
   }
+
+  function resetPasswordModal() {
+    // 가입자 본인 확인 정보를 통한 비밀번호 재설정 모달
+    const email = workflowUI.field("email", "이메일", "", "email");
+    const name = workflowUI.field("display_name", "성명");
+    const phone = workflowUI.field("phone_number", "등록된 연락처 (선택)", "", "tel");
+    const affil = workflowUI.field("affiliation", "등록된 소속 (선택)");
+    const password = workflowUI.field("new_password", "새 비밀번호 (10자 이상, 문자·숫자·특수문자)", "", "password");
+    const passwordConfirm = workflowUI.field("new_password_confirm", "새 비밀번호 확인", "", "password");
+
+    email.querySelector("input").required = true;
+    name.querySelector("input").required = true;
+    password.querySelector("input").required = true;
+    password.querySelector("input").minLength = 10;
+    passwordConfirm.querySelector("input").required = true;
+    passwordConfirm.querySelector("input").minLength = 10;
+
+    const notice = node("p", "※ 가입 시 등록한 성명과, 연락처 또는 소속 정보 중 하나 이상을 입력하시면 본인 확인 후 비밀번호가 재설정됩니다.", "muted reset-notice");
+
+    const view = workflowUI.modal("비밀번호 찾기 / 초기화", [notice, email, name, phone, affil, password, passwordConfirm], async values => {
+      if (values.new_password !== values.new_password_confirm) {
+        throw new Error("새 비밀번호가 서로 일치하지 않습니다.");
+      }
+      const result = await authRequest("/auth/reset-password", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+          email: values.email.trim(),
+          display_name: values.display_name.trim(),
+          phone_number: (values.phone_number || "").trim(),
+          affiliation: (values.affiliation || "").trim(),
+          new_password: values.new_password
+        })
+      });
+      toast(result.message || "비밀번호가 재설정되었습니다.");
+    });
+    view.submit.textContent = "비밀번호 재설정";
+    view.dialog.addEventListener("close", () => {
+      password.querySelector("input").value = passwordConfirm.querySelector("input").value = "";
+    }, {once:true});
+  }
+
 
   async function tokens(userId) {
     const content = node("div",null,"full");
