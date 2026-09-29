@@ -269,7 +269,7 @@ async def detect_ai_document(
         "지적, confirmation은 모순이 없음을 확인한 내용입니다. 모순 지적과 확인은 작성 주체의 근거로 쓰지 마십시오.\n"
         "분량: reasons는 최대 4개(각 150자 이내), suspicious_excerpts는 최대 4개(snippet 120자·reason 100자 "
         "이내). 주민등록번호 등 개인 식별번호가 든 문장은 발췌하지 말고, 인터넷 주소(URL)는 쓰지 마십시오"
-        "(응답이 보안 검사에서 격리됩니다). JSON 객체 하나만 답하십시오.\n\n"
+        "(응답이 보안 점검에서 격리됩니다). JSON 객체 하나만 답하십시오.\n\n"
         "반드시 아래 JSON 형식으로만 응답하십시오:\n"
         "{\n"
         '  "verdict": "AI_FULL_GENERATION_LIKELY" | "AI_PARTIAL_GENERATION" | "UNCERTAIN",\n'

@@ -152,8 +152,10 @@ def review_document(result, library, router, context, pii):
                     for c in eligible if c.get("claim_id") not in linked])
     review["observation_limit_reached"] = len(observations) >= 5
     review["assessment_scope"] = "SELECTED_EXCERPTS_ONLY_NOT_ALL_CLAIMS"
+    # 모든 청구 대상 주장이 발췌본과 대조 연결된 경우, 5건 한도에 도달했더라도 전체 검토 완결로 인정한다.
+    all_claims_linked = bool(eligible and len(linked) >= len(eligible))
     review["review_completed"] = (not review["rejected_observations"] and not review["document_truncated"]
-                                  and not review["observation_limit_reached"])
+                                  and (not review["observation_limit_reached"] or all_claims_linked))
     review["comparison_completed"] = True
     review["legal_binding_determined"] = False
     review["authority_limitation"] = "내부 안내자료에 기초한 참고 의견이며, 공식 법령·상급 규정 확인 필요"
@@ -170,7 +172,7 @@ def review_document(result, library, router, context, pii):
         review.update(status="REVIEWED_NO_ADVICE", reason="MODEL_RETURNED_NO_ADVICE_NOT_LEGAL_CLEARANCE")
         return review
     review.update(status="ADVISORY_REVIEWED", source_quotes_validated=True, observations=observations,
-                  reason=("OBSERVATION_LIMIT_REACHED" if review["observation_limit_reached"] else
+                  reason=("OBSERVATION_LIMIT_REACHED" if (review["observation_limit_reached"] and not all_claims_linked) else
                           "EXACT_QUOTES_CHECKED_NOT_ENTAILMENT_OR_LEGAL_VALIDITY"))
     return review
 

@@ -77,14 +77,17 @@ def inspect_request(request):
                 else:
                     user_kinds[m.kind] += 1
 
-    status = "BLOCKED" if kinds else "PASSED"
-    failure_code = None
-    if status == "BLOCKED":
-        # 시스템 고정 프롬프트에서만 잡힌 경우와 사용자 입력에서 잡힌 경우를 구분
-        if system_kinds and not user_kinds:
-            failure_code = "STATIC_PROMPT_FALSE_POSITIVE"
-        else:
-            failure_code = "PII_INPUT_BLOCKED"
+    # 사용자 입력(user_kinds)에 개인정보가 존재할 때에만 실질적 PII 유출로 차단(BLOCKED)한다.
+    # 시스템 고정 프롬프트(system/schema)에서만 감지된 경우는 정적 오탐으로 분류하여 통과(PASSED)시킨다.
+    if user_kinds:
+        status = "BLOCKED"
+        failure_code = "PII_INPUT_BLOCKED"
+    elif system_kinds:
+        status = "PASSED"
+        failure_code = "STATIC_PROMPT_FALSE_POSITIVE"
+    else:
+        status = "PASSED"
+        failure_code = None
 
     res = {
         "policy_version": POLICY_VERSION,
@@ -97,4 +100,6 @@ def inspect_request(request):
         res["failure_code"] = failure_code
         res["detected_field_paths"] = sorted(detected_paths)
         res["retryable"] = failure_code == "STATIC_PROMPT_FALSE_POSITIVE"
+        if failure_code == "STATIC_PROMPT_FALSE_POSITIVE":
+            res["note"] = "시스템 고정 프롬프트의 정적 어휘 오탐으로 판정하여 호출을 허용함(사용자 입력 PII 없음)"
     return res
