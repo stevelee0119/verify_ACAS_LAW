@@ -13,6 +13,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, Optional
@@ -34,6 +35,7 @@ KIND_PREFIX = {
     "PASSPORT": "PASSPORT",
     "DOB": "DOB",
     "MEDICAL": "MED",
+    "VEHICLE": "VEHICLE",
 }
 
 
@@ -137,7 +139,15 @@ class PseudonymStore:
                 handle.write(self._encrypt(payload))
                 handle.flush()
                 os.fsync(handle.fileno())
-            os.replace(temporary, self._path)
+            # Windows 환경에서 파일 핸들 해제 지연에 따른 PermissionError 방지를 위한 재시도 처리
+            for attempt in range(5):
+                try:
+                    os.replace(temporary, self._path)
+                    break
+                except PermissionError:
+                    if attempt == 4:
+                        raise
+                    time.sleep(0.02 * (attempt + 1))
         finally:
             Path(temporary).unlink(missing_ok=True)
 

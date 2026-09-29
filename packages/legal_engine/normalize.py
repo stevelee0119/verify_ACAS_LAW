@@ -168,6 +168,9 @@ LAW_NAME_PREFIX_NOISE = [
 # 법령명 첫 글자와 구별되지 않으므로(예: 위치정보법, 구강보건법, 동물보호법) 띄어 쓴 경우에만 뗀다.
 _GLUED_NOISE = {"또한", "그리고", "한편", "따라서", "아울러", "특히", "나아가"}
 
+# 기본 주요 법전 (약칭 매핑과 별도로 단독 법령명으로 최우선 인식)
+CORE_LEGAL_CODES = {"민법", "형법", "상법", "헌법", "대한민국헌법", "민사소송법", "형사소송법", "행정소송법", "국가배상법", "근로기준법"}
+
 # 법령명 앞 토큰이 조사로 끝나면 법령명이 아니다(예: "적용법조는 테스트법" -> "테스트법").
 JOSA_TAILS = set("는은이가을를의에로과와도만며고서")
 
@@ -210,10 +213,10 @@ def law_name_suffix(raw: str) -> str:
         # 낫표는 법령명의 경계를 표시한다. 안쪽 전체가 법령명이다(「…예방 및 대책에 관한 법률」).
         return " ".join(bracketed.group(1).split())
 
-    # 공식 제명 목록(LAW_ALIASES의 공식 명칭)이 raw 내에 완전 포함된 경우 최장 일치를 우선 보존한다
+    # 공식 제명 목록(LAW_ALIASES의 공식 명칭 및 주요 법전)이 raw 내에 완전 포함된 경우 최장 일치를 우선 보존한다
     clean_raw = re.sub(r"[「」『』]", " ", raw or "")
     matches = []
-    for official in set(LAW_ALIASES.values()):
+    for official in (set(LAW_ALIASES.values()) | CORE_LEGAL_CODES):
         pattern = re.compile(r"(?<![가-힣])" + re.escape(official).replace(r"\ ", r"\s*")
                              + r"(?:\s*시행(?:령|규칙))?(?=$|[^가-힣]|(?:을|를|에|의|은|는)(?:\s|$))")
         for match in pattern.finditer(clean_raw):
@@ -264,15 +267,31 @@ def law_name_suffix(raw: str) -> str:
     return " ".join(kept)
 
 
+# 기본 주요 법전 (약칭 매핑과 별도로 단독 법령명으로 최우선 인식)
+CORE_LEGAL_CODES = {"민법", "형법", "상법", "헌법", "대한민국헌법", "민사소송법", "형사소송법", "행정소송법", "국가배상법", "근로기준법"}
+
 LAW_NAME_ENUMERATORS = {"및", "또는"}
 LAW_KIND_TAIL_RE = re.compile(r"(?:법|법률|령|규칙|조례)$")
+# 일반 법률 행위·위반 명사는 법령명 내부 연결어('및') 앞 토큰이 될 수 없다 (오탐 방지)
+NON_STATUTE_NOUNS = {
+    "채무불이행", "불법행위", "손해배상", "침해행위", "위반행위", "이행지체", "부당이득",
+    "사기", "배임", "횡령", "과실", "고의", "하자", "의무위반", "계약위반"
+}
 
 
 def _continues_name(token: str) -> bool:
-    """'및' 앞 토큰이 법령명의 일부(조사 없는 명사)인지 본다."""
+    """'및' 앞 토큰이 법령명의 일부(조사 없는 고유 명사)인지 판별한다.
+
+    '학교폭력예방 및 대책에 관한 법률'의 '학교폭력예방'은 True이지만,
+    '채무불이행 및 민법 제750조'의 '채무불이행'은 법률행위 명사이므로 False이다.
+    """
+    clean = re.sub(r"^[의에을를은는이가와과]+", "", token).strip()
+    if clean in NON_STATUTE_NOUNS or token.startswith("의"):
+        return False
     return (bool(re.fullmatch(r"[가-힣A-Za-z·]{2,}", token)) and not LAW_KIND_TAIL_RE.search(token)
             and token[-1] not in SENTENCE_TAILS and token[-1] not in JOSA_TAILS
             and token not in LAW_NAME_PREFIX_NOISE)
+
 
 
 def _joins_forward(tokens) -> bool:

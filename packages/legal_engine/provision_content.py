@@ -29,6 +29,9 @@ PERIOD_CLAIM_RE = re.compile(
     r"^\s*(?:은|는|이|가|도)\s*(?P<e>\d+)\s*(?P<ue>일|개월|년)\s*(?=[,，]|이다|으로|$)"
 )
 PERIOD_ANY_RE = re.compile(r"(?P<n>\d+)\s*(?P<u>일|개월|년)(?!\s*[.월])")
+# 배수(N배) 패턴: "3배", "5배를 넘지 아니하는", "5배의" 등 법정 증액 및 손해배상 배수 대조
+MULTIPLIER_RE = re.compile(r"(?<!\d)(?P<m>\d+)\s*배(?=(?:를|의|에|로|까지|도|만|\s|[.,()，。]|$))")
+
 # 날짜 속 숫자("2026년 7월 8일")는 기간이 아니다.
 DATE_CONTEXT_RE = re.compile(r"\d+\s*[년월.]\s*$")
 TERM_RE = re.compile(r"[가-힣]{2,}")
@@ -86,7 +89,13 @@ def _all_periods(text: str) -> List[Tuple[int, str]]:
     return [(int(m.group("n")), m.group("u")) for m in PERIOD_ANY_RE.finditer(text or "")]
 
 
+def _multipliers(text: str) -> List[int]:
+    """본문에서 배수(N배) 수치를 추출한다(예: 3배, 5배)."""
+    return [int(m.group("m")) for m in MULTIPLIER_RE.finditer(text or "")]
+
+
 def _terms(text: str) -> List[str]:
+
     out = []
     for token in TERM_RE.findall(text or ""):
         for tail in JOSA_TAILS:
@@ -126,9 +135,11 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
         return {"status": "UNVERIFIED", "reason": "조문 본문 없음"}
     claimed_fractions = _fractions(claim)
     claimed_periods = _claimed_periods(claim)
+    claimed_multipliers = _multipliers(claim)
     scoped = _scoped_body(body, subject)
     body_fractions = set(_fractions(scoped)) or set(_fractions(body))
     body_periods = set(_all_periods(scoped)) or set(_all_periods(body))
+    body_multipliers = set(_multipliers(scoped)) or set(_multipliers(body))
     mismatches: List[Dict[str, str]] = []
     matched: List[str] = []
     for fraction in claimed_fractions:
@@ -145,6 +156,12 @@ def compare_claim_to_provision(claim: Optional[str], provision_text: str, *, num
             matched.append(label)
         elif same_unit:
             mismatches.append({"claimed": label, "official": ", ".join(f"{n}{unit}" for n in same_unit)})
+    for mult in claimed_multipliers:
+        label = f"{mult}배"
+        if mult in body_multipliers:
+            matched.append(label)
+        elif body_multipliers:
+            mismatches.append({"claimed": label, "official": ", ".join(f"{b}배" for b in sorted(body_multipliers))})
     if mismatches:
         return {"status": "CONTRADICTED", "basis": "NUMERIC", "mismatches": mismatches, "matched": matched}
     modality = None if numbers_only else modality_conflict(claim, scoped)

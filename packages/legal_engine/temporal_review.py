@@ -202,15 +202,22 @@ def reference_for(citation, sentence: str, document_text: str, case_date: Option
 
 def review_temporal_application(citation, versions: List[Dict[str, Any]], reference: Dict[str, Any],
                                 *, criminal: bool = False) -> Optional[Finding]:
-    """버전이 둘 이상이고 문서가 조문 내용을 주장했을 때만 판단한다."""
-    if len(versions) < 2:
+    """버전이 둘 이상이거나 행위 당시 부존재하던 신설 조항일 때 행위시법 적용 여부를 판단한다."""
+    if not versions:
+        return None
+    when = reference.get("date")
+    earliest_start = min((v.get("effective_from") for v in versions if v.get("effective_from")), default=None)
+
+    # 신설 조항 소급 적용 체크: 행위 당시 조문 자체가 아직 제정/시행되지 않은 경우
+    is_not_yet_enacted = bool(when and earliest_start and earliest_start > when)
+
+    if len(versions) < 2 and not is_not_yet_enacted:
         return None
     results = [r for r in version_outcomes(citation, versions) if r["outcome"]["status"] in ("VERIFIED", "CONTRADICTED")]
-    if len(results) < 2:
+    if len(results) < 2 and not is_not_yet_enacted:
         return None
     matching = [r for r in results if r["outcome"]["status"] == "VERIFIED"]
-    current = next((r for r in results if not r["version"].get("effective_to")), results[-1])
-    when = reference.get("date")
+    current = next((r for r in results if not r["version"].get("effective_to")), results[-1] if results else {"version": versions[-1], "outcome": {}})
     ref = next((r for r in results if when and _covers(r["version"], when)), None)
     claim = (citation.attributes or {}).get("claim_text") or ""
     values = "; ".join(f"{_label(r['version'])}: {_official_values(r['outcome'])}" for r in results)
@@ -218,7 +225,11 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
     basis_note = reference.get("note") or ""
     legal_basis = [CRIMINAL_BASIS] if criminal else []
 
-    if when and ref is None:
+    if is_not_yet_enacted:
+        rule, status, severity = "TEMPORAL.STATUTE_NOT_YET_ENACTED", VerificationStatus.CONTRADICTED, Severity.HIGH
+        title_tail = (f"행위 당시({when}) 부존재하던 신설 조항 소급 적용 (최초 시행일 {earliest_start}) — "
+                      f"행위시법 원칙 위반(RETROACTIVE_APPLICATION_ERROR)")
+    elif when and ref is None:
         rule, status, severity, title_tail = ("TEMPORAL.REVIEW_NEEDED", VerificationStatus.UNVERIFIED, Severity.INFO,
                                               f"기준일 {when}에 시행된 버전을 확보하지 못했다")
     elif when and ref in matching:
@@ -227,9 +238,9 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
         title_tail = f"기준일 {when} 시행 버전({_label(ref['version'])})과 일치" + (
             f" — 현행과 다름(현행 {_official_values(current['outcome'])})" if differs else "")
     elif when and current in matching:
-        rule, status, severity = "TEMPORAL.CURRENT_ONLY_MATCH", VerificationStatus.SUSPICIOUS, Severity.MEDIUM
-        title_tail = (f"현행 버전과만 일치 — 기준일 {when} 시행 버전({_label(ref['version'])})은 "
-                      f"{_official_values(ref['outcome'])}")
+        rule, status, severity = "TEMPORAL.CURRENT_ONLY_MATCH", VerificationStatus.SUSPICIOUS, Severity.HIGH
+        title_tail = (f"증액·개정 규정 소급 적용 오류 — 기준일 {when} 당시 법정 규정은 {_official_values(ref['outcome'])}"
+                      f"(현행 {_official_values(current['outcome'])}, RETROACTIVE_APPLICATION_ERROR)")
     elif not matching:
         rule, status, severity = "TEMPORAL.NO_VERSION_MATCH", VerificationStatus.CONTRADICTED, Severity.HIGH
         title_tail = f"어느 시행 버전과도 다르다({values})"
@@ -262,7 +273,7 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
         confidence=0.85 if status == VerificationStatus.CONTRADICTED else 0.6, confidence_features=features,
         document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
         engine=ENGINE_NAME, advisory_only=status == VerificationStatus.VERIFIED,
-        tags=["LEGAL", "STATUTE", "TEMPORAL"],
+        tags=["LEGAL", "STATUTE", "TEMPORAL"] + (["RETROACTIVE_APPLICATION_ERROR"] if "RETROACTIVE_APPLICATION_ERROR" in title_tail else []),
         evidence=[Evidence.create(description=f"시행 버전 {_label(r['version'])}", grade=EvidenceGrade.A,
                                   excerpt=paragraph_text(r["version"].get("text") or "", citation.paragraph)[:300])
                   for r in results[:4]])

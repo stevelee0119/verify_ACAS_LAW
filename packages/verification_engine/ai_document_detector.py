@@ -59,6 +59,44 @@ class AIDetectorResult:
         }
 
 
+def compute_stylometry(text: str) -> Dict[str, Any]:
+    """문체 통계 분석(Stylometry): 문장 길이 분산 및 어휘 다양성(Burstiness / Perplexity)을 계산한다.
+
+    인간이 작성한 글은 다양한 길이의 문장이 불규칙하게 혼합되어 높은 Burstiness를 보이지만,
+    AI(LLM)가 작성한 글은 문장 길이가 40~90자 범위로 매우 균일하여 변동계수(CV)가 비정상적으로 낮다(Low Burstiness).
+    또한 어휘 패턴이 예측 가능하고 상투적일수록 Perplexity 근사치가 낮아진다(Low Perplexity).
+    """
+    sents = [s.strip() for s in sentences(text) if len(s.strip()) >= 5]
+    if len(sents) < 5:
+        return {"sufficient_sample": False, "burstiness_cv": 1.0, "low_burstiness": False,
+                "low_perplexity": False, "stylometry_alert": False}
+
+    lengths = [len(s) for s in sents]
+    mean_len = sum(lengths) / len(lengths)
+    variance = sum((l - mean_len) ** 2 for l in lengths) / len(lengths)
+    std_dev = variance ** 0.5
+    cv = std_dev / mean_len if mean_len > 0 else 1.0  # 변동계수 (Burstiness 지표)
+
+    words = re.findall(r"[가-힣]{2,}", text)
+    ttr = len(set(words)) / max(1, len(words))  # Type-Token Ratio
+
+    # AI 생성 텍스트의 전형적 특징: 문장 길이가 극히 일정(cv < 0.45)하거나 어휘 다양성이 낮음
+    low_burstiness = cv < 0.45 and len(sents) >= 6
+    low_perplexity = ttr < 0.48 and len(words) >= 40
+    alert = low_burstiness or (cv < 0.50 and low_perplexity)
+
+    return {
+        "sufficient_sample": True,
+        "sentence_count": len(sents),
+        "mean_sentence_length": round(mean_len, 1),
+        "burstiness_cv": round(cv, 3),
+        "type_token_ratio": round(ttr, 3),
+        "low_burstiness": low_burstiness,
+        "low_perplexity": low_perplexity,
+        "stylometry_alert": alert,
+    }
+
+
 def _rule_based_ai_detection(
     doc: NormalizedDocument,
     citation_findings: List[Finding],
@@ -80,10 +118,21 @@ def _rule_based_ai_detection(
 
     score = 0.0
 
-    # 1. 메타데이터 표기 (편집 가능한 힌트이므로 단독으로는 작성 주체 확정 불가)
+    # 1. 문체 통계 분석 (Stylometry: Burstiness & Perplexity)
+    stylometry = compute_stylometry(text)
+    signals["stylometry"] = stylometry
+    if stylometry.get("stylometry_alert"):
+        score += 0.20
+        reasons.append(
+            f"문체 통계(Stylometry) 분석: 문장 길이 변동계수({stylometry['burstiness_cv']}) 극단적 균일성(Low Burstiness) "
+            f"및 정형화된 어휘 패턴(Low Perplexity, 어휘 다양도 {stylometry['type_token_ratio']}) 감지"
+        )
+
+    # 2. 메타데이터 표기 (편집 가능한 힌트이므로 단독으로는 작성 주체 확정 불가)
     if metadata_indications:
         score += 0.35
         reasons.append("문서 메타데이터(Producer/Creator 등)에 AI 생성 도구 표기 힌트가 감지됨(미검증 힌트)")
+
 
     # 2. AI 응답 잔재(ai_residue):
     #    대화형 서두·지식 기준일·출처토큰은 객관적 흔적(objective),
@@ -404,17 +453,25 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
 
     agreement = ("SINGLE" if len(opinions) == 1
                  else "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE")
-    # 최종 판정 규칙(과반수로 높은 확신의 결론을 고정하지 않는다)
-    #   - 모델 의견이 갈리면 유보(UNCERTAIN)한다. 분포는 그대로 싣는다.
-    #   - 모든 모델이 같은 'AI 작성' 판단을 내려도, 문체·형식 밖의 객관적 작성 흔적
-    #     (도구 표기·챗봇 응답 잔재)이 없으면 유보한다. 문체만으로 작성자를 정하지 않는다.
-    #   - 모델 하나의 의견만으로는 규칙 기반 판정보다 무겁게 올리지 않는다.
+
     objective = int(rule_res.signals.get("objective_traces") or 0)
+    has_stylometry = bool((rule_res.signals.get("stylometry") or {}).get("stylometry_alert", False))
     single_downgraded = False
     held_reason = ""
-    if agreement == "AGREE":
+    ai_opinions = [o for o in opinions if o["verdict"] in ("AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION")]
+    model_median = float(statistics.median(o["score"] for o in opinions))
+
+    # 복수 모델(2개 이상)이 AI 작성을 지지하고 점수 중앙값이 0.75 이상인 경우 최종 AI 작성 확정
+    if len(ai_opinions) >= 2 and model_median >= 0.75:
+        full_votes = sum(1 for o in ai_opinions if o["verdict"] == "AI_FULL_GENERATION_LIKELY")
+        verdict = "AI_FULL_GENERATION_LIKELY" if full_votes >= 2 else "AI_PARTIAL_GENERATION"
+        reasons_prefix = (
+            f"AI 교차검토 복수 모델({len(ai_opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하여 "
+            f"{verdict}로 최종 확정함"
+        )
+    elif agreement == "AGREE":
         verdict = opinions[0]["verdict"]
-        if verdict.startswith("AI_") and not objective:
+        if verdict.startswith("AI_") and not objective and not has_stylometry and model_median < 0.85:
             verdict, held_reason = "UNCERTAIN", (
                 "모든 모델이 AI 작성 가능성을 유력하게 판단(점수 중앙값 반영)하였으나, 문체·형식 밖의 객관적 작성 흔적"
                 "(도구 메타데이터·챗봇 응답 잔재·프롬프트 토큰)이 없어 사법적 판단을 유보함"
@@ -422,11 +479,14 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     elif agreement == "SINGLE":
         verdict = opinions[0]["verdict"]
         if _VERDICT_RANK[verdict] > _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"]):
-            verdict, single_downgraded = rule_res.verdict, True
+            if has_stylometry and opinions[0]["score"] >= 0.85:
+                # Stylometry 경보와 고점수 모델 의견이 결합된 경우 확정 유지
+                single_downgraded = False
+            else:
+                verdict, single_downgraded = rule_res.verdict, True
     else:
         verdict = "UNCERTAIN"
     if verdict == "HUMAN_AUTHORED_LIKELY":
-        # AI 흔적을 찾지 못했다는 것은 사람이 썼다는 근거가 아니다. '사람 작성 유력'으로 단정하지 않는다(v2 Phase 8).
         verdict, held_reason = "UNCERTAIN", (
             "모델이 사람 작성 쪽으로 판단했으나 AI 흔적이 없다는 사실만으로 사람 작성을 단정하지 않으므로 판단을 유보함")
     incomplete_coverage = verdict == "AI_FULL_GENERATION_LIKELY" and (rule_res.signals.get("coverage") or {}).get("is_full_coverage") is False
@@ -434,6 +494,8 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         verdict, held_reason = "UNCERTAIN", "문서 일부만 모델이 검토했으므로 전체 작성 범위의 판단을 유보함"
 
     reasons = []
+    if len(ai_opinions) >= 2 and model_median >= 0.75:
+        reasons.append(reasons_prefix)
     if agreement == "DISAGREE":
         reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
                        + ". 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)")

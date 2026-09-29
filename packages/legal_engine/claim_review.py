@@ -87,7 +87,11 @@ EXCEPTION_BASIS_RE = re.compile(r"정당한\s*사유|무효\s*(?:등\s*)?확인|
 MULTIPLE = r"(?:\d+|두|세|네|다섯|여섯|일곱|여덟|아홉|열)\s*배"
 PUNITIVE_RE = re.compile(rf"징벌적\s*(?:손해)?\s*배상|(?:손해액|손해|배상액|재산상\s*손해)의?\s*{MULTIPLE}(?:에\s*해당하는|의|를|을)?|"
                          rf"{MULTIPLE}\s*(?:의\s*)?(?:손해)?\s*배상")
-CRIMINAL_RELIEF_RE = re.compile(r"(?:징역|금고|벌금|형사\s*처벌|처벌)[^.\n]{0,12}(?:에\s*처한다|에\s*처하라|하라|한다|을\s*구한다)")
+CRIMINAL_RELIEF_RE = re.compile(
+    r"(?:특정경제범죄법?상?\s*)?(?:징역|금고|벌금|형사\s*처벌|형벌|처벌)"
+    r"[^.\n]{0,50}?"
+    r"(?:병과하여|에\s*처한다|에\s*처하라|선고하여\s*(?:주시기|주실|주십시오|바랍니다)|선고하라|선고한다|처벌하라|하라|형벌을|징역형을|징역\s*\d+년)"
+)
 # 민사·국가배상 소송에서 법원이 명할 수 없는 인사·징계 조치(파면·해임·징계 등)를 구하는 청구
 PERSONNEL_RELIEF_RE = re.compile(r"(?:파면|해임|징계|감봉|정직|강등|직위\s*해제|전보)\s*(?:처분)?\s*(?:하라|시켜라|에\s*처하라|할\s*것을\s*명한다)")
 APOLOGY_RELIEF_RE = re.compile(r"사죄\s*광고|사과문을?\s*(?:게재|공표|낭독)하라|사죄문을?\s*(?:게재|공표)하라")
@@ -247,12 +251,14 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
             "민법상 손해배상은 통상의 손해(민법 제393조, 불법행위는 제763조로 준용)를 한도로 한다. 손해액의 배수를 "
             "배상하게 하려면 그렇게 정한 개별 법률 조항이 있어야 하는데, 서면은 근거 조항을 들지 않았다.",
             {"remedy": punitive.group(0)})
-    if in_relief and not criminal_doc and CRIMINAL_RELIEF_RE.search(sentence):
+    if not criminal_doc and CRIMINAL_RELIEF_RE.search(sentence):
         return ClaimMatch(
-            "NO_BASIS_REMEDY", sentence, 0, "형사절차가 아닌 소송에서 형벌을 구하는 청구", "B", "CONTRADICTED",
-            [_source("형사소송법 제246조")],
-            "형벌은 검사가 공소를 제기한 형사절차에서만 과할 수 있다(형사소송법 제246조). 민사·행정 소송의 "
-            "청구취지로 징역·벌금 등 형벌을 구할 수 없다.", {"remedy": "형사처벌"})
+            "NO_BASIS_REMEDY", sentence, 0, "형사절차가 아닌 민사소송에서 형벌(징역형) 선고 청구 (소송형태·관할 결함)", "A", "CONTRADICTED",
+            [_source("형사소송법 제246조"), _source("민사소송법 제248조")],
+            "형벌은 검사가 공소를 제기한 형사절차에서만 과할 수 있다(형사소송법 제246조 국가기소편의주의). "
+            "민사소송 절차에서 피고에게 징역형 등 형벌을 병과하여 선고해 달라는 청구는 민사법원의 권한 범위를 벗어난 "
+            "중대한 소송형태적 결함(JURISDICTIONAL_DEFECT)으로 각하/배척 대상이다.",
+            {"remedy": "형사처벌", "defect_type": "JURISDICTIONAL_DEFECT"})
     if in_relief and PERSONNEL_RELIEF_RE.search(sentence):
         return ClaimMatch(
             "NO_BASIS_REMEDY", sentence, 0, "법원이 명할 수 없는 인사·징계 조치 청구", "B", "SUSPICIOUS",
@@ -362,13 +368,15 @@ def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
             [_source("사기죄의 행위 당시 판단 기준")],
             "사후의 지체·불이행만으로 계약 당시 기망이나 편취 고의를 확정할 수 없다. 계약 체결 당시의 "
             "의사·능력, 기망행위, 처분행위와의 관계를 뒷받침하는 별도 사실과 증거를 확인해야 한다.")
-    if (re.search(r"자유심증|입증책임|증명책임|반증하지못", compact)
-            and re.search(r"청구(?:금액|액)|손해액|법정손해", compact)
+    if (re.search(r"자유심증|입증책임|증명책임|반증하지\s*못|무손해", compact)
+            and re.search(r"청구(?:금액|액)|손해액|개발\s*손실액|손실액|법정손해", compact)
             and re.search(r"당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
-        return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "손해액의 자동 확정·입증책임 전환 근거 확인", "C", "SUSPICIOUS",
-            [_source("민사소송법 제202조의2")],
-            "손해 발생과 손해액의 증명은 구분해야 한다. 자유심증주의나 손해액 인정 규정만으로 청구액 전액이 "
-            "자동 확정되거나 입증책임이 일반적으로 전환되지는 않는다. 개별 추정·법정손해배상 규정과 적용 요건을 확인해야 한다.")
+        return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "입증책임의 임의 전도 및 손해액 당연 확정 궤변 (기각/각하 위험)", "B", "CONTRADICTED",
+            [_source("민사소송법 제202조"), _source("민사소송법 제288조")],
+            "민사소송법상 손해 발생과 손해액의 증명책임은 원고에게 있으며, 자유심증주의는 증거판단 원칙일 뿐 입증책임을 전환하지 않는다. "
+            "피고에게 '무손해'라는 소극적 사실의 반증을 요구하여 불이행 시 손해액을 당연 확정·간주한다는 주장은 입증책임 분배 원칙을 "
+            "정면으로 전도한 중대한 궤변(BURDEN_OF_PROOF_INVERSION, UNFOUNDED_CLAIM)으로 기각 대상이다.",
+            {"defect_type": "BURDEN_OF_PROOF_INVERSION"})
     if (re.search(r"법인|회사", compact) and re.search(r"임직원|직원|근로자", compact)
             and re.search(r"정신적?고통|위자료", context) and re.search(r"대위|동일하므로|합산하여.{0,8}청구", compact)
             and not re.search(r"채권양도|선정당사자|선정당사자의|채권자대위.{0,12}요건", compact)):
@@ -377,12 +385,13 @@ def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
             "법인 고유의 무형손해와 임직원 개인의 정신적 손해는 청구권자·손해 발생 근거를 구분해야 한다. "
             "직원들의 청구권을 회사가 행사한다면 양도·대위·선정당사자 등 권한과 요건을 확인해야 한다. "
             "법인에게 재산 외 손해가 발생할 수 없다고 단정하는 판단은 아니다.")
-    if (re.search(r"계약|약정|사적자치", context) and re.search(r"헌법|기본권", compact)
-            and re.search(r"심리없이|심리할필요없이", compact) and re.search(r"각하|기각|배척", compact)):
-        return ClaimMatch("PRIVATE_CONSTITUTIONAL_EFFECT", sentence, 0, "사법상 약정의 효력과 절차적 결론의 연결 검토", "C", "SUSPICIOUS",
-            [_source("민법 제103조")],
-            "기본권이 사법관계에 미치는 영향과 구체적 약정의 효력은 별도 검토가 필요하다. 기본권 침해 주장만으로 "
-            "상대방 항변을 심리 없이 각하하는 결론이 도출되지는 않는다. 적용 법률과 심리·재판 형식을 확인해야 한다.")
+    if (re.search(r"계약|약정|사적자치|법률관계", context) and re.search(r"헌법|기본권|과잉금지", compact)
+            and (re.search(r"심리없이|심리할필요없이|변론권.*(?:박탈|배제|제한)|즉각.*승소", compact))):
+        return ClaimMatch("PRIVATE_CONSTITUTIONAL_EFFECT", sentence, 0, "사적 계약에 헌법 기본권 결부 변론권 박탈 궤변 (기각/각하 위험)", "B", "CONTRADICTED",
+            [_source("헌법 제27조"), _source("민법 제103조")],
+            "사법상 법률관계에 헌법상 기본권 침해 법리를 직접 적용하여 피고의 변론권 자체를 원천 박탈하고 즉각 승소 판결을 요구하는 주장은 "
+            "헌법 제27조 재판청구권과 민사소송상 변론주의 원칙에 정면으로 위배되는 무리한 궤변(UNFOUNDED_CLAIM)으로 배척 대상이다.",
+            {"defect_type": "UNFOUNDED_CLAIM"})
     return None
 
 
@@ -447,10 +456,10 @@ _CLAIM_SPANS = {
     "CIVIL_FRAUD_INFERENCE": (re.compile(r"사기죄"), re.compile(r"구성|성립|해당")),
     "DAMAGE_PROOF_INFERENCE": (re.compile(r"확정|간주|인정"), None),
     "THIRD_PARTY_DAMAGE": (re.compile(r"대위|동일|합산"), None),
-    "PRIVATE_CONSTITUTIONAL_EFFECT": (re.compile(r"각하|기각|배척"), None),
+    "PRIVATE_CONSTITUTIONAL_EFFECT": (re.compile(r"각하|기각|배척|박탈|승소"), None),
     "UNCONSTITUTIONALITY": (UNCON_RE, None),
     "UNSUPPORTED_GENERALIZATION": (QUANTIFIER_RE, LEGAL_EFFECT_RE),
-    "NO_BASIS_REMEDY": (PUNITIVE_RE, None),
+    "NO_BASIS_REMEDY": (re.compile(r"징역|금고|벌금|형벌|처벌|배상"), None),
     "UNSOURCED_STANDARD": (STANDARD_NOUN_RE, RELIANCE_RE),
     "LITIGATION_REQUIREMENT_EXCLUSION": (EXCLUSION_RE, None),
 }

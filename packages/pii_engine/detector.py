@@ -55,9 +55,16 @@ class PIIMatch:
 # 응답이 출력 검사에서 격리됐다. 줄바꿈은 넘지 않는다.
 # 외국인등록번호 및 가상/변형 번호(9로 시작 등)까지 포괄하도록 [1-9]로 확장한다.
 RRN_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-9])(\d{6})(?!\d)")
-# 주민등록번호 라벨이 명시된 문맥에서는 뒷자리 첫 글자와 관계없이 13자리 번호를 개인정보로 포착한다.
-RRN_LABELLED_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*(\d{2}\d{2}\d{2}[ \t]*[-–]?[ \t]*\d{7})(?!\d)")
+# 뒷자리가 별표 등으로 일부 마스킹된 주민등록번호(예: 780512-1******)
+RRN_MASKED_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-9])([*●xX]{6})(?!\d)")
+# 주민등록번호 라벨이 명시된 문맥에서는 뒷자리 첫 글자와 관계없이 13자리 번호 또는 마스킹 번호를 개인정보로 포착한다.
+RRN_LABELLED_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*(\d{2}\d{2}\d{2}[ \t]*[-–]?[ \t]*[\d*●xX]{7})(?!\d)")
 PHONE_RE = re.compile(r"(?<!\d)(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})(?!\d)")
+# 차량번호: "12가 3456", "345나 7890", "서울 12가 3456" 등 (일반 명사 '차량' 오탐 방지 및 조사 허용)
+VEHICLE_RE = re.compile(
+    r"(?<![0-9])(?:(?:서울|경기|인천|강원|충북|충남|전북|전남|경북|경남|제주|부산|대구|광주|대전|울산|세종)\s*)?"
+    r"\d{2,3}\s*[가-힣]\s*\d{4}(?=[을를은는이가의에도만로]|으로|\s|[.,!?()~-]|$)(?![0-9])"
+)
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ACCOUNT_RE = re.compile(r"(?<!\d)\d{2,3}[-\s]\d{2,6}[-\s]\d{2,6}(?:[-\s]\d{1,6})?(?!\d)")
 MILITARY_ID_RE = re.compile(
@@ -157,6 +164,7 @@ NAME_TITLE_RE = re.compile(
 
 DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("RRN", RRN_RE, 1.0),
+    ("RRN", RRN_MASKED_RE, 0.95),
     ("EMAIL", EMAIL_RE, 1.0),
     ("PHONE", PHONE_RE, 0.95),
     ("PASSPORT", PASSPORT_RE, 0.8),
@@ -164,6 +172,7 @@ DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("ACCOUNT", ACCOUNT_RE, 0.6),
     ("DOB", DOB_RE, 0.9),
     ("ADDRESS", ADDRESS_RE, 0.85),
+    ("VEHICLE", VEHICLE_RE, 0.9),
 ]
 
 RRN_WEIGHTS = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]

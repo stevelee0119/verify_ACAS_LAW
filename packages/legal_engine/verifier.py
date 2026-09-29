@@ -316,7 +316,7 @@ class LegalVerifier:
                 Finding.create(
                     type=FindingType.CASE_NOT_FOUND,
                     status=VerificationStatus.NOT_FOUND,
-                    severity=Severity.HIGH,
+                    severity=Severity.CRITICAL,
                     evidence_grade=EvidenceGrade.B,
                     title=title,
                     detail=(
@@ -333,7 +333,7 @@ class LegalVerifier:
                     span=citation.span,
                     engine=ENGINE_NAME,
                     source_record_ids=[r.source_record_id for r in verdict.source_records],
-                    tags=["LEGAL", "CASE"],
+                    tags=["LEGAL", "CASE", "FAKE_PRECEDENT"],
                     evidence=[
                         Evidence.create(
                             description="공식 Source 조회 결과 없음",

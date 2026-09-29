@@ -266,14 +266,14 @@ def _law_absent(verdict, response):
     verdict.review["law_candidates"] = candidates
     ids = [r.source_record_id for r in verdict.source_records]
     verdict.findings.append(Finding.create(
-        type=FindingType.STATUTE_NONEXISTENT, status=VerificationStatus.NOT_FOUND, severity=Severity.HIGH,
+        type=FindingType.STATUTE_NONEXISTENT, status=VerificationStatus.NOT_FOUND, severity=Severity.CRITICAL,
         evidence_grade=EvidenceGrade.B,
         title=f"법령 목록에서 찾지 못한 법령(NOT_FOUND_LAW): {citation.law_name}",
         detail=("국가법령정보 법령 목록에서 같은 이름의 법령을 찾지 못했다(조회 범위 내 미발견, 부존재 확정 아님). "
                 + (f"비슷한 이름: {', '.join(candidates)}. " if candidates else "비슷한 이름의 법령도 없다. ")
                 + "법령명 오기·약칭·폐지 여부를 원문으로 확인해야 한다."),
         document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
-        engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "STATUTE", "NOT_FOUND_LAW"],
+        engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "STATUTE", "NOT_FOUND_LAW", "FAKE_REGULATION"],
         confidence_features={"verdict_label": "NOT_FOUND_LAW", "absence_scope": "SEARCHED_SCOPE_ONLY",
                              "law_candidates": candidates, "law_name": citation.law_name},
         evidence=[Evidence.create(description="법령 목록 조회 결과", grade=EvidenceGrade.B,
