@@ -399,8 +399,8 @@ def extract_from_text(
         head_id, position = citations[-1].citation_id, m.end()
         while (more := CONTINUED_ARTICLE_RE.match(text, position)):
             bridge = text[position:more.start("ref")]
-            # 사이에 다른 법령명이 있으면 이어진 조문이 아니다('불법행위'의 '불법'은 법령명이 아니다).
-            if re.search(r"[가-힣]+법(?:률)?(?![가-힣])|제\s*\d+\s*조", bridge):
+            # 사이에 다른 법령명('형법과')이 있으면 이어진 조문이 아니다('불법행위'의 '불법'은 법령명이 아니다).
+            if re.search(r"[가-힣]+법(?:률)?(?=[과와은는이가을를의에도만로]|[^가-힣]|$)|제\s*\d+\s*조", bridge):
                 break
             number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
             span_start = more.start("ref")
