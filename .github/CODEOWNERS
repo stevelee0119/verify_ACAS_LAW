@@ -1,0 +1,17 @@
+# 평가 자산·역할 문서는 구현 에이전트가 단독으로 바꾸지 못하게 사용자 검토를 요구한다.
+# (기본 브랜치 보호 규칙에서 "Require review from Code Owners"를 켜야 효력이 있다.)
+/tests/acceptance/                    @stevelee0119
+/tests/fixtures/                      @stevelee0119
+/scripts/eval_testset.py              @stevelee0119
+/scripts/scorecard.py                 @stevelee0119
+/scripts/score_gate.py                @stevelee0119
+/scripts/probe_document.py            @stevelee0119
+/scripts/score_report.py             @stevelee0119
+/scripts/check_case_literals.py       @stevelee0119
+/scripts/review_feedback_report.py    @stevelee0119
+/docs/scorecards/                     @stevelee0119
+/.github/workflows/score-gate.yml     @stevelee0119
+/.github/CODEOWNERS                   @stevelee0119
+/docs/AGENT_ROLES.md                  @stevelee0119
+/AGENTS.md                            @stevelee0119
+/CLAUDE.md                            @stevelee0119

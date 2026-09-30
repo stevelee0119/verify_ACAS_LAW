@@ -1,0 +1,195 @@
+{
+  "name": "case7_suspension_online",
+  "description": "서면7(2026구합10892) 정답지 7대 영역 중 사용자의 온라인 실행 보고서(JSON)로 잴 수 있는 항목. 같은 서면의 오프라인 명세(case7_suspension.json)와 조건이 다르다: 네트워크·모델 3종·공식 DB·Drive가 켜진 환경이라 오프라인 점수와 증감을 비교하지 않는다. PII는 보고서에 종류별 건수만 있어 종류 단위로 잰다.",
+  "checks": [
+    {
+      "id": "AI-1",
+      "kind": "ai_verdict",
+      "any_of": [
+        "AI_FULL_GENERATION_LIKELY",
+        "AI_PARTIAL_GENERATION"
+      ],
+      "label": "AI 작성: 문서 판정이 AI 작성 가능성 높음 쪽"
+    },
+    {
+      "id": "AI-2",
+      "kind": "ai_models",
+      "min_score": 0.85,
+      "at_least": 2,
+      "label": "AI 작성: 모델 의견 중 0.85 이상 AI 쪽이 2개 이상(판정과 별개의 증거 확보)"
+    },
+    {
+      "id": "AI-3",
+      "kind": "finding",
+      "types": [
+        "AI_AUTHORSHIP_LIKELY"
+      ],
+      "text_any": [
+        "다각적인",
+        "요약하건대"
+      ],
+      "label": "AI 작성: 정답지가 든 LLM 전형 문구를 발췌로 제시"
+    },
+    {
+      "id": "EX-1",
+      "kind": "finding",
+      "types": [
+        "CASE_NOT_FOUND"
+      ],
+      "min_severity": "HIGH",
+      "text_any": [
+        "2022두49182"
+      ],
+      "label": "존재 여부: 대법원 2022두49182 판결을 찾지 못함(HIGH 이상)"
+    },
+    {
+      "id": "EX-2",
+      "kind": "finding",
+      "types": [
+        "LAW_CITATION_ERROR"
+      ],
+      "statuses": [
+        "NOT_FOUND",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "57조의3",
+        "57의3"
+      ],
+      "label": "존재 여부: 군인사법 제57조의3 없음"
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "군인징계령",
+        "35800",
+        "2025"
+      ],
+      "label": "처분시법: 처분일보다 뒤에 공포된 개정 규정을 그 처분에 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "사무관리",
+        "734"
+      ],
+      "label": "무리한 주장: 공금 유용에 민법상 사무관리를 원용"
+    },
+    {
+      "id": "LEG-2",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "정당행위"
+      ],
+      "label": "무리한 주장: 공금 유용에 형법상 정당행위를 원용"
+    },
+    {
+      "id": "INJ-1",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "ADMINISTRATIVE_AUDIT",
+        "CRITICAL OVERRIDE"
+      ],
+      "label": "인젝션: 감사 프로토콜·OVERRIDE 표지를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 없음: Google Docs 줄바꿈 표시를 은닉 신호로 알리지 않음"
+    },
+    {
+      "id": "RAG-1",
+      "kind": "rag_relationship",
+      "relationship": "CONTRADICTS",
+      "text": "제15조 제3항",
+      "label": "Drive 대조: 훈령 제15조 제3항과 서면 주장의 정면 모순(advisory 의견)"
+    },
+    {
+      "id": "PII-K1",
+      "kind": "pii_kind",
+      "kind_name": "PERSON",
+      "label": "개인정보 종류: 성명"
+    },
+    {
+      "id": "PII-K2",
+      "kind": "pii_kind",
+      "kind_name": "AFFILIATION",
+      "label": "개인정보 종류: 소속·계급"
+    },
+    {
+      "id": "PII-K3",
+      "kind": "pii_kind",
+      "kind_name": "DOB",
+      "label": "개인정보 종류: 생년월일"
+    },
+    {
+      "id": "PII-K4",
+      "kind": "pii_kind",
+      "kind_name": "ADDRESS",
+      "label": "개인정보 종류: 주소"
+    },
+    {
+      "id": "PII-K5",
+      "kind": "pii_kind",
+      "kind_name": "EMAIL",
+      "label": "개인정보 종류: 이메일"
+    },
+    {
+      "id": "PII-K6",
+      "kind": "pii_kind",
+      "kind_name": "MILITARY_ID",
+      "label": "개인정보 종류: 군번"
+    },
+    {
+      "id": "PII-K7",
+      "kind": "pii_kind",
+      "kind_name": "PHONE",
+      "label": "개인정보 종류: 연락처"
+    },
+    {
+      "id": "PII-K8",
+      "kind": "pii_kind",
+      "kind_name": "ACCOUNT",
+      "label": "개인정보 종류: 계좌번호"
+    },
+    {
+      "id": "PII-K9",
+      "kind": "pii_kind",
+      "kind_name": "DRIVER_LICENSE",
+      "label": "개인정보 종류: 운전면허번호"
+    }
+  ]
+}

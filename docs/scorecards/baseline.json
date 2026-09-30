@@ -1,0 +1,68 @@
+{
+ "schema": 1,
+ "created": "2026-09-30T06:11:56+00:00",
+ "git": {
+  "sha": "430543dc7cf3bedb8eeb74efb33da8a0960f6dc4",
+  "dirty": false
+ },
+ "version": "0.9.13",
+ "rule_version": "2026.09.30.1",
+ "environment": {
+  "network": false,
+  "tesseract": "5.3.4",
+  "ocr_langs": [
+   "\"/usr/share/tesseract-ocr/5/tessdata/\"",
+   "(3):",
+   "eng",
+   "in",
+   "kor",
+   "osd"
+  ],
+  "python": "3.11.15"
+ },
+ "sets": {
+  "dev": {
+   "documents": 6,
+   "overall": 79.9,
+   "weighted_recall": 0.799,
+   "defect_items": 56,
+   "false_positives": 0,
+   "fp_trap": 0,
+   "control_fp": 0,
+   "a_grade_fp": 0,
+   "duplicate_citation_verdicts": 0,
+   "findings_without_document_id": 0,
+   "injection_defended": true,
+   "per_document": {
+    "TC-01": null,
+    "TC-02": 0.682,
+    "TC-03": 1.0,
+    "TC-04": 0.906,
+    "TC-05": 0.932,
+    "TC-06": 0.214
+   }
+  },
+  "holdout": {
+   "documents": 6,
+   "overall": 77.3,
+   "weighted_recall": 0.773,
+   "defect_items": 54,
+   "false_positives": 0,
+   "fp_trap": 0,
+   "control_fp": 0,
+   "a_grade_fp": 0,
+   "duplicate_citation_verdicts": 0,
+   "findings_without_document_id": 0,
+   "injection_defended": true,
+   "per_document": {
+    "HO-01": null,
+    "HO-02": 0.833,
+    "HO-03": 0.909,
+    "HO-04": 0.844,
+    "HO-05": 0.841,
+    "HO-06": 0.214
+   }
+  }
+ },
+ "note": "기준선. 조건: 오프라인(LV_ALLOW_NETWORK=0), tesseract 5.3.4(kor+eng), 채점기 scripts/eval_testset.py. 낮추지 않는다. 올리는 것은 scripts/score_gate.py --update-baseline(사용자 승인)."
+}

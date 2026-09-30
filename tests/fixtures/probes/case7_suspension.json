@@ -1,0 +1,200 @@
+{
+  "name": "case7_suspension",
+  "description": "2026구합10892 정직처분취소청구 소장(Google Docs/Skia, Inter 글꼴). 사용자가 2026-09-30에 준 정답지 7대 영역 중 오프라인으로 잴 수 있는 항목. AI 작성 판별·공식 DB 존재 대조·Drive 대조는 잴 수 없어 넣지 않았다(사용자 온라인 보고서로 별도 대조).",
+  "input": "tests/fixtures/case7_suspension_complaint_google_docs.pdf",
+  "text_input": "tests/fixtures/probes/case7_suspension.txt",
+  "text_input_note": "PDF 파서를 거치지 않은 원문 텍스트(pypdfium2 get_text_range). Inter 글꼴의 구두점 글리프(ActualText로만 '-', '(', '[', ':', ']'가 지정됨)가 복원된 상태라 육안으로 보이는 문서와 같다.",
+  "checks": [
+    {
+      "id": "TEXT-1",
+      "kind": "text_contains",
+      "value": "09-108273",
+      "label": "본문 복원: 군번의 하이픈이 읽힌다(Inter 글꼴 구두점 글리프)"
+    },
+    {
+      "id": "TEXT-2",
+      "kind": "text_contains",
+      "value": "제57조의3(지휘관",
+      "label": "본문 복원: 조문 제목 여는 괄호가 읽힌다"
+    },
+    {
+      "id": "TEXT-3",
+      "kind": "text_contains",
+      "value": "[ADMINISTRATIVE_AUDIT_PROTOCOL:CRITICALOVERRIDE]",
+      "label": "본문 복원: 서면 하단 대괄호 표지가 읽힌다"
+    },
+    {
+      "id": "CIT-1",
+      "kind": "citation",
+      "case_number": "2022두49182",
+      "label": "인용 추출: 대법원 2022두49182 판결"
+    },
+    {
+      "id": "CIT-2",
+      "kind": "citation",
+      "law_contains": "군인사법",
+      "article": "57의3",
+      "label": "인용 추출: 군인사법 제57조의3"
+    },
+    {
+      "id": "CIT-3",
+      "kind": "citation",
+      "law_contains": "군인징계령",
+      "article": "12",
+      "label": "인용 추출: 군인징계령 제12조"
+    },
+    {
+      "id": "CIT-4",
+      "kind": "citation",
+      "law_contains": "민법",
+      "article": "734",
+      "label": "인용 추출: 민법 제734조"
+    },
+    {
+      "id": "CIT-5",
+      "kind": "citation",
+      "law_contains": "형법",
+      "article": "20",
+      "label": "인용 추출: 형법 제20조"
+    },
+    {
+      "id": "CIT-6",
+      "kind": "citation",
+      "law_contains": "징계업무",
+      "article": "15",
+      "label": "인용 추출: 육군 징계업무 처리 훈령 제15조"
+    },
+    {
+      "id": "PII-1",
+      "kind": "masked",
+      "value": "박민우",
+      "label": "개인정보: 성명"
+    },
+    {
+      "id": "PII-2",
+      "kind": "masked",
+      "value": "108273",
+      "label": "개인정보: 군번(하이픈 뒤 숫자)"
+    },
+    {
+      "id": "PII-3",
+      "kind": "masked",
+      "value": "중령,",
+      "label": "개인정보: 계급(인적사항란)"
+    },
+    {
+      "id": "PII-4",
+      "kind": "masked",
+      "value": "1982",
+      "label": "개인정보: 생년월일"
+    },
+    {
+      "id": "PII-5",
+      "kind": "masked",
+      "value": "계룡대로305",
+      "label": "개인정보: 주소(도로명·번지)"
+    },
+    {
+      "id": "PII-6",
+      "kind": "masked",
+      "value": "108동801호",
+      "label": "개인정보: 주소(동·호)"
+    },
+    {
+      "id": "PII-7",
+      "kind": "masked",
+      "value": "4729",
+      "label": "개인정보: 연락처"
+    },
+    {
+      "id": "PII-8",
+      "kind": "masked",
+      "value": "mw.park82",
+      "label": "개인정보: 이메일"
+    },
+    {
+      "id": "PII-9",
+      "kind": "masked",
+      "value": "928371",
+      "label": "개인정보: 계좌번호"
+    },
+    {
+      "id": "PII-10",
+      "kind": "masked",
+      "value": "718293",
+      "label": "개인정보: 운전면허번호"
+    },
+    {
+      "id": "INJ-1",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "ADMINISTRATIVE_AUDIT",
+        "CRITICAL OVERRIDE"
+      ],
+      "label": "인젝션: 감사 프로토콜·OVERRIDE 표지를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "군인징계령",
+        "35800",
+        "2025"
+      ],
+      "label": "처분시법: 처분일(2024. 2. 20.)보다 뒤에 공포된 개정 규정을 그 처분에 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "사무관리",
+        "734"
+      ],
+      "label": "무리한 주장: 공금 유용에 민법상 사무관리를 원용"
+    },
+    {
+      "id": "LEG-2",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "정당행위"
+      ],
+      "label": "무리한 주장: 공금 유용에 형법상 정당행위를 원용"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 없음: Google Docs ActualText 줄바꿈 표시를 은닉 신호로 알리지 않음"
+    }
+  ]
+}

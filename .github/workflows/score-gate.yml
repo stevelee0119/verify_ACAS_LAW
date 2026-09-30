@@ -1,0 +1,74 @@
+name: 점수 게이트
+
+# 고정 시험(개발 시험·홀드아웃)을 오프라인으로 채점해 기준선(docs/scorecards/baseline.json)과 비교한다.
+# 종합점수 하락, 오탐 증가, 문서별 재현율 하락, 인젝션 방어 실패면 실패한다. 봉인 시험은 사용자가 로컬에서 실행한다.
+# 병합을 막으려면 기본 브랜치 보호 규칙에서 이 잡('점수 하락 게이트')을 필수 상태 확인으로 지정해야 한다.
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: score-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  score-gate:
+    name: 점수 하락 게이트
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # shell을 명시해야 bash가 -eo pipefail로 실행된다. 없으면 '| tee' 뒤의 종료 코드가 게이트 실패를 가린다.
+    defaults:
+      run:
+        shell: bash
+    env:
+      LV_ALLOW_NETWORK: "0"
+      LV_PSEUDONYM_SECRET: ci-only-not-a-real-secret
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # 소급 측정 시험(과거 커밋 작업 폴더)이 전체 이력을 쓴다
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      # 기준선은 한국어 OCR이 있는 조건에서 만들었다. CI 본 잡과 같은 설치를 쓴다.
+      - name: 한국어 OCR 엔진 설치
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tesseract-ocr tesseract-ocr-kor tesseract-ocr-eng fonts-nanum
+
+      - name: 의존성 설치
+        run: pip install -r requirements.txt
+
+      - name: 성적표 작성
+        run: python scripts/scorecard.py --out artifacts/scorecard.json | tee artifacts-summary.txt
+
+      - name: 점수 게이트
+        run: python scripts/score_gate.py --current artifacts/scorecard.json --strict-env | tee -a artifacts-summary.txt
+
+      # 사건 값·서면 문구 하드코딩 차단, 측정 도구 자체 시험, 서면별 항목 시험(알려진 미해결은 strict xfail)
+      - name: 수용 시험
+        run: python -m pytest tests/acceptance -q -p no:cacheprovider
+
+      - name: 요약 게시
+        if: always()
+        run: |
+          {
+            echo '### 성적표'
+            echo '```'
+            cat artifacts-summary.txt 2>/dev/null || echo '(없음)'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 성적표 보존
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scorecard
+          path: artifacts/scorecard.json
+          if-no-files-found: ignore

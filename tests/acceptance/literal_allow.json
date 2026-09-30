@@ -1,0 +1,24 @@
+{
+ "note": "사건 서면의 값이 아니라 법령·판례·기관의 공식 표기를 코드가 쓰는 경우의 허용 목록. 평가 에이전트만 올린다. 사건 서면에서 따온 문구는 여기에 올리지 않는다.",
+ "allow": {
+  "packages/legal_engine/temporal_review.py": {
+   "2020도16420": "행위시법 원칙의 공식 근거 판례(대법원 2022. 12. 22. 선고 2020도16420 전원합의체 판결, 국가법령정보센터 precSeq=233049)를 규칙의 근거로 인용"
+  },
+  "packages/adversarial_engine/patterns.py": {
+   "한국의료분쟁조정중재원": "기관의 공식 명칭"
+  },
+  "packages/legal_engine/normalize.py": {
+   "국가를당사자로하는계약에관한법률": "법령의 공식 명칭",
+   "의료기기산업육성및혁신의료기기지원법": "법령의 공식 명칭"
+  },
+  "packages/legal_engine/related_authorities.py": {
+   "국가를당사자로하는계약에관한법률": "법령의 공식 명칭"
+  },
+  "packages/legal_engine/statute_ranges.py": {
+   "국가를당사자로하는계약에관한법률": "법령의 공식 명칭"
+  },
+  "packages/legal_engine/claim_review.py": {
+   "민사소송법제202조": "법령 조문 표기"
+  }
+ }
+}
