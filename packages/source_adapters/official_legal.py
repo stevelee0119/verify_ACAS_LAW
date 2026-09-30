@@ -138,13 +138,25 @@ class OfficialLegalMixin:
             return AdapterResponse(AdapterStatus.READY, [], listed.source_record,
                                    EXACT_LAW_NOT_FOUND + json.dumps(candidates, ensure_ascii=False),
                                    listed.source_records, True)
-        identities = {str(r.get("law_id") or "").lstrip("0") for r in named}
-        if len(identities) != 1 or "" in identities:
+        identities = {str(r.get("law_id") or "").lstrip("0") for r in named if r.get("law_id")}
+        if not identities or "" in identities:
             return AdapterResponse(AdapterStatus.ERROR, [], listed.source_record,
                                    "Missing or ambiguous exact law identity", listed.source_records)
+        # 동명 법령이 전부개정 등으로 복수 law_id를 갖는 경우(예: 근로기준법 구법과 현행법),
+        # 시행일자·공포일자가 가장 최신인 법령의 law_id를 채택하여 연혁 단절을 방지한다.
+        if len(identities) == 1:
+            target_lid = next(iter(identities))
+        else:
+            sorted_named = sorted(
+                named,
+                key=lambda r: str(r.get("effective_from") or r.get("promulgation_date") or ""),
+                reverse=True,
+            )
+            target_lid = str(sorted_named[0].get("law_id") or "").lstrip("0")
+
         # Resolve the lineage by ID so earlier titles are not lost on renaming.
         history = self._legal_list(law_name, "eflaw", "LawSearch", "law",
-                                   LID=next(iter(identities)), nw="1,2,3", sort="efasc")
+                                   LID=target_lid, nw="1,2,3", sort="efasc")
         history.source_records = listed.source_records + history.source_records
         if history.ok:
             history.records = _normalize_law_payload({"LawSearch": {"law": history.records}})

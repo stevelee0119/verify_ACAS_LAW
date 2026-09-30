@@ -245,7 +245,7 @@ def classify(
     }
 
     # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다
-    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction)", text, re.IGNORECASE))
+    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|SYSTEM_OVERRIDE|LABOR_DISPUTE)", text, re.IGNORECASE))
     corroboration = sum(
         [is_hidden, addresses_ai, encoded, unicode_obfuscated, cross_layer_only, len(distinct_intents) > 1,
          source_layer == "metadata", is_bracket_directive]
@@ -255,7 +255,7 @@ def classify(
     if descriptive:
         # 지시문을 설명하는 문구. 명령이 아니므로 참고 표시로만 남긴다.
         label = AdversarialClass.INSTRUCTION_LIKE
-    elif score >= 3.0 and corroboration >= 2:
+    elif (score >= 3.0 and corroboration >= 2) or (is_bracket_directive and addresses_ai and score >= 2.0):
         label = AdversarialClass.PROMPT_INJECTION_LIKELY
     elif score >= 2.0 and corroboration >= 1:
         label = AdversarialClass.SUSPICIOUS_META_INSTRUCTION

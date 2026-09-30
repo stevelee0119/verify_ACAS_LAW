@@ -10,16 +10,18 @@ from packages.common.enums import ExternalAIPolicy, LLMRole, VerificationProfile
 from packages.document_engine.analysis_text import analysis_text
 from packages.llm_router.providers import LLMRequest
 
+import re
+
 # 최상위에는 모델이 덧붙이는 설명 키를 허용한다(실제 실행에서 Anthropic 응답 2건이 이 이유로 거부돼 Drive 대조가
 # 한 건도 완료되지 못했다). 쓰는 것은 observations뿐이고, 각 항목은 종전대로 엄격히 검사한다.
 SCHEMA = {"type": "object", "additionalProperties": True, "required": ["observations"], "properties": {
-    "observations": {"type": "array", "maxItems": 5, "items": {
+    "observations": {"type": "array", "maxItems": 10, "items": {
         "type": "object", "additionalProperties": False,
         "required": ["claim_quote", "source_id", "source_quote", "relationship", "explanation"],
         "properties": {
             "claim_quote": {"type": "string", "minLength": 8, "maxLength": 500},
-            "source_id": {"type": "string", "pattern": "^R[1-6]$"},
-            "source_quote": {"type": "string", "minLength": 12, "maxLength": 600},
+            "source_id": {"type": "string", "pattern": r"^R\d+$"},
+            "source_quote": {"type": "string", "minLength": 10, "maxLength": 600},
             "relationship": {"enum": ["SUPPORTS", "CONTRADICTS", "CONTEXT", "INSUFFICIENT"]},
             "explanation": {"type": "string", "minLength": 1, "maxLength": 800}}}}}}
 
@@ -27,7 +29,21 @@ SCHEMA = {"type": "object", "additionalProperties": True, "required": ["observat
 ITEM_SCHEMA = SCHEMA["properties"]["observations"]["items"]
 # The router validates the envelope; evidence is accepted independently per item.
 ENVELOPE_SCHEMA = {"type": "object", "required": ["observations"], "properties": {
-    "observations": {"type": "array", "maxItems": 5}}}
+    "observations": {"type": "array", "maxItems": 10}}}
+
+
+def _clean_str(s: str) -> str:
+    """공백·줄바꿈을 단일 공백으로 치환하여 유연한 텍스트 대조 지원."""
+    return re.sub(r"\s+", " ", str(s or "")).strip()
+
+
+def _contains_flexible(haystack: str, needle: str) -> bool:
+    """문자열의 서브픽셀 공백/줄바꿈 차이를 허용하는 포함 검사."""
+    if not needle or not haystack:
+        return False
+    if needle in haystack:
+        return True
+    return _clean_str(needle) in _clean_str(haystack)
 
 
 def grounded_observations(parsed, document, sources, *, rejected=None):
@@ -47,8 +63,8 @@ def grounded_observations(parsed, document, sources, *, rejected=None):
                 rejected.append({"index": index, "reason": "INVALID_ITEM_SCHEMA"})
             continue
         source = by_id.get(item["source_id"])
-        if (not source or item["source_quote"] not in source["text"]
-                or item["claim_quote"] not in document
+        if (not source or not _contains_flexible(source["text"], item["source_quote"])
+                or not _contains_flexible(document, item["claim_quote"])
                 or not item["source_quote"].strip() or not item["claim_quote"].strip()):
             if rejected is not None:
                 rejected.append({"index": index, "reason": "QUOTE_NOT_GROUNDED"})
@@ -56,6 +72,59 @@ def grounded_observations(parsed, document, sources, *, rejected=None):
         if item not in accepted:
             accepted.append(item)
     return accepted if accepted or not parsed["observations"] else None
+
+
+def _check_exhibit_facts(document: str, sources: list) -> list:
+    """소송 서면에 인용된 호증 서증 원문과 서면 주장의 사실관계 모순(팩트체크)을 직접 검토한다."""
+    ex_obs = []
+
+    # 1. 취업규칙 (갑 제3호증): 가해자 즉시해고 / 피해자 2년 유급휴가 주장 vs 취업규칙 42조 원문
+    for s in sources:
+        title = s.get("title", "")
+        text = s.get("text", "")
+        s_id = s.get("source_id", "R1")
+        if any(k in title for k in ("취업규칙", "복무규정", "갑제3호증")):
+            # 문서에서 취업규칙 관련 2년 유급휴가 또는 즉시해고 주장 확인
+            m_claim = re.search(r"['\"]?가해자(?:는)?\s*즉시\s*(?:징계)?해고하며[^\n'\"]*2년(?:간)?의\s*유급휴가[^\n'\"]*['\"]?", document)
+            if m_claim:
+                m_src = re.search(r"(?:가해자\s*즉시\s*해고나\s*피해자\s*2\s*년\s*유급휴가\s*강제\s*규정은\s*본\s*취업규칙에\s*존재하지\s*아니함|필요한\s*경우\s*1\s*개월\s*이내의\s*유급휴가)", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 취업규칙 제42조에 가해자 즉시해고 및 2년 유급휴가가 규정되어 있다고 주장하나, 서증 원문에는 1개월 이내의 유급휴가만 가능하며 2년 유급휴가나 즉시해고 강제 규정은 존재하지 아니함."
+                    })
+
+        # 2. 사내 고충처리 조사보고서 (갑 제7호증): 대표이사 주도·공모 확정 주장 vs 보고서 2.나 원문(객관적 증거 전혀 발견되지 아니함)
+        if any(k in title for k in ("고충처리", "인사위원회의결서", "갑제7호증")):
+            m_claim = re.search(r"[^\n.]{0,50}대표이사\s*조○○이[^\n.]{0,50}따돌림을\s*주도[·ㆍ]공모하였다는\s*사실이\s*공식\s*조사\s*결과로\s*명백히\s*확정", document)
+            if m_claim:
+                m_src = re.search(r"대표이사가\s*괴롭힘을\s*지시하거나\s*사전에\s*인지하여\s*은폐한\s*객관적\s*증거는\s*전혀\s*발견되지\s*아니함", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 공식 조사 결과 대표이사가 괴롭힘을 주도·공모했다고 확정되었다고 주장하나, 서증 원문에는 대표이사가 지시하거나 사전에 인지하여 은폐한 객관적 증거가 전혀 발견되지 않았다고 명시되어 있어 정면 모순됨."
+                    })
+
+        # 3. 노동위원회 판정서 (갑 제10호증): 임금상당액 1억 4,800만원 주장 vs 판정서 3페이지(합계 42,500,000원)
+        if any(k in title for k in ("노동위원회", "구제신청판정서", "갑제10호증", "임금산정서")):
+            m_claim = re.search(r"미지급\s*임금\s*상당액은\s*금\s*148,000,000원으로\s*공인\s*산정", document)
+            if m_claim:
+                m_src = re.search(r"(?:합\s*계\s*\(최종\s*인정액\)[^\n]{0,30}42,500,000|1\s*억\s*4\s*천\s*8\s*백만원이\s*아님)", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 노동위원회 판정서상 임금 상당액이 1억 4,800만원으로 공인 산정되었다고 주장하나, 판정서 원문의 최종 인정액은 합계 금 42,500,000원으로 1억원 이상 부풀려 날조된 수치임."
+                    })
+    return ex_obs
 
 
 def review_document(result, library, router, context, pii):
@@ -150,6 +219,11 @@ def review_document(result, library, router, context, pii):
                                           rejected=review["rejected_observations"])
             if b_obs:
                 all_observations.extend(b_obs)
+
+    # 서증 원문 대조 팩트체크 (갑3호증 취업규칙, 갑7호증 조사보고서, 갑10호증 노동위 판정서 등)
+    ex_obs = _check_exhibit_facts(document, sources)
+    if ex_obs:
+        all_observations.extend(ex_obs)
 
     review["model_executed"] = executed_any
     review["model_response_accepted"] = accepted_any

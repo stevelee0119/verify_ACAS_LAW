@@ -57,3 +57,8 @@ rules:
     objective: false
     case_sensitive: true
     pattern: '[(（''‘"“]\s*([a-z]+(?:\s+[a-z]+){1,4})\s*[)）''’"”]'
+  - category: TRANSLATION_CALQUE
+    label: 영문 직역 및 번역투 관용구
+    objective: true
+    pattern: '(다각적인\s*렌즈|사법적\s*렌즈|다면적\s*렌즈|법적\s*풍경|사법적\s*지형|legal\s+landscape|조화로운\s*조망)'
+

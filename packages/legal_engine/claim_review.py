@@ -92,8 +92,12 @@ CRIMINAL_RELIEF_RE = re.compile(
     r"[^.\n]{0,50}?"
     r"(?:병과하여|에\s*처한다|에\s*처하라|선고하여\s*(?:주시기|주실|주십시오|바랍니다)|선고하라|선고한다|처벌하라|하라|형벌을|징역형을|징역\s*\d+년)"
 )
-# 민사·국가배상 소송에서 법원이 명할 수 없는 인사·징계 조치(파면·해임·징계 등)를 구하는 청구
-PERSONNEL_RELIEF_RE = re.compile(r"(?:파면|해임|징계|감봉|정직|강등|직위\s*해제|전보)\s*(?:처분)?\s*(?:하라|시켜라|에\s*처하라|할\s*것을\s*명한다)")
+# 민사·국가배상 소송에서 법원이 명할 수 없는 인사·징계 조치(파면·해임·징계 등) 및 행정청 감독권 발동 청구
+PERSONNEL_RELIEF_RE = re.compile(
+    r"(?:파면|해임|징계|감봉|정직|강등|직위\s*해제|전보|특별근로감독\s*(?:등\s*)?지정)"
+    r"[^.\n]{0,80}?"
+    r"(?:하라|시켜라|에\s*처하라|할\s*것을\s*명한다|지정을\s*명한다|해임명령을|해임을\s*명한다|선고하여\s*(?:주시기|주실|주십시오|바랍니다)|해임\s*및)"
+)
 APOLOGY_RELIEF_RE = re.compile(r"사죄\s*광고|사과문을?\s*(?:게재|공표|낭독)하라|사죄문을?\s*(?:게재|공표)하라")
 RELIEF_HEAD_RE = re.compile(r"청\s*구\s*취\s*지")
 GROUNDS_HEAD_RE = re.compile(r"청\s*구\s*원\s*인")
@@ -259,13 +263,14 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
             "민사소송 절차에서 피고에게 징역형 등 형벌을 병과하여 선고해 달라는 청구는 민사법원의 권한 범위를 벗어난 "
             "중대한 소송형태적 결함(JURISDICTIONAL_DEFECT)으로 각하/배척 대상이다.",
             {"remedy": "형사처벌", "defect_type": "JURISDICTIONAL_DEFECT"})
-    if in_relief and PERSONNEL_RELIEF_RE.search(sentence):
+    if (in_relief or not criminal_doc) and PERSONNEL_RELIEF_RE.search(sentence):
         return ClaimMatch(
-            "NO_BASIS_REMEDY", sentence, 0, "법원이 명할 수 없는 인사·징계 조치 청구", "B", "SUSPICIOUS",
-            [_source("민법 제394조")],
-            "손해배상은 다른 의사표시가 없으면 금전으로 한다(민법 제394조). 공무원·직원의 파면·징계 같은 인사 조치는 "
-            "임용권자·징계권자의 권한이며, 손해배상 소송의 청구취지로 법원에 명하게 할 법률 근거가 없다.",
-            {"remedy": "인사·징계 조치"})
+            "NO_BASIS_REMEDY", sentence, 0, "법원이 명할 수 없는 대표이사 해임 및 행정청 감독권 발동 청구 (소송형태·관할 결함)", "A", "CONTRADICTED",
+            [_source("상법 제385조"), _source("근로기준법 제101조"), _source("민법 제394조")],
+            "대표이사 해임은 상법상 주주총회 고유권한(상법 제385조)이며, 특별근로감독 지정은 행정관청의 고유 권한(근로기준법 제101조)이다. "
+            "손해배상 등 민사소송의 청구취지나 판결로 피고 회사에게 대표이사 해임이나 행정청의 감독권 발동을 명할 수 없으므로, "
+            "중대한 소송형태적 결함(JURISDICTIONAL_DEFECT)으로 각하/배척 대상이다.",
+            {"remedy": "인사·감독명령", "defect_type": "JURISDICTIONAL_DEFECT"})
     if in_relief and APOLOGY_RELIEF_RE.search(sentence):
         return ClaimMatch(
             "NO_BASIS_REMEDY", sentence, 0, "사죄광고·사과문 게재 강제 청구(사람 확인)", "C", "SUSPICIOUS",
@@ -369,8 +374,8 @@ def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
             "사후의 지체·불이행만으로 계약 당시 기망이나 편취 고의를 확정할 수 없다. 계약 체결 당시의 "
             "의사·능력, 기망행위, 처분행위와의 관계를 뒷받침하는 별도 사실과 증거를 확인해야 한다.")
     if (re.search(r"자유심증|입증책임|증명책임|반증하지\s*못|무손해", compact)
-            and re.search(r"청구(?:금액|액)|손해액|개발\s*손실액|손실액|법정손해", compact)
-            and re.search(r"당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
+            and re.search(r"청구(?:금액|액)|손해액|개발\s*손실액|손실액|법정손해|위자료", compact)
+            and re.search(r"확정\s*간주|확정간주|당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
         return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "입증책임의 임의 전도 및 손해액 당연 확정 궤변 (기각/각하 위험)", "B", "CONTRADICTED",
             [_source("민사소송법 제202조"), _source("민사소송법 제288조")],
             "민사소송법상 손해 발생과 손해액의 증명책임은 원고에게 있으며, 자유심증주의는 증거판단 원칙일 뿐 입증책임을 전환하지 않는다. "

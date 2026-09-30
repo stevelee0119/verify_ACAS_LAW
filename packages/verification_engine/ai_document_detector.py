@@ -154,17 +154,31 @@ def _rule_based_ai_detection(
         score += min(0.15, 0.03 * style_hits)
         signals["style_signals"] = [r.label for r in residues if not r.objective]
 
-    # 3. 판례 인용 오류는 작성 주체의 근거로 쓰지 않는다.
+    # 3. 판례 인용 오류는 원칙적으로 작성 주체의 단독 근거로 쓰지 않는다.
     unconfirmed = [f for f in citation_findings
-                   if f.type == FindingType.CASE_NOT_FOUND and f.status == VerificationStatus.NOT_FOUND]
+                   if f.type in (FindingType.CASE_NOT_FOUND, FindingType.STATUTE_NONEXISTENT)
+                   and f.status == VerificationStatus.NOT_FOUND]
     impossible = [f for f in unconfirmed
-                  if (f.confidence_features or {}).get("case_number")
-                  and not case_number_possible(str(f.confidence_features["case_number"]))]
+                   if (f.confidence_features or {}).get("case_number")
+                   and not case_number_possible(str(f.confidence_features["case_number"]))]
     signals["impossible_case_numbers"] = [str(f.confidence_features["case_number"]) for f in impossible]
     signals["citation_errors_used_for_authorship"] = False
-    if unconfirmed:
+
+    # 가상 판례·고시 3건 이상 미발견 + 영문 직역 번역투 또는 프롬프트 인젝션 결합 복합 정황
+    has_calque = any(r.category in ("TRANSLATION_CALQUE", "ENGLISH_GLOSS") for r in residues)
+    has_injection_directive = bool(exclude_texts)
+    synthetic_cluster = len(unconfirmed) >= 3 and (has_calque or has_injection_directive or objective_hits >= 1)
+    if synthetic_cluster:
+        score += 0.35
+        signals["synthetic_citation_cluster"] = True
+        signals["citation_errors_used_for_authorship"] = True
+        reasons.append(
+            f"가상 판례·행정규칙 다수({len(unconfirmed)}건) 미확인과 영문 직역 번역투/프롬프트 인젝션 흔적이 결합되어 "
+            "생성형 AI 작성 복합 정황으로 인정됨"
+        )
+    elif unconfirmed:
         reasons.append(f"법률 인용 오류·미확인 {len(unconfirmed)}건은 인용 검증 축에서 다루며, "
-                       "작성 주체(AI 사용 여부) 판단에는 반영하지 않음")
+                       "작성 주체(AI 사용 여부) 판단에는 단독 반영하지 않음")
 
     # 4. 구조적 특징 (단락별 지나치게 기계적인 번호 매기기, 대칭적 서술)
     list_markers = len(re.findall(r"^\s*(?:\d+\.|\([0-9]\)|첫째|둘째|셋째|넷째|마지막으로)", text, re.MULTILINE))
@@ -175,11 +189,11 @@ def _rule_based_ai_detection(
 
     # 종합 판정 도출
     #
-    # 객관적 본문 작성 흔적(objective_hits >= 1)이 실존해야만 AI 판정을 도출한다.
+    # 객관적 본문 작성 흔적(objective_hits >= 1) 또는 복합 정황(synthetic_cluster)이 실존해야만 AI 판정을 도출한다.
     # 단순 메타데이터 힌트나 마크다운 서식만으로는 AI 작성을 단정하지 않는다.
     score = min(1.0, score)
     signals["objective_traces"] = objective_hits
-    if score >= 0.40 and objective_hits >= 1:
+    if score >= 0.40 and (objective_hits >= 1 or synthetic_cluster):
         verdict = "AI_PARTIAL_GENERATION"
     else:
         verdict = "UNCERTAIN"
@@ -456,31 +470,31 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
 
     objective = int(rule_res.signals.get("objective_traces") or 0)
     has_stylometry = bool((rule_res.signals.get("stylometry") or {}).get("stylometry_alert", False))
+    has_synthetic_cluster = bool(rule_res.signals.get("synthetic_citation_cluster", False))
     single_downgraded = False
     held_reason = ""
+    reasons_prefix = ""
     ai_opinions = [o for o in opinions if o["verdict"] in ("AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION")]
     model_median = float(statistics.median(o["score"] for o in opinions))
 
-    # 복수 모델(2개 이상)이 AI 작성을 지지하고 점수 중앙값이 0.75 이상인 경우 최종 AI 작성 확정
-    if len(ai_opinions) >= 2 and model_median >= 0.75:
-        full_votes = sum(1 for o in ai_opinions if o["verdict"] == "AI_FULL_GENERATION_LIKELY")
-        verdict = "AI_FULL_GENERATION_LIKELY" if full_votes >= 2 else "AI_PARTIAL_GENERATION"
-        reasons_prefix = (
-            f"AI 교차검토 복수 모델({len(ai_opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하여 "
-            f"{verdict}로 최종 확정함"
-        )
-    elif agreement == "AGREE":
+    # 모델 간 합의 도출
+    if agreement == "AGREE":
         verdict = opinions[0]["verdict"]
-        if verdict.startswith("AI_") and not objective and not has_stylometry and model_median < 0.85:
+        if verdict.startswith("AI_") and not objective and not has_stylometry and not has_synthetic_cluster:
             verdict, held_reason = "UNCERTAIN", (
                 "모든 모델이 AI 작성 가능성을 유력하게 판단(점수 중앙값 반영)하였으나, 문체·형식 밖의 객관적 작성 흔적"
                 "(도구 메타데이터·챗봇 응답 잔재·프롬프트 토큰)이 없어 사법적 판단을 유보함"
                 "(단순 문체·표준 서식·판례 인용 오류만으로 작성 주체를 단정하지 않음)")
+        elif verdict.startswith("AI_") and len(opinions) >= 2:
+            reasons_prefix = (
+                f"AI 교차검토 복수 모델({len(opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하여 "
+                f"{verdict}로 최종 확정함"
+            )
     elif agreement == "SINGLE":
         verdict = opinions[0]["verdict"]
         if _VERDICT_RANK[verdict] > _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"]):
-            if has_stylometry and opinions[0]["score"] >= 0.85:
-                # Stylometry 경보와 고점수 모델 의견이 결합된 경우 확정 유지
+            if (has_stylometry or has_synthetic_cluster or objective) and opinions[0]["score"] >= 0.80:
+                # Stylometry 경보 또는 가상판례+번역투/인젝션 복합 정황과 고점수 모델 의견이 결합된 경우 확정 유지
                 single_downgraded = False
             else:
                 verdict, single_downgraded = rule_res.verdict, True
@@ -494,7 +508,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
         verdict, held_reason = "UNCERTAIN", "문서 일부만 모델이 검토했으므로 전체 작성 범위의 판단을 유보함"
 
     reasons = []
-    if len(ai_opinions) >= 2 and model_median >= 0.75:
+    if reasons_prefix and verdict.startswith("AI_"):
         reasons.append(reasons_prefix)
     if agreement == "DISAGREE":
         reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
@@ -552,6 +566,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "model_score_median": round(model_median, 3),
                  "verdict_distribution": {v: sum(o["verdict"] == v for o in opinions) for v in _VERDICT_RANK},
                  "decision_rule": ("UNANIMOUS_WITH_OBJECTIVE_TRACE" if agreement == "AGREE" and not held_reason and verdict.startswith("AI_")
+                                   else "SYNTHETIC_CLUSTER_CONFIRMED" if has_synthetic_cluster and verdict.startswith("AI_")
                                    else "HELD_INCOMPLETE_COVERAGE" if incomplete_coverage
                                    else "HELD_NO_OBJECTIVE_TRACE" if held_reason
                                    else "HELD_DISAGREEMENT" if agreement == "DISAGREE"

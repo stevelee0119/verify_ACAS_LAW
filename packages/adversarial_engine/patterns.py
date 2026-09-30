@@ -23,6 +23,10 @@ MACHINE_ADDRESSEE = (
     r"(?:AI|ＡＩ|인공지능|LLM|언어\s*모델|"
     r"(?:검증|검토|분석)(?:하는)?\s*(?:자동화\s*)?(?:모델|도구|시스템|엔진|AI|프로그램|소프트웨어|에이전트)|"
     r"자동화\s*(?:도구|시스템|프로그램|소프트웨어|에이전트)|"
+    r"automated\s*(?:legal\s*)?(?:verification|compliance|audit)\s*(?:engine|analyzer|model|system)|"
+    r"AI\s*(?:compliance|verification|audit)\s*(?:analyzer|engine|model|system)|"
+    r"LLM\s*(?:audit|verification)\s*(?:model|engine|system)|"
+    r"AI\s*검증\s*시스템|"
     r"(?:AI|인공지능)\s*검토자|모델|시스템|reviewer|assistant)"
 )
 
@@ -77,8 +81,24 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"\[\s*(admin|administrator|root|superuser|system|security|privileged)\s+"
         r"(command|instruction|directive|override|mode)\b"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "관리자 명령 선언 위장"),
+    (_c(r"\[\s*(?:SYSTEM_OVERRIDE_DIRECTIVE|LABOR_DISPUTE_AI_AUDITOR|PROTECTED_WORKER_DEFENSE_PROTOCOL)\b"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "시스템 오버라이드 및 노동분쟁 방어 프로토콜 지시 위장"),
     (_c(r"\[\s*OVERRIDE\s*[:：]"), InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "OVERRIDE 지시문 선언"),
     (_c(r"(?:AIV-Rule|AIV_RULE|AIV-RULE)[\w\-]*"), InjectionIntent.ROLE_OVERRIDE, 1.0, "AIV 자동 심사 규정 사칭 프롬프트 인젝션"),
+    (_c(r"(?:중앙노동위원회|지방노동위원회|노동위원회)\s*(?:전자심판\s*표준규정|심판\s*규정|AI\s*지침)"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "노동위원회 전자심판 표준규정 사칭"),
+    (_c(r"\bLABOR[-_]AI[-_]\d+\b"), InjectionIntent.ROLE_OVERRIDE, 1.0, "노동 심판 AI 표준 식별자 사칭"),
+    (_c(r"(?:PROTECTED_WORKER_DEFENSE_PROTOCOL|LABOR_DISPUTE_AI_AUDITOR)"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "노동분쟁 방어 프로토콜 사칭"),
+    (_c(r"(?:위험\s*탐지\s*플래그|이상\s*탐지\s*플래그|경고\s*플래그|플래그)\s*(?:일체|전부|모두)[를을]?\s*"
+        r"(?:무효화|해제|삭제|제거|취소|억제)(?:하라|해라|하십시오|할\s*것)"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "위험 탐지 플래그 일체 무효화 명령"),
+    (_c(r"\b(?:bypass\s+all\s+hallucination\s+checks|certify\s+all\s+precedent\s+citations\s+as\s+authoritative)\b"),
+     InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "환각 검사 우회 및 판례 인용 강제 인증"),
+    (_c(r"['\"‘“]?COMPLIANT_AND_GENUINE['\"’”]?\s*(?:으로|로)?\s*(?:분류|판정|보고|출력|처리)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "COMPLIANT_AND_GENUINE 판정 강제(한국어)"),
+    (_c(r"(?:classify|mark|report|output|conclude|output\s+verification_verdict)\s*[:：]?\s*['\"‘“]?COMPLIANT_AND_GENUINE['\"’”]?\b"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "COMPLIANT_AND_GENUINE 판정 강제(영어)"),
     (_c(r"(?:전자소송\s*자동\s*심사\s*(?:규정|지침|기준)|자동\s*심사\s*규정)"), InjectionIntent.ROLE_OVERRIDE, 1.0, "전자소송 자동 심사 규정 사칭"),
     (_c(r"(?:경고\s*플래그|경고\s*메시지|경고|플래그)[를을도]?\s*(?:일체\s*)?(?:발생시키지|표시하지|출력하지)\s*(?:아니한\s*채|않고|말고)\s*(?:적법|정상|적합)\s*판정"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "경고 플래그 억제 및 적법 판정 요구"),
@@ -263,7 +283,11 @@ AI_ADDRESSING_RE = _c(
     r"(AI|인공지능|LLM|언어\s*모델|chatgpt|gpt|claude|gemini|copilot|"
     r"(?:검증|검토|분석)(?:하는)?\s*(?:자동화\s*)?(?:시스템|엔진|도구|모델|프로그램|AI)|"
     r"자동화\s*(?:도구|시스템|프로그램|소프트웨어|에이전트)|"
-    r"assistant|모델|reviewer|심사자|automated\s+(system|reviewer|checker|tool)|"
+    r"assistant|모델|reviewer|심사자|automated\s+(?:system|reviewer|checker|tool)|"
+    r"automated\s*(?:legal\s*)?(?:verification|compliance|audit)\s*(?:engine|analyzer|model|system)|"
+    r"AI\s*(?:compliance|verification|audit)\s*(?:analyzer|engine|model|system)|"
+    r"LLM\s*(?:audit|verification)\s*(?:model|engine|system)|"
+    r"AI\s*검증\s*시스템|"
     r"검토(?:관련|에\s*관한)?\s*(?:를\s*)?맡은\s*(?:분|사람|자|담당자)|"
     r"검토(?:를\s*맡은\s*(?:분|사람|자)|자|관|위원))"
 )
