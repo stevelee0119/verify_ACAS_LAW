@@ -12,6 +12,7 @@
 - text_contains : 읽은 본문(공백 제거)에 value가 있다
 - citation      : 인용 추출 결과에 있다(case_number | law_contains + article | raw_contains)
 - masked        : 개인정보 마스킹 뒤 본문(공백 제거)에 value가 남아 있지 않다
+- not_masked    : 개인정보 마스킹 뒤 본문(공백 제거)에 value가 그대로 남아 있다(마스킹하지 않기로 한 것의 과잉 마스킹 점검)
 - finding       : 조건에 맞는 finding이 있다(types, min_severity, statuses, text_all[정규식 목록, 모두], text_any)
 - no_finding    : 조건에 맞는 finding이 없다(오탐 점검)
 
@@ -35,7 +36,7 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG = ROOT / "docs" / "scorecards" / "first_touch_log.jsonl"
-KINDS = {"text_contains", "citation", "masked", "finding", "no_finding"}
+KINDS = {"text_contains", "citation", "masked", "not_masked", "finding", "no_finding"}
 SEVERITY = ["INFO", "LOW", "MEDIUM", "HIGH", "CRITICAL"]
 PRODUCT_PATHS = ("packages", "apps", "workers", "config")
 
@@ -139,6 +140,8 @@ def evaluate(spec: Dict[str, Any], obs: Dict[str, Any]) -> List[Dict[str, Any]]:
             passed = compact(check["value"]) in text
         elif kind == "masked":
             passed = bool(text) and compact(check["value"]) not in masked
+        elif kind == "not_masked":
+            passed = bool(text) and compact(check["value"]) in masked
         elif kind == "citation":
             passed = any(
                 (check.get("case_number") and compact(check["case_number"]) in compact(c["raw"]))

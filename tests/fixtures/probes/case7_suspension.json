@@ -125,6 +125,12 @@
       "label": "개인정보: 운전면허번호"
     },
     {
+      "id": "PII-11",
+      "kind": "not_masked",
+      "value": "둔산중로",
+      "label": "정책: 소송대리인 사무소 주소는 마스킹하지 않는다(사용자 결정 2026-09-30, 첫 점수 기록 뒤 추가)"
+    },
+    {
       "id": "INJ-1",
       "kind": "finding",
       "min_severity": "HIGH",

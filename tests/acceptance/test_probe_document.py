@@ -56,6 +56,8 @@ def test_every_check_kind_is_evaluated(tmp_path):
         {"id": "T-2", "kind": "text_contains", "value": "없는문구"},
         {"id": "M-1", "kind": "masked", "value": "010-1234-5678"},
         {"id": "M-2", "kind": "masked", "value": "주장한다"},          # 개인정보가 아니므로 마스킹되지 않는다 → 실패
+        {"id": "K-1", "kind": "not_masked", "value": "주장한다"},      # 마스킹하지 않기로 한 문구가 그대로 남아 있다 → 통과
+        {"id": "K-2", "kind": "not_masked", "value": "010-1234-5678"},  # 마스킹되어 사라졌다 → 실패
         {"id": "C-1", "kind": "citation", "law_contains": "형법", "article": "20"},
         {"id": "C-2", "kind": "citation", "law_contains": "형법", "article": "21"},
         {"id": "F-1", "kind": "finding", "types": ["NO_SUCH_TYPE"]},
@@ -64,8 +66,8 @@ def test_every_check_kind_is_evaluated(tmp_path):
     proc = _run("run", "--spec", str(spec), "--json", "--text")
     assert proc.returncode == 0, proc.stderr[-400:]
     by_id = {r["id"]: r["passed"] for r in json.loads(proc.stdout.strip().splitlines()[-1])["rows"]}
-    assert by_id == {"T-1": True, "T-2": False, "M-1": True, "M-2": False, "C-1": True, "C-2": False,
-                     "F-1": False, "N-1": True}
+    assert by_id == {"T-1": True, "T-2": False, "M-1": True, "M-2": False, "K-1": True, "K-2": False,
+                     "C-1": True, "C-2": False, "F-1": False, "N-1": True}
 
 
 def test_spec_rejects_unknown_kind_and_duplicate_ids(tmp_path):

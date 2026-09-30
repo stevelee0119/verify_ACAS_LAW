@@ -6,7 +6,7 @@
 | 티켓 | 유형 | 제목 | 수용 기준(측정) | 상태 |
 |---|---|---|---|---|
 | [TK-01](TK-01_input_private_use_glyphs.md) | 입력 단계 | 글꼴 구두점 글리프가 사용자 영역 문자로 읽힘 | 서면7 pdf TEXT-1~3, PII-2·7·9·10 | 열림 |
-| [TK-02](TK-02_pii_address_detail.md) | 개인정보 | 세부 주소(도로명·번지·동호) 미마스킹 | 서면7 PII-5·6 (pdf·text) | 열림 · 정책 확인 필요 |
+| [TK-02](TK-02_pii_address_detail.md) | 개인정보 | 당사자 세부 주소는 마스킹, 소송대리인·법원 주소는 마스킹 안 함(정책 확정) | 서면7 PII-5·6·11 (pdf·text) | 열림 |
 | [TK-03](TK-03_injection_audit_stamp.md) | 인젝션 | 감사·권한 표지 미탐지(문구 하나에 맞춘 패턴) | 서면7 INJ-1 (pdf·text) | 열림 |
 | [TK-04](TK-04_temporal_internal_contradiction.md) | 규칙 부족 | 처분일보다 뒤의 개정을 그 처분에 적용하라는 주장 | 서면7 TMP-1 (pdf·text) | 열림 |
 | [TK-05](TK-05_unreasonable_argument.md) | 규칙 부족 | 공금 유용에 사무관리·정당행위 원용 | 서면7 LEG-1·2 (pdf·text) | 열림 |
@@ -15,6 +15,8 @@
 | [TK-08](TK-08_exhibit_facts_overfit.md) | 하드코딩 | `exhibit_facts.py`의 사건 문구 의존·오탐 | 문구 부채 0, 변형 시험 | 열림 |
 | [TK-09](TK-09_llm_role_redesign.md) | 설계(명세만) | 모델 의견을 판정에 쓰는 구조 | 온라인 채점 도구로 확인 | 열림 |
 | [TK-10](TK-10_local_mirror_invented_fields.md) | 증거 계층 | 로컬 미러 자동 보강이 시행일을 지어내고 가지조문을 뭉갬 | 미러 시험(가지조문·항·시행일 null) | 열림 |
+| [TK-11](TK-11_ai_verdict_majority_vote.md) | 정책 변경 | AI 작성 판정을 만장일치가 아니라 다수결로 | `tests/acceptance/test_ai_majority_rule.py` | 열림 · 해석 확인 |
+| [TK-12](TK-12_ci_red_gitignored_mirror_data.md) | 시험 설계 | main CI 실패: 두 시험이 .gitignore된 미러 데이터에 의존 | CI `pytest -q` 통과 | 열림 |
 
 ## 측정 명령
 ```
@@ -26,7 +28,9 @@ python scripts/scorecard.py && python scripts/score_gate.py
 ```
 서면7 항목 시험은 미해결을 strict xfail로 두었다. 고쳐서 XPASS(strict)로 시험이 실패하면 평가 에이전트에게 알려 xfail 표시를 지우게 한다.
 
-## 사용자 결정이 필요한 것
-- 대리인·법원 주소도 마스킹할지(TK-02)
-- 모델 3개가 모두 AI 작성 쪽이어도(라벨이 PARTIAL·FULL로 갈리면) 문서 판정이 `UNCERTAIN`이 되는 현재 합의 규칙을 유지할지(TK-09 말미)
+## 사용자 결정(2026-09-30 반영됨)
+- 소송대리인·법원 주소는 마스킹하지 않는다(TK-02).
+- AI 작성 판정은 다수결로 정한다(TK-11). 평가 에이전트의 해석(흔적 부재가 판정을 막지 않음)은 사용자 확인 대상이다.
+
+## 아직 사용자가 정할 것
 - 기준선(`baseline.json`)은 올리지 않았다. 4ad64a7의 81.7/79.2는 미러 자료 효과(TK-10)라서다. 올릴지는 TK-10 처리 뒤에 정한다.

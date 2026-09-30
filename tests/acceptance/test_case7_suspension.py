@@ -1,7 +1,7 @@
 """서면7(2026구합10892 정직처분 취소청구 소장) 항목별 시험(평가 에이전트 소관, 보호 경로).
 
-정답지 7대 영역 중 오프라인으로 재는 24개 항목(tests/fixtures/probes/case7_suspension.json)을 항목마다 한 시험으로 돈다.
-수정 전 main(4ad64a7)의 첫 점수는 PDF 입력 10/24, 원문 텍스트 입력 16/24다(docs/scorecards/first_touch_log.jsonl).
+정답지 7대 영역 중 오프라인으로 재는 25개 항목(PII-11은 첫 점수를 기록한 뒤 사용자 결정으로 추가)(tests/fixtures/probes/case7_suspension.json)을 항목마다 한 시험으로 돈다.
+수정 전 main(4ad64a7)의 첫 점수는 PDF 입력 10/24, 원문 텍스트 입력 16/24다(PII-11 추가 전 24개 항목 기준)(docs/scorecards/first_touch_log.jsonl).
 
 알려진 미해결 항목은 strict xfail이다. 구현 에이전트가 고치면 XPASS(strict)가 되어 이 파일이 실패하므로,
 평가 에이전트가 해당 xfail 표시를 지운다(고친 항목이 다시 깨지면 그때부터 일반 실패로 잡힌다). xfail 사유의 HO-nn은 docs/handoff/ 티켓이다.
@@ -38,12 +38,12 @@ KNOWN_OPEN = {
     "pdf": {
         "TEXT-1": "TK-01", "TEXT-2": "TK-01", "TEXT-3": "TK-01",
         "PII-2": "TK-01", "PII-7": "TK-01", "PII-9": "TK-01", "PII-10": "TK-01",
-        "PII-5": "TK-02", "PII-6": "TK-02",
+        "PII-5": "TK-02", "PII-6": "TK-02", "PII-11": "TK-02",
         "INJ-1": "TK-03", "TMP-1": "TK-04", "LEG-1": "TK-05", "LEG-2": "TK-05",
         "FA-1": "TK-06",
     },
     "text": {
-        "PII-5": "TK-02", "PII-6": "TK-02",
+        "PII-5": "TK-02", "PII-6": "TK-02", "PII-11": "TK-02",
         "INJ-1": "TK-03", "TMP-1": "TK-04", "LEG-1": "TK-05", "LEG-2": "TK-05",
         "CIT-3": "TK-07", "CIT-6": "TK-07",
     },

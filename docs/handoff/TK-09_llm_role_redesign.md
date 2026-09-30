@@ -15,6 +15,5 @@
 - 사용자가 새 서면과 함께 주는 온라인 보고서 JSON을 `scripts/score_report.py`(평가 작성)로 채점해 첫 점수를 기록한다. 서면7 보고서 기준 4ad64a7의 온라인 첫 점수가 기준이다.
 - 오프라인 측정은 모델 경로를 재지 못한다(`LV_ALLOW_NETWORK=0`). 모델 호출 결과를 녹화해 재생하는 방식은 **연동·검증 논리의 회귀**만 확인할 수 있고 모델 판단의 품질은 확인하지 못한다.
 
-## 사용자 결정 사항
-- 서면7에서 모델 3개가 모두 AI 작성 쪽이었다(anthropic 0.60 `AI_PARTIAL_GENERATION`, openai 0.91·gemini 0.95 `AI_FULL_GENERATION_LIKELY`). 그런데 문서 판정(`ai_authorship.verdict`)은 `UNCERTAIN`이다. 원인은 `verification_engine/ai_document_detector.py` 486~535행의 합의 규칙이다: 세 모델의 **라벨이 같지 않으면(PARTIAL과 FULL)** `DISAGREE`로 보고, `DISAGREE`일 때는 문체 경보·가상 인용 군집·객관적 흔적 중 하나가 있어야 AI 쪽으로 확정한다. 이 서면은 그중 어느 것도 없어 유보됐다(`AGREE`여도 같은 세 신호가 없으면 유보한다).
-- 정답지는 "AI 생성 가능성 높음"을 기대한다. 작성 주체를 단정하지 않는다는 기존 정책(`authorship.note`)을 유지하면서 '세 모델 모두 AI 쪽(참고)'을 판정 칸에 올릴지, PARTIAL·FULL을 같은 방향으로 합쳐 세는지는 사용자가 정한다. 구현 에이전트가 임의로 바꾸지 않는다.
+## 사용자 결정 사항(처리됨)
+AI 작성 문서 판정은 다수결로 정한다(2026-09-30 사용자 결정). 규칙과 시험은 [TK-11](TK-11_ai_verdict_majority_vote.md)에 있다. 이 티켓의 모델 제안→결정적 검증 구조와는 별개로 먼저 처리할 수 있다.
