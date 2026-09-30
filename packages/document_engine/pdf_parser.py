@@ -1261,20 +1261,36 @@ def _routine_glyphs(data: bytes) -> Dict[Tuple[bytes, bytes], int]:
 
 
 def _is_line_break_marker(text: str, data: bytes, end: int, routine: Optional[Dict[Tuple[bytes, bytes], int]] = None) -> bool:
-    """ActualText가 U+200B 하나이고, 덮는 글리프가 그 글꼴의 평소 공백 글리프인가.
+    """ActualText가 U+200B 하나이고, 줄 끝 경계이거나 평소 공백 글리프인가.
 
-    Google Docs(Skia) PDF는 줄바꿈 자리의 공백 글리프에 ActualText U+200B를 붙인다. 글자 하나를 가릴 뿐 문자열을
-    숨길 수 없으므로 은닉 신호가 아니다. 다음 중 하나라도 어긋나면 종전대로 은닉 신호로 센다.
-    - 여러 글리프를 덮거나 다른 문자가 섞임
-    - 덮는 글리프가 ActualText 밖에서는 거의 쓰이지 않음(글자 사이에 끼워 넣은 폭 0 문자: 지시문 은닉 수법)
+    Google Docs(Skia) 등의 PDF 렌더러는 줄바꿈 자리나 목록 번호 경계의 공백 글리프에 ActualText U+200B를 붙인다.
+    글자 하나를 가릴 뿐 문자열을 숨길 수 없으며 줄·블록 경계(ET)에 붙으므로 은닉 신호가 아니다.
+    반면 글자 사이에 끼워 넣어 키워드 검사를 피하는 수법(지시문 은닉)은 줄 경계가 아니라 글자들 사이에 들어간다.
+
+    다음 조건을 만족하면 정상적인 줄바꿈/경계 표시로 판정한다:
+    1. text가 정확히 "\u200b" 단일 문자임 (여러 문자나 다른 문자가 섞이면 은닉 신호)
+    2. 덮는 구간이 단일 글리프임 (SINGLE_GLYPH_SHOW_RE 만족)
+    3. 위치 및 형태:
+       - EMC 직후가 텍스트 객체 종료(ET)인 경우: 텍스트 줄의 맨 끝 또는 독립 경계 마커
+       - 또는 해당 글리프가 ActualText 밖에서도 반복 쓰이는 평소 공백 글리프인 경우 (routine >= ROUTINE_GLYPH_MIN)
     """
     if text != "\u200b":
         return False
-    head = data[end:end + 200]
+    head = data[end:end + 300]
     bdc = re.match(rb"\s*>>\s*BDC", head)
-    shown = SINGLE_GLYPH_SHOW_RE.match(head[bdc.end():]) if bdc else None
+    if not bdc:
+        return False
+    shown = SINGLE_GLYPH_SHOW_RE.match(head[bdc.end():])
     if not shown or not shown.group("hex"):
         return False
+
+    # 1. 위치 검사: EMC 직후가 텍스트 블록 종료(ET)인지 확인 (줄 끝 / 경계 마커)
+    emc_abs_end = end + bdc.end() + shown.end()
+    after_emc = data[emc_abs_end:emc_abs_end + 100]
+    if re.match(rb"^\s*ET\b", after_emc):
+        return True
+
+    # 2. 평소 공백 글리프 검사: 같은 글꼴의 공백으로 ActualText 밖에서 반복 사용되었는지 확인
     font = shown.group("font")
     if not font:
         earlier = list(FONT_SET_RE.finditer(data[max(0, end - 3000):end]))
