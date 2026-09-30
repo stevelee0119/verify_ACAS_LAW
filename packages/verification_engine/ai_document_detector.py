@@ -80,13 +80,15 @@ def compute_stylometry(text: str) -> Dict[str, Any]:
     words = re.findall(r"[가-힣]{2,}", text)
     ttr = len(set(words)) / max(1, len(words))  # Type-Token Ratio
 
-    # AI 생성 텍스트의 전형적 특징: 문장 길이가 극히 일정(cv < 0.45)하거나 어휘 다양성이 낮음
-    low_burstiness = cv < 0.45 and len(sents) >= 6
-    low_perplexity = ttr < 0.48 and len(words) >= 40
-    alert = low_burstiness or (cv < 0.50 and low_perplexity)
+    # AI 생성 텍스트의 전형적 특징: 충분한 본문 분량(200자 이상 및 평균 문장 길이 30자 이상)에서
+    # 문장 길이가 극히 일정(cv < 0.45)하거나 어휘 다양성이 낮음 (짧은 서식·단문 나열 오탐 방지)
+    has_volume = sum(lengths) >= 200 and mean_len >= 30.0
+    low_burstiness = has_volume and cv < 0.45 and len(sents) >= 6
+    low_perplexity = has_volume and ttr < 0.48 and len(words) >= 40
+    alert = low_burstiness or (has_volume and cv < 0.50 and low_perplexity)
 
     return {
-        "sufficient_sample": True,
+        "sufficient_sample": has_volume,
         "sentence_count": len(sents),
         "mean_sentence_length": round(mean_len, 1),
         "burstiness_cv": round(cv, 3),
@@ -499,7 +501,17 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
             else:
                 verdict, single_downgraded = rule_res.verdict, True
     else:
-        verdict = "UNCERTAIN"
+        # 복수 모델 중 2개 이상이 AI 작성을 지목하고 객관적 작성 흔적, 문체 이상(Stylometry), 또는 가상판례 군집이 확인된 경우
+        if len(ai_opinions) >= 2 and (has_stylometry or has_synthetic_cluster or objective):
+            full_votes = sum(1 for o in ai_opinions if o["verdict"] == "AI_FULL_GENERATION_LIKELY")
+            verdict = "AI_FULL_GENERATION_LIKELY" if full_votes >= 2 else "AI_PARTIAL_GENERATION"
+            agreement = "MAJORITY_AI_AGREE"
+            reasons_prefix = (
+                f"AI 교차검토 다수 모델({len(ai_opinions)}/{len(opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하고 "
+                f"가상 판례/문체 이상 정황이 확인되어 {verdict}로 최종 확정함"
+            )
+        else:
+            verdict = "UNCERTAIN"
     if verdict == "HUMAN_AUTHORED_LIKELY":
         verdict, held_reason = "UNCERTAIN", (
             "모델이 사람 작성 쪽으로 판단했으나 AI 흔적이 없다는 사실만으로 사람 작성을 단정하지 않으므로 판단을 유보함")
@@ -566,6 +578,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "model_score_median": round(model_median, 3),
                  "verdict_distribution": {v: sum(o["verdict"] == v for o in opinions) for v in _VERDICT_RANK},
                  "decision_rule": ("UNANIMOUS_WITH_OBJECTIVE_TRACE" if agreement == "AGREE" and not held_reason and verdict.startswith("AI_")
+                                   else "MAJORITY_AI_CONSENSUS" if agreement == "MAJORITY_AI_AGREE" and verdict.startswith("AI_")
                                    else "SYNTHETIC_CLUSTER_CONFIRMED" if has_synthetic_cluster and verdict.startswith("AI_")
                                    else "HELD_INCOMPLETE_COVERAGE" if incomplete_coverage
                                    else "HELD_NO_OBJECTIVE_TRACE" if held_reason

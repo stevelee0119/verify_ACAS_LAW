@@ -527,7 +527,16 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
 def _law_name_start(m: "re.Match") -> int:
     """법령명 앞에 붙어 잡힌 문장 조각을 뺀 법령명의 시작 위치."""
     raw = m.group("law")
-    kept = law_name_suffix(raw).split()
+    suffix = law_name_suffix(raw)
+    clean_raw = re.sub(r"[「」『』]", " ", raw or "")
+    first_word = suffix.split()[0] if suffix else ""
+    if first_word:
+        pos = clean_raw.rfind(first_word)
+        if pos >= 0:
+            if pos > 0 and raw[pos - 1] in "「『":
+                pos -= 1
+            return m.start("law") + pos
+    kept = suffix.split()
     tokens = list(re.finditer(r"[^\s「」『』]+", raw))
     if not kept or len(kept) > len(tokens):
         return m.start("law")

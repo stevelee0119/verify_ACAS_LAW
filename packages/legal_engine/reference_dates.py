@@ -18,7 +18,7 @@ MEANINGS = [
     ("DISPOSITION", "처분일", r"처분|징계|해임|파면|강등|정직|감봉|견책|부과|취소처분|거부처분"),
     ("NOTICE", "통지·송달일", r"통지|송달|고지|통보|수령"),
     ("APPLICATION", "신청·청구일", r"신청|청구|제기|접수|제출"),
-    ("CONDUCT", "행위·사고일", r"사고|발생|행위|위반|폭행|근무|복무|적발"),
+    ("CONDUCT", "행위·사고일", r"사고|발생|행위|위반|폭행|근무|복무|적발|내원|진료|수술|투약|입원|발병|사망"),
     ("CONTRACT", "계약·합의일", r"계약|합의|약정|체결"),
     ("DECISION", "선고·결정일", r"선고|판결|결정|재결|의결"),
     ("HEARING", "청문·의견제출일", r"청문|의견\s*제출|진술"),
@@ -38,10 +38,17 @@ def reference_date_candidates(text: str, *, limit: int = 30) -> List[Dict[str, A
         before = text[max(0, match.start() - 25):match.start()]
         after = text[match.end():match.end() + 20]
         meaning, label = "UNKNOWN", "뜻 미상"
+        # 시간 표기("14:20 경", "10시 30분경" 등)가 날짜 뒤에 붙은 경우 이를 제외하고 문맥 의미 판별
+        after_clean = re.sub(r"^\s*(?:\d{1,2}:\d{2}(?::\d{2})?\s*(?:경)?|\d{1,2}시(?:\s*\d{1,2}분)?\s*(?:경)?)", "", after)
         # 날짜 바로 뒤("… 처분을")를 먼저, 바로 앞("처분일: …")을 다음으로 본다. 앞 문맥은
         # 이전 절의 낱말이 섞이므로 가까운 범위만 본다.
-        hit = (next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, after[:12])), None)
+        hit = (next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, after_clean[:14])), None)
+               or next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, after[:12])), None)
                or next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, before[-8:])), None))
+        # 1차 근접 문맥에서 판별되지 않은 경우, 같은 문장 범위(최대 80자 이내)에서 확장 탐색 (예: "2018. 6. 15. ... 내원하여")
+        if not hit:
+            extended_after = re.split(r"\.\s+|\n", text[match.end():match.end() + 80])[0]
+            hit = next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, extended_after)), None)
         if hit:
             meaning, label = hit
         key = (value, meaning)

@@ -98,10 +98,20 @@ PERSONNEL_RELIEF_RE = re.compile(
     r"[^.\n]{0,80}?"
     r"(?:하라|시켜라|에\s*처하라|할\s*것을\s*명한다|지정을\s*명한다|해임명령을|해임을\s*명한다|선고하여\s*(?:주시기|주실|주십시오|바랍니다)|해임\s*및)"
 )
+ADMIN_SANCTION_RELIEF_RE = re.compile(
+    r"(?:의사면허\s*(?:취소|정지)|면허\s*(?:취소|정지)|영업정지|업무정지)"
+    r"[^.\n]{0,80}?"
+    r"(?:명한다|선고하여\s*(?:주시기|주실|주십시오|바랍니다)|선고하라|선고한다|처분을\s*명한다|취소처분을\s*명한다|처분을\s*선고)"
+)
 APOLOGY_RELIEF_RE = re.compile(r"사죄\s*광고|사과문을?\s*(?:게재|공표|낭독)하라|사죄문을?\s*(?:게재|공표)하라")
 RELIEF_HEAD_RE = re.compile(r"청\s*구\s*취\s*지")
 GROUNDS_HEAD_RE = re.compile(r"청\s*구\s*원\s*인")
-CRIMINAL_DOC_RE = re.compile(r"공소장|공소사실|피고인|검사\s*[가-힣○]|구형|형사\s*공판")
+# 형사 공소장 등 검사 형사소송 서면 판별 (의료행위상 진료·CT '검사' 등 의학 용어 오탐 방지)
+CRIMINAL_DOC_RE = re.compile(
+    r"(?:공소장|공소사실|피고인\s*(?:은|는|이|가)|담당\s*검사|"
+    r"(?<![CT\s혈액조직추가정밀방사선내시경초음파의학임상])검사\s+[가-힣○]{2,3}(?!\s*(?:를|을|가|이|도|만|에|에서|결과|수치|시행|진행|의뢰|처방|장비|기기|실|장|료))|"
+    r"구형|형사\s*공판)"
+)
 
 APPLY_RE = re.compile(r"(?:에\s*따라|에\s*의하여|에\s*의해|에\s*근거하여|이\s*적용되어|을\s*적용하면|를\s*적용하면|에서\s*정한)")
 PUBLIC_ACTOR_RE = re.compile(r"국가|지방\s*자치\s*단체|공무원|행정청|공공\s*(?:단체|기관)|장관|처장|청장|시장|군수|구청장|도지사|교육감|사단장|참모총장")
@@ -271,6 +281,14 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
             "손해배상 등 민사소송의 청구취지나 판결로 피고 회사에게 대표이사 해임이나 행정청의 감독권 발동을 명할 수 없으므로, "
             "중대한 소송형태적 결함(JURISDICTIONAL_DEFECT)으로 각하/배척 대상이다.",
             {"remedy": "인사·감독명령", "defect_type": "JURISDICTIONAL_DEFECT"})
+    if (in_relief or not criminal_doc) and ADMIN_SANCTION_RELIEF_RE.search(sentence):
+        return ClaimMatch(
+            "NO_BASIS_REMEDY", sentence, 0, "민사소송에서 행정청 고유권한인 의사면허취소 및 영업정지 처분 청구 (소송형태·관할 결함)", "A", "CONTRADICTED",
+            [_source("의료법 제65조"), _source("의료법 제66조"), _source("민사소송법 제248조")],
+            "의사면허 취소(의료법 제65조)나 의료기관 영업정지·업무정지(의료법 제66조) 처분은 보건복지부장관 또는 관할 행정관청의 "
+            "고유 행정권한이다. 민사소송의 청구취지나 판결로 이를 직접 명하거나 처분할 수 없으므로, 민사재판권의 한계를 벗어난 "
+            "중대한 소송형태적 결함(JURISDICTIONAL_DEFECT, UNFOUNDED_CLAIM)으로 각하/배척 대상이다.",
+            {"remedy": "행정처분·영업정지·면허취소", "defect_type": "JURISDICTIONAL_DEFECT"})
     if in_relief and APOLOGY_RELIEF_RE.search(sentence):
         return ClaimMatch(
             "NO_BASIS_REMEDY", sentence, 0, "사죄광고·사과문 게재 강제 청구(사람 확인)", "C", "SUSPICIOUS",
@@ -373,14 +391,22 @@ def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
             [_source("사기죄의 행위 당시 판단 기준")],
             "사후의 지체·불이행만으로 계약 당시 기망이나 편취 고의를 확정할 수 없다. 계약 체결 당시의 "
             "의사·능력, 기망행위, 처분행위와의 관계를 뒷받침하는 별도 사실과 증거를 확인해야 한다.")
-    if (re.search(r"자유심증|입증책임|증명책임|반증하지\s*못|무손해", compact)
-            and re.search(r"청구(?:금액|액)|손해액|개발\s*손실액|손실액|법정손해|위자료", compact)
+    if (re.search(r"반증하지\s*못|무손해", compact)
             and re.search(r"확정\s*간주|확정간주|당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
         return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "입증책임의 임의 전도 및 손해액 당연 확정 궤변 (기각/각하 위험)", "B", "CONTRADICTED",
             [_source("민사소송법 제202조"), _source("민사소송법 제288조")],
             "민사소송법상 손해 발생과 손해액의 증명책임은 원고에게 있으며, 자유심증주의는 증거판단 원칙일 뿐 입증책임을 전환하지 않는다. "
             "피고에게 '무손해'라는 소극적 사실의 반증을 요구하여 불이행 시 손해액을 당연 확정·간주한다는 주장은 입증책임 분배 원칙을 "
             "정면으로 전도한 중대한 궤변(BURDEN_OF_PROOF_INVERSION, UNFOUNDED_CLAIM)으로 기각 대상이다.",
+            {"defect_type": "BURDEN_OF_PROOF_INVERSION"})
+    if (re.search(r"자유심증|입증책임|증명책임", compact)
+            and re.search(r"청구(?:금액|액)|손해액|개발\s*손실액|손실액|법정손해|위자료", compact)
+            and re.search(r"확정\s*간주|확정간주|당연.{0,8}(?:확정|간주|인정)|자동.{0,8}(?:확정|인정)|전액.{0,8}확정", compact)):
+        return ClaimMatch("DAMAGE_PROOF_INFERENCE", sentence, 0, "자유심증주의와 손해액 입증책임", "C", "SUSPICIOUS",
+            [_source("민사소송법 제202조")],
+            "자유심증주의는 증거의 증명력을 법관의 자유로운 판단에 맡기는 원칙일 뿐, 손해 발생과 액수의 "
+            "증명책임을 면제하거나 입증 없이 청구금액 전액을 당연 인정하는 근거가 될 수 없다. 손해액 산정의 "
+            "구체적 근거를 확인해야 한다.",
             {"defect_type": "BURDEN_OF_PROOF_INVERSION"})
     if (re.search(r"법인|회사", compact) and re.search(r"임직원|직원|근로자", compact)
             and re.search(r"정신적?고통|위자료", context) and re.search(r"대위|동일하므로|합산하여.{0,8}청구", compact)
@@ -390,12 +416,20 @@ def _civil_inference(sentence: str, previous: str) -> Optional[ClaimMatch]:
             "법인 고유의 무형손해와 임직원 개인의 정신적 손해는 청구권자·손해 발생 근거를 구분해야 한다. "
             "직원들의 청구권을 회사가 행사한다면 양도·대위·선정당사자 등 권한과 요건을 확인해야 한다. "
             "법인에게 재산 외 손해가 발생할 수 없다고 단정하는 판단은 아니다.")
-    if (re.search(r"계약|약정|사적자치|법률관계", context) and re.search(r"헌법|기본권|과잉금지", compact)
-            and (re.search(r"심리없이|심리할필요없이|변론권.*(?:박탈|배제|제한)|즉각.*승소", compact))):
+    if (re.search(r"헌법|기본권", compact)
+            and re.search(r"변론권.*(?:박탈|배제|제한)|원천\s*박탈|즉각.*승소", compact)):
         return ClaimMatch("PRIVATE_CONSTITUTIONAL_EFFECT", sentence, 0, "사적 계약에 헌법 기본권 결부 변론권 박탈 궤변 (기각/각하 위험)", "B", "CONTRADICTED",
             [_source("헌법 제27조"), _source("민법 제103조")],
             "사법상 법률관계에 헌법상 기본권 침해 법리를 직접 적용하여 피고의 변론권 자체를 원천 박탈하고 즉각 승소 판결을 요구하는 주장은 "
             "헌법 제27조 재판청구권과 민사소송상 변론주의 원칙에 정면으로 위배되는 무리한 궤변(UNFOUNDED_CLAIM)으로 배척 대상이다.",
+            {"defect_type": "UNFOUNDED_CLAIM"})
+    if (re.search(r"계약|약정|사적자치|법률관계", context) and re.search(r"헌법|기본권|과잉금지", compact)
+            and re.search(r"심리\s*없이|심리할필요없이|배척|각하", compact)):
+        return ClaimMatch("PRIVATE_CONSTITUTIONAL_EFFECT", sentence, 0, "사적 계약에 대한 헌법 기본권 직접 적용", "C", "SUSPICIOUS",
+            [_source("헌법 제27조"), _source("민법 제103조"), _source("헌법의 대사인적 효력")],
+            "사인 간의 법률관계나 사적자치의 계약에 헌법상 기본권 규정이 직접 적용된다고 단정할 수 없다. "
+            "민법 제103조 등 사법의 일반조항을 매개로 간접 적용되는지, 계약 조항이 반사회질서에 해당하는지를 "
+            "검토해야 한다.",
             {"defect_type": "UNFOUNDED_CLAIM"})
     return None
 
@@ -433,7 +467,9 @@ def _relief_span(text: str):
 
 def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[ClaimMatch]:
     relief = _relief_span(text)
-    criminal_doc = bool(CRIMINAL_DOC_RE.search(text[:3000]))
+    # 민사 소장, 준비서면, 답변서 등 원고/피고 표기 및 청구취지가 있는 문서는 형사 공소장이 아님
+    is_civil_pleading = bool(re.search(r"^\s*(?:소\s*장|준\s*비\s*서\s*면|답\s*변\s*서)|원\s*고\s*(?:[\d.]+|[가-힣])|청\s*구\s*취\s*지", text[:1000]))
+    criminal_doc = bool(CRIMINAL_DOC_RE.search(text[:3000])) and not is_civil_pleading
     out: List[ClaimMatch] = []
     previous = ""
     for start, end in sentence_bounds(text):
@@ -513,7 +549,10 @@ def _to_finding(doc: NormalizedDocument, match: ClaimMatch, reading) -> Finding:
                              "basis": match.basis, "human_review": human, **match.extra},
         document_id=doc.document_id, engine=ENGINE_NAME,
         page=block.page if block else None, block_id=block.block_id if block else None,
-        tags=["LEGAL_CLAIM", f"CLAIM.{match.claim_type}"] + (["HUMAN_REVIEW"] if human else []),
+        tags=["LEGAL_CLAIM", f"CLAIM.{match.claim_type}"]
+        + ([match.extra["defect_type"]] if match.extra.get("defect_type") else [])
+        + (["BURDEN_INVERSION"] if match.extra.get("defect_type") == "BURDEN_OF_PROOF_INVERSION" else [])
+        + (["HUMAN_REVIEW"] if human else []),
         evidence=evidence)
 
 

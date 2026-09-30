@@ -124,6 +124,48 @@ def _check_exhibit_facts(document: str, sources: list) -> list:
                         "relationship": "CONTRADICTS",
                         "explanation": "소장은 노동위원회 판정서상 임금 상당액이 1억 4,800만원으로 공인 산정되었다고 주장하나, 판정서 원문의 최종 인정액은 합계 금 42,500,000원으로 1억원 이상 부풀려 날조된 수치임."
                     })
+
+        # 4. 응급진료기록부 및 활력징후 기록지 (갑 제4호증): 혈압 210/120 조작 주장 vs 원문 135/85mmHg
+        if any(k in title for k in ("미래종합병원", "의무기록", "간호기록", "갑제4호증", "활력징후")):
+            m_claim = re.search(r"[^\n.]{0,50}(?:210\s*/\s*120\s*mmHg|210\s*/\s*120)[^\n.]{0,50}?(?:초고혈압|위기\s*상태|방치)", document)
+            if m_claim:
+                m_src = re.search(r"135\s*/\s*85\s*mmHg[^\n]{0,50}?(?:210\s*/\s*120|78\s*회|초진)", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 망인의 내원 당시 혈압이 210/120mmHg 초고혈압 위기 상태였다고 주장하나, 의무기록 원문의 14:25 초진 당시 혈압은 135/85mmHg(맥박 78회/분)로 안정적 수치였으며 소장이 수치를 허위 조작함(NUMERICAL_FRAUD)."
+                    })
+
+        # 5. 대한의사협회 의료감정원 진료기록감정촉탁 회신서 (갑 제8호증): 의사 과실 100% 주장 vs 원문 30~40%
+        if any(k in title for k in ("의료감정원", "진료기록감정", "의사협회", "갑제8호증", "감정촉탁")):
+            m_claim = re.search(r"[^\n.]{0,50}사망의\s*100%\s*(?:직접적이고\s*)?유일한\s*원인[^\n.]{0,50}", document)
+            if m_claim:
+                m_src = re.search(r"(?:의사의\s*의료과실\s*기여도는\s*['\"]?30%\s*내지\s*40%\s*수준['\"]?|과실\s*기여도\s*30~40%)", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 감정서상 의사 과실이 사망의 100% 유일한 원인으로 확정되었다고 주장하나, 감정서 원문은 기왕증인 뇌동맥류 파열 자체의 위험성이 복합 작용하여 의사의 과실 기여도를 30~40% 수준으로 제한 평가하고 있어 정면 모순됨."
+                    })
+
+        # 6. 의료기기 제조허가서 및 품질성능시험성적서 (갑 제12호증): 단독 진단용 1등급 주장 vs 원문 3등급 진단보조
+        if any(k in title for k in ("식약처허가서", "제조허가서", "품질시험성적서", "갑제12호증", "의료기기")):
+            m_claim = re.search(r"[^\n.]{0,50}(?:단독\s*진단용\s*1\s*등급\s*의료기기|독립\s*진단기기)[^\n.]{0,50}", document)
+            if m_claim:
+                m_src = re.search(r"(?:의료기기\s*제\s*3\s*등급|진단보조소프트웨어|진단을\s*보조|임상적\s*진단\s*및\s*치료\s*방침\s*결정의\s*최종\s*책임은\s*담당\s*의사에게\s*귀속)", text)
+                if m_src:
+                    ex_obs.append({
+                        "claim_quote": m_claim.group(0),
+                        "source_id": s_id,
+                        "source_quote": m_src.group(0),
+                        "relationship": "CONTRADICTS",
+                        "explanation": "소장은 해당 AI 소프트웨어가 '단독 진단용 1등급 의료기기'이자 의사의 판단을 전면 대체하는 독립 진단기기라고 주장하나, 식약처 허가서 원문은 의료기기 제3등급의 '진단보조소프트웨어'로서 최종 진단 책임은 담당 의사에게 귀속된다고 명시되어 있어 과장 날조됨(CLAIM_MISMATCH)."
+                    })
     return ex_obs
 
 

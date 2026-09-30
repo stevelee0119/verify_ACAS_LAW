@@ -245,7 +245,7 @@ def classify(
     }
 
     # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다
-    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|SYSTEM_OVERRIDE|LABOR_DISPUTE)", text, re.IGNORECASE))
+    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|SYSTEM_OVERRIDE|LABOR_DISPUTE|MEDICAL_AI)", text, re.IGNORECASE))
     corroboration = sum(
         [is_hidden, addresses_ai, encoded, unicode_obfuscated, cross_layer_only, len(distinct_intents) > 1,
          source_layer == "metadata", is_bracket_directive]

@@ -1042,7 +1042,9 @@ class VerificationPipeline:
                     unavailable.append({"citation": citation.raw_text, "reason": fetched["reason"]})
                     continue
                 versions = fetched["versions"]
-            if len(versions) < 2:
+            earliest_start = min((v.get("effective_from") for v in versions if v.get("effective_from")), default=None)
+            is_not_yet_enacted = bool(reference.get("date") and earliest_start and earliest_start > reference.get("date"))
+            if len(versions) < 2 and not is_not_yet_enacted:
                 continue
             reviewed += 1
             finding = review_temporal_application(citation, versions, reference, criminal=criminal)

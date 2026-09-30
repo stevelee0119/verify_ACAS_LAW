@@ -118,7 +118,7 @@ REFERENCE_KINDS = {
     "TORT": "불법행위일",
     "LOWER_JUDGMENT": "원심 선고일",
 }
-TORT_SENTENCE_RE = re.compile(r"사고|불법행위|손해가\s*발생|상해를\s*입|부상을\s*입|폭행을\s*당")
+TORT_SENTENCE_RE = re.compile(r"사고|불법행위|손해가\s*발생|상해를\s*입|부상을\s*입|폭행을\s*당|내원|진료|수술|오진|의료사고|사망")
 LOWER_JUDGMENT_RE = re.compile(r"원심|제1심|1심|원판결")
 PROCEDURAL_LAW_RE = re.compile(r"소송법$|소송규칙$")
 
@@ -220,7 +220,7 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
     current = next((r for r in results if not r["version"].get("effective_to")), results[-1] if results else {"version": versions[-1], "outcome": {}})
     ref = next((r for r in results if when and _covers(r["version"], when)), None)
     claim = (citation.attributes or {}).get("claim_text") or ""
-    values = "; ".join(f"{_label(r['version'])}: {_official_values(r['outcome'])}" for r in results)
+    values = "; ".join(f"{_label(r['version'])}: {_official_values(r['outcome'])}" for r in results) or (f"{_label(versions[0])} (신설 조항)" if versions else "")
     base_detail = f"문서의 주장 '{claim.strip()[:80]}'을 시행 버전별 조문과 대조했다({values})."
     basis_note = reference.get("note") or ""
     legal_basis = [CRIMINAL_BASIS] if criminal else []
@@ -262,7 +262,8 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
                 "version_source": (versions[0].get("source") if versions else None),
                 "versions": [{"effective_from": r["version"].get("effective_from"),
                               "effective_to": r["version"].get("effective_to"),
-                              "status": r["outcome"]["status"], "values": _official_values(r["outcome"])} for r in results],
+                              "status": r["outcome"].get("status"), "values": _official_values(r["outcome"])}
+                             for r in (results or [{"version": v, "outcome": {}} for v in versions])],
                 "legal_basis": legal_basis, "human_review": True}
     detail = " ".join(x for x in (base_detail, basis_note, *(f"{b}." for b in legal_basis),
                                   "어느 버전이 사건에 적용되는지는 법률 판단이므로 결론을 내리지 않는다.") if x)
@@ -276,7 +277,7 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
         tags=["LEGAL", "STATUTE", "TEMPORAL"] + (["RETROACTIVE_APPLICATION_ERROR"] if "RETROACTIVE_APPLICATION_ERROR" in title_tail else []),
         evidence=[Evidence.create(description=f"시행 버전 {_label(r['version'])}", grade=EvidenceGrade.A,
                                   excerpt=paragraph_text(r["version"].get("text") or "", citation.paragraph)[:300])
-                  for r in results[:4]])
+                  for r in (results or [{"version": v} for v in versions])[:4]])
 
 
 def criminal_context(text: str) -> bool:
@@ -317,9 +318,15 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
         return {"status": "UNAVAILABLE", "versions": [],
                 "reason": f"법령 연혁을 확보하지 못함({getattr(history, 'message', '') or getattr(history, 'status', '')})"}
     rows = sorted(history.records, key=lambda r: legal_date(r.get("effective_from")) or "")
+    earliest_start = legal_date(rows[0].get("effective_from")) if rows else None
+    is_not_yet_enacted = bool(reference_date and earliest_start and earliest_start > reference_date)
     try:
         current = select_version(rows, today)
-        wanted = [select_version(rows, reference_date)] if reference_date else []
+        if is_not_yet_enacted:
+            # 기준일 당시 아직 법률이 제정/시행되지 않은 신설 법령인 경우: 최초 시행 버전을 wanted에 포함
+            wanted = [rows[0]]
+        else:
+            wanted = [select_version(rows, reference_date)] if reference_date else []
     except ValueError as exc:
         return {"status": "UNAVAILABLE", "versions": [], "reason": f"시행 버전을 고르지 못함({exc})"}
     if not reference_date:

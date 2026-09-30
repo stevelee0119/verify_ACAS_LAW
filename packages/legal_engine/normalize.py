@@ -154,6 +154,11 @@ LAW_ALIASES = {
     "특정범죄가중법": "특정범죄 가중처벌 등에 관한 법률",
     "정보통신망법": "정보통신망 이용촉진 및 정보보호 등에 관한 법률",
     "학교폭력예방법": "학교폭력예방 및 대책에 관한 법률",
+    # 혁신의료기기지원법 공식 제명 및 약칭
+    "혁신의료기기법": "의료기기산업 육성 및 혁신의료기기 지원법",
+    "혁신의료기기지원법": "의료기기산업 육성 및 혁신의료기기 지원법",
+    "의료기기산업법": "의료기기산업 육성 및 혁신의료기기 지원법",
+    "의료기기산업육성및혁신의료기기지원법": "의료기기산업 육성 및 혁신의료기기 지원법",
 }
 
 
@@ -216,7 +221,9 @@ def law_name_suffix(raw: str) -> str:
     # 공식 제명 목록(LAW_ALIASES의 공식 명칭 및 주요 법전)이 raw 내에 완전 포함된 경우 최장 일치를 우선 보존한다
     clean_raw = re.sub(r"[「」『』]", " ", raw or "")
     matches = []
-    for official in (set(LAW_ALIASES.values()) | CORE_LEGAL_CODES):
+    targets = set(LAW_ALIASES.values()) | set(LAW_ALIASES.keys()) | CORE_LEGAL_CODES
+    for official in targets:
+        # 단어 시작 경계(공백 또는 문장 시작)에서 일치하는 법령명 탐색
         pattern = re.compile(r"(?<![가-힣])" + re.escape(official).replace(r"\ ", r"\s*")
                              + r"(?:\s*시행(?:령|규칙))?(?=$|[^가-힣]|(?:을|를|에|의|은|는)(?:\s|$))")
         for match in pattern.finditer(clean_raw):
@@ -227,7 +234,11 @@ def law_name_suffix(raw: str) -> str:
     if matches:
         # The rightmost complete title wins; preserve a subordinate decree/rule.
         match = max(matches, key=lambda m: (m.end(), len(m.group())))
-        return " ".join(match.group().split())
+        resolved = " ".join(match.group().split())
+        compact = resolved.replace(" ", "")
+        if compact in LAW_ALIASES:
+            return LAW_ALIASES[compact]
+        return resolved
 
     tokens = clean_raw.split()
     if not tokens:
