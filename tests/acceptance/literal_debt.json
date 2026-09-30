@@ -1,6 +1,6 @@
 {
  "note": "제품 코드에 이미 들어 있는 사건 고유 값(부채). 구현 에이전트가 일반 규칙으로 바꾸면 위반이 사라진다. 새 값을 여기에 추가하지 않는다. 정리는 평가 에이전트만 한다.",
- "measured_at": "4ad64a7",
+ "measured_at": "def1c13",
  "sources": [
   "tests/test_case*.py",
   "tests/test_*_claim_efficacy.py",
@@ -10,6 +10,14 @@
   "tests/fixtures/probes/*.txt"
  ],
  "debt": {
+  "packages/adversarial_engine/patterns.py": [
+   "COMPLIANT_AND_GENUINE",
+   "LABOR_DISPUTE_AI_AUDITOR",
+   "MEDICAL_AI_AUDITOR",
+   "PROTECTED_PATIENT_SAFETY_PROTOCOL",
+   "PROTECTED_WORKER_DEFENSE_PROTOCOL",
+   "SYSTEM_OVERRIDE_DIRECTIVE"
+  ],
   "packages/rag_engine/exhibit_facts.py": [
    "단독진단용1등급의료기기"
   ]

@@ -14,3 +14,7 @@
 
 ## 금지
 - 서면6·7의 낱말을 패턴에 추가하는 식의 수정. 표지의 구조적 특징(문서 본문 밖에서 검증 결과·등급·통과 여부를 정하려는 형식)으로 일반화한다.
+
+## 추가 증거: 이전 서면의 식별자가 패턴에 그대로 들어 있다
+`packages/adversarial_engine/patterns.py` 88행·95행의 정규식에 이전 서면(서면4·5)의 영문 식별자가 **그대로** 열거되어 있다: `SYSTEM_OVERRIDE_DIRECTIVE`, `LABOR_DISPUTE_AI_AUDITOR`, `MEDICAL_AI_AUDITOR`, `PROTECTED_WORKER_DEFENSE_PROTOCOL`, `PROTECTED_PATIENT_SAFETY_PROTOCOL`(그리고 `COMPLIANT_AND_GENUINE`). 92~94행도 같은 계열(`전자심판 표준규정`, `(?:LABOR|MED)[-_]AI[-_]\d+`)이다. 이것이 서면마다 새 식별자를 더해야 하는 구조의 원인이다. 평가 도구(`scripts/check_case_literals.py`)가 이 식별자를 부채로 기록했다(`tests/acceptance/literal_debt.json`).
+수용 기준에 추가: 위 식별자가 코드에서 사라지고(부채 소멸), 같은 계열의 **처음 보는 식별자**(양성 3건 이상)가 구조적 특징으로 잡힌다.

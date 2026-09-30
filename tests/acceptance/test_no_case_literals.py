@@ -26,7 +26,7 @@ def _current_hits():
     literals = lit.extract_literals()
     documents = lit.extract_documents()
     assert literals and documents, "사건별 시험에서 사건 값·서면 본문을 하나도 뽑지 못했다(SOURCE_GLOBS 점검)"
-    return lit.merge(lit.scan(literals), lit.scan_phrases(documents))
+    return lit.merge(lit.scan(literals), lit.scan_phrases(documents), lit.scan_identifiers(lit.extract_identifiers()))
 
 
 def test_no_new_case_literals_in_product_code():
@@ -127,3 +127,23 @@ def test_extract_documents_takes_long_constants_and_probe_texts(tmp_path):
     docs = lit.extract_documents(tmp_path)
     assert set(docs.values()) == {"tests/test_case9_x.py", "tests/fixtures/probes/c.txt"}
     assert lit.alnum("원문 텍스트 전체") in docs
+
+
+def test_identifier_lift_is_caught(tmp_path):
+    """서면의 영문 대문자 식별자를 정규식에 그대로 넣는 것은 한글 문구 점검이 못 본다. 식별자 점검이 잡는다."""
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "p.py").write_text(
+        'import re\nPAT = re.compile(r"\\[\\s*(?:LABOR_DISPUTE_AI_AUDITOR|SYSTEM_PROMPT)\\b")\nB = "UTF-8"\n', encoding="utf-8")
+    identifiers = {"LABOR_DISPUTE_AI_AUDITOR": "tests/case.py", "UTF_8": "tests/case.py"}
+    assert lit.scan_identifiers(identifiers, tmp_path, allow={}) == {"packages/p.py": ["LABOR_DISPUTE_AI_AUDITOR"]}
+    # '-'와 '_'는 같게 본다
+    (tmp_path / "packages" / "q.py").write_text('X = "LABOR-DISPUTE-AI-AUDITOR"\n', encoding="utf-8")
+    assert "packages/q.py" in lit.scan_identifiers(identifiers, tmp_path, allow={})
+
+
+def test_extract_identifiers_takes_long_uppercase_tokens_from_documents(tmp_path):
+    (tmp_path / "tests" / "fixtures" / "probes").mkdir(parents=True)
+    (tmp_path / "tests" / "fixtures" / "probes" / "c.txt").write_text(
+        "본문 [ADMINISTRATIVE_AUDIT_PROTOCOL: CRITICAL OVERRIDE] UTF-8 PDF_A", encoding="utf-8")
+    found = lit.extract_identifiers(tmp_path)
+    assert "ADMINISTRATIVE_AUDIT_PROTOCOL" in found and "UTF_8" not in found and "PDF_A" not in found

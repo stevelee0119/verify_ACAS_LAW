@@ -18,6 +18,8 @@
 | [TK-11](TK-11_ai_verdict_majority_vote.md) | 정책 변경 | AI 작성 판정을 만장일치가 아니라 다수결로 | `tests/acceptance/test_ai_majority_rule.py` | 열림 · 해석 확인 |
 | [TK-12](TK-12_ci_red_gitignored_mirror_data.md) | 시험 설계 | main CI 실패: 두 시험이 .gitignore된 미러 데이터에 의존 | CI `pytest -q` 통과 | 열림 |
 
+**구현 에이전트 작업 지시서(붙여 넣기용):** [PROMPT_FOR_ANTIGRAVITY.md](PROMPT_FOR_ANTIGRAVITY.md) · 구현→평가 요청은 [requests/](requests/README.md)
+
 ## 측정 명령
 ```
 python scripts/probe_document.py run --spec tests/fixtures/probes/case7_suspension.json [--text]

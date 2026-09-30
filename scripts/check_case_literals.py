@@ -14,6 +14,8 @@
 - 금액: 유효숫자 3자리 이상인 쉼표 금액(148,000,000 → 유효숫자 148). 1,000,000처럼 둥근 값은 뺀다
 - 활력징후: 210/120 mmHg 같은 수치쌍
 
+- 식별자 베끼기: 서면에 나오는 대문자 식별자(`LABOR_DISPUTE_AI_AUDITOR`, `ADMINISTRATIVE_AUDIT_PROTOCOL`)가 제품 코드의 정규식·목록에 그대로 들어 있는 경우
+  (한글 문구 점검은 영문 식별자를 못 본다). 12자 이상, `_`·`-`로 이어진 대문자·숫자 토큰만 센다. `-`와 `_`는 같게 본다
 - 문구 베끼기: 사건 서면 본문(사건별 시험의 긴 문자열 상수, 서면 원문 텍스트)에 나오는 열 글자 이상의 연속 문구가
   제품 코드의 정규식·메시지에 그대로 들어 있는 경우. 숫자를 빼고 사건 문구로 정규식을 짜도 잡는다(숫자만 보는 점검의 구멍)
 
@@ -49,6 +51,8 @@ AMOUNT = re.compile(r"(?<![\d,])\d{1,3}(?:,\d{3}){2,}(?![\d,])")
 VITALS = re.compile(r"(?<!\d)\d{2,3}\s*/\s*\d{2,3}(?=\s*mmHg)")
 MIN_PHRASE = 10          # 글자·숫자만 이은 연속 문구의 최소 길이(공백·정규식 문법 제외). 한글이 이 길이 이상이어야 센다
 MIN_DOCUMENT = 200       # 사건 서면 본문으로 보는 문자열 상수의 최소 길이
+MIN_IDENT = 12           # 서면의 대문자 식별자(LABOR_DISPUTE_AI_AUDITOR 같은 것)를 코드에서 찾을 최소 길이
+IDENT = re.compile(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]{1,}(?:[_-][A-Z0-9]+){1,}(?![A-Za-z0-9])")
 
 
 def distinctive_amount(value: str) -> bool:
@@ -129,6 +133,44 @@ def extract_documents(root: Path = ROOT) -> Dict[str, str]:
                     if len(const) >= MIN_DOCUMENT:
                         docs.setdefault(alnum(const), rel)
     return docs
+
+
+def norm_ident(token: str) -> str:
+    return token.replace("-", "_")
+
+
+def extract_identifiers(root: Path = ROOT) -> Dict[str, str]:
+    """{서면의 대문자 식별자: 출처 파일}. 원문 텍스트 파일과 사건별 시험의 긴 문자열 상수에서 뽑는다."""
+    found: Dict[str, str] = {}
+    for pattern in SOURCE_GLOBS:
+        for path in sorted(root.glob(pattern)):
+            raw = path.read_text(encoding="utf-8", errors="ignore")
+            rel = str(path.relative_to(root))
+            texts = [raw] if path.suffix == ".txt" else [c for c in code_constants(raw) if len(c) >= MIN_DOCUMENT]
+            for text in texts:
+                for token in IDENT.findall(text):
+                    if len(token) >= MIN_IDENT:
+                        found.setdefault(norm_ident(token), rel)
+    return found
+
+
+def scan_identifiers(identifiers: Dict[str, str], root: Path = ROOT,
+                     allow: Dict[str, Dict[str, str]] | None = None) -> Dict[str, List[str]]:
+    """{제품 코드 파일: [서면에서 그대로 따온 식별자]}"""
+    allow = load_allow() if allow is None else allow
+    hits: Dict[str, List[str]] = {}
+    for path in sorted(root.glob(SCAN_GLOB)):
+        relative = str(path.relative_to(root))
+        skip = set(allow.get(relative, {}))
+        found = set()
+        for const in code_constants(path.read_text(encoding="utf-8", errors="ignore")):
+            for token in IDENT.findall(const):
+                key = norm_ident(token)
+                if len(token) >= MIN_IDENT and key in identifiers and key not in skip:
+                    found.add(key)
+        if found:
+            hits[relative] = sorted(found)
+    return hits
 
 
 def scan_phrases(documents: Dict[str, str], root: Path = ROOT, allow: Dict[str, Dict[str, str]] | None = None
@@ -220,7 +262,7 @@ def main(argv: List[str] | None = None) -> int:
     args = parser.parse_args(argv)
     literals = extract_literals()
     documents = extract_documents()
-    hits = merge(scan(literals), scan_phrases(documents))
+    hits = merge(scan(literals), scan_phrases(documents), scan_identifiers(extract_identifiers()))
     if args.write_debt:
         payload = {"note": "제품 코드에 이미 들어 있는 사건 고유 값(부채). 구현 에이전트가 일반 규칙으로 바꾸면 위반이 사라진다. "
                            "새 값을 여기에 추가하지 않는다. 정리는 평가 에이전트만 한다.",
