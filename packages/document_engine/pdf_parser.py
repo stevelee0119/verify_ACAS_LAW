@@ -1231,21 +1231,56 @@ def _pdf_literal(body: bytes) -> str:
     return data.decode("latin-1", "ignore")
 
 
-SINGLE_GLYPH_SHOW_RE = re.compile(rb"^\s*(?:/[A-Za-z0-9]+\s+[\d.]+\s+Tf\s*)?(?:[-\d.\s]+(?:Tm|Td|TD)\s*)*"
-                                  rb"(?:<(?P<hex>[0-9A-Fa-f]{2,4})>|\((?P<lit>(?:\\.|[^\\)]))\))\s*Tj\s*EMC")
+SINGLE_GLYPH_SHOW_RE = re.compile(
+    rb"^\s*(?:/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf\s*)?(?:[-\d.\s]+(?:Tm|Td|TD)\s*)*"
+    rb"(?:<(?P<hex>[0-9A-Fa-f]{2,4})>|\((?P<lit>(?:\\.|[^\\)]))\))\s*Tj\s*EMC")
+FONT_SET_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf")
+GLYPH_SHOW_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf|<(?P<hex>[0-9A-Fa-f]{2,4})>\s*Tj")
+ROUTINE_GLYPH_MIN = 3  # 같은 글꼴·글리프가 ActualText 밖에서 이만큼 쓰이면 평소 글자(공백)로 본다
 
 
-def _is_line_break_marker(text: str, data: bytes, end: int) -> bool:
-    """ActualText가 U+200B 하나이고, 그 표시 구간이 글리프 하나(공백 자리)만 그리는가.
+def _routine_glyphs(data: bytes) -> Dict[Tuple[bytes, bytes], int]:
+    """ActualText 구간 밖에서 글리프 하나를 그린 횟수(글꼴 이름, 글리프 코드)별 집계."""
+    spans = []
+    for m in ACTUAL_TEXT_RE.finditer(data):
+        stop = data.find(b"EMC", m.end())
+        spans.append((m.start(), stop if stop != -1 else len(data)))
+    counts: Dict[Tuple[bytes, bytes], int] = {}
+    font, index = b"", 0
+    for m in GLYPH_SHOW_RE.finditer(data):
+        if m.group("font"):
+            font = m.group("font")
+            continue
+        while index < len(spans) and spans[index][1] < m.start():
+            index += 1
+        if index < len(spans) and spans[index][0] <= m.start() <= spans[index][1]:
+            continue
+        key = (font, m.group("hex").upper())
+        counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+def _is_line_break_marker(text: str, data: bytes, end: int, routine: Optional[Dict[Tuple[bytes, bytes], int]] = None) -> bool:
+    """ActualText가 U+200B 하나이고, 덮는 글리프가 그 글꼴의 평소 공백 글리프인가.
 
     Google Docs(Skia) PDF는 줄바꿈 자리의 공백 글리프에 ActualText U+200B를 붙인다. 글자 하나를 가릴 뿐 문자열을
-    숨길 수 없으므로 은닉 신호가 아니다. 여러 글리프를 덮거나 다른 문자가 섞이면 종전대로 센다.
+    숨길 수 없으므로 은닉 신호가 아니다. 다음 중 하나라도 어긋나면 종전대로 은닉 신호로 센다.
+    - 여러 글리프를 덮거나 다른 문자가 섞임
+    - 덮는 글리프가 ActualText 밖에서는 거의 쓰이지 않음(글자 사이에 끼워 넣은 폭 0 문자: 지시문 은닉 수법)
     """
     if text != "\u200b":
         return False
     head = data[end:end + 200]
     bdc = re.match(rb"\s*>>\s*BDC", head)
-    return bool(bdc and SINGLE_GLYPH_SHOW_RE.match(head[bdc.end():]))
+    shown = SINGLE_GLYPH_SHOW_RE.match(head[bdc.end():]) if bdc else None
+    if not shown or not shown.group("hex"):
+        return False
+    font = shown.group("font")
+    if not font:
+        earlier = list(FONT_SET_RE.finditer(data[max(0, end - 3000):end]))
+        font = earlier[-1].group("font") if earlier else b""
+    counts = routine if routine is not None else _routine_glyphs(data)
+    return counts.get((font, shown.group("hex").upper()), 0) >= ROUTINE_GLYPH_MIN
 
 
 def _actual_text_zero_width(raw: bytes, collect: bool = False, line_break_markers: Optional[Dict[str, int]] = None):
@@ -1263,6 +1298,7 @@ def _actual_text_zero_width(raw: bytes, collect: bool = False, line_break_marker
         header = body[max(0, m.start() - 400) : m.start()]
         chunks.append(_decode_stream(m.group(1), header.decode("latin-1", "ignore")))
     for data in chunks:
+        routine = None
         for m in ACTUAL_TEXT_RE.finditer(data or b""):
             if m.group(1) is not None:
                 hexdigits = re.sub(rb"\s", b"", m.group(1)).decode()
@@ -1274,7 +1310,10 @@ def _actual_text_zero_width(raw: bytes, collect: bool = False, line_break_marker
                     continue
             else:
                 text = _pdf_literal(m.group(2))
-            if line_break_markers is not None and _is_line_break_marker(text, data, m.end()):
+            if line_break_markers is not None and text == "\u200b":
+                if routine is None:
+                    routine = _routine_glyphs(data)
+            if line_break_markers is not None and _is_line_break_marker(text, data, m.end(), routine):
                 line_break_markers["U+200B ZERO WIDTH SPACE"] = line_break_markers.get("U+200B ZERO WIDTH SPACE", 0) + 1
                 continue
             found = False

@@ -129,13 +129,20 @@ def test_google_docs_line_break_marker_is_not_smuggling(parsed):
     assert not [f for f in findings if f.type == FindingType.UNICODE_SMUGGLING]
 
 
+ROUTINE_SPACES = b"".join(b"BT /F6 14.6 Tf 1 0 0 -1 0 .8 Tm %d 5 Td <0003> Tj ET\n" % n for n in (10, 20, 30))
+
+
 @pytest.mark.parametrize("stream, smuggled", [
-    # 글리프 하나(공백)를 덮는 U+200B: 줄바꿈 표시
-    (b"BT /Span<</ActualText <FEFF200B> >> BDC /F6 14.6 Tf 1 0 0 -1 0 .8 Tm 307.7 -13.2 Td <0003> Tj EMC ET", False),
+    # 평소 공백 글리프(같은 글꼴에서 ActualText 밖에 여러 번 쓰임) 하나를 덮는 U+200B: 줄바꿈 표시
+    (ROUTINE_SPACES + b"BT /Span<</ActualText <FEFF200B> >> BDC /F6 14.6 Tf 1 0 0 -1 0 .8 Tm 307.7 -13.2 Td <0003> Tj EMC ET", False),
+    # 글리프 하나를 덮지만 그 글리프가 다른 곳에서는 쓰이지 않음(글자 사이에 끼운 폭 0 문자): 은닉 신호
+    (ROUTINE_SPACES + b"BT /Span<</ActualText <FEFF200B> >> BDC /F55 15.3 Tf 14.8 0 Td <01> Tj EMC ET", True),
+    # 같은 글꼴이 아니면 평소 글리프로 보지 않는다
+    (ROUTINE_SPACES + b"BT /Span<</ActualText <FEFF200B> >> BDC /F9 14.6 Tf 14.8 0 Td <0003> Tj EMC ET", True),
     # 여러 글리프를 덮는 U+200B: 은닉 신호
-    (b"BT /Span<</ActualText <FEFF200B> >> BDC /F6 14.6 Tf 10 0 Td <0003> Tj 5 0 Td <0004> Tj EMC ET", True),
+    (ROUTINE_SPACES + b"BT /Span<</ActualText <FEFF200B> >> BDC /F6 14.6 Tf 10 0 Td <0003> Tj 5 0 Td <0003> Tj EMC ET", True),
     # 폭 0 문자와 다른 글자가 섞인 ActualText: 은닉 신호
-    (b"BT /Span<</ActualText <FEFF0069200B0067> >> BDC <0003> Tj EMC ET", True),
+    (ROUTINE_SPACES + b"BT /Span<</ActualText <FEFF0069200B0067> >> BDC /F6 14.6 Tf <0003> Tj EMC ET", True),
 ])
 def test_line_break_marker_rule_is_narrow(stream, smuggled):
     raw = b"%PDF-1.4\n1 0 obj << /Length 10 >> stream\n" + stream + b"\nendstream endobj"
@@ -143,6 +150,14 @@ def test_line_break_marker_rule_is_narrow(stream, smuggled):
     counts = _actual_text_zero_width(raw, line_break_markers=markers)
     assert bool(counts) is smuggled
     assert bool(markers) is not smuggled
+
+
+def test_dev_fixture_zero_width_still_flagged():
+    """저장소 개발 시험 문서(한컴 PDF, 지시문 안의 폭 0 문자)는 은닉 신호로 계속 잡힌다."""
+    path = Path(__file__).parent / "fixtures" / "legal_verifier_testset" / "TC-03.pdf"
+    doc = parse_document(str(path), document_id="tc03", filename=path.name, mime_type="application/pdf", sha256="x")
+    assert doc.structure.get("actual_text_zero_width") == {"U+200B ZERO WIDTH SPACE": 1}
+    assert not doc.structure.get("actual_text_line_break_markers")
 
 
 # ---------------------------------------------------------------------------------------------------------
