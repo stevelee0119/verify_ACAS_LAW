@@ -5,6 +5,7 @@ import hashlib
 from contextlib import closing
 import json
 from pathlib import Path
+import re
 import sys
 
 from packages.adversarial_engine import AdversarialScanner
@@ -18,6 +19,50 @@ EXTRACTOR_VERSION = "drive-text-v3"
 EXCLUDE_MIN_TOTAL = 10       # 이보다 짧은 파일은 쪽 단위로 빼지 않고 전체를 격리한다
 EXCLUDE_MAX_SHARE = 0.02     # 전체 쪽수의 2%까지(최소 1쪽)
 EXCLUDE_MAX_PAGES = 3        # 그리고 3쪽까지만 해당 쪽을 빼고 색인한다
+
+
+def chunk_page_text(text: str, page_number: int, target_size: int = 1040, max_size: int = 1200, overlap: int = 160) -> list[dict]:
+    """페이지 텍스트를 문맥·문장 경계를 보존하며 고품질 청크로 분할한다.
+
+    1. PDF 줄바꿈으로 인해 단어나 수치 중간이 쪼개진 현상을 정돈.
+    2. 단순 글자 수 슬라이싱 대신 문장 마침표·개행 경계에서 분할하여 키워드 분실 방지.
+    """
+    if not text or not text.strip():
+        return []
+
+    # 단어 중간의 부자연스러운 PDF 줄바꿈 결합
+    normalized = re.sub(r'([가-힣a-zA-Z0-9,])\n([가-힣a-zA-Z0-9])', r'\1 \2', text)
+    normalized = re.sub(r'[ \t]+', ' ', normalized).strip()
+    if not normalized:
+        return []
+
+    if len(normalized) <= max_size:
+        return [{"page": page_number, "start": 0, "text": normalized}]
+
+    chunks = []
+    start = 0
+    total_len = len(normalized)
+
+    while start < total_len:
+        end = min(start + max_size, total_len)
+        if end < total_len:
+            # target_size 주변에서 자연스러운 문장 마침표 탐색
+            search_start = max(start + target_size - 120, start + 200)
+            for marker in ("\n\n", ".\n", ". ", "다. ", "함. ", "임. ", "\n", "; "):
+                idx = normalized.rfind(marker, search_start, end)
+                if idx != -1:
+                    end = idx + len(marker)
+                    break
+
+        chunk_str = normalized[start:end].strip()
+        if chunk_str:
+            chunks.append({"page": page_number, "start": start, "text": chunk_str})
+
+        if end >= total_len:
+            break
+        start = max(start + 1, end - overlap)
+
+    return chunks
 
 
 def excludable_pages(total):
@@ -104,10 +149,8 @@ def extract(path, filename, mime):
             no_text_pages.append(page.page_number)
             continue
         read_pages += 1
-        for start in range(0, len(text), 1040):
-            chunk = text[start:start + 1200]
-            if chunk.strip():
-                chunks.append({"page": page.page_number, "start": start, "text": chunk})
+        page_chunks = chunk_page_text(text, page.page_number)
+        chunks.extend(page_chunks)
     coverage_missing = any(p.get("status") in ("UNVERIFIED", "OCR_LOW_QUALITY")
                            for p in doc.structure.get("page_coverage", []))
     partial = read_pages < total or coverage_missing or bool(doc.parse_warnings)

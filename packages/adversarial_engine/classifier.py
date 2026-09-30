@@ -110,6 +110,22 @@ def _imperative_near(text: str, hit: PatternHit, window: int = 24) -> bool:
 # 한국어 과거·완료 서술 어미(…하였다, 했고, 되었으나). 사건 경위를 적은 문장의 표지다.
 NARRATIVE_PAST_RE = re.compile(r"(?:였|었|았|했|됐)(?:다|고|으며|으나|는데|지만|음)")
 
+# 법률·규정·계약의 규범적 금지·의무 서술 표현 (명령 프롬프트가 아닌 정상 법규 조항 표지)
+NORMATIVE_RULE_RE = re.compile(
+    r"(?:하여서는\s*(?:아니\s*된다|안\s*된다)|할\s*수\s*(?:없다|없음)|"
+    r"[을를]\s*(?:금지한다|제한한다)|[이가]\s*금지된다|"
+    r"에\s*(?:위배된다|위반된다|저촉된다|해당한다)|"
+    r"준수하여야\s*한다|따라야\s*한다|거쳐야\s*한다|의하여야\s*한다)"
+)
+
+
+def _normative_rule_sentence(text: str, hit: PatternHit) -> bool:
+    """지시형 낱말이 든 문장이 규정·법령의 규범적 금지·의무 서술인지 본다('…승인 절차를 생략하고 반출할 수 없다')."""
+    start = max((text.rfind(mark, 0, hit.start) for mark in ".!?。\n"), default=-1) + 1
+    ends = [i for i in (text.find(mark, hit.end) for mark in ".!?。\n") if i >= 0]
+    sentence = text[start:min(ends) if ends else len(text)]
+    return bool(NORMATIVE_RULE_RE.search(sentence)) and not IMPERATIVE_RE.search(sentence)
+
 
 def _narrative_sentence(text: str, hit: PatternHit) -> bool:
     """지시형 낱말이 든 문장이 한국어 과거 서술로 끝나는지 본다("…규칙을 무시하고 영업을 계속하였다").
@@ -236,6 +252,8 @@ def classify(
         "imperative": imperative,
         # 모든 지시형 낱말이 한국어 과거 서술 문장 안에 있는지(사건 경위 서술). 심각도 승격 여부에 쓴다.
         "narrative_past": bool(hits) and all(_narrative_sentence(text, h) for h in hits),
+        # 모든 지시형 낱말이 규정·법령의 규범적 금지·의무 서술 문장 안에 있는지(정상 규정 조항).
+        "normative_rule": bool(hits) and all(_normative_rule_sentence(text, h) for h in hits),
         "descriptive_mention": descriptive,
         "directive_target": "AI_OR_VERIFIER" if addresses_ai else "UNSPECIFIED",
         "matched_patterns": [{"text": h.matched_text, "description": h.description, "intent": str(h.intent),
@@ -244,8 +262,8 @@ def classify(
         "adversarial_subtype": "GUIDELINE_IMPERSONATION" if bool(hits and OFFICIAL_GUIDELINE_RE.search(text)) else None,
     }
 
-    # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다
-    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|SYSTEM_OVERRIDE|LABOR_DISPUTE|MEDICAL_AI)", text, re.IGNORECASE))
+    # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다 (특정 사건 하드코딩 제거 및 범용화)
+    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|directive|auditor|prompt|mode)", text, re.IGNORECASE))
     corroboration = sum(
         [is_hidden, addresses_ai, encoded, unicode_obfuscated, cross_layer_only, len(distinct_intents) > 1,
          source_layer == "metadata", is_bracket_directive]
@@ -307,11 +325,12 @@ def severity_for(classification: Classification, *, in_ocr_layer: bool = False) 
     # ("피고는 종전 규칙을 무시하고 영업을 계속하였다"). 이런 단일 서술은 승격하지 않는다(0.9.9:
     # 판례집 같은 참고자료가 파일째 격리되고 대조군 문서에 HIGH가 붙는 원인이었다).
     intents = set(classification.intents)
-    narrative = (classification.features.get("narrative_past")
-                 and not classification.features.get("imperative")
-                 and not classification.features.get("corroborating_signals")
-                 and InjectionIntent.ROLE_OVERRIDE not in intents)
-    if intents & ESCALATING_INTENTS and not narrative:
+    # 사건 경위 서술(과거형)이거나 법령·규정의 규범적 금지 조항이고 명령형 어미나 보조 신호가 없으면 승격하지 않는다.
+    narrative_or_normative = ((classification.features.get("narrative_past") or classification.features.get("normative_rule"))
+                              and not classification.features.get("imperative")
+                              and not classification.features.get("corroborating_signals")
+                              and InjectionIntent.ROLE_OVERRIDE not in intents)
+    if intents & ESCALATING_INTENTS and not narrative_or_normative:
         return max(base, Severity.HIGH, key=_severity_rank)
     return base
 
