@@ -51,6 +51,29 @@ class LocalLegalMirror:
             except Exception:
                 self._laws = []
 
+        # config/legal_rules/rules.json에 수집된 공식 조문을 기본 오프라인 미러로 자동 보강
+        rules_file = CONFIG_DIR / "legal_rules" / "rules.json"
+        if rules_file.exists():
+            try:
+                rules_data = json.loads(rules_file.read_text(encoding="utf-8"))
+                for key, val in rules_data.get("sources", {}).items():
+                    m_law = re.match(r"^(?P<law>[가-힣A-Za-z]+)\s*제\s*(?P<art>\d+)\s*조", key)
+                    if m_law:
+                        law_name = m_law.group("law")
+                        article = m_law.group("art")
+                        if not any(_canon(l.get("law_name", "")) == _canon(law_name) and str(l.get("article")) == article for l in self._laws):
+                            self._laws.append({
+                                "law_name": law_name,
+                                "article": article,
+                                "paragraph": "1",
+                                "text": val.get("text", ""),
+                                "effective_from": "1980-01-01",
+                                "effective_to": None,
+                                "detail_link": val.get("url", ""),
+                            })
+            except Exception:
+                pass
+
     def find_case(self, case_number: str) -> Optional[Dict[str, Any]]:
         return self._cases.get(_canon(case_number))
 
