@@ -168,6 +168,32 @@ def _table_title(blocks, table_bbox) -> Optional[str]:
     return best[1] if best else None
 
 
+def _map_pua_chars(plumber_str: str, pdfium_str: str) -> Dict[str, str]:
+    """pdfplumber의 PUA(Private Use Area, Co 범주) 글리프를 pypdfium2의 실제 문자로 동적 대응시킨다."""
+    import difflib
+    import unicodedata
+    mapping: Dict[str, str] = {}
+    matcher = difflib.SequenceMatcher(None, plumber_str, pdfium_str)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "replace":
+            p_chunk = plumber_str[i1:i2]
+            f_chunk = pdfium_str[j1:j2]
+            if not any(unicodedata.category(c) == "Co" for c in p_chunk):
+                continue
+            sub_matcher = difflib.SequenceMatcher(lambda x: x in " \t\r\n", p_chunk, f_chunk)
+            for s_tag, si1, si2, sj1, sj2 in sub_matcher.get_opcodes():
+                if s_tag == "replace":
+                    sp = p_chunk[si1:si2].strip()
+                    sf = f_chunk[sj1:sj2].strip()
+                    if len(sp) == 1 and len(sf) == 1 and unicodedata.category(sp) == "Co" and unicodedata.category(sf) != "Co":
+                        mapping[sp] = sf
+                    elif len(sp) == len(sf):
+                        for c1, c2 in zip(sp, sf):
+                            if unicodedata.category(c1) == "Co" and unicodedata.category(c2) != "Co":
+                                mapping[c1] = c2
+    return mapping
+
+
 class PdfParser(DocumentParser):
     name = "PdfParser"
     extensions = [".pdf"]
@@ -221,12 +247,38 @@ class PdfParser(DocumentParser):
             doc.structure["parser_chain"] = [f"pdfplumber:실패({type(exc).__name__})"]
             _parse_with_pypdf(raw_bytes, doc)
             return doc
+
         page_texts: Dict[int, str] = {}
+        pdfium_doc = None
         with pdfplumber.open(path) as pdf:
             doc.metadata.update({k: str(v) for k, v in (pdf.metadata or {}).items()})
             for index, page in enumerate(pdf.pages, start=1):
                 p = Page(page_number=index, width=float(page.width), height=float(page.height))
                 chars = page.chars or []
+
+                # PUA(사용자 정의 영역 Co) 문자가 있으면 pypdfium2 텍스트와 동적 정렬하여 실제 문자로 복원
+                import unicodedata
+                if any(unicodedata.category(c.get("text", "")) == "Co" for c in chars):
+                    if pdfium_doc is None:
+                        try:
+                            import pypdfium2 as pdfium
+                            pdfium_doc = pdfium.PdfDocument(path)
+                        except Exception:
+                            pdfium_doc = False
+                    if pdfium_doc:
+                        try:
+                            tpage = pdfium_doc[index - 1].get_textpage()
+                            pdfium_str = tpage.get_text_range()
+                            plumber_str = "".join(c.get("text", "") for c in chars)
+                            pua_map = _map_pua_chars(plumber_str, pdfium_str)
+                            if pua_map:
+                                for c in chars:
+                                    t = c.get("text", "")
+                                    if t in pua_map:
+                                        c["text"] = pua_map[t]
+                        except Exception as exc:
+                            doc.parse_warnings.append(f"PUA 글리프 복원 실패(p{index}): {exc}")
+
                 page_texts[index] = "".join(str(c.get("text") or "") for c in chars)
                 lines = self._group_chars_to_lines(chars)
                 # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.
@@ -371,6 +423,12 @@ class PdfParser(DocumentParser):
                 # 모두 읽었으므로 놓아준다.
                 page.flush_cache()
                 chars = []
+
+        if pdfium_doc:
+            try:
+                pdfium_doc.close()
+            except Exception:
+                pass
 
         if contrast_checks:
             try:

@@ -116,9 +116,16 @@ DOB_RE = re.compile(
 # 3MB 검증 결과 한 건에 25초가 걸려 보고서 생성 요청이 끊겼다. 실제 시·도명은
 # 2~4자, 시·군·구명은 1~5자, 도로·동명은 숫자를 포함해도 20자를 넘지 않는다.
 ADDRESS_RE = re.compile(
-    r"(?:[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도)\s*)?"
-    r"[가-힣]{1,8}(?:시|군|구)\s+[가-힣0-9]{1,20}(?:읍|면|동|가|로|길)\s*[\d\-]*(?:번지|호)?"
-    r"(?:\s*,\s*|\s+)?(?:\d{1,4}동\s*\d{1,4}호|\d{1,4}호|\d{1,3}층|[가-힣0-9]{1,15}(?:아파트|빌라|오피스텔|마을|단지|타운|맨션)(?:\s*\d{1,4}동\s*\d{1,4}호)?)?"
+    r"(?:(?:[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도)|서울|대전|대구|부산|인천|광주|울산|세종|제주|경기|강원|충북|충남|전북|전남|경북|경남)\s*)?"
+    r"(?:[가-힣]{1,8}(?:시|군|구)\s+)+"
+    r"(?:[가-힣]{1,8}(?:읍|면)\s+)?"
+    r"(?:[가-힣0-9]{1,20}(?:로|길|동|리|가)\s*[\d\-]+(?:번지|호)?|[가-힣0-9]{1,20}(?:읍|면|동|가|로|길)\s*[\d\-]*(?:번지|호)?)"
+    r"(?:\s*,\s*|\s+)?(?:\d{1,4}동(?:\s*\d{1,4}호)?|\d{1,3}층(?:\s*\d{1,4}호)?|\d{1,4}호|[가-힣0-9]{1,15}(?:아파트|빌라|오피스텔|마을|단지|타운|맨션)(?:\s*\d{1,4}동\s*\d{1,4}호)?(?:\s*,\s*\d{1,4}호)?)?"
+)
+# 소송대리인(변호사 사무소) 및 법원 주소 문맥 (주소 마스킹 제외용 정책 규칙)
+LAWYER_COURT_CONTEXT_RE = re.compile(
+    r"(?:소송\s*대리인|대리인\s*변호사|법률\s*사무소|법무\s*법인|변호사\s*사무실|변호사\s*사무소|"
+    r"(?:지방|고등|행정|가정|군사|회생|특허)?법원\s*(?:귀중|앞)?)"
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
 JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
@@ -291,6 +298,23 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                     continue  # 사업자등록번호는 법인 식별에 필요
                 if CORP_NO_RE.fullmatch(raw.strip()):
                     continue  # 법인등록번호
+            if kind == "ADDRESS":
+                # 소송대리인(변호사 사무소) 및 법원 주소는 마스킹하지 않고 보존한다(사용자 정책 결정).
+                start_line = text.rfind("\n", 0, start)
+                start_line = 0 if start_line < 0 else start_line + 1
+                end_line = text.find("\n", end)
+                end_line = len(text) if end_line < 0 else end_line
+                line_context = text[start_line:end_line]
+
+                prev_line_start = text.rfind("\n", 0, max(0, start_line - 1))
+                prev_line_start = 0 if prev_line_start < 0 else prev_line_start + 1
+                prev_line = text[prev_line_start:start_line]
+
+                full_context = prev_line + " " + line_context
+                if LAWYER_COURT_CONTEXT_RE.search(full_context):
+                    # 당사자(원고/피고 등)의 직접적인 인적사항 라벨 줄이 아니면 대리인/법원 주소로 보고 제외
+                    if not re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", line_context.strip()):
+                        continue
             matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
 
     # 주민등록번호 라벨이 명시된 13자리 번호(변형/외국인/합성 포함) 포착
