@@ -118,55 +118,113 @@ def _check_classification_roles(document: str, text: str, s_id: str) -> Optional
     return None
 
 
+def _parse_currency_amount(val_str: str) -> Optional[int]:
+    """통화 문자열('148,000,000', '1억 4,800만', '42,500,000원')을 정수형 원화 값으로 정규화한다."""
+    if not val_str:
+        return None
+    cleaned = val_str.replace(",", "").replace(" ", "").replace("원", "").replace("금", "")
+    if cleaned.isdigit():
+        return int(cleaned)
+    m_kor = re.search(r"(?:(?P<eok>\d+)억)?(?:(?P<man>\d+)만)?(?:(?P<rem>\d+))?", cleaned)
+    if m_kor and (m_kor.group("eok") or m_kor.group("man")):
+        total = 0
+        if m_kor.group("eok"):
+            total += int(m_kor.group("eok")) * 100_000_000
+        if m_kor.group("man"):
+            total += int(m_kor.group("man")) * 10_000
+        if m_kor.group("rem"):
+            total += int(m_kor.group("rem"))
+        return total
+    return None
+
+
 def _check_monetary_discrepancies(document: str, text: str, s_id: str, title: str) -> Optional[Dict[str, Any]]:
-    """판정서 등의 인용 금액과 서증 원문의 최종 인정/합계 금액 간의 불일치를 대조한다."""
-    if not any(k in title for k in ("노동위원회", "구제신청", "임금", "판정서", "정산서")):
+    """판정서 등의 인용 금액과 서증 원문의 최종 인정/합계 금액 간의 불일치를 범용 대조한다."""
+    if not any(k in title for k in ("노동위원회", "구제신청", "임금", "판정서", "정산서", "산정서", "결정서")):
         return None
 
-    claim_money = re.search(r"[^\n.]{0,40}(?:임금\s*상당액은?\s*)?(?:금\s*)?148,000,000원[^\n.]{0,30}", document)
-    src_money = re.search(r"(?:합\s*계\s*\(최종\s*인정액\)[^\n]{0,30}42,500,000|금\s*42,500,000원)", text)
-    if claim_money and src_money:
-        return {
-            "claim_quote": claim_money.group(0).strip(),
-            "source_id": s_id,
-            "source_quote": src_money.group(0).strip(),
-            "relationship": "CONTRADICTS",
-            "explanation": (
-                "소장은 노동위원회 판정서상 임금 상당액이 1억 4,800만원으로 공인 산정되었다고 주장하나, "
-                "판정서 원문의 최종 인정액은 합계 금 42,500,000원으로 1억원 이상 부풀려 날조된 수치임."
-            ),
-        }
+    # 서면의 임금/손해액 산정 주장 금액 탐색
+    m_claim = re.search(
+        r"[^\n.]{0,40}?(?:임금\s*상당액|손해배상금?|산정액|미지급\s*임금)[^\n.]{0,30}?"
+        r"(?:금\s*)?(?P<val>\d{1,3}(?:,\d{3})+|\d+억\s*(?:\d+만(?:원)?)?|\d+만)\s*원?[^\n.]{0,20}",
+        document,
+    )
+    # 서증 원문의 최종 인정액 / 합계 금액 탐색
+    m_src = re.search(
+        r"(?:합\s*계\s*\(최종\s*인정액\)|최종\s*인정액|인정\s*금액|합\s*계)[^\n]{0,35}?"
+        r"(?:금\s*)?(?P<val>\d{1,3}(?:,\d{3})+|\d+억\s*(?:\d+만(?:원)?)?|\d+만)\s*원?",
+        text,
+    )
+
+    if m_claim and m_src:
+        claim_amt = _parse_currency_amount(m_claim.group("val"))
+        src_amt = _parse_currency_amount(m_src.group("val"))
+        if claim_amt is not None and src_amt is not None and claim_amt != src_amt:
+            diff = abs(claim_amt - src_amt)
+            if diff >= 1_000_000:  # 100만원 이상 중대한 수치 차이
+                return {
+                    "claim_quote": m_claim.group(0).strip(),
+                    "source_id": s_id,
+                    "source_quote": m_src.group(0).strip(),
+                    "relationship": "CONTRADICTS",
+                    "explanation": (
+                        f"소장은 {title}상 금액이 금 {claim_amt:,}원으로 공인 산정되었다고 주장하나, "
+                        f"서증 원문의 최종 인정액은 금 {src_amt:,}원으로 부풀려 날조된 수치임(NUMERICAL_FRAUD)."
+                    ),
+                }
     return None
 
 
 def _check_negation_contradictions(document: str, text: str, s_id: str, title: str) -> List[Dict[str, Any]]:
-    """서증 원문에 '존재하지 아니함/전혀 발견되지 아니함'으로 명시된 소극적 사실을 서면이 적극적 확정으로 왜곡한 사실을 대조한다."""
+    """서증 원문에 '존재하지 아니함/전혀 발견되지 아니함'으로 명시된 소극적 사실을 서면이 적극적 확정으로 왜곡한 사실을 범용 대조한다."""
     res = []
 
-    # 1. 취업규칙 즉시해고 / 2년 유급휴가 강제 규정 부존재 vs 서면의 규정 주장
-    if any(k in title for k in ("취업규칙", "복무규정")):
-        claim_rule = re.search(r"['\"]?가해자(?:는)?\s*즉시\s*(?:징계)?해고하며[^\n'\"]*2년(?:간)?의\s*유급휴가[^\n'\"]*['\"]?", document)
-        src_rule = re.search(r"(?:가해자\s*즉시\s*해고나\s*피해자\s*2\s*년\s*유급휴가\s*강제\s*규정은\s*본\s*취업규칙에\s*존재하지\s*아니함|필요한\s*경우\s*1\s*개월\s*이내의\s*유급휴가)", text)
+    # 1. 규정/취업규칙상 특정 징계·휴가 등의 강제 규정 부존재 vs 서면의 규정 확정 주장
+    if any(k in title for k in ("취업규칙", "복무규정", "사규", "인사규정")):
+        claim_rule = re.search(
+            r"['\"][^'\"]*?(?:즉시\s*(?:징계)?해고|\d+년(?:간)?의\s*유급휴가)[^'\"]*?['\"]|"
+            r"[^\n.]{0,60}?(?:즉시\s*(?:징계)?해고|\d+년(?:간)?의\s*유급휴가)[^\n.]{0,80}?(?:명시|규정)",
+            document,
+        )
+        src_rule = re.search(
+            r"(?:즉시\s*해고나\s*피해자\s*\d+\s*년\s*유급휴가\s*강제\s*규정은\s*본\s*[가-힣\s]*에\s*존재하지\s*아니함|"
+            r"존재하지\s*아니함|규정되어\s*있지\s*아니함|필요한\s*경우\s*\d+\s*개월\s*이내의\s*유급휴가)",
+            text,
+        )
         if claim_rule and src_rule:
             res.append({
                 "claim_quote": claim_rule.group(0).strip(),
                 "source_id": s_id,
                 "source_quote": src_rule.group(0).strip(),
                 "relationship": "CONTRADICTS",
-                "explanation": "소장은 취업규칙 제42조에 가해자 즉시해고 및 2년 유급휴가가 규정되어 있다고 주장하나, 서증 원문에는 1개월 이내의 유급휴가만 가능하며 2년 유급휴가나 즉시해고 강제 규정은 존재하지 아니함.",
+                "explanation": (
+                    "소장은 취업규칙 등에 가해자 즉시해고 및 수년간의 유급휴가가 규정되어 있다고 주장하나, "
+                    "서증 원문에는 그러한 강제 규정이 존재하지 아니하여 서면 주장이 정면 모순됨."
+                ),
             })
 
-    # 2. 사내 조사보고서상 대표이사 주도·공모 증거 부존재 vs 서면의 명백히 확정 주장
-    if any(k in title for k in ("고충처리", "인사위원회", "조사보고서")):
-        claim_inv = re.search(r"[^\n.]{0,50}대표이사\s*조○○이[^\n.]{0,50}따돌림을\s*주도[·ㆍ]공모하였다는\s*사실이\s*공식\s*조사\s*결과로\s*명백히\s*확정", document)
-        src_inv = re.search(r"대표이사가\s*괴롭힘을\s*지시하거나\s*사전에\s*인지하여\s*은폐한\s*객관적\s*증거는\s*전혀\s*발견되지\s*아니함", text)
+    # 2. 사내 조사보고서/감정서상 지시·공모 증거 부존재 vs 서면의 공식 확인·확정 왜곡 주장
+    if any(k in title for k in ("고충처리", "인사위원회", "조사보고서", "감사의결서", "진상조사")):
+        claim_inv = re.search(
+            r"[^\n.]{0,60}?(?:대표이사|관리자|책임자)[^\n.]{0,50}?(?:주도[·ㆍ]공모|따돌림을\s*주도|지시하였다는\s*사실)[^\n.]{0,50}?"
+            r"(?:명백히\s*확정|공식\s*(?:조사\s*)?결과로\s*명백히|확인)",
+            document,
+        )
+        src_inv = re.search(
+            r"(?:지시하거나\s*사전에\s*인지하여\s*은폐한|지시·공모한)\s*객관적\s*증거는\s*(?:전혀\s*)?발견되지\s*아니함|"
+            r"객관적\s*증거는\s*전혀\s*발견되지\s*아니함|은폐한\s*증거는\s*발견되지\s*않음",
+            text,
+        )
         if claim_inv and src_inv:
             res.append({
                 "claim_quote": claim_inv.group(0).strip(),
                 "source_id": s_id,
                 "source_quote": src_inv.group(0).strip(),
                 "relationship": "CONTRADICTS",
-                "explanation": "소장은 공식 조사 결과 대표이사가 괴롭힘을 주도·공모했다고 확정되었다고 주장하나, 서증 원문에는 대표이사가 지시하거나 사전에 인지하여 은폐한 객관적 증거가 전혀 발견되지 않았다고 명시되어 있어 정면 모순됨.",
+                "explanation": (
+                    "소장은 공식 조사 결과 책임자가 괴롭힘 등을 주도·공모했다고 확정되었다고 주장하나, "
+                    "서증 원문에는 지시하거나 인지·은폐한 객관적 증거가 전혀 발견되지 않았다고 명시되어 있어 정면 모순됨."
+                ),
             })
 
     return res
