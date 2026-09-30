@@ -36,6 +36,8 @@ KIND_PREFIX = {
     "DOB": "DOB",
     "MEDICAL": "MED",
     "VEHICLE": "VEHICLE",
+    "DRIVER_LICENSE": "DLICENSE",
+    "AFFILIATION": "AFFIL",
 }
 
 

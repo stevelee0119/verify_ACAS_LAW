@@ -56,7 +56,8 @@ class PIIEngine:
         replacements: Dict[str, str] = {}
         out = []
         cursor = 0
-        for match in sorted(matches, key=lambda m: m.start):
+        # 같은 위치에서 시작하면 긴 탐지를 먼저 쓴다(블록 경계를 넘는 문맥 탐지가 부분 탐지를 덮는다).
+        for match in sorted(matches, key=lambda m: (m.start, -(m.end - m.start))):
             if match.start < cursor:
                 continue
             token = self.store.pseudonym_for(match.kind, match.text)
@@ -86,12 +87,22 @@ class PIIEngine:
             matches = [m for m in detect(block.text, block_id=block.block_id, page=block.page)
                        if m.confidence >= MIN_CONFIDENCE]
             spans = {(m.start, m.end) for m in matches}
+            end_of_block = offset + len(block.text)
             for match in contextual:
-                if offset <= match.start < match.end <= offset + len(block.text):
-                    span = (match.start - offset, match.end - offset)
-                    if span not in spans:
-                        matches.append(replace(match, start=span[0], end=span[1], block_id=block.block_id, page=block.page))
-                        spans.add(span)
+                if match.end <= offset or match.start >= end_of_block:
+                    continue
+                # 줄바꿈으로 여러 블록에 걸친 값("생년월일: 1985. 11." / "24.")은 블록마다 해당 조각을 가린다.
+                # 한 블록 안에 든 값만 옮기면 나머지 조각이 그대로 외부 모델로 나간다.
+                span = (max(match.start, offset) - offset, min(match.end, end_of_block) - offset)
+                if not block.text[span[0]:span[1]].strip():
+                    continue
+                piece = replace(match, start=span[0], end=span[1], block_id=block.block_id, page=block.page)
+                if span not in spans:
+                    matches.append(piece)
+                    spans.add(span)
+                elif match.start < offset or match.end > end_of_block:
+                    # 블록 안의 부분 탐지(지역명 없는 면허번호 등)보다 경계를 넘는 전체 값의 가명을 쓴다.
+                    matches = [piece if (m.start, m.end) == span else m for m in matches]
             offset += len(block.text) + 1
             result = self._mask_matches(block.text, matches)
             masked.blocks.append(

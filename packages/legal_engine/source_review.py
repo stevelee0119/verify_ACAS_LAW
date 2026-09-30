@@ -100,6 +100,7 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
     if provision["status"] != "VERIFIED":
         verdict.notes.append(provision.get("reason", "지정 조항호목의 전문을 확인하지 못했다"))
         return verdict
+    _offense_name_check(verdict, official, provision)
     article_start = provision.get("article_effective_from")
     enforcement = official.get("enforcement_note") or ""
     supplement_text = "\n".join(s.get("text", "") for s in official.get("supplementary_provisions", []))
@@ -153,6 +154,58 @@ def verify_statute_source(verifier, citation, *, as_of=None, incident_date=None,
         verdict.levels["temporal_basis"] = "CURRENT_VERSION"
     verdict.notes.append("시행 버전·본문 대조는 사건에 대한 법률 적용 결론이 아니다")
     return verdict
+
+
+GENERIC_OFFENSE_WORDS = {"위반", "처벌", "범죄", "본죄", "해당", "같은", "동조", "이법", "위법"}
+OFFENSE_NAME_RE = re.compile(r"^\s*의\s*(?P<name>[가-힣·ㆍ]{1,12}?)(?:죄|범죄)")
+ARTICLE_TITLE_RE = re.compile(r"^\s*제\s*\d+\s*조(?:\s*의\s*\d+)?\s*\((?P<title>[^)\n]{1,60})\)")
+
+
+def _offense_name_check(verdict, official, provision):
+    """'제10조의 누설죄'처럼 서면이 조문에 붙인 죄명이 공식 조문 제목과 맞는지 본다.
+
+    죄명의 핵심어(두 글자 이상)가 조문 제목에 하나도 없으면, 같은 법에서 그 핵심어가 제목에 든 조문을
+    함께 적어 알린다. 죄명은 약칭으로 쓰는 일이 있어 CONTRADICTED가 아니라 SUSPICIOUS로 둔다.
+    """
+    citation = verdict.citation
+    claim = (citation.attributes or {}).get("claim_text") or ""
+    named = OFFENSE_NAME_RE.match(claim)
+    if not named:
+        return
+    title = provision.get("article_title")
+    if not title:
+        found = ARTICLE_TITLE_RE.match(provision.get("text") or "")
+        title = found.group("title") if found else None
+    if not title:
+        return
+    compact_title = re.sub(r"\s+", "", title)
+    # '위반죄'·'처벌규정 위반죄'처럼 조문 내용을 가리키지 않는 일반 죄명은 대조하지 않는다.
+    stems = [s for s in re.split(r"[·ㆍ\s]", named.group("name")) if len(s) >= 2 and s not in GENERIC_OFFENSE_WORDS]
+    if not stems or any(s in compact_title for s in stems):
+        return
+    others = [f"제{r['number']}조({r['title']})" for r in official.get("provisions") or []
+              if r.get("title") and any(s in re.sub(r"\s+", "", r["title"]) for s in stems)][:4]
+    compared = compared_label(citation)
+    ids = [r.source_record_id for r in verdict.source_records]
+    verdict.review["offense_name_check"] = {"claimed": named.group("name") + "죄", "article_title": title,
+                                            "articles_with_term": others}
+    verdict.findings.append(Finding.create(
+        type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.SUSPICIOUS, severity=Severity.MEDIUM,
+        evidence_grade=EvidenceGrade.A,
+        title=f"조문 제목과 서면이 적은 죄명이 다르다: {compared} — 서면 '{named.group('name')}죄' / 조문 제목 '{title}'",
+        detail=(f"조회한 시행 버전의 {compared} 제목은 '{title}'이다. 서면은 이 조문을 '{named.group('name')}죄'의 근거로 적었다. "
+                + (f"같은 법에서 제목에 '{'·'.join(stems)}'이(가) 든 조문: {', '.join(others)}. " if others else "")
+                + "조문 번호 오기이거나 다른 조문의 죄를 잘못 연결했을 수 있으므로 사람이 확인한다."),
+        document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+        engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "SOURCE_TEXT", "OFFENSE_NAME_MISMATCH"],
+        confidence_features={"deterministic_rule": True, "rule_id": "LEGAL.OFFENSE_NAME_VS_ARTICLE_TITLE",
+                             "claimed_offense": named.group("name"), "article_title": title,
+                             "articles_with_term": others},
+        evidence=[Evidence.create(description="조회한 공식 버전의 조문 제목·본문", grade=EvidenceGrade.A,
+                                  excerpt=f"({title}) " + (provision.get("text") or "")[:300], source_record_ids=ids),
+                  Evidence.create(description="문서의 주장", grade=EvidenceGrade.B, document_id=citation.document_id,
+                                  block_id=citation.block_id, excerpt=claim[:200])],
+    ))
 
 
 def _compare_asserted_content(verdict, provision):

@@ -32,6 +32,7 @@ def implementation_identity():
              "packages/document_engine/docx_parser.py", "packages/document_engine/analysis_text.py",
              "packages/claim_engine/classification.py", "packages/claim_engine/attachments.py",
              "packages/rag_engine/review.py", "packages/rag_engine/contract_facts.py",
+             "packages/rag_engine/provision_quotes.py",
              "packages/legal_engine/semantic_consensus.py", "packages/legal_engine/normalize.py")
     hashes = {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in files if (root / name).is_file()}
     return {"git_commit": commit if re.fullmatch(r"[0-9a-fA-F]{40}", commit) else None,

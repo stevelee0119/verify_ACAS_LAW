@@ -36,7 +36,8 @@ from .provision_content import compare_claim_to_provision
 ENGINE_NAME = "legal_engine.temporal_review"
 CIRCLED = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳"
 TIME_QUALIFIER_RE = re.compile(r"(?P<kind>행위|범행|처분|사고|계약|사건)\s*(?:당시|시(?:점)?(?:에|의)?)")
-DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*\.\s*(?P<m>\d{1,2})\s*\.\s*(?P<d>\d{1,2})\s*\.?")
+# '2023. 11. 20.'과 '2023년 11월 20일' 표기를 모두 읽는다(공소사실은 흔히 '년월일'로 적는다).
+DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.년]\s*(?P<m>\d{1,2})\s*[.월]\s*(?P<d>\d{1,2})\s*[.일]?")
 # 문서가 행위(범행)일로 적은 날짜: '피고인은 2021. 6. 1. …', '2021. 6. 1. … 범행·횡령·공소사실'
 ACT_SUBJECT_RE = re.compile(r"(?:피고인|피의자|행위자)\s*(?:은|는|이|가)?\s*$")
 ACT_SENTENCE_RE = re.compile(r"공소사실|범행|횡령|절취|편취|폭행|배임|사기|위반행위")
@@ -127,6 +128,10 @@ def _sentences(text: str):
     return [s for s in re.split(r"(?<=[다음함])\s*[.。]\s*|\n", text or "") if s.strip()]
 
 
+LAW_DATE_AFTER_RE = re.compile(r"\s*(?:(?:법률|대통령령|총리령|[가-힣]{1,8}부령|훈령|예규|고시)\s*제\s*\d+\s*호|"
+                               r"(?:부터|자로)?\s*시행(?:된|되는|되어|한다|하는|일)|공포)")
+
+
 def reference_candidates(text: str) -> List[Dict[str, Any]]:
     """문서가 적은 계약체결일·범행일·처분일·불법행위일·원심 선고일 후보. 같은 날짜·종류는 한 번만."""
     out: List[Dict[str, Any]] = []
@@ -138,6 +143,8 @@ def reference_candidates(text: str) -> List[Dict[str, Any]]:
             except ValueError:
                 continue
             before, after = sentence[:m.start()], sentence[m.end():]
+            if LAW_DATE_AFTER_RE.match(after):
+                continue  # "2022년 6월 10일 법률 제18900호로 개정", "2022. 12. 11.부터 시행": 법령의 날짜다
             kinds = []
             if ACT_SUBJECT_RE.search(before) and ACT_SENTENCE_RE.search(sentence):
                 kinds.append("OFFENSE")
@@ -360,3 +367,171 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
                          "version_id": selected.get("version_id"), "source": "OFFICIAL_HISTORY", "source_url": url})
     versions.sort(key=lambda v: v["effective_from"] or "")
     return {"status": "READY", "versions": versions, "reason": "", "source_urls": urls}
+
+
+# --- 서면이 밝힌 개정 이력과 행위일 대조 --------------------------------------------------------------
+#
+# 서면이 "2024년 12월 24일 법률 제20589호로 개정되어 2025년 1월 1일부터 시행된 「○○법」 제35조"처럼
+# 개정 이력을 스스로 적고 그 조항을 행위에 적용하라고 주장하면, 적힌 시행일과 행위일(기준일)만으로도
+# 행위 후 시행 조항에 기댄 주장임을 알 수 있다. 공식 연혁을 조회할 수 있으면 적힌 공포번호·공포일·시행일이
+# 그 법령의 연혁에 있는지도 대조한다. 어느 법을 적용할지는 결론 내리지 않는다.
+_D = r"(?:19|20)\d{2}\s*[.년]\s*\d{1,2}\s*[.월]\s*\d{1,2}\s*[.일]?"
+_LAW_KIND = r"(?:법률|대통령령|총리령|[가-힣]{1,8}부령)"
+_LAW_NAME = r"[「『]?\s*(?P<law>[가-힣][가-힣A-Za-z0-9ㆍ·\s]{0,40}?(?:법률|법|령|규칙))\s*[」』]?"
+_ARTICLE = r"제\s*(?P<art>\d+)\s*조(?:\s*의\s*(?P<sub>\d+))?(?:\s*제\s*(?P<para>\d+)\s*항)?"
+DECLARED_AMENDMENT_RES = (
+    # "2024년 12월 24일 법률 제20589호로 개정되어 2025년 1월 1일부터 시행된 (개정) 「방위사업법」 제35조 제4항"
+    re.compile(rf"(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호\s*(?:로|으로)?\s*"
+               rf"(?:일부|전부)?\s*(?:개정|제정|신설)(?:되어|된|되고|되었으며|하여)?\s*,?\s*"
+               rf"(?P<eff>{_D})\s*(?:부터|자로)\s*시행(?:된|되는|되어|되고|중인)?\s*(?:개정\s*|현행\s*)?{_LAW_NAME}\s*{_ARTICLE}"),
+    # "「방위사업법」(2024. 12. 24. 법률 제20589호로 개정, 2025. 1. 1. 시행) 제35조"
+    re.compile(rf"{_LAW_NAME}\s*\(\s*(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호[^)\n]{{0,20}}?"
+               rf"(?P<eff>{_D})\s*시행\s*\)\s*{_ARTICLE}"),
+)
+# 행위 후 시행 조항을 사건에 적용하라는 주장인지(부합·소급·신법·면책 등)
+RELIANCE_RE = re.compile(r"부합|소급|신법|적용되어|적용하여|해당하여|따라\s*(?:피고인|형사|면책|책임|처벌)|조각|면책|무죄|정당화")
+# 행위시법·구법을 따로 논하는 문장은 적용 주장이 아니다
+ACT_TIME_LAW_RE = re.compile(r"행위\s*(?:당시|시)(?:의)?\s*(?:법|법률|법령)|구법|개정\s*전(?:의)?\s*(?:법|규정|조항)")
+FAVORABLE_NEW_LAW_BASIS = (
+    "형법 제1조 제1항은 범죄의 성립과 처벌을 행위 시의 법률에 따르게 하고, 제2항은 범죄 후 법률이 변경되어 그 행위가 "
+    "범죄를 구성하지 아니하게 되거나 형이 구법보다 가벼워진 경우에만 신법에 따르게 한다. 대법원 2022. 12. 22. 선고 "
+    "2020도16420 전원합의체 판결은 해당 형벌법규 자체 또는 그로부터 수권·위임을 받은 법령이 아닌 다른 법령이 변경된 "
+    "경우에는 형사법적 관점의 변화를 주된 근거로 하는 법령 변경이어야 형법 제1조 제2항을 적용한다고 보았다")
+CIVIL_TIME_BASIS = "법령은 원칙적으로 시행 후의 사실에 적용되므로, 행위 후 시행된 조항의 적용 여부는 부칙·경과규정으로 확인해야 한다"
+
+
+def _iso(value: str) -> Optional[str]:
+    m = DATE_RE.search(value or "")
+    if not m:
+        return None
+    try:
+        return date(int(m.group("y")), int(m.group("m")), int(m.group("d"))).isoformat()
+    except ValueError:
+        return None
+
+
+def declared_amendments(text: str) -> List[Dict[str, Any]]:
+    """서면이 적은 '공포일·법령번호·시행일 + 법령명·조문' 묶음."""
+    out, seen = [], set()
+    for regex in DECLARED_AMENDMENT_RES:
+        for m in regex.finditer(text or ""):
+            law = " ".join(m.group("law").split())
+            key = (law, m.group("art"), m.group("num"))
+            if key in seen:
+                continue
+            seen.add(key)
+            article = m.group("art") + (f"의{m.group('sub')}" if m.group("sub") else "")
+            out.append({"law_name": law, "article": article, "paragraph": m.group("para"),
+                        "kind": m.group("kind"), "number": m.group("num"),
+                        "promulgated": _iso(m.group("prom")), "effective": _iso(m.group("eff")),
+                        "span": m.span(), "raw": " ".join(m.group(0).split())})
+    return out
+
+
+def document_reference_date(text: str, *, criminal: bool) -> Dict[str, Any]:
+    """법령명과 무관하게 문서에서 기준일(형사: 범행일, 그 밖: 계약·처분·불법행위일)을 하나로 정할 수 있으면 그 날짜."""
+    candidates = reference_candidates(text)
+    order = ["OFFENSE"] if criminal else ["CONTRACT", "DISPOSITION", "TORT"]
+    kind = next((k for k in order if any(c["kind"] == k for c in candidates)), None)
+    if kind is None:
+        return {"date": None, "basis": "MISSING", "candidates": candidates}
+    dates = sorted({c["date"] for c in candidates if c["kind"] == kind})
+    if len(dates) != 1:
+        return {"date": None, "basis": "AMBIGUOUS", "kind": kind, "candidates": candidates}
+    return {"date": dates[0], "basis": "DOCUMENT_INFERRED", "kind": kind, "candidates": candidates,
+            "note": f"문서에서 {REFERENCE_KINDS[kind]}로 추정한 {dates[0]}을 기준일로 썼다(추정 기준일)"}
+
+
+def _official_history_check(adapter, declared: Dict[str, Any]) -> Dict[str, Any]:
+    """적힌 법령번호·공포일·시행일이 공식 연혁에 있는가. 조회할 수 없으면 UNAVAILABLE(판정하지 않음)."""
+    from packages.source_adapters.legal_history import legal_date
+
+    if adapter is None or not hasattr(adapter, "search_law_history"):
+        return {"status": "UNAVAILABLE", "reason": "법령 연혁을 조회할 출처가 없음"}
+    status = str(adapter.status()) if hasattr(adapter, "status") else "READY"
+    if not status.endswith("READY"):
+        return {"status": "UNAVAILABLE", "reason": f"국가법령정보 조회 불가({status})"}
+    try:
+        history = adapter.search_law_history(declared["law_name"])
+    except Exception as exc:  # 조회 실패는 판정하지 않는다
+        return {"status": "UNAVAILABLE", "reason": f"법령 연혁 조회 오류({type(exc).__name__})"}
+    message = getattr(history, "message", "") or ""
+    if not getattr(history, "ok", False) or not getattr(history, "complete", False) or message.startswith("EXACT_LAW_NOT_FOUND"):
+        return {"status": "UNAVAILABLE", "reason": f"법령 연혁을 확보하지 못함({message or getattr(history, 'status', '')})"}
+    rows = history.records or []
+    if not rows:
+        return {"status": "UNAVAILABLE", "reason": "법령 연혁이 비어 있음"}
+    wanted = str(int(declared["number"]))
+    same_number = [r for r in rows if str(r.get("promulgation_number") or "").strip().lstrip("0") == wanted]
+    listed = [{"promulgation_number": r.get("promulgation_number"), "promulgation_date": legal_date(r.get("promulgation_date")),
+               "effective_from": legal_date(r.get("effective_from")), "amendment_type": r.get("amendment_type")}
+              for r in same_number]
+    urls = [getattr(rec, "url", "") for rec in (getattr(history, "source_records", None) or []) if getattr(rec, "url", "")]
+    if not same_number:
+        return {"status": "NOT_IN_HISTORY", "history_rows": len(rows), "source_urls": urls[:3],
+                "reason": f"공식 연혁 {len(rows)}건에 {declared['kind']} 제{declared['number']}호에 의한 개정이 없다"}
+    dates_match = any((not declared["promulgated"] or row["promulgation_date"] == declared["promulgated"])
+                      and (not declared["effective"] or row["effective_from"] == declared["effective"]) for row in listed)
+    return {"status": "MATCH" if dates_match else "DATE_MISMATCH", "history_rows": len(rows), "matches": listed,
+            "source_urls": urls[:3]}
+
+
+def _sentence(value: str) -> str:
+    value = (value or "").strip()
+    return value if not value or value.endswith(".") else value + "."
+
+
+def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal: bool, adapter=None,
+                               document_id: Optional[str] = None) -> List[Finding]:
+    """서면이 밝힌 시행일이 기준일(행위일) 뒤인 조항을 행위에 적용하라고 주장하는 경우를 알린다."""
+    when = reference.get("date")
+    findings: List[Finding] = []
+    for declared in declared_amendments(text):
+        effective = declared["effective"]
+        if not when or not effective or effective <= when:
+            continue
+        start, end = declared["span"]
+        context = text[max(0, start - 80):min(len(text), end + 400)]
+        # 구법·행위시법 논의는 개정 이력을 적은 문장부터 뒤에서만 본다(앞 표제의 '행위시법'은 주장이 아니다).
+        if not RELIANCE_RE.search(context) or ACT_TIME_LAW_RE.search(text[start:min(len(text), end + 300)]):
+            continue
+        official = _official_history_check(adapter, declared)
+        label = f"「{declared['law_name']}」 제{declared['article']}조" + (
+            f" 제{declared['paragraph']}항" if declared.get("paragraph") else "")
+        stated = (f"서면이 적은 개정 이력: {declared['promulgated'] or '?'} {declared['kind']} 제{declared['number']}호, "
+                  f"{effective} 시행")
+        if official["status"] in ("NOT_IN_HISTORY", "DATE_MISMATCH"):
+            status, grade, severity = VerificationStatus.CONTRADICTED, EvidenceGrade.A, Severity.HIGH
+            official_note = (official["reason"] if official["status"] == "NOT_IN_HISTORY" else
+                             "공식 연혁의 같은 번호 개정과 공포일·시행일이 다르다: "
+                             + "; ".join(f"{r['promulgation_date']} 공포·{r['effective_from']} 시행" for r in official["matches"]))
+            tail = "공식 연혁과 다른 개정 이력에 근거한 소급 적용 주장"
+        else:
+            status, grade, severity = VerificationStatus.SUSPICIOUS, EvidenceGrade.B, Severity.HIGH
+            official_note = ("적힌 개정 이력은 공식 연혁과 일치한다. 조문 내용은 인용 검증 결과를 따로 본다."
+                             if official["status"] == "MATCH" else f"공식 연혁 대조 미실행: {official.get('reason', '')}")
+            tail = "행위 후 시행 조항에 근거한 소급 적용 주장"
+        basis = FAVORABLE_NEW_LAW_BASIS if criminal else CIVIL_TIME_BASIS
+        findings.append(Finding.create(
+            type=FindingType.TEMPORAL_LAW_MISMATCH, status=status, severity=severity, evidence_grade=grade,
+            title=(f"법령 적용 시점 검토: {label} — 시행일 {effective}이 기준일({when}, "
+                   f"{REFERENCE_KINDS.get(reference.get('kind'), '입력 기준일')}) 뒤인데 {tail} (RETROACTIVE_APPLICATION_ERROR)"),
+            detail=" ".join(_sentence(x) for x in (
+                stated, reference.get("note") or "", official_note, basis,
+                "적힌 조항이 실제로 행위에 적용되는지(유리한 신법·부칙·경과규정)는 법률 판단이므로 결론을 내리지 않는다.") if x),
+            confidence=0.85 if status == VerificationStatus.CONTRADICTED else 0.7,
+            confidence_features={"deterministic_rule": True, "rule_id": "TEMPORAL.POST_OFFENSE_AMENDMENT_RELIANCE",
+                                 "defect_code": "RETROACTIVE_APPLICATION_ERROR", "declared": {
+                                     k: declared[k] for k in ("law_name", "article", "paragraph", "kind", "number",
+                                                              "promulgated", "effective")},
+                                 "reference_date": when, "reference_basis": reference.get("basis"),
+                                 "reference_kind": reference.get("kind"), "official_history": official,
+                                 "legal_basis": [basis], "human_review": True},
+            document_id=document_id, span=declared["span"], engine=ENGINE_NAME,
+            tags=["LEGAL", "STATUTE", "TEMPORAL", "RETROACTIVE_APPLICATION_ERROR"],
+            evidence=[Evidence.create(description="서면의 개정 이력 기재", grade=EvidenceGrade.B,
+                                      document_id=document_id, excerpt=declared["raw"][:300], supports=False)]
+            + ([Evidence.create(description="국가법령정보 법령 연혁 대조", grade=EvidenceGrade.A,
+                                excerpt=official_note[:300])] if official["status"] in ("NOT_IN_HISTORY", "DATE_MISMATCH", "MATCH") else []),
+        ))
+    return findings

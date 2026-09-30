@@ -83,7 +83,7 @@ class ProviderConfig:
 @dataclass
 class Settings:
     app_name: str = "ACASia_LAW"
-    version: str = "0.9.12"
+    version: str = "0.9.13"
     database_url: str = field(default_factory=resolve_database_url)
     storage_root: Path = field(
         default_factory=lambda: Path(os.getenv("LV_STORAGE_ROOT") or str(data_dir() / "storage"))
@@ -142,7 +142,7 @@ class Settings:
         default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
     authorship_max_chars: int = field(default_factory=lambda: max(6000, min(48000,
         int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
-    rule_version: str = "2026.09.28.1"
+    rule_version: str = "2026.09.30.1"
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))

@@ -216,8 +216,17 @@ def review_document(result, library, router, context, pii):
         review.update(status="NOT_RELEVANT", reason="NO_RELEVANT_DRIVE_REFERENCE:" + selection["reason"])
         return review
     review["drive_used"] = True
+    # 규정 조항 인용의 허용·금지 방향 대조는 규칙으로 한다. 모델이 없어도 결과를 남긴다.
+    from .provision_quotes import check_quoted_provisions
+    provision_obs = check_quoted_provisions(document, sources)
+    review["deterministic_observations"] = len(provision_obs)
     if context.profile == VerificationProfile.QUICK or not router.has_available_provider(policy=context.external_ai_policy):
         review.update(status="RETRIEVED_ONLY", reason="MODEL_NOT_AVAILABLE_OR_QUICK_PROFILE")
+        if provision_obs:
+            from .contract_facts import link_observations
+            masked_claims = [{**c, "text": mask(c.get("text", ""))} for c in getattr(result, "claims", [])]
+            review.update(observations=provision_obs, source_quotes_validated=True,
+                          issues=link_observations(provision_obs, sources, masked_claims))
         return review
     batch_size = 6
     batches = [sources[i:i + batch_size] for i in range(0, len(sources), batch_size)] or [sources]
@@ -266,6 +275,7 @@ def review_document(result, library, router, context, pii):
     ex_obs = _check_exhibit_facts(document, sources)
     if ex_obs:
         all_observations.extend(ex_obs)
+    all_observations.extend(provision_obs)
 
     review["model_executed"] = executed_any
     review["model_response_accepted"] = accepted_any
@@ -349,8 +359,9 @@ def report_lines(run_result):
             lines.append(f"{source['source_id']}: {source['title']} / {location} / "
                          f"수정 {source['modified_time']} / SHA-256 {source['sha256']} / {source['url']}")
         for item in review.get("observations", []):
+            kind = "규칙 대조 의견" if item.get("method") == "DETERMINISTIC_PROVISION_COMPARISON" else "AI 참고 의견"
             lines.append(f"문서: {item['claim_quote']}\n근거 {item['source_id']}: {item['source_quote']}\n"
-                         f"AI 참고 의견({item['relationship']}): {item['explanation']}")
+                         f"{kind}({item['relationship']}): {item['explanation']}")
         for calc in review.get("contract_review", {}).get("calculations", []):
             values = calc["outputs"]
             lines.append(f"자료 기반 조건부 검산: {values['delay_days']}일 × {values['daily_penalty']}원 = "

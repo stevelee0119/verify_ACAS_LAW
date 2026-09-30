@@ -27,6 +27,11 @@ MEANINGS = [
 ]
 
 
+PROMULGATION_AFTER_RE = re.compile(r"\s*(?:법률|대통령령|총리령|[가-힣]{1,8}부령|훈령|예규|고시)\s*제\s*\d+\s*호")
+OFFENDER_BEFORE_RE = re.compile(r"(?:피고인|피의자)\s*(?:[A-Z가-힣]\s*)?(?:이|은|는|가)?\s*[\"“']?\s*$")
+ACCUSATION_RE = re.compile(r"공소\s*사실|범죄\s*사실|범죄\s*일시|범행")
+
+
 def reference_date_candidates(text: str, *, limit: int = 30) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen = set()
@@ -49,6 +54,12 @@ def reference_date_candidates(text: str, *, limit: int = 30) -> List[Dict[str, A
         if not hit:
             extended_after = re.split(r"\.\s+|\n", text[match.end():match.end() + 80])[0]
             hit = next(((code, name) for code, name, pattern in MEANINGS if re.search(pattern, extended_after)), None)
+        # 날짜 바로 뒤가 '법률 제N호'이면 그 날짜는 법령의 공포일이다("행위는 2024년 … 법률 제N호로 개정되어").
+        if PROMULGATION_AFTER_RE.match(after_clean):
+            hit = ("ENFORCEMENT", "시행·공포일")
+        # 공소사실·범죄사실의 "피고인이 2023년 … 경"은 행위일이다(뒤에 행위 낱말이 없어도).
+        elif not hit and OFFENDER_BEFORE_RE.search(before) and ACCUSATION_RE.search(text[max(0, match.start() - 60):match.start()]):
+            hit = ("CONDUCT", "행위·사고일")
         if hit:
             meaning, label = hit
         key = (value, meaning)

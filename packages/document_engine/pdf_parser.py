@@ -438,7 +438,10 @@ class PdfParser(DocumentParser):
                 lines[-1].append(ch)
             else:
                 lines.append([ch])
-        return lines
+        # 한 줄 안에서는 가로 위치 순으로 다시 놓는다. 한글·영문 글꼴을 따로 쓰는 PDF(Google Docs 등)는
+        # 글꼴마다 top 값이 1pt 안팎 다르다. top 우선 정렬만 하면 한글이 모두 앞에, 숫자·공백이 모두 뒤에
+        # 붙어 "사건 2026고단315"가 "사건고단 2026315"로 읽히고 인용·개인정보 탐지가 모두 빗나간다.
+        return [sorted(line, key=lambda c: float(c.get("x0", 0))) for line in lines]
 
     @staticmethod
     def _line_bbox(line: List[Dict[str, Any]]) -> BBox:
@@ -696,9 +699,13 @@ class PdfParser(DocumentParser):
         doc.structure["has_invisible_render_mode"] = _has_invisible_render_mode(raw)
         doc.structure["has_filled_shapes"] = _has_filled_shapes(raw)
         doc.structure["has_clip_paths"] = _has_clip_paths(raw)
-        zero_width, strings = _actual_text_zero_width(raw, collect=True)
+        markers: Dict[str, int] = {}
+        zero_width, strings = _actual_text_zero_width(raw, collect=True, line_break_markers=markers)
         if zero_width:
             doc.structure["actual_text_zero_width"] = zero_width
+        if markers:
+            # 줄바꿈 자리의 공백 글리프 하나를 U+200B로 바꿔 둔 표시(Google Docs 등). 은닉 신호로 세지 않고 수만 남긴다.
+            doc.structure["actual_text_line_break_markers"] = markers
         if strings:
             doc.structure["actual_text_strings"] = strings[:50]
 
@@ -1224,10 +1231,28 @@ def _pdf_literal(body: bytes) -> str:
     return data.decode("latin-1", "ignore")
 
 
-def _actual_text_zero_width(raw: bytes, collect: bool = False):
+SINGLE_GLYPH_SHOW_RE = re.compile(rb"^\s*(?:/[A-Za-z0-9]+\s+[\d.]+\s+Tf\s*)?(?:[-\d.\s]+(?:Tm|Td|TD)\s*)*"
+                                  rb"(?:<(?P<hex>[0-9A-Fa-f]{2,4})>|\((?P<lit>(?:\\.|[^\\)]))\))\s*Tj\s*EMC")
+
+
+def _is_line_break_marker(text: str, data: bytes, end: int) -> bool:
+    """ActualText가 U+200B 하나이고, 그 표시 구간이 글리프 하나(공백 자리)만 그리는가.
+
+    Google Docs(Skia) PDF는 줄바꿈 자리의 공백 글리프에 ActualText U+200B를 붙인다. 글자 하나를 가릴 뿐 문자열을
+    숨길 수 없으므로 은닉 신호가 아니다. 여러 글리프를 덮거나 다른 문자가 섞이면 종전대로 센다.
+    """
+    if text != "\u200b":
+        return False
+    head = data[end:end + 200]
+    bdc = re.match(rb"\s*>>\s*BDC", head)
+    return bool(bdc and SINGLE_GLYPH_SHOW_RE.match(head[bdc.end():]))
+
+
+def _actual_text_zero_width(raw: bytes, collect: bool = False, line_break_markers: Optional[Dict[str, int]] = None):
     """표시 글자 대신 쓰일 문자열(ActualText)에 들어 있는 폭 0 문자. 추출기는 이 문자를 버리는 경우가 많다.
 
     collect=True면 ActualText 문자열 자체도 돌려준다(화면 글자와 다른 문자열을 숨기는 경로이므로 폭 0 문자를 지우고 지시문인지 분류한다).
+    line_break_markers에 dict를 넘기면 줄바꿈 표시(_is_line_break_marker)는 폭 0 문자 수에서 빼고 그 dict에 센다.
     """
     counts: Dict[str, int] = {}
     strings: List[str] = []
@@ -1249,6 +1274,9 @@ def _actual_text_zero_width(raw: bytes, collect: bool = False):
                     continue
             else:
                 text = _pdf_literal(m.group(2))
+            if line_break_markers is not None and _is_line_break_marker(text, data, m.end()):
+                line_break_markers["U+200B ZERO WIDTH SPACE"] = line_break_markers.get("U+200B ZERO WIDTH SPACE", 0) + 1
+                continue
             found = False
             for ch, name in ZERO_WIDTH_NAMES.items():
                 if ch in text:

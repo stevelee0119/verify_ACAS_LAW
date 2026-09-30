@@ -99,6 +99,25 @@ def compute_stylometry(text: str) -> Dict[str, Any]:
     }
 
 
+def _unconfirmed_authority(finding: Finding) -> bool:
+    """공식 조회 범위에서 실재를 확인하지 못한 법률 근거(가상 인용 군집 판단용).
+
+    판례·법령 미발견 외에, 법령은 확인됐지만 조회한 시행 버전의 전체 조문에 해당 조문이 없는 경우와
+    서면이 적은 개정 이력(공포번호)이 공식 연혁에 없는 경우를 센다. 공식 목록에 없을 수 있는 행정규칙
+    미검색은 세지 않는다.
+    """
+    features = finding.confidence_features or {}
+    if finding.type in (FindingType.CASE_NOT_FOUND, FindingType.STATUTE_NONEXISTENT):
+        return finding.status == VerificationStatus.NOT_FOUND
+    if finding.type == FindingType.LAW_CITATION_ERROR:
+        return (finding.status == VerificationStatus.NOT_FOUND
+                and features.get("absence_scope") == "SELECTED_VERSION_FULL_TEXT")
+    if finding.type == FindingType.TEMPORAL_LAW_MISMATCH:
+        return (features.get("rule_id") == "TEMPORAL.POST_OFFENSE_AMENDMENT_RELIANCE"
+                and (features.get("official_history") or {}).get("status") == "NOT_IN_HISTORY")
+    return False
+
+
 def _rule_based_ai_detection(
     doc: NormalizedDocument,
     citation_findings: List[Finding],
@@ -157,9 +176,7 @@ def _rule_based_ai_detection(
         signals["style_signals"] = [r.label for r in residues if not r.objective]
 
     # 3. 판례 인용 오류는 원칙적으로 작성 주체의 단독 근거로 쓰지 않는다.
-    unconfirmed = [f for f in citation_findings
-                   if f.type in (FindingType.CASE_NOT_FOUND, FindingType.STATUTE_NONEXISTENT)
-                   and f.status == VerificationStatus.NOT_FOUND]
+    unconfirmed = [f for f in citation_findings if _unconfirmed_authority(f)]
     impossible = [f for f in unconfirmed
                    if (f.confidence_features or {}).get("case_number")
                    and not case_number_possible(str(f.confidence_features["case_number"]))]

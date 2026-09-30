@@ -258,5 +258,6 @@ def select_provision(law: dict, article: str, paragraph: str | None = None,
         return "\n".join(filter(None, pieces))
     text = full_text(node) if node else ""
     return {"status": "VERIFIED" if text else "UNVERIFIED", "path": path, "text": text,
+            "article_title": article_node.get("title") if article_node else None,
             "article_effective_from": article_node.get("effective_from") if article_node else None,
             "article_effective_date_raw": article_node.get("effective_date_raw") if article_node else None}

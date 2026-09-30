@@ -77,7 +77,11 @@ LAW_RE = re.compile(
 )
 # 앞 조문 인용에 이어지는 조문: "및 제751조", ", 제4조 제2항", "와 제9조의2"
 CONTINUED_ARTICLE_RE = re.compile(
-    r"\s*(?:,|및|또는|와|과|·|ㆍ|(?:은|는)\s*[^.?!。\n「」『』,]{1,90},)\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
+    r"\s*(?:,|및|또는|와|과|·|ㆍ|(?:은|는)\s*[^.?!。\n「」『』,]{1,90},|"
+    # "제10조의 누설죄 또는 제11조의 탐지·수집죄": 죄명·규정을 사이에 두고 이어진 같은 법령의 조문
+    # "제750조의 불법행위 책임 또는 제756조"도 같다(죄명·책임 이름은 한 번까지 띄어 쓸 수 있다).
+    r"의\s*(?:[가-힣·ㆍ]{1,12}\s)?[가-힣·ㆍ]{0,12}(?:죄|규정|조항|책임)\s*(?:또는|및|,|이나|과|와))"
+    r"\s*(?P<ref>제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?)")
 # "같은 법", "동법", "같은 법률": 앞서 인용한 법령을 가리킨다.
 # "동법 시행령"·"같은 법 시행규칙"은 앞서 인용한 법률의 하위 법령이다.
@@ -359,6 +363,12 @@ def extract_from_text(
         if law_name.endswith(ADMIN_RULE_KINDS):
             # 이름이 훈령·예규·고시·지침으로 끝나면 법령이 아니라 행정규칙이다.
             kind = next(k for k in ADMIN_RULE_KINDS if law_name.endswith(k))
+            if law_name == kind:
+                # "위 지침 제11조": 바로 앞(600자 안)에 낫표로 적은 같은 종류의 규정을 가리킨다. 없으면 그대로 둔다.
+                earlier = [n.group("name").strip() for n in BRACKET_NAME_RE.finditer(text, max(0, m.start() - 600), m.start())
+                           if n.group("name").strip().endswith(kind)]
+                if earlier:
+                    law_name = earlier[-1]
             citations.append(_admin_rule_citation(
                 text, m.start(), m.end(), kind=kind, name=law_name,
                 article=m.group("article"), sub=m.group("article_sub"), paragraph=m.group("paragraph"),
@@ -389,7 +399,8 @@ def extract_from_text(
         head_id, position = citations[-1].citation_id, m.end()
         while (more := CONTINUED_ARTICLE_RE.match(text, position)):
             bridge = text[position:more.start("ref")]
-            if re.search(r"[가-힣]+법(?:률)?|제\s*\d+\s*조", bridge):
+            # 사이에 다른 법령명이 있으면 이어진 조문이 아니다('불법행위'의 '불법'은 법령명이 아니다).
+            if re.search(r"[가-힣]+법(?:률)?(?![가-힣])|제\s*\d+\s*조", bridge):
                 break
             number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
             span_start = more.start("ref")

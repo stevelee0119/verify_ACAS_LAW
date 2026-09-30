@@ -1,2 +1,3 @@
 # Preserve the user's PDF fixture byte-for-byte on Windows and Linux.
 tests/fixtures/school_violence_synthetic.pdf -text -diff
+tests/fixtures/case6_defense_opinion_google_docs.pdf -text -diff

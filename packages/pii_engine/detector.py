@@ -69,11 +69,44 @@ EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 ACCOUNT_RE = re.compile(r"(?<!\d)\d{2,3}[-\s]\d{2,6}[-\s]\d{2,6}(?:[-\s]\d{1,6})?(?!\d)")
 MILITARY_ID_RE = re.compile(
     r"(?:군번\s*[:\s]?\s*)(\d{2}[-\s]?\d{5,8})(?![0-9])|"
-    r"(?<![0-9A-Za-z])(\d{2}-\d{5,8})(?![0-9])|"
+    r"(?<![0-9A-Za-z\-])(\d{2}-\d{5,8})(?![0-9\-])|"
     r"(?<![0-9A-Za-z])\d{2}[-\s]?\d{8}(?![0-9])|"
     r"(?<![A-Za-z])[가-힣]?\d{7,8}(?=\s*군번)"
 )
 PASSPORT_RE = re.compile(r"\b[MSRODmsrod]\d{8}\b")
+# 운전면허번호: 지역번호 2-연도 2-일련 6-검증 2자리(11-15-849201-22). 앞에 지역명이 붙거나(강원 11-15-…)
+# 지역명이 번호 앞 두 자리를 대신하는(강원 15-849201-22) 표기도 있다. 줄바꿈으로 지역명과 번호가 갈라질 수 있다.
+REGION_NAMES = r"(?:서울|부산|경기|강원|충북|충남|전북|전남|경북|경남|제주|대구|인천|광주|대전|울산|세종)"
+DRIVER_LICENSE_RE = re.compile(
+    rf"(?<![0-9\-])(?:{REGION_NAMES}\s*)?\d{{2}}-\d{{2}}-\d{{6}}-\d{{2}}(?![0-9\-])|"
+    rf"{REGION_NAMES}\s*\d{{2}}-\d{{6}}-\d{{2}}(?![0-9\-])"
+)
+# 은행명·계좌 표지 바로 뒤의 번호는 자릿수 배열(6-2-6 등)과 관계없이 계좌번호다.
+ACCOUNT_LABELLED_RE = re.compile(
+    r"(?:은행|뱅크|금고|농협|수협|신협|우체국|증권|계좌\s*(?:번호)?\s*(?:는|은|[:：])?)\s*"
+    r"(\d{2,6}(?:-\d{2,7}){2,3})(?![\d\-])"
+)
+# 소속 부대와 계급을 함께 적은 표기는 단독으로도 사람을 좁힐 수 있는 준식별자다.
+MILITARY_AFFILIATION_RE = re.compile(
+    r"(?:육군|해군|공군|해병대|국군)\s*(?:제\s*[\d○◯OＯ]{1,4}\s*)?[가-힣]{0,12}?"
+    r"(?:군단|사단|여단|연대|대대|비행단|전대|함대|사령부|부대)"
+    r"(?:\s*[가-힣]{2,15}(?:실|과|처|팀|반|소대|중대|대대|대|단))?\s*(?:소속\s*)?"
+    r"(?:이병|일병|상병|병장|하사|중사|상사|원사|준위|소위|중위|대위|소령|중령|대령|준장|소장|중장|대장)(?![가-힣])"
+)
+# 서면 머리의 당사자 표시는 글자 사이를 띄워 쓴다("피 고 인   최 원 석"). 이름 글자 사이 공백도 허용한다.
+PARTY_HEADER_NAME_RE = re.compile(
+    r"(?:^|\n)[ \t]*(?:피[ \t]*고[ \t]*인|피[ \t]*의[ \t]*자|피[ \t]*신[ \t]*청[ \t]*인|피[ \t]*청[ \t]*구[ \t]*인|"
+    r"피[ \t]*고|원[ \t]*고|신[ \t]*청[ \t]*인|청[ \t]*구[ \t]*인|상[ \t]*고[ \t]*인|항[ \t]*소[ \t]*인|"
+    r"담[ \t]*당[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*인)[ \t]+"
+    r"((?:[가-힣][ \t]?){1,3}[가-힣])(?=[ \t]*(?:\n|$|[(（]))"
+)
+PARTY_HEADER_STOPWORDS = {"대한민국", "국가", "검사", "미상", "불상",
+                          # 서면 제목("변 호 인  의 견 서")
+                          "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
+                          "탄원서", "소장", "항소장", "상고장"}
+# '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
+MILITARY_NOUN_AFTER_GUN_RE = re.compile(
+    r"\s*(?:장교|간부|병사|병력|부대|복무|당국|사법|검찰|수사|형법|인사|기밀|시설|부사관|병원|조직|내부|전산|보안|의무)")
 DOB_RE = re.compile(
     r"(?:19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[.\-일\s]?\s*(?:생|출생|일생)|"
     r"(?:생년월일|출생일)\s*[:\s]?\s*(?:19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[.\-일]?"
@@ -108,6 +141,8 @@ LABELLED_NAME_RE = re.compile(
 # 정상적인 법률·행정·군사·계약용어가 인명(PERSON)으로 과잉 마스킹되는 것을 방지하기 위한 Stopword 목록
 LEGAL_MILITARY_STOPWORDS = {
     "부대", "부사관", "처분", "행정청", "처분청", "지휘관", "사단장", "연대장", "대대장",
+    # 직함 앞에 오는 일반 명사("소속 소령", "담당변호사", "당시 대위")
+    "소속", "담당", "당시", "현역", "예비역", "해당", "전담", "선임", "수석", "주임",
     "중대장", "소대장", "징계권자", "심사위원회", "소청심사", "인사위원회", "국방부", "육군본부",
     "해군본부", "공군본부", "사령부", "행정소송", "불복", "사유", "내용", "결과", "사실", "기준",
     "원처분", "징계처분", "재심사", "위원회", "보수", "호봉", "진급", "임용", "복무", "휴직",
@@ -169,10 +204,12 @@ DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("PHONE", PHONE_RE, 0.95),
     ("PASSPORT", PASSPORT_RE, 0.8),
     ("MILITARY_ID", MILITARY_ID_RE, 0.85),
+    ("DRIVER_LICENSE", DRIVER_LICENSE_RE, 0.9),
     ("ACCOUNT", ACCOUNT_RE, 0.6),
     ("DOB", DOB_RE, 0.9),
     ("ADDRESS", ADDRESS_RE, 0.85),
     ("VEHICLE", VEHICLE_RE, 0.9),
+    ("AFFILIATION", MILITARY_AFFILIATION_RE, 0.7),
 ]
 
 RRN_WEIGHTS = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]
@@ -264,6 +301,19 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         raw = m.group(1)
         matches.append(PIIMatch("RRN", raw, start, end, block_id, page, 0.95, "주민등록번호 라벨 문맥"))
 
+    for m in ACCOUNT_LABELLED_RE.finditer(text):
+        start, end = m.start(1), m.end(1)
+        if _covered_by_span(guard_spans, start, end) or re.fullmatch(r"(?:19|20)\d{2}-\d{1,2}-\d{1,2}", m.group(1)):
+            continue  # "은행 2024-12-24 거래내역"의 날짜는 계좌번호가 아니다
+        matches.append(PIIMatch("ACCOUNT", m.group(1), start, end, block_id, page, 0.9, "은행명·계좌 표지 문맥"))
+
+    for m in PARTY_HEADER_NAME_RE.finditer(text):
+        name = re.sub(r"\s+", "", m.group(1))
+        if name in PARTY_HEADER_STOPWORDS or name in LEGAL_MILITARY_STOPWORDS:
+            continue
+        # 가명은 띄어쓰기를 뺀 이름으로 만든다. 본문의 '최원석'과 머리의 '최 원 석'이 같은 가명을 받는다.
+        matches.append(PIIMatch("PERSON", name, m.start(1), m.end(1), block_id, page, 0.8, "당사자 표시란"))
+
     for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON"), (LABELLED_NAME_RE, "PERSON")):
         for m in pattern.finditer(text):
             name = m.group(1).strip()
@@ -279,6 +329,8 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                     continue
                 # 직함 앞 단어가 조사(과, 와, 은, 는, 이, 가, 을, 를, 의, 에, 로, 도, 만, 에게)로 끝나면 인명이 아니므로 제외
                 if re.search(r"(?:과|와|은|는|이|가|을|를|의|에|로|도|만|에게)$", name):
+                    continue
+                if re.search(r"\s*군$", full_matched) and MILITARY_NOUN_AFTER_GUN_RE.match(text, m.end()):
                     continue
             matches.append(PIIMatch(kind, name, start, end, block_id, page, 0.75, "직함·당사자·가족 표기 문맥"))
 

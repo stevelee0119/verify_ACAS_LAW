@@ -57,7 +57,8 @@ from packages.claim_engine.attachments import analyze_attachments
 from packages.claim_engine.classification import link_claim_evidence
 from packages.legal_engine.components import affected_by_unavailable
 from packages.legal_engine.reference_dates import reference_date_candidates
-from packages.legal_engine.temporal_review import (criminal_context, official_versions, reference_for,
+from packages.legal_engine.temporal_review import (criminal_context, document_reference_date, official_versions,
+                                                   reference_for, review_declared_amendments,
                                                    review_temporal_application)
 from packages.legal_engine.source_review import case_applicability_review
 from packages.legal_engine.spec_mapping import relevance_finding
@@ -705,6 +706,10 @@ class VerificationPipeline:
         # 법령 적용 시점(행위시법): 시행 버전이 둘 이상인 조문에 대한 주장을 버전별로 대조한다(v4 P3)
         with manifest.stage("temporal_review", result.findings, inputs=0, unit="검토한 조문 주장", document_id=document.document_id) as stage:
             found = self._temporal_reviews(doc, citations, context)
+            # 서면이 스스로 적은 개정 이력(공포번호·시행일)이 행위일 뒤인데 그 조항을 행위에 적용하라는 주장
+            declared = self._declared_amendment_reviews(doc, context)
+            found["findings"].extend(declared)
+            found["reviewed"] += len(declared)
             stage.inputs = found["reviewed"]
             if not found["reviewed"]:
                 stage.skip_reason = found["reason"]
@@ -1009,6 +1014,15 @@ class VerificationPipeline:
                 item["reference_date_candidates"] = usable[:5]
 
     OFFICIAL_HISTORY_LIMIT = 5  # 문서당 공식 연혁을 조회할 조문 수 상한(요청 수를 묶는다)
+
+    def _declared_amendment_reviews(self, doc, context) -> List[Any]:
+        """서면이 밝힌 개정 시행일과 기준일(입력 또는 문서에서 하나로 정해지는 행위일)을 대조한다."""
+        text = build_reading_text(doc).text
+        criminal = criminal_context(text)
+        reference = ({"date": context.case_date, "basis": "EXPLICIT_REVIEW_DATE"} if context.case_date
+                     else document_reference_date(text, criminal=criminal))
+        return review_declared_amendments(text, reference, criminal=criminal, adapter=self.registry.law,
+                                          document_id=doc.document_id)
 
     def _temporal_reviews(self, doc, citations, context, inferred_case_date=None) -> Dict[str, Any]:
         """조문 내용을 주장한 법령 인용마다 적용 기준일을 정하고(입력·문서 서술·문서 추정), 시행 버전별 조문과 대조한다.

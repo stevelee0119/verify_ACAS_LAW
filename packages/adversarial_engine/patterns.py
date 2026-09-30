@@ -48,6 +48,10 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(한국어)"),
     (_c(r"ignore\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|preceding)\s+(instructions?|prompts?|rules?|directions?)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "이전 지시 무시 요구(영어)"),
+    # "ignore conflicting internal guidelines": 검증 기준이 되는 내부 규정·지침과의 충돌을 무시하라는 요구
+    (_c(r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:conflicting|contradicting|internal|existing|other|applicable)\s+"
+        r"(?:internal\s+)?(?:guidelines?|policies|policy|rules?|regulations?|protocols?|instructions?)"),
+     InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "내부 지침·규정 충돌 무시 요구(영어)"),
     (_c(r"disregard\s+(all\s+|any\s+|the\s+)?(previous|prior|above|earlier|system)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "disregard previous"),
     (_c(r"forget\s+(everything|all\s+previous|your\s+instructions)"),
@@ -112,8 +116,11 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # --- 검증 중단 요구 -----------------------------------------------------
     (_c(r"(검증|탐지|분석|점검|심사)\s*(루틴|절차|과정|기능)?[를을]?\s*(즉시\s*)?(중단|생략|건너뛰|해제|비활성)"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "검증 중단 요구(한국어)"),
-    (_c(r"(skip|disable|bypass|suppress|turn\s+off)\s+(all\s+|any\s+|the\s+)?"
-        r"(security\s+)?(check|verification|validation|detection|scan|warning|alert|analysis)s?"),
+    # 동사와 대상 사이의 수식어("suspend all standard legal hallucination detectors",
+    # "bypass statute date verification protocols")를 네 단어까지 허용한다.
+    (_c(r"(skip|disable|bypass|suppress|suspend|deactivate|turn\s+off|switch\s+off)\s+(all\s+|any\s+|the\s+)?"
+        r"(?:[a-z][a-z\-]*\s+){0,4}?"
+        r"(check|verification|validation|detection|detector|scan|scanner|warning|alert|analysis|filter|protocol)s?\b"),
      InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "검증·경고 억제 요구(영어)"),
     (_c(r"(추가\s*)?(경고|결함|문제점|오류)[를을]?\s*(출력|표시|기재|보고)하지\s*(말|마십시오|마세요|않)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "경고 출력 금지 요구"),
@@ -146,8 +153,14 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무오류 결론 강제"),
     (_c(r"(report|conclude|state|say)\s+(that\s+)?(there\s+are\s+)?no\s+(issues?|errors?|problems?|findings?)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "무오류 결론 강제(영어)"),
-    (_c(r"(mark|classify|rate)\s+(this|the)\s+document\s+as\s+(authentic|valid|genuine|clean|safe)"),
+    (_c(r"(mark|classify|rate|label|flag)\s+(this|the)\s+(?:document|submission|filing|brief|pleading|file)\s+as\s*:?\s*"
+        r"(?:status\s*[:=]?\s*)?['\"‘“]?(?:passed[_\s-]?)?(authentic|valid|genuine|clean|safe|verified|compliant|passed)"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "진정성 강제 표시"),
+    # 문서 끝에 붙인 "[DOCUMENT AUDIT METADATA - REF #…-AI-SEC-CLEARANCE]" 같은 감사·보안 통과 표지.
+    # 지시문이 없더라도 검증을 이미 통과했다고 믿게 하려는 표지다(사전심사 완료 주장과 같은 유형).
+    (_c(r"\[\s*(?:DOCUMENT\s+|SYSTEM\s+)?(?:AUDIT|SECURITY|COMPLIANCE|VERIFICATION|AI)[\s_-]+"
+        r"(?:METADATA|CLEARANCE|CLEARED|VERIFIED|PASSED|APPROVAL|APPROVED|STATUS)\b[^\]\n]{0,80}\]"),
+     InjectionIntent.ROLE_OVERRIDE, 0.8, "감사·보안 통과 표지 사칭(검증 면제 유도)"),
     (_c(r"(?:output|report|return|display|conclude)\s+['\"‘“]?(?:pass|clean|valid|authentic)['\"’”]?\b"),
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "PASS 결과 출력 강제(영어)"),
     (_c(r"(신뢰도|점수|score)\s*[를을]?\s*(100|최고|최상)[%점]?\s*(로|으로)?\s*(부여|기재|설정)"),
@@ -163,7 +176,11 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
      InjectionIntent.OUTPUT_MANIPULATION, 1.0, "불리한 사실 제외 요구"),
     (_c(r"(?:사건번호|판례|판결문|법령|조문|기록|원문)\s*(?:확인|조회|검증|대조)[은는을를]?\s*(?:생략|건너뛰|하지\s*말|패스)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "사건번호 및 원문 확인 생략 요구"),
-    (_c(r"(?:요약\s*담당자|검토자|작성자|실무자|조사관)[은는이가]?\s*[^.\n]{0,80}?(?:결론을\s*(?:내리|확정|도출)|생략|제외|반영하지\s*말)"),
+    # '생략·제외'는 검토·보고 대상(확인, 사실, 경고 등)을 뺄 때만 조작 지시다. 규정 문언의
+    # "실무자가 지휘관 승인 절차를 생략하고 … 반출할 수 없다" 같은 업무 절차 금지 조항은 해당하지 않는다.
+    (_c(r"(?:요약\s*담당자|검토자|작성자|실무자|조사관)[은는이가]?\s*[^.\n]{0,80}?(?:결론을\s*(?:내리|확정|도출)|"
+        r"(?:확인|검증|검토|조회|대조|경고|사실|사정|내용|정황|진술|증거|쟁점|인용|판례|사건번호)[을를은는]?\s*"
+        r"(?:모두\s*|일체\s*|전부\s*)?(?:생략|제외)|반영하지\s*말)"),
      InjectionIntent.OUTPUT_MANIPULATION, 0.9, "요약 담당자·검토자 대상 결론 강요 및 검증 생략"),
 
     # --- Verification Suppression ---------------------------------------
