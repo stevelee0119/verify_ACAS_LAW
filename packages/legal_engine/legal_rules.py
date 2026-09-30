@@ -172,19 +172,26 @@ def _is_negated_expression(rule: Dict[str, Any], unit: str, match: re.Match) -> 
     pat_str = rule.get("pattern", "")
     rule_targets_negation = bool(re.search(r"않|아니|없|불가|배제", pat_str))
     end_pos = match.end()
-    following_text = unit[end_pos:end_pos + 60].strip()
+    # 매칭부 바로 직후(최대 25자)의 연결 서술어 확인
+    immediate_following = unit[end_pos:end_pos + 25].strip()
 
     if not rule_targets_negation:
-        # 규칙이 긍정 명제(예: '책임을 진다', '처벌을 구한다')를 잡는 규칙인 경우:
-        # 매칭부 바로 뒤에 '는 것은 아니다', '라 볼 수 없다', '대상이 아니라고', '않는다' 등 부정어가 이어지면 배척
-        if NEGATION_WORDS_RE.search(following_text):
+        # 규칙이 긍정 명제(예: '위법성 조각', '책임을 진다')인 경우:
+        # 매칭부 직후에 '된다고 볼 수 없다', '되는 것은 아니다', '되지 않는다', '라 할 수 없다' 등
+        # 해당 명제 자체를 직접 부정하는 서술어가 이어지는 경우에만 부정으로 판정
+        direct_negation = re.search(
+            r"^(?:된다고|되는|한다고|하는|이라|라|다)\s*(?:볼\s*수\s*없|것은\s*아니|지\s*않|기\s*어렵|없다|아니다)",
+            immediate_following,
+        )
+        if direct_negation:
             return True
-        if NEGATION_WORDS_RE.search(unit[-30:]):
+        # 또한 '…라는 피고 주장은 이유 없다 / 배척되어야 한다'처럼 상대방 주장을 배척하는 경우
+        if re.search(r"(?:주장|항변)(?:은|는|이|가)?\s*(?:이유\s*없|배척|받아들일\s*수\s*없|타당하지\s*않)", unit):
             return True
     else:
-        # 규칙 자체가 이미 부정 명제(예: '적용되지 않는다', '필요 없다')인 경우:
-        # '…라는 주장은 이유 없다', '배척되어야', '…적용되지 않는 것은 아니다' 등 이중 부정/상대방 주장 배척 검사
-        if re.search(r"이유\s*없|배척|타당하지\s*않|것은\s*아니", following_text) or re.search(r"이유\s*없|배척|타당하지\s*않", unit[-30:]):
+        # 규칙 자체가 이미 부정 명제인 경우 (예: '적용되지 않는다', '필요 없다')
+        # 상대방 주장을 배척하거나 이중 부정인 경우
+        if re.search(r"(?:주장|항변)(?:은|는|이|가)?\s*(?:이유\s*없|배척|타당하지\s*않)|것은\s*아니", unit):
             return True
 
     return False

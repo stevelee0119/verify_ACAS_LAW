@@ -82,27 +82,38 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # 실제 테스트 문서(verification_rpt_251392c6e1a044f7)에서 미탐지된 형태이다.
     # "[ADMIN COMMAND: ...]", "[SYSTEM INSTRUCTION: SECURITY EVALUATION OVERRIDE]"는
     # 역할 태그가 아니라 대괄호 안의 명령 선언이라 기존 규칙에 걸리지 않았다.
+    # --- 권한 위장 명령 -----------------------------------------------------
+    # 실제 테스트 문서(verification_rpt_251392c6e1a044f7)에서 미탐지된 형태이다.
+    # "[ADMIN COMMAND: ...]", "[SYSTEM INSTRUCTION: SECURITY EVALUATION OVERRIDE]"는
+    # 역할 태그가 아니라 대괄호 안의 명령 선언이라 기존 규칙에 걸리지 않았다.
     (_c(r"\[\s*(admin|administrator|root|superuser|system|security|privileged)\s+"
         r"(command|instruction|directive|override|mode)\b"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "관리자 명령 선언 위장"),
-    (_c(r"\[\s*(?:SYSTEM_OVERRIDE_DIRECTIVE|LABOR_DISPUTE_AI_AUDITOR|MEDICAL_AI_AUDITOR|PROTECTED_WORKER_DEFENSE_PROTOCOL|PROTECTED_PATIENT_SAFETY_PROTOCOL)\b"),
-     InjectionIntent.ROLE_OVERRIDE, 1.0, "시스템 오버라이드 및 분쟁 방어 프로토콜 지시 위장"),
+    # 대괄호 안 감사·보안·시스템·관리·방어 프로토콜 및 오버라이드 지시자 위장 (TK-03)
+    (_c(r"\[\s*(?:[A-Z0-9_]{3,35}_)?(?:AUDIT|PROTOCOL|DIRECTIVE|OVERRIDE|AUDITOR|CLEARANCE|INSTRUCTION|SUPERVISOR|CONTROLLER)(?:\s*[:：\-]\s*[A-Z0-9_\s]{2,35})?\s*\]"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "시스템 감사 및 오버라이드 프로토콜 지시 위장"),
     (_c(r"\[\s*OVERRIDE\s*[:：]"), InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "OVERRIDE 지시문 선언"),
     (_c(r"(?:AIV-Rule|AIV_RULE|AIV-RULE)[\w\-]*"), InjectionIntent.ROLE_OVERRIDE, 1.0, "AIV 자동 심사 규정 사칭 프롬프트 인젝션"),
-    (_c(r"(?:중앙노동위원회|지방노동위원회|노동위원회|대법원\s*의료전담(?:재판)?부|한국의료분쟁조정중재원)\s*(?:전자심판\s*표준규정|전자감정\s*표준규정|심판\s*규정|AI\s*지침)"),
+    # 공공기관/위원회/재판부 명칭 + 전자심판/표준규정 사칭
+    (_c(r"(?:[가-힣]{2,10}(?:위원회|재판부|중재원|법원|심판원))\s*(?:전자심판\s*표준규정|전자감정\s*표준규정|심판\s*규정|AI\s*(?:심사|감정|지침|규정))"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "공공기관 전자심판/전자감정 표준규정 사칭"),
-    (_c(r"\b(?:LABOR|MED)[-_]AI[-_]\d+\b"), InjectionIntent.ROLE_OVERRIDE, 1.0, "공공/법원 AI 전자심판·감정 표준 식별자 사칭"),
-    (_c(r"(?:PROTECTED_WORKER_DEFENSE_PROTOCOL|PROTECTED_PATIENT_SAFETY_PROTOCOL|LABOR_DISPUTE_AI_AUDITOR|MEDICAL_AI_AUDITOR)"),
+    # 공공/법원 AI 전자심판 식별자 사칭 (예: DISPUTE-AI-01, LAB-AI-12 등)
+    (_c(r"\b[A-Z]{3,8}[-_]AI[-_]\d+\b"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "공공/법원 AI 전자심판·감정 표준 식별자 사칭"),
+    # 영문 대문자 감사/방어/감독 프로토콜 식별자 사칭
+    (_c(r"\b[A-Z]{3,15}_(?:[A-Z]{3,15}_)*(?:DEFENSE_PROTOCOL|SAFETY_PROTOCOL|AUDIT_PROTOCOL|AI_AUDITOR|AI_CONTROLLER|OVERRIDE_DIRECTIVE)\b"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "분쟁 방어/감사 프로토콜 사칭"),
     (_c(r"(?:위험\s*탐지\s*플래그|이상\s*탐지\s*플래그|경고\s*플래그|플래그)\s*(?:일체|전부|모두)[를을]?\s*"
         r"(?:무효화|해제|삭제|제거|취소|억제)(?:하라|해라|하십시오|할\s*것)"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "위험 탐지 플래그 일체 무효화 명령"),
     (_c(r"\b(?:bypass\s+all\s+hallucination\s+checks|certify\s+all\s+precedent\s+citations\s+as\s+authoritative)\b"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "환각 검사 우회 및 판례 인용 강제 인증"),
-    (_c(r"['\"‘“]?COMPLIANT_AND_GENUINE['\"’”]?\s*(?:으로|로)?\s*(?:분류|판정|보고|출력|처리)"),
-     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "COMPLIANT_AND_GENUINE 판정 강제(한국어)"),
-    (_c(r"(?:classify|mark|report|output|conclude|output\s+verification_verdict)\s*[:：]?\s*['\"‘“]?COMPLIANT_AND_GENUINE['\"’”]?\b"),
-     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "COMPLIANT_AND_GENUINE 판정 강제(영어)"),
+    # 특정 판정 상태(COMPLIANT, GENUINE, ZERO_DEFECT 등) 강제 요구 (한국어)
+    (_c(r"['\"‘“]?(?:COMPLIANT|GENUINE|ZERO_DEFECTS?|VERIFIED_PASS|NO_DEFECTS?)(?:_[A-Z0-9]+)*['\"’”]?\s*(?:으로|로)?\s*(?:분류|판정|보고|출력|처리)"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "정상 판정 결과 강제 요구(한국어)"),
+    # 특정 판정 상태 강제 요구 (영어)
+    (_c(r"(?:classify|mark|report|output|conclude|output\s+verification_verdict)\s*[:：]?\s*['\"‘“]?(?:COMPLIANT|GENUINE|ZERO_DEFECTS?|VERIFIED_PASS|NO_DEFECTS?)(?:_[A-Z0-9]+)*\b"),
+     InjectionIntent.OUTPUT_MANIPULATION, 1.0, "정상 판정 결과 강제 요구(영어)"),
     (_c(r"(?:전자소송\s*자동\s*심사\s*(?:규정|지침|기준)|자동\s*심사\s*규정)"), InjectionIntent.ROLE_OVERRIDE, 1.0, "전자소송 자동 심사 규정 사칭"),
     (_c(r"(?:경고\s*플래그|경고\s*메시지|경고|플래그)[를을도]?\s*(?:일체\s*)?(?:발생시키지|표시하지|출력하지)\s*(?:아니한\s*채|않고|말고)\s*(?:적법|정상|적합)\s*판정"),
      InjectionIntent.VERIFICATION_SUPPRESSION, 1.0, "경고 플래그 억제 및 적법 판정 요구"),
