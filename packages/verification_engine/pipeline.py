@@ -362,6 +362,8 @@ class VerificationPipeline:
 
         references = ReferenceLibrary(self.settings, check=check or (lambda: None),
             notify=lambda done, total: emit(JobState.VERIFYING, f"Drive 참고자료 확인 {done}/{total}건", 0.85))
+        self.references = references
+        self.legal.references = references
         total = max(1, len(documents))
         for index, document in enumerate(documents):
             self._execution_document = document.document_id

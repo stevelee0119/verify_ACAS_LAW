@@ -84,6 +84,9 @@ LEDGER_RECORDS = [
     ("TK-22", "PARAGRAPH_WRAPPED_INJECTION", True, "하드래핑으로 갈라진 [INJECTION...] 표지", "단일 블록 결합 및 인젝션 탐지"),
     ("TK-22", "PARAGRAPH_PARTY_HEADER_PRESERVE", False, "원고/주소/연락처 등 당사자 표시란", "독립 줄 단위 유지"),
     ("TK-22", "PARAGRAPH_HEADING_PRESERVE", False, "1. 사건의 실체적 경위 등 목차 제목", "단독 제목 블록 분리 보존"),
+    ("TK-23", "INTERNAL_REGULATION_DRIVE_MATCH", False, "사용자 참고자료에 있는 안전대응규정", "CRITICAL 부존재 미발행 (참고자료 매칭)"),
+    ("TK-23", "INTERNAL_REGULATION_SEVERITY_LOW", False, "공식 법령 목록에 없는 부서지침", "심각도 LOW (HIGH 미만)"),
+    ("TK-23", "STATUTE_NONEXISTENT_CONTROL", True, "공식 법령 목록에 없는 가공민사소송법", "기존 CRITICAL 유지 (대조군)"),
     ("TK-26", "DEFENSE_OVERCLAIM_POSITIVE", True, "헌법 제19조 양심의 자유에 따라 징계는 당연무효", "과대주장 탐지"),
     ("TK-26", "DEFENSE_OVERCLAIM_CONTROL", False, "정당방위 요건인 상당한 이유를 입증합니다", "과대주장 미탐"),
 ]
@@ -484,8 +487,100 @@ def test_tk22_blank_line_split_control():
     assert len(blocks) == 2, f"빈 줄로 구분된 문단이 분리되지 않음 (개수: {len(blocks)})"
 
 
+
 # ===========================================================================
-# 9. 원장 종합 무결성 검증
+# 9. TK-23: 내부 규정 및 행정규칙 CRITICAL 오탐 방지 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "rule_name, ref_filename",
+    [
+        ("안전관리대응규정", "안전관리대응규정.pdf"),
+        ("인사복무처리지침", "인사복무처리지침.hwpx"),
+        ("자산운용관리세칙", "자산운용관리세칙.docx"),
+    ],
+)
+def test_tk23_internal_regulation_drive_match_positive(rule_name: str, ref_filename: str):
+    """TK-23 양성: 사용자 참고자료(Drive)에 있는 규범은 공식 법령 목록 부재 시 CRITICAL 미발행."""
+    from packages.common.enums import AdapterStatus, CitationType, Severity, VerificationStatus
+    from packages.common.schemas import Citation
+    from packages.legal_engine.source_review import _law_absent
+    from packages.legal_engine.verifier import CitationVerdict, LegalVerifier
+    from packages.source_adapters.base import AdapterResponse
+
+    citation = Citation.create(CitationType.STATUTE, f"{rule_name} 제5조", law_name=rule_name, article="5")
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    verifier = LegalVerifier()
+    verifier.user_references = [ref_filename]
+
+    mock_resp = AdapterResponse(status=AdapterStatus.READY, message="EXACT_LAW_NOT_FOUND:[]")
+    _law_absent(verdict, mock_resp, verifier=verifier)
+
+    # CRITICAL finding이 없어야 함
+    critical_findings = [f for f in verdict.findings if f.severity == Severity.CRITICAL]
+    assert len(critical_findings) == 0, f"Drive 일치 규범에 CRITICAL finding이 발행됨: {critical_findings}"
+    assert verdict.levels.get("existence") == "FOUND_IN_USER_REFERENCES"
+    assert verdict.review.get("user_reference_match") == ref_filename
+
+
+@pytest.mark.parametrize(
+    "rule_name",
+    [
+        "재난현장안전통제규정",
+        "공공기관업무수행지침",
+        "회계집행처리지침",
+    ],
+)
+def test_tk23_internal_regulation_severity_low_positive(rule_name: str):
+    """TK-23 양성: Drive에 없더라도 내부 규정/지침 형태 규범은 공식 법령 목록 부재 시 심각도 LOW (HIGH 미만)."""
+    from packages.common.enums import AdapterStatus, CitationType, FindingType, Severity, VerificationStatus
+    from packages.common.schemas import Citation
+    from packages.legal_engine.source_review import _law_absent
+    from packages.legal_engine.verifier import CitationVerdict
+    from packages.source_adapters.base import AdapterResponse
+
+    citation = Citation.create(CitationType.STATUTE, f"{rule_name} 제3조", law_name=rule_name, article="3")
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+
+    mock_resp = AdapterResponse(status=AdapterStatus.READY, message="EXACT_LAW_NOT_FOUND:[]")
+    _law_absent(verdict, mock_resp)
+
+    assert len(verdict.findings) == 1
+    finding = verdict.findings[0]
+    assert finding.type == FindingType.LAW_CITATION_ERROR
+    assert finding.severity == Severity.LOW, f"심각도가 LOW가 아님: {finding.severity}"
+    assert verdict.levels.get("existence") == "NOT_FOUND_IN_STATUTE_LIST"
+
+
+@pytest.mark.parametrize(
+    "statute_name",
+    [
+        "가공민사소송법",
+        "가상국가배상특별법률",
+        "임의행정심판법시행령",
+    ],
+)
+def test_tk23_statute_nonexistent_control(statute_name: str):
+    """TK-23 대조군: 법률·시행령 등 일반 법령 형태의 가공 법령은 기존대로 STATUTE_NONEXISTENT CRITICAL 유지."""
+    from packages.common.enums import AdapterStatus, CitationType, FindingType, Severity, VerificationStatus
+    from packages.common.schemas import Citation
+    from packages.legal_engine.source_review import _law_absent
+    from packages.legal_engine.verifier import CitationVerdict
+    from packages.source_adapters.base import AdapterResponse
+
+    citation = Citation.create(CitationType.STATUTE, f"{statute_name} 제10조", law_name=statute_name, article="10")
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+
+    mock_resp = AdapterResponse(status=AdapterStatus.READY, message="EXACT_LAW_NOT_FOUND:[]")
+    _law_absent(verdict, mock_resp)
+
+    assert len(verdict.findings) == 1
+    finding = verdict.findings[0]
+    assert finding.type == FindingType.STATUTE_NONEXISTENT
+    assert finding.severity == Severity.CRITICAL, f"가공 법령에 CRITICAL이 유지되지 않음: {finding.severity}"
+
+
+# ===========================================================================
+# 10. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -502,4 +597,5 @@ def test_ledger_records_integrity():
     assert "TK-17" in ticket_ids
     assert "TK-20" in ticket_ids
     assert "TK-22" in ticket_ids
+    assert "TK-23" in ticket_ids
     assert "TK-26" in ticket_ids

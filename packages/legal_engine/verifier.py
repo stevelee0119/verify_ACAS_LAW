@@ -66,15 +66,19 @@ class CitationVerdict:
 
 
 class LegalVerifier:
-    def __init__(self, registry: Optional[SourceRegistry] = None) -> None:
+    def __init__(self, registry: Optional[SourceRegistry] = None, *, references: Any = None) -> None:
         self.registry = registry or SourceRegistry()
+        self.references = references
 
     # -- 진입점 -----------------------------------------------------------
     def verify_citations(
         self, citations: List[Citation], *, case_date: Optional[str] = None,
         incident_date: Optional[str] = None, current_date: Optional[str] = None,
         progress: Optional[Callable[[int, int], None]] = None,
+        references: Any = None,
     ) -> EngineResult:
+        if references is not None:
+            self.references = references
         result = EngineResult(engine=ENGINE_NAME)
         verdicts: List[CitationVerdict] = []
 
