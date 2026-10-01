@@ -529,12 +529,14 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
     located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
     if not located:
         return
-    for s_start, s_end in _sentences(text):
+    # 한국어 하드 래핑 줄바꿈 결합: 종결 부호 없이 단순 개행된 줄을 공백으로 치환(길이 1:1 보존)하여 문장 단절 방지
+    unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text)
+    for s_start, s_end in _sentences(unwrapped):
         inside = [c for c in located if s_start <= c.span[0] < s_end]
         for position, citation in enumerate(inside):
             if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                 # 판례를 근거로 서면이 말하는 내용: 같은 문장에서 인용 표시를 뺀 부분(의견 귀속·결론 방향 검사용)
-                sentence = text[s_start:s_end]
+                sentence = unwrapped[s_start:s_end]
                 claim = sentence[:citation.span[0] - s_start] + " " + sentence[citation.span[1] - s_start:]
                 claim = re.sub(r"\(\s*\)|\[\s*\]", " ", claim)
                 citation.attributes["case_claim"] = " ".join(claim.split())[:400]
@@ -542,7 +544,7 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
             if citation.type not in _STATUTE_TYPES:
                 continue
             start, end = citation.span
-            before = text[s_start:start]
+            before = unwrapped[s_start:start]
             opened = before.rfind("(")
             if opened > before.rfind(")"):
                 clause_start = max(before.rfind(",", 0, opened), before.rfind("，", 0, opened)) + 1
@@ -550,9 +552,9 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
                 citation.attributes["claim_mode"] = "PARENTHETICAL_BASIS"
             else:
                 stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
-                claim = text[end:stop]
+                claim = unwrapped[end:stop]
                 # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
-                lead = re.sub(r"^[\s\d가-하.)(]*[.)]\s*", "", text[s_start:start]).split()
+                lead = re.sub(r"^[\s\d가-하.)(]*[.)]\s*", "", unwrapped[s_start:start]).split()
                 if lead:
                     subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
                     if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):

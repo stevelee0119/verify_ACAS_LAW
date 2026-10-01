@@ -135,7 +135,9 @@ PROCEDURAL_LAW_RE = re.compile(r"소송법$|소송규칙$")
 
 
 def _sentences(text: str):
-    return [s for s in re.split(r"(?<=[다음함])\s*[.。]\s*|\n", text or "") if s.strip()]
+    # 한국어 하드 래핑 줄바꿈 결합: 종결 부호 없이 단순 개행된 줄을 공백으로 이어 문장 단절 방지
+    unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text or "")
+    return [s for s in re.split(r"(?<=[다음함])\s*[.。]\s*|\n", unwrapped) if s.strip()]
 
 
 LAW_DATE_AFTER_RE = re.compile(
@@ -153,6 +155,8 @@ def reference_candidates(text: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     seen = set()
     for sentence in _sentences(text):
+        if "생년월일" in sentence:
+            continue  # 당사자·대표자 생년월일 기재 줄은 사건 행위일/계약일 후보에서 제외
         for m in DATE_RE.finditer(sentence):
             try:
                 value = date(int(m.group("y")), int(m.group("m")), int(m.group("d"))).isoformat()

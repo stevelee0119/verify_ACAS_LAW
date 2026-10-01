@@ -227,7 +227,9 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             units = _items(sections[scope])
         else:
             body = sections["BODY"]
-            units = [body[s:e].strip() for s, e in sentence_bounds(body)]
+            # 하드 래핑 줄바꿈 결합: 문장 종결 부호 없이 단순 개행된 줄을 공백으로 이어 문장 단절 방지
+            body_unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", body)
+            units = [body_unwrapped[s:e].strip() for s, e in sentence_bounds(body_unwrapped)]
         previous = ""
         for unit in units:
             prior, previous = previous, unit
