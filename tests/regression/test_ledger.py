@@ -95,6 +95,9 @@ LEDGER_RECORDS = [
     ("TK-25", "AI_SCOPE_INDEPENDENT_OF_TRACES", True, "흔적 0건 + 다수결 AI_FULL 판정", "scope=WHOLE_DOCUMENT, involvement=NO_OBJECTIVE_TRACES"),
     ("TK-25", "AI_SCOPE_PARTIAL_WITHOUT_TRACES", True, "흔적 0건 + 다수결 AI_PARTIAL 판정", "scope=PART_OF_DOCUMENT, involvement=NO_OBJECTIVE_TRACES"),
     ("TK-25", "AI_SCOPE_HUMAN_CONTROL", False, "흔적 0건 + 사람 작성 추정", "scope=NOT_APPLICABLE"),
+    ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_PHONE_BLOCKED", True, "system 프롬프트에 합성 전화번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_RRN_BLOCKED", True, "system 프롬프트에 합성 주민번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("ASTRA-V5", "STATIC_PROMPT_CLEAN_CONTROL", False, "고정 시스템 프롬프트 및 메타 지시문", "PASSED"),
 ]
 
 
@@ -744,7 +747,51 @@ def test_tk25_scope_non_ai_control(
 
 
 # ===========================================================================
-# 12. 원장 종합 무결성 검증
+# 12. ASTRA-V5: AI 프롬프트 system/schema 영역 동적 PII 차단 및 정적 오탐 예외 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "system_text, user_text, schema_dict, expected_status, expected_code",
+    [
+        ("담당자 전화번호: 010-9876-5432", "질의 내용입니다.", None, "BLOCKED", "PII_INPUT_BLOCKED"),
+        ("의뢰인 주민등록번호: 880101-1234567", "질의 내용입니다.", None, "BLOCKED", "PII_INPUT_BLOCKED"),
+        ("시스템 프롬프트", "질의 내용", {"contact_email": "test_person@example.com"}, "BLOCKED", "PII_INPUT_BLOCKED"),
+    ],
+)
+def test_astra_v5_dynamic_pii_in_system_or_schema_blocked_positive(
+    system_text: str, user_text: str, schema_dict: Any, expected_status: str, expected_code: str
+):
+    """ASTRA-V5 양성: system 또는 schema 영역이라도 구체적 식별자(전화번호, 주민번호 등)가 삽입되면 BLOCKED."""
+    from packages.llm_router.privacy import inspect_request
+    from packages.llm_router.providers import LLMRequest
+
+    req = LLMRequest(system=system_text, user=user_text, schema=schema_dict)
+    res = inspect_request(req)
+    assert res["status"] == expected_status
+    assert res.get("failure_code") == expected_code
+
+
+@pytest.mark.parametrize(
+    "system_text, user_text, schema_dict",
+    [
+        ("당신은 법률 지원 AI입니다. 지침을 준수하십시오.", "계약 해지 효력 질의", None),
+        ("주민등록번호 등 개인 식별번호가 든 문장은 발췌하지 마십시오.", "답변 요망", None),
+        ("정상 시스템 안내", "문서 검토 요청", {"verdict": {"type": "string"}}),
+    ],
+)
+def test_astra_v5_clean_system_and_meta_labels_control(
+    system_text: str, user_text: str, schema_dict: Any
+):
+    """ASTRA-V5 대조군: 식별자가 없는 정상 시스템 프롬프트 및 메타 지시문은 통과(PASSED)."""
+    from packages.llm_router.privacy import inspect_request
+    from packages.llm_router.providers import LLMRequest
+
+    req = LLMRequest(system=system_text, user=user_text, schema=schema_dict)
+    res = inspect_request(req)
+    assert res["status"] == "PASSED"
+
+
+# ===========================================================================
+# 13. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -765,3 +812,4 @@ def test_ledger_records_integrity():
     assert "TK-25" in ticket_ids
     assert "TK-26" in ticket_ids
     assert "TK-27" in ticket_ids
+    assert "ASTRA-V5" in ticket_ids
