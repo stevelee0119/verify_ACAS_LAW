@@ -119,6 +119,29 @@ CLAIMED_EFFECT_RE = re.compile(
 
 SENTENCE_END_RE = re.compile(r"(?:다|음|함)\s*\.|[\n。!?]")
 
+# --- 줄바꿈으로 갈라진 법령명 결합 전처리 (TK-07) --------------------------------
+# 낫표(「」,『』) 안의 줄바꿈: 「군인\n징계령」→「군인 징계령」
+_BRACKET_NEWLINE_RE = re.compile(r"([「『][^」』\n]{1,30})\n([^」』\n]{1,30}[」』])")
+# 법령명 접미사(법/령/규칙/훈령 등) 직전 줄바꿈: "징계업무\n처리 훈령"→"징계업무 처리 훈령"
+_PRESUFFIX_NEWLINE_RE = re.compile(
+    r"([가-힣])\n([가-힣·\s]{0,20}?(?:법률|법|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?\s*제\s*\d)"
+)
+
+
+def _join_hard_wrapped_citations(text: str) -> str:
+    """텍스트 입력에서 줄바꿈으로 갈라진 법령 인용을 공백으로 결합한다.
+
+    '\\n' → ' ' 치환이므로 문자열 길이가 보존되어 span 보정이 필요 없다.
+    두 가지 패턴을 처리한다:
+    1) 낫표(「」,『』) 안의 줄바꿈
+    2) 한글 뒤의 줄바꿈 + 법령명 접미사(법/령/규칙/훈령 등)로 이어지는 줄바꿈
+    """
+    # 낫표 안의 줄바꿈 — 한 번의 줄바꿈만 허용(두 줄 이상 떨어진 것은 별도 인용)
+    text = _BRACKET_NEWLINE_RE.sub(r"\1 \2", text)
+    # 법령명 접미사 직전 줄바꿈
+    text = _PRESUFFIX_NEWLINE_RE.sub(r"\1 \2", text)
+    return text
+
 
 def _admin_rule_citation(text: str, anchor_start: int, anchor_end: int, *, agency=None, kind=None,
                          number=None, name=None, article=None, sub=None, paragraph=None,
@@ -211,6 +234,8 @@ def _quote_near(text: str, index: int, window: int = 400) -> Optional[str]:
 def extract_from_text(
     text: str, *, document_id: Optional[str] = None, block_id: Optional[str] = None, page: Optional[int] = None
 ) -> List[Citation]:
+    # TK-07: 줄바꿈으로 갈라진 법령 인용을 공백으로 결합 (길이 불변)
+    text = _join_hard_wrapped_citations(text)
     citations: List[Citation] = []
     consumed: List[tuple] = []
 

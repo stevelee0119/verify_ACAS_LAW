@@ -356,7 +356,7 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
         provision = select_provision(detail.records[0], str(citation.article))
         if provision.get("status") not in ("VERIFIED", "DELETED"):
             return {"status": "UNAVAILABLE", "versions": [],
-                    "reason": f"{selected.get('effective_from')} 시행본에서 제{citation.article}조를 확인하지 못함"}
+                    "reason": f"{selected.get('effective_from')} 시행본에서 {_format_article(citation.article)}를 확인하지 못함"}
         start = legal_date(selected.get("effective_from"))
         later = [d for d in starts if d and start and d > start]
         record = getattr(detail, "source_record", None)
@@ -387,9 +387,15 @@ DECLARED_AMENDMENT_RES = (
     # "「방위사업법」(2024. 12. 24. 법률 제20589호로 개정, 2025. 1. 1. 시행) 제35조"
     re.compile(rf"{_LAW_NAME}\s*\(\s*(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호[^)\n]{{0,20}}?"
                rf"(?P<eff>{_D})\s*시행\s*\)\s*{_ARTICLE}"),
+    # TK-04: "2025년 3월 1일 대통령령 제35800호로 개정·공포된 「군인 징계령」 제12조"
+    # — 시행일 없이 공포일만 있는 단일 날짜 패턴. effective = promulgated로 취급.
+    re.compile(rf"(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호\s*(?:로|으로)?\s*"
+               rf"(?:일부|전부)?\s*(?:개정[·ㆍ]?공포|공포[·ㆍ]?개정|개정|제정|신설|공포)"
+               rf"(?:된|되어|되고|하여|한)?\s*(?:개정\s*|현행\s*)?"
+               rf"{_LAW_NAME}\s*{_ARTICLE}"),
 )
 # 행위 후 시행 조항을 사건에 적용하라는 주장인지(부합·소급·신법·면책 등)
-RELIANCE_RE = re.compile(r"부합|소급|신법|적용되어|적용하여|해당하여|따라\s*(?:피고인|형사|면책|책임|처벌)|조각|면책|무죄|정당화")
+RELIANCE_RE = re.compile(r"부합|소급|신법|적용되어|적용하여|적용해야|적용하|적용될|적용받|해당하여|따라\s*(?:피고인|형사|면책|책임|처벌)|조각|면책|무죄|정당화|단서|위반|부당")
 # 행위시법·구법을 따로 논하는 문장은 적용 주장이 아니다
 ACT_TIME_LAW_RE = re.compile(r"행위\s*(?:당시|시)(?:의)?\s*(?:법|법률|법령)|구법|개정\s*전(?:의)?\s*(?:법|규정|조항)")
 FAVORABLE_NEW_LAW_BASIS = (
@@ -398,6 +404,26 @@ FAVORABLE_NEW_LAW_BASIS = (
     "2020도16420 전원합의체 판결은 해당 형벌법규 자체 또는 그로부터 수권·위임을 받은 법령이 아닌 다른 법령이 변경된 "
     "경우에는 형사법적 관점의 변화를 주된 근거로 하는 법령 변경이어야 형법 제1조 제2항을 적용한다고 보았다")
 CIVIL_TIME_BASIS = "법령은 원칙적으로 시행 후의 사실에 적용되므로, 행위 후 시행된 조항의 적용 여부는 부칙·경과규정으로 확인해야 한다"
+# TK-04: 처분시법주의 — 행정처분 사건에서 처분일보다 뒤에 시행된 법령 적용 주장의 근거
+DISPOSITION_TIME_BASIS = (
+    "행정처분의 위법 여부는 처분 당시의 법령과 사실상태를 기준으로 판단하여야 하고, 처분 후 법령의 "
+    "개폐나 사실상태의 변동에 의하여 영향을 받지 않는다(처분시법주의, 대법원 92누19033 판결 등 참조). "
+    "처분일보다 뒤에 시행된 법령을 그 처분에 적용하라는 주장은 처분시법주의에 반할 수 있다")
+
+
+def _format_article(article: str) -> str:
+    """조문 번호 포매팅: '57의3' → '제57조의3', '12' → '제12조'.
+
+    '제{article}조' 형태로 출력하면 '제57의3조'가 되는 비표준 표기를 방지한다.
+    """
+    if not article:
+        return ""
+    if "의" in str(article):
+        # '57의3' → '제57조의3'
+        parts = str(article).split("의", 1)
+        return f"제{parts[0]}조의{parts[1]}"
+    return f"제{article}조"
+
 
 
 def _iso(value: str) -> Optional[str]:
@@ -421,9 +447,15 @@ def declared_amendments(text: str) -> List[Dict[str, Any]]:
                 continue
             seen.add(key)
             article = m.group("art") + (f"의{m.group('sub')}" if m.group("sub") else "")
+            # TK-04: 단일 날짜 패턴(3번째)에는 eff 그룹이 없으므로 prom을 fallback으로 사용
+            prom_iso = _iso(m.group("prom"))
+            try:
+                eff_iso = _iso(m.group("eff"))
+            except IndexError:
+                eff_iso = None
             out.append({"law_name": law, "article": article, "paragraph": m.group("para"),
                         "kind": m.group("kind"), "number": m.group("num"),
-                        "promulgated": _iso(m.group("prom")), "effective": _iso(m.group("eff")),
+                        "promulgated": prom_iso, "effective": eff_iso or prom_iso,
                         "span": m.span(), "raw": " ".join(m.group(0).split())})
     return out
 
@@ -496,7 +528,8 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
         if not RELIANCE_RE.search(context) or ACT_TIME_LAW_RE.search(text[start:min(len(text), end + 300)]):
             continue
         official = _official_history_check(adapter, declared)
-        label = f"「{declared['law_name']}」 제{declared['article']}조" + (
+        # TK-04: 조문 번호 포매팅 — '57의3' → '제57조의3' (기존 '제57의3조' 비표준 표기 수정)
+        label = f"「{declared['law_name']}」 {_format_article(declared['article'])}" + (
             f" 제{declared['paragraph']}항" if declared.get("paragraph") else "")
         stated = (f"서면이 적은 개정 이력: {declared['promulgated'] or '?'} {declared['kind']} 제{declared['number']}호, "
                   f"{effective} 시행")
@@ -511,7 +544,13 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
             official_note = ("적힌 개정 이력은 공식 연혁과 일치한다. 조문 내용은 인용 검증 결과를 따로 본다."
                              if official["status"] == "MATCH" else f"공식 연혁 대조 미실행: {official.get('reason', '')}")
             tail = "행위 후 시행 조항에 근거한 소급 적용 주장"
-        basis = FAVORABLE_NEW_LAW_BASIS if criminal else CIVIL_TIME_BASIS
+        # TK-04: 처분시법주의 — 처분일 기준이면 전용 법적 근거, 그 밖은 기존 분기
+        if criminal:
+            basis = FAVORABLE_NEW_LAW_BASIS
+        elif reference.get("kind") == "DISPOSITION":
+            basis = DISPOSITION_TIME_BASIS
+        else:
+            basis = CIVIL_TIME_BASIS
         findings.append(Finding.create(
             type=FindingType.TEMPORAL_LAW_MISMATCH, status=status, severity=severity, evidence_grade=grade,
             title=(f"법령 적용 시점 검토: {label} — 시행일 {effective}이 기준일({when}, "
