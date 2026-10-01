@@ -348,7 +348,52 @@ def test_tk07_line_wrapped_normal_text_control():
 
 
 # ===========================================================================
-# 7. 원장 종합 무결성 검증
+# 7. TK-26: 법리 군집 단일 원천화 및 체계적 과대주장 일반화 (양성 5건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 해당 명령을 불이행한 사실이 인정되더라도, 헌법 제19조의 양심의 자유에 따라 징계는 당연히 무효이다.",
+        "가사 개인정보 제출을 거부한 점이 인정되더라도, 헌법 제17조 사생활의 비밀에 비추어 처분은 허용될 수 없다.",
+        "설령 폭행 사실이 인정되더라도, 형법 제21조 정당방위에 해당하여 위법성이 조각되고 책임은 면제된다.",
+        "백보 양보하여 계약상 채무불이행이 인정되더라도, 원고의 청구는 민법 제2조 권리남용에 해당하여 전면 면책되어야 한다.",
+        "가령 사실관계가 인정되더라도, 행정법상 비례의 원칙에 위배되어 처분은 당연무효이며 전액 면제되어야 한다.",
+    ],
+)
+def test_tk26_unseen_doctrine_positive(text: str):
+    """TK-26 양성 5건: 헌법 기본권·위법성조각·민법/행정법 원칙 기반 무리한 주장 탐지."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) >= 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 사실관계가 인정되더라도, 정당방위의 요건인 상당한 이유가 존재함을 구체적인 증거로 소명합니다.",
+        "설령 사실이 인정되더라도 사정변경의 원칙은 계약 체결 당시 예견할 수 없었던 현저한 변경이 있을 때에만 제한적으로 인정된다(대법원 2007. 3. 29. 선고 2004다31302 판결 참조).",
+        "설령 비위행위가 인정되더라도 피고는 참작할 만한 사정이 있으므로 선처를 구합니다.",
+    ],
+)
+def test_tk26_unseen_doctrine_control(text: str):
+    """TK-26 대조군 3건: 요건 소명, 판례 인용, 범주적 단정 부재 문장은 오탐하지 않음."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) == 0
+
+
+# ===========================================================================
+# 8. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
