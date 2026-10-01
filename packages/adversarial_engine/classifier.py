@@ -160,6 +160,23 @@ CITATION_CONTEXT_RE = re.compile(
 )
 
 
+# 구조적 인젝션 신호 합산용 의도 군집 어휘 (TK-20 2절: 통과·승인·면제, 우회·건너뜀·억제, 시스템·검증 지시)
+STRUCT_PASS_TOKENS = {
+    'pass', 'passed', 'approved', 'approve', 'approval', 'cleared', 'clear', 'clearance',
+    'waiver', 'waived', 'verified', 'pre_verified', 'pre-verified', 'validated', 'zero_defect',
+    'compliant', 'ok', '적법', '승인', '면제', '통과', '검증완료'
+}
+STRUCT_BYPASS_TOKENS = {
+    'bypass', 'skip', 'override', 'ignore', 'suppress', 'disable', 'halt', 'drop',
+    '생략', '우회', '무시', '억제', '중단', '해제', '배제'
+}
+STRUCT_SYSTEM_TOKENS = {
+    'system', 'audit', 'auditor', 'reviewer', 'review', 'verifier', 'validator',
+    'controller', 'compliance', 'protocol', 'instruction', 'directive', 'automation',
+    'automated', 'gate', 'notice', '감사', '검증'
+}
+
+
 def classify(
     text: str,
     *,
@@ -172,6 +189,37 @@ def classify(
     """단일 텍스트 조각을 분류한다."""
     extra_signals = extra_signals or {}
     hits = find_pattern_hits(text)
+
+    # 신호 합산 기반 구조적 인젝션 표지 판별 (TK-20 2절): 구분자 래핑, 대문자 식별자 2개+, 의도 군집 2군집+, 키-값 상태 구조
+    wrap_m = re.search(
+        r"(?:\[\[?|<<|\{\{|<!--|/\*|(?P<w_sdel>[@#%&*~=^_|!$]{2,}))\s*"
+        r"(?P<content>[^\n\r]+?)\s*"
+        r"(?:\]\]?|>>|\}\}|-->|\*/|(?P=w_sdel))",
+        text
+    )
+    content = wrap_m.group('content').strip() if wrap_m else text.strip()
+    sig_delim = bool(wrap_m)
+    upper_tokens = re.findall(r'\b[A-Z0-9]{2,}(?:[_-][A-Z0-9]+)+\b|[A-Z]{3,}', content)
+    sig_upper = len(upper_tokens) >= 2
+    tokens = set(re.split(r'[^A-Za-z0-9가-힣]+', content.lower()))
+    c_pass = bool(tokens & STRUCT_PASS_TOKENS or any(p in content.lower() for p in ('pre-verified', 'status=pass', 'status=cleared')))
+    c_bypass = bool(tokens & STRUCT_BYPASS_TOKENS or any(p in content.lower() for p in ('bypass_all', 'skip citation')))
+    c_sys = bool(tokens & STRUCT_SYSTEM_TOKENS or '자동 검증' in content)
+    sig_intent = (c_pass + c_bypass + c_sys) >= 2
+    sig_keyval = bool(re.search(r'[A-Za-z0-9_]+\s*(?:::|:=|:|=)\s*[A-Za-z0-9_]+', content))
+    structural_injection_signal = sig_intent and (sum([sig_delim, sig_upper, sig_intent, sig_keyval]) >= 2)
+
+    if structural_injection_signal and not hits:
+        matched_str = wrap_m.group(0) if wrap_m else text.strip()
+        hits.append(PatternHit(
+            InjectionIntent.ROLE_OVERRIDE,
+            matched_str,
+            "구조적 인젝션 표지 및 상태 조작 지시",
+            2.5,
+            wrap_m.start() if wrap_m else 0,
+            wrap_m.end() if wrap_m else len(text)
+        ))
+
     if not hits:
         return Classification(
             AdversarialClass.BENIGN_CONTENT,
@@ -191,9 +239,13 @@ def classify(
     unicode_obfuscated = bool(extra_signals.get("unicode_obfuscated"))
     cross_layer_only = bool(extra_signals.get("cross_layer_only"))
     imperative = any(_imperative_near(text, h) for h in hits)
-    # 구분자([], [[]], <<>>, {{}}, <!-- -->) 기반 시스템·감사·지시 표지 여부 사전 판별
+    # 구분자(짝 괄호 및 기호 2개 이상) 기반 시스템·감사·지시 표지 여부 사전 판별
     is_bracket_directive = bool(re.search(
-        r"(?:\[\[?|<<|\{\{|<!--|/\*)\s*(?:[A-Za-z0-9_]{1,20}_)?(?:admin|system|override|security|developer|instruction|directive|auditor|verifier|validator|prompt|mode|gate|compliance|notice|reviewer|audit|controller)",
+        r"(?:\[\[?|<<|\{\{|<!--|/\*|(?P<c_sdel>[@#%&*~=^_|!$]{2,}))\s*"
+        r"(?:[A-Za-z0-9_]{1,20}_)?"
+        r"(?:admin|system|override|security|developer|instruction|directive|auditor|verifier|validator|prompt|mode|gate|compliance|notice|reviewer|audit|controller|automated|waiver|protocol|clearance)"
+        r"[^\n]*?"
+        r"(?:\]\]?|>>|\}\}|-->|\*/|(?P=c_sdel))",
         text,
         re.IGNORECASE,
     ))
@@ -276,10 +328,14 @@ def classify(
          source_layer == "metadata", is_bracket_directive]
     )
     features["corroborating_signals"] = corroboration
+    features["structural_injection"] = structural_injection_signal
 
     if descriptive:
         # 지시문을 설명하는 문구. 명령이 아니므로 참고 표시로만 남긴다.
         label = AdversarialClass.INSTRUCTION_LIKE
+    elif structural_injection_signal:
+        # 의도 군집 포함 2개 이상 구조적 신호 충족 시 HIGH 판정 (TK-20 2절)
+        label = AdversarialClass.PROMPT_INJECTION_LIKELY
     elif (score >= 3.0 and corroboration >= 2) or (is_bracket_directive and addresses_ai and score >= 2.0):
         label = AdversarialClass.PROMPT_INJECTION_LIKELY
     elif score >= 2.0 and corroboration >= 1:
