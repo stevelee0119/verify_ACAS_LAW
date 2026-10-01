@@ -398,9 +398,14 @@ def test_r10_axis_uses_the_same_verdict_as_the_document_result():
     doc.ai_detector_result = {"verdict": "AI_FULL_GENERATION_LIKELY", "score": 0.8,
                               "signals": {"objective_traces": 2}}
     unified = unified_authorship(doc)
-    assert unified["verdict"] == "AI_FULL_GENERATION_LIKELY" and unified["stylometry_signal"] == "ABSTAIN"
+    # 사용자 결정 2026-09-30 (TK-11/TK-18): 객관적 흔적(objective_traces) 0건이어도
+    # detector 다수결 판정을 강제로 UNCERTAIN으로 격하시키지 않고 다수결 판정을 유지하며,
+    # 객관적 흔적 부재는 involvement=NO_OBJECTIVE_TRACES 및 objective_traces=0으로 별도 축에서 분리 보존한다.
     doc.ai_detector_result["signals"]["objective_traces"] = 0
-    assert unified_authorship(doc)["verdict"] == "UNCERTAIN"
+    unified_zero_traces = unified_authorship(doc)
+    assert unified_zero_traces["verdict"] == "AI_FULL_GENERATION_LIKELY"
+    assert unified_zero_traces["objective_traces"] == 0
+    assert unified_zero_traces.get("involvement") == "NO_OBJECTIVE_TRACES"
 
 
 # --- R4/B8: 같은 값을 '재판유형 불일치'로 내지 않는다 ------------------------------------
