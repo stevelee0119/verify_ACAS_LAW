@@ -685,14 +685,18 @@ def _anchor_cover(remark: Finding, candidates: List[Finding]) -> tuple:
     return used, unresolved
 
 
-def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[str, int]] = None) -> List[Finding]:
-    """모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(J2).
+def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[str, int]] = None,
+                                 doc_text: Optional[str] = None,
+                                 reference_date: Optional[str] = None) -> List[Finding]:
+    """모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(J2 및 TK-09).
 
     1) 종류가 같다는 이유만으로 확인하지 않는다. 가정적·예비적 주장은 검토 의견으로 남긴다.
     2) 지적에 적힌 값(날짜·금액·조문)을 결정론 판정(CONTRADICTED) 제목의 값과 맞춘다. 지적의 모순 문장이
        모두 확인되면 그 판정들의 근거로 붙이고 지적 항목은 뺀다. 일부만 확인되면 확인된 판정에 붙이되, 지적 항목은
        확인하지 못한 문장과 함께 사람 확인으로 남긴다.
-    3) 어느 것으로도 확인하지 못하면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
+    3) 결정론 판정과 맞지 않더라도 서면 내부 날짜 및 처분 시점으로 재계산하여 모순이 증명되는 경우(TK-09),
+       정식 Finding(SUSPICIOUS, B등급)으로 승격한다.
+    4) 어느 것으로도 확인하지 못하면 '재계산으로 확인하지 못함'으로 사람 확인 항목에 남긴다.
     stats가 주어지면 confirmed / partial / unconfirmed 건수를 채운다(실행 매니페스트용).
     """
     counts = {"confirmed": 0, "partial": 0, "unconfirmed": 0}
@@ -723,11 +727,23 @@ def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[s
             remark.detail += (f" 지적 가운데 값이 결정론 판정({', '.join(rules)})으로 확인된 부분은 그 판정에 근거로 붙였다. "
                               f"확인하지 못한 부분('{' / '.join(unresolved)[:160]}')은 결정론 재계산으로 확인하지 못했으므로 "
                               "사람이 원문을 확인한다.")
+            out.append(remark)
         else:
-            counts["unconfirmed"] += 1
-            remark.confidence_features["reconciled"] = "UNCONFIRMED"
-            remark.detail += " 결정론 재계산으로 확인하지 못했으므로 사람이 원문을 확인한다."
-        out.append(remark)
+            # TK-09: 결정론 판정으로 잡히지 않은 지적에 대해 서면 내부 날짜/기간 재계산 검증 수행
+            promoted = None
+            if doc_text:
+                from packages.verification_engine.candidate_verifier import verify_model_fact_recalculation
+                promoted, rej = verify_model_fact_recalculation(
+                    text, doc_text, reference_date_str=reference_date, document_id=remark.document_id
+                )
+            if promoted:
+                counts["confirmed"] += 1
+                out.append(promoted)
+            else:
+                counts["unconfirmed"] += 1
+                remark.confidence_features["reconciled"] = "UNCONFIRMED"
+                remark.detail += " 결정론 재계산으로 확인하지 못했으므로 사람이 원문을 확인한다."
+                out.append(remark)
     if stats is not None:
         stats.update(counts)
     return out

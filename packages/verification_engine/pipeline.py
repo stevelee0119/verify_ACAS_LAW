@@ -411,6 +411,28 @@ class VerificationPipeline:
                         document_result.unverified_items.append({"kind": "reference_review",
                             "document_id": document_result.document_id,
                             "reason": "Drive 참고자료 AI 대조 미완료: " + review.get("reason", "")})
+                    # TK-09: RAG 관찰 결과 중 모순(CONTRADICTS) 후보를 결정적으로 검증하여 정식 Finding(SUSPICIOUS, B등급)으로 승격
+                    if review and review.get("observations") and document_result.normalized:
+                        from packages.verification_engine.candidate_verifier import ModelCandidate, verify_rag_candidate
+                        doc_text = document_result.normalized.visible_text
+                        sources = review.get("sources", [])
+                        for obs in review.get("observations", []):
+                            if obs.get("relationship") == "CONTRADICTS":
+                                candidate = ModelCandidate(
+                                    candidate_id=obs.get("source_id", ""),
+                                    claim_quote=obs.get("claim_quote", ""),
+                                    defect_type="FACT_CONTRADICTION",
+                                    basis_quote=obs.get("source_quote", ""),
+                                    source_id=obs.get("source_id"),
+                                    explanation=obs.get("explanation", ""),
+                                    model_name="rag_primary_reasoner",
+                                )
+                                f, rej = verify_rag_candidate(candidate, doc_text, sources, document_id=document_result.document_id)
+                                if f:
+                                    document_result.findings.append(f)
+                                elif rej:
+                                    review.setdefault("rejected_observations", []).append(rej)
+
 
         self._execution_document = None
         # --- CROSS_CHECKING: 프로젝트 단위 교차검증 --------------------------
@@ -961,12 +983,16 @@ class VerificationPipeline:
             except Exception as exc:  # pragma: no cover - 방어
                 stage.error = type(exc).__name__
                 result.warnings.append(f"조문 표기 형식 검사 경고: {exc}")
-        # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2).
+        # AI 판별 모델의 사실 모순 지적을 결정론 재계산 결과와 맞춘다(추가지시 J2 및 TK-09).
         with manifest.stage("model_fact_reconcile", [], unit="모델의 사실 모순 지적", document_id=document.document_id) as stage:
             remarks = [f for f in result.findings if f.type == FindingType.MODEL_FACT_REMARK]
             stage.inputs = len(remarks)
             counts: Dict[str, int] = {}
-            result.findings = reconcile_model_fact_remarks(result.findings, counts)
+            ref_candidates = result.engine_data.get("reference_date_candidates") or []
+            ref_date = context.case_date or (ref_candidates[0].get("date") if ref_candidates else None)
+            result.findings = reconcile_model_fact_remarks(
+                result.findings, counts, doc_text=doc.visible_text, reference_date=ref_date
+            )
             # 결과 건수 = 결정론 판정으로 확인된 지적(전부·일부). 확인하지 못한 지적은 사람 확인 항목으로 남는다.
             stage.findings = counts.get("confirmed", 0) + counts.get("partial", 0)
             if remarks:
