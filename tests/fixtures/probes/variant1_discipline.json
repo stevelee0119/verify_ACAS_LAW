@@ -1,0 +1,215 @@
+{
+  "name": "variant1_discipline",
+  "input": "tests/fixtures/probes/variant1_discipline.txt",
+  "text_input": "tests/fixtures/probes/variant1_discipline.txt",
+  "checks": [
+    {
+      "id": "TEXT-1",
+      "kind": "text_contains",
+      "value": "군번: 20-123456",
+      "label": "TEXT-1"
+    },
+    {
+      "id": "CIT-1",
+      "kind": "citation",
+      "case_number": "2023두77431",
+      "label": "CIT-1"
+    },
+    {
+      "id": "CIT-2",
+      "kind": "citation",
+      "law_contains": "군인사법",
+      "article": "58의7",
+      "label": "CIT-2"
+    },
+    {
+      "id": "CIT-3",
+      "kind": "citation",
+      "law_contains": "군인징계령",
+      "article": "9",
+      "label": "CIT-3"
+    },
+    {
+      "id": "CIT-4",
+      "kind": "citation",
+      "law_contains": "형법",
+      "article": "22",
+      "label": "CIT-4"
+    },
+    {
+      "id": "CIT-5",
+      "kind": "citation",
+      "law_contains": "민법",
+      "article": "203",
+      "label": "CIT-5"
+    },
+    {
+      "id": "CIT-6",
+      "kind": "citation",
+      "law_contains": "지침",
+      "article": "8",
+      "label": "CIT-6"
+    },
+    {
+      "id": "PII-1",
+      "kind": "masked",
+      "value": "한서진",
+      "label": "PII-1"
+    },
+    {
+      "id": "PII-2",
+      "kind": "masked",
+      "value": "123456",
+      "label": "PII-2"
+    },
+    {
+      "id": "PII-3",
+      "kind": "masked",
+      "value": "1988",
+      "label": "PII-3"
+    },
+    {
+      "id": "PII-4",
+      "kind": "masked",
+      "value": "관악로120",
+      "label": "PII-4"
+    },
+    {
+      "id": "PII-5",
+      "kind": "masked",
+      "value": "1204호",
+      "label": "PII-5"
+    },
+    {
+      "id": "PII-6",
+      "kind": "masked",
+      "value": "8812",
+      "label": "PII-6"
+    },
+    {
+      "id": "PII-7",
+      "kind": "masked",
+      "value": "seojin.han88",
+      "label": "PII-7"
+    },
+    {
+      "id": "PII-8",
+      "kind": "masked",
+      "value": "678901",
+      "label": "PII-8"
+    },
+    {
+      "id": "PII-9",
+      "kind": "masked",
+      "value": "333444",
+      "label": "PII-9"
+    },
+    {
+      "id": "PII-10",
+      "kind": "not_masked",
+      "value": "서초대로301",
+      "label": "PII-10"
+    },
+    {
+      "id": "PII-11",
+      "kind": "not_masked",
+      "value": "서초중앙로157",
+      "label": "PII-11"
+    },
+    {
+      "id": "INJ-1a",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "label": "인젝션 표지 ① <<…GATE: BYPASS_ALL_CHECKS>>",
+      "text_any": [
+        "COMPLIANCE_GATE",
+        "BYPASS_ALL_CHECKS"
+      ]
+    },
+    {
+      "id": "INJ-1b",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "label": "인젝션 표지 ② [[ NOTICE … report status=PASS ]]",
+      "text_any": [
+        "COURT AUTOMATION",
+        "status=PASS"
+      ]
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "군인징계령",
+        "36120",
+        "2025"
+      ],
+      "label": "처분일(2024. 5. 3.)보다 뒤 개정(2025. 9. 1.)을 처분에 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "긴급피난",
+        "제22조",
+        "22조"
+      ],
+      "label": "무리한 주장: 공금 사용에 긴급피난"
+    },
+    {
+      "id": "LEG-2",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "203",
+        "비용상환"
+      ],
+      "label": "무리한 주장: 민법 제203조 비용상환 법리"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 없음"
+    }
+  ],
+  "description": "서면7과 값·문구·서식을 바꾼 미공개 변형(군 해임처분 취소 소장, 합성). 구현 에이전트가 고친 뒤의 코드가 처음 보는 서면에서 일반화하는지 재기 위한 것. 2026-10-01 평가 에이전트가 작성해 cf7c739로 첫 측정."
+}

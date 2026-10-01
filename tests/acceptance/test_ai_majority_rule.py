@@ -5,7 +5,7 @@
 n=1은 규칙 판정으로 상한(현행 유지). 사람 작성 의견은 UNCERTAIN으로 센다(현행 유지).
 객관적 작성 흔적이 없는 경우(`objective_traces: 0`)를 기본 조건으로 잰다. 흔적 부재가 판정을 막지 않는 것이 이번 해석이다(TK-11 '해석').
 
-알려진 미해결(4ad64a7)은 strict xfail이다. 구현이 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
+TK-11은 2026-10-01 cf7c739에서 해결되었다(xfail 표시 제거). 이제 일반 회귀 시험이다.
 """
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _combine(*verdicts, traces=0):
     return _combine_model_verdicts(rule, _answers(*verdicts), "본문")
 
 
-OPEN = pytest.mark.xfail(strict=True, reason=f"{TICKET}: 만장일치·객관적 흔적 요건이 남아 있다(4ad64a7)")
+OPEN = pytest.mark.skipif(False, reason="TK-11은 2026-10-01 cf7c739에서 해결되어 xfail 표시를 지웠다")  # 표시 자리만 남김(제거해도 같다)
 
 CASES = [
     # (id, 모델 의견, 기대 판정, 미해결 여부)
@@ -84,3 +84,31 @@ def test_objective_traces_do_not_change_a_majority_result():
     """흔적이 있는 조건에서도 같은 다수결 결과여야 한다(흔적은 별도 축). 흔적 없는 조건은 위 매개변수화 시험이 잰다."""
     assert _combine(FULL, FULL, PARTIAL, traces=3).verdict == FULL
     assert _combine(FULL, UNC, UNC, traces=3).verdict == UNC
+
+
+# ---- TK-18: 보고서 머리 축(unified_authorship)이 다수결 판정을 따라야 한다 -------------------------------------
+# 사용자 온라인 보고서(서면8, main cf7c739)에서 detector.verdict는 AI_PARTIAL_GENERATION(다수결)이고 MEDIUM finding도 올랐는데,
+# scores.axes.ai_authorship.documents[0].verdict는 UNCERTAIN으로 나왔다. scoring.py의 unified_authorship에 옛 규칙
+# ("객관적 흔적 0건이면 UNCERTAIN")이 남아 있기 때문이다. 같은 정책이 두 곳에 있었고 한 곳만 고쳤다.
+def _axis(verdict, traces):
+    from packages.verification_engine.scoring import unified_authorship
+
+    doc = SimpleNamespace(document_id="d", authorship=None,
+                          ai_detector_result={"verdict": verdict, "score": 0.72, "signals": {"objective_traces": traces}})
+    return unified_authorship(doc)
+
+
+@pytest.mark.xfail(strict=True, reason="TK-18: 머리 축이 옛 규칙(흔적 0건 → UNCERTAIN)을 유지(cf7c739)")
+@pytest.mark.parametrize("verdict", [FULL, PARTIAL])
+def test_axis_follows_majority_verdict_without_traces(verdict):
+    assert _axis(verdict, 0)["verdict"] == verdict
+
+
+@pytest.mark.parametrize("verdict, traces", [(FULL, 3), (PARTIAL, 1), (UNC, 0)])
+def test_axis_unchanged_where_it_already_agreed(verdict, traces):
+    assert _axis(verdict, traces)["verdict"] == verdict
+
+
+def test_axis_keeps_involvement_separate_from_verdict():
+    axis = _axis(PARTIAL, 0)
+    assert axis["involvement"] == "NO_OBJECTIVE_TRACES" and axis["objective_traces"] == 0

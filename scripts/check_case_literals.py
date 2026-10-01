@@ -70,7 +70,7 @@ def extract_literals(root: Path = ROOT) -> Dict[str, List[str]]:
             values |= {v for v in AMOUNT.findall(text) if distinctive_amount(v)}
             values |= {re.sub(r"\s+", "", v) for v in VITALS.findall(text)}
             for value in values:
-                found.setdefault(value, set()).add(str(path.relative_to(root)))
+                found.setdefault(value, set()).add(path.relative_to(root).as_posix())
     return {value: sorted(files) for value, files in sorted(found.items())}
 
 
@@ -125,7 +125,7 @@ def extract_documents(root: Path = ROOT) -> Dict[str, str]:
     for pattern in SOURCE_GLOBS:
         for path in sorted(root.glob(pattern)):
             raw = path.read_text(encoding="utf-8", errors="ignore")
-            rel = str(path.relative_to(root))
+            rel = path.relative_to(root).as_posix()
             if path.suffix == ".txt":
                 docs[alnum(raw)] = rel
             else:
@@ -145,7 +145,7 @@ def extract_identifiers(root: Path = ROOT) -> Dict[str, str]:
     for pattern in SOURCE_GLOBS:
         for path in sorted(root.glob(pattern)):
             raw = path.read_text(encoding="utf-8", errors="ignore")
-            rel = str(path.relative_to(root))
+            rel = path.relative_to(root).as_posix()
             texts = [raw] if path.suffix == ".txt" else [c for c in code_constants(raw) if len(c) >= MIN_DOCUMENT]
             for text in texts:
                 for token in IDENT.findall(text):
@@ -160,7 +160,7 @@ def scan_identifiers(identifiers: Dict[str, str], root: Path = ROOT,
     allow = load_allow() if allow is None else allow
     hits: Dict[str, List[str]] = {}
     for path in sorted(root.glob(SCAN_GLOB)):
-        relative = str(path.relative_to(root))
+        relative = path.relative_to(root).as_posix()
         skip = set(allow.get(relative, {}))
         found = set()
         for const in code_constants(path.read_text(encoding="utf-8", errors="ignore")):
@@ -180,7 +180,7 @@ def scan_phrases(documents: Dict[str, str], root: Path = ROOT, allow: Dict[str, 
     bodies = list(documents)
     hits: Dict[str, List[str]] = {}
     for path in sorted(root.glob(SCAN_GLOB)):
-        relative = str(path.relative_to(root))
+        relative = path.relative_to(root).as_posix()
         skip = set(allow.get(relative, {}))
         found = set()
         for const in code_constants(path.read_text(encoding="utf-8", errors="ignore")):
@@ -206,7 +206,7 @@ def scan(literals: Dict[str, List[str]], root: Path = ROOT, allow: Dict[str, Dic
     patterns = {value: literal_regex(value) for value in literals}
     hits: Dict[str, List[str]] = {}
     for path in sorted(root.glob(SCAN_GLOB)):
-        relative = str(path.relative_to(root))
+        relative = path.relative_to(root).as_posix()
         text = code_strings(path.read_text(encoding="utf-8", errors="ignore"))
         skip = set(allow.get(relative, {}))
         present = sorted(value for value, pattern in patterns.items() if value not in skip and pattern.search(text))

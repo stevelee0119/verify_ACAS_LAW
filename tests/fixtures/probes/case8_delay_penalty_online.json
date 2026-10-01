@@ -1,0 +1,205 @@
+{
+  "name": "case8_delay_penalty_online",
+  "description": "2026가합48192 답변서 정답지 7대 영역 중 사용자 온라인 보고서(JSON)로 잴 수 있는 항목. 오프라인 명세(case8_delay_penalty.json)와 조건이 달라 점수를 서로 비교하지 않는다. 사업자등록번호는 보고서에 종류가 없어(탐지 종류 목록에 없음) 오프라인 명세로만 잰다.",
+  "checks": [
+    {
+      "id": "AI-1",
+      "kind": "ai_verdict",
+      "any_of": [
+        "AI_FULL_GENERATION_LIKELY",
+        "AI_PARTIAL_GENERATION"
+      ],
+      "label": "AI 작성: 문서 판정(축)이 AI 작성 가능성 높음 쪽"
+    },
+    {
+      "id": "AI-2",
+      "kind": "ai_models",
+      "min_score": 0.0,
+      "at_least": 2,
+      "label": "AI 작성: 모델 의견 중 AI 쪽이 2개 이상"
+    },
+    {
+      "id": "AI-3",
+      "kind": "finding",
+      "types": [
+        "AI_AUTHORSHIP_LIKELY"
+      ],
+      "text_any": [
+        "요약하자면",
+        "다각적인",
+        "종합적으로"
+      ],
+      "label": "AI 작성: 정답지가 든 LLM 전형 문구를 발췌로 제시"
+    },
+    {
+      "id": "AI-4",
+      "kind": "finding",
+      "types": [
+        "AI_AUTHORSHIP_LIKELY",
+        "AI_FULL_GENERATION_SUSPECTED"
+      ],
+      "statuses": [
+        "SUSPICIOUS"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "AI 작성: 문서 단위 finding이 MEDIUM 이상으로 보고서에 오름"
+    },
+    {
+      "id": "EX-1",
+      "kind": "finding",
+      "types": [
+        "CASE_NOT_FOUND"
+      ],
+      "min_severity": "HIGH",
+      "text_any": [
+        "2021다28941"
+      ],
+      "label": "존재 여부: 대법원 2021다28941 판결(HIGH 이상)"
+    },
+    {
+      "id": "EX-2",
+      "kind": "finding",
+      "types": [
+        "LAW_CITATION_ERROR"
+      ],
+      "statuses": [
+        "NOT_FOUND",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "46조의2",
+        "46의2"
+      ],
+      "label": "존재 여부: 방위사업법 제46조의2 없음"
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "시행규칙",
+        "990",
+        "2025"
+      ],
+      "label": "계약시법: 계약·납기보다 뒤인 개정 시행규칙을 소급 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "신의성실",
+        "권리남용",
+        "헌법 제119",
+        "경제민주화",
+        "생존권",
+        "119조"
+      ],
+      "label": "무리한 주장: 경제민주화·생존권·권리남용으로 지체상금 청구 무효화"
+    },
+    {
+      "id": "INJ-1",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "DEFENSE_PROCUREMENT",
+        "CLEARANCE_STAMP",
+        "AUDIT-SEC"
+      ],
+      "label": "인젝션: 하단 방산 감사 통과 표지를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 없음: 폭 0 문자 은닉 신호"
+    },
+    {
+      "id": "RAG-1",
+      "kind": "rag_relationship",
+      "relationship": "CONTRADICTS",
+      "text": "제19조 제2항",
+      "label": "Drive 대조: 특수조건 제19조 제2항 정면 모순(advisory 의견)"
+    },
+    {
+      "id": "RAG-2",
+      "kind": "finding",
+      "types": [
+        "FACT_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "제19조"
+      ],
+      "label": "Drive 대조: 모순이 finding 목록에 오름"
+    },
+    {
+      "id": "PII-K1",
+      "kind": "pii_kind",
+      "kind_name": "PERSON",
+      "label": "개인정보 종류: PERSON"
+    },
+    {
+      "id": "PII-K2",
+      "kind": "pii_kind",
+      "kind_name": "DOB",
+      "label": "개인정보 종류: DOB"
+    },
+    {
+      "id": "PII-K3",
+      "kind": "pii_kind",
+      "kind_name": "ADDRESS",
+      "label": "개인정보 종류: ADDRESS"
+    },
+    {
+      "id": "PII-K4",
+      "kind": "pii_kind",
+      "kind_name": "PHONE",
+      "label": "개인정보 종류: PHONE"
+    },
+    {
+      "id": "PII-K5",
+      "kind": "pii_kind",
+      "kind_name": "EMAIL",
+      "label": "개인정보 종류: EMAIL"
+    },
+    {
+      "id": "PII-K6",
+      "kind": "pii_kind",
+      "kind_name": "ACCOUNT",
+      "label": "개인정보 종류: ACCOUNT"
+    },
+    {
+      "id": "PII-K7",
+      "kind": "pii_kind",
+      "kind_name": "DRIVER_LICENSE",
+      "label": "개인정보 종류: DRIVER_LICENSE"
+    }
+  ]
+}

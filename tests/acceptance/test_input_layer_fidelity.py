@@ -20,9 +20,7 @@ os.environ.setdefault("LV_ALLOW_NETWORK", "0")
 ROOT = Path(__file__).resolve().parents[2]
 PDFS = sorted((ROOT / "tests" / "fixtures").rglob("*.pdf"))
 
-KNOWN_OPEN = {
-    "tests/fixtures/case7_suspension_complaint_google_docs.pdf": "TK-01",
-}
+KNOWN_OPEN: dict = {}     # 2026-10-01 cf7c739에서 TK-01이 해결되어 비었다
 
 
 def _suspect_characters(text: str) -> dict:
