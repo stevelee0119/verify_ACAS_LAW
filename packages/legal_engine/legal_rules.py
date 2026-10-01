@@ -20,6 +20,7 @@ from .polarity import asserted
 
 ENGINE_NAME = "legal_engine.legal_rules"
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "rules.json"
+DEFENSE_GROUPS_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_defense_groups.json"
 RELIEF_HEAD_RE = re.compile(r"청\s*구\s*취\s*지")
 GROUNDS_HEAD_RE = re.compile(r"청\s*구\s*원\s*인")
 DEFENDANT_HEAD_RE = re.compile(r"(?:^|\n)\s*피\s*고")
@@ -35,6 +36,43 @@ def load_rules() -> Dict[str, Any]:
         return json.loads(RULES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"rules": [], "sources": {}}
+
+
+@lru_cache(maxsize=1)
+def load_defense_groups() -> Dict[str, Any]:
+    """무리한 법리 주장 판별을 위한 법리 군집 및 구조 신호 로드 (TK-26 단일 진실 원천)."""
+    try:
+        return json.loads(DEFENSE_GROUPS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"clusters": {}, "structural_signals": {}}
+
+
+@lru_cache(maxsize=1)
+def get_defense_overclaim_pattern() -> re.Pattern[str]:
+    """legal_defense_groups.json으로부터 체계로 닫힌 법리 군집 기반 과대주장 정규식을 동적 생성."""
+    groups = load_defense_groups()
+    clusters = groups.get("clusters", {})
+    signals = groups.get("structural_signals", {})
+
+    all_articles = set()
+    all_terms = set()
+    for c in clusters.values():
+        all_articles.update(c.get("article_numbers", c.get("articles", [])))
+        all_terms.update(c.get("terms", []))
+
+    concessions = "|".join(signals.get("hypothetical_concessions", ["설령", "가사", "백보\\s*양보하여", "가령", "만일", "만약"]))
+    verbs = "|".join(signals.get("concession_verbs", ["인정되", "문제\\s*된다", "있", "해당한"]))
+    connectors = "|".join(signals.get("concession_connectors", ["하더라도", "되더라도", "더라도", "으나", "지만"]))
+    p1 = rf"(?:(?:{concessions})[^.\n]{{0,50}}?(?:{verbs})[가-힣\s]{{0,10}}?(?:{connectors})[^.\n]{{0,20}}?)"
+
+    art_pattern = "|".join(sorted(all_articles, key=lambda x: -len(x)))
+    term_pattern = "|".join(re.escape(t).replace(r"\ ", r"\s*") for t in sorted(all_terms, key=lambda x: -len(x)))
+    p2 = rf"(?:(?:헌법|민법|형법)?\s*(?:제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?|상)?\s*(?:{term_pattern})|제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?)"
+
+    c_alt = "|".join(signals.get("categorical_conclusions", ["당연(?:히)?\\s*무효", "허용될\\s*수\\s*없", "전면\\s*면책", "전액\\s*면제"]))
+    p3 = rf"(?:{c_alt})(?:[^.\n]{{0,50}}?(?:{c_alt}))*"
+
+    return re.compile(rf"{p1}[^.\n]{{0,100}}?{p2}[^.\n]{{0,100}}?{p3}")
 
 
 def _sections(text: str) -> Dict[str, str]:
@@ -215,7 +253,10 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             continue
         if rule.get("context") and not re.search(rule["context"], text):
             continue
-        pattern = re.compile(rule["pattern"])
+        if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
+            pattern = get_defense_overclaim_pattern()
+        else:
+            pattern = re.compile(rule["pattern"])
         scope = rule.get("scope", "BODY")
         if scope == "RELIEF_ALL":
             relief = sections["RELIEF"]

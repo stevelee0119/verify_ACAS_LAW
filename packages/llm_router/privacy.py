@@ -72,13 +72,26 @@ def inspect_request(request):
             detected_paths.add(path)
             for m in matches:
                 kinds[m.kind] += 1
-                if path.startswith("system") or path.startswith("schema"):
+                is_system_or_schema = path.startswith("system") or path.startswith("schema")
+                # 구체적 개인 식별자 인스턴스(전화번호, 주민번호, 이메일, 사업자번호 등)는
+                # 시스템/스키마 영역에 삽입된 동적 개인정보이므로 정적 오탐으로 면책하지 않는다(Astra 지적 반영).
+                is_concrete_identifier = m.kind in {
+                    "PHONE",
+                    "RRN",
+                    "EMAIL",
+                    "BUSINESS_REGISTRATION",
+                    "ACCOUNT",
+                    "ADDRESS",
+                    "MEDICAL",
+                    "VEHICLE",
+                }
+                if is_system_or_schema and not is_concrete_identifier:
                     system_kinds[m.kind] += 1
                 else:
                     user_kinds[m.kind] += 1
 
-    # 사용자 입력(user_kinds)에 개인정보가 존재할 때에만 실질적 PII 유출로 차단(BLOCKED)한다.
-    # 시스템 고정 프롬프트(system/schema)에서만 감지된 경우는 정적 오탐으로 분류하여 통과(PASSED)시킨다.
+    # 실질적 개인정보(사용자 입력 또는 시스템/스키마에 동적 삽입된 구체적 식별자)가 존재할 때 차단(BLOCKED)한다.
+    # 출처가 확인된 정적 어휘 오탐(구체적 식별자 값이 아닌 안내 라벨/설명)인 경우에만 예외로 통과(PASSED)시킨다.
     if user_kinds:
         status = "BLOCKED"
         failure_code = "PII_INPUT_BLOCKED"

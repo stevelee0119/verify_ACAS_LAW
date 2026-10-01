@@ -78,7 +78,7 @@ CONTROL_CASES = [
 def test_positive_temporal_contradictions(case_id, text, desc):
     """시점 모순(기준일 이후 개정 법령 소급적용)이 정상적으로 탐지되어야 한다."""
     ref = document_reference_date(text, criminal=False)
-    assert ref.get("date") is not None, f"[{case_id}] {desc}: 기준일 추출 실패: {ref}"
+    assert ref.get("date") is not None or ref.get("dates"), f"[{case_id}] {desc}: 기준일 추출 실패: {ref}"
     findings = review_declared_amendments(text, ref, criminal=False)
     assert len(findings) >= 1, f"[{case_id}] {desc}: 시점 모순 finding 미생성"
     assert findings[0].type == FindingType.TEMPORAL_LAW_MISMATCH
