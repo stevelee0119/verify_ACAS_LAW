@@ -49,7 +49,9 @@ def test_failed_tests_parses_pytest_rf_output():
 
 
 def test_jobs_cover_every_dev_spec_and_skip_online_specs():
-    names = {(spec.stem, text) for spec, text in gate.jobs()}
+    work, missing = gate.jobs()
+    assert missing == [], missing
+    names = {(spec.stem, text) for spec, text in work}
     assert ("case9_state_compensation", False) in names and ("variant2_food_license", True) in names
     assert not any(stem.endswith("_online") for stem, _ in names)
 
@@ -91,3 +93,31 @@ def test_round2_article_keyed_rules_are_flagged_against_cf7c739():
     assert ("config/legal_rules/rules.json", "제203조") in flagged
     assert ("config/legal_rules/rules.json", "제119조") in flagged
     assert ("config/legal_rules/rules.json", "제34조") in flagged
+
+
+# ------------------------------------------------- 측정하지 못한 것은 통과가 아니다(독립 감사 Astra 4차 지적) ---
+def test_unmeasured_flags_empty_rows_and_processing_errors_on_either_side():
+    ok = ({"A": True}, [])
+    assert gate.unmeasured("s", ok, ok) == []
+    assert any("비어" in r for r in gate.unmeasured("s", ({}, []), ok))
+    assert any("처리 오류" in r and "현재" in r for r in gate.unmeasured("s", ok, ({"A": True}, ["pipeline: boom"])))
+    # 양쪽이 같은 오류를 내도 '회귀 없음'으로 보지 않는다
+    both = ({"A": True}, ["pii: boom"])
+    assert len(gate.unmeasured("s", both, both)) == 2
+
+
+def test_pytest_counts_reads_summary_line_and_empty_collection_is_visible():
+    assert gate.pytest_counts("....\n===== 3 failed, 120 passed, 2 skipped in 10.1s =====") == {
+        "failed": 3, "passed": 120, "skipped": 2}
+    assert gate.pytest_counts("no tests ran in 0.01s") == {}
+    assert gate.pytest_counts("1 error in 0.5s") == {"error": 1}
+
+
+def test_jobs_reports_specs_whose_input_file_is_missing(tmp_path, monkeypatch):
+    spec = tmp_path / "probes"
+    spec.mkdir()
+    (spec / "x.json").write_text('{"name": "x", "input": "nope.pdf", "text_input": "nope.txt", "checks": []}', encoding="utf-8")
+    monkeypatch.setattr(gate, "SPECS", spec)
+    monkeypatch.setattr(gate, "ROOT", tmp_path)
+    work, missing = gate.jobs()
+    assert work == [] and len(missing) == 2 and all("입력 파일 없음" in m for m in missing)
