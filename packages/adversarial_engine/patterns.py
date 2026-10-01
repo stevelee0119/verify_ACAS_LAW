@@ -85,9 +85,24 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     (_c(r"\[\s*(admin|administrator|root|superuser|system|security|privileged)\s+"
         r"(command|instruction|directive|override|mode)\b"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "관리자 명령 선언 위장"),
-    # 대괄호 안 감사·보안·시스템·관리·방어 프로토콜 및 오버라이드 지시자 위장 (TK-03)
-    (_c(r"\[\s*(?:[A-Z0-9_]{3,35}_)?(?:AUDIT|PROTOCOL|DIRECTIVE|OVERRIDE|AUDITOR|CLEARANCE|INSTRUCTION|SUPERVISOR|CONTROLLER)(?:\s*[:：\-]\s*[A-Z0-9_\s]{2,35})?\s*\]"),
-     InjectionIntent.ROLE_OVERRIDE, 1.0, "시스템 감사 및 오버라이드 프로토콜 지시 위장"),
+    # 구조적 인젝션 표지: 구분자([], [[]], <<>>, {{}}, <!-- -->) 내부의 제어/감사/시스템 식별자 및 우회/승인 지시 (TK-13 일반화)
+    (_c(r"(?:\[\[?|<<|\{\{|<!--|/\*)"
+        r"[ \t]*"
+        r"(?:"
+            r"(?:[A-Za-z0-9_]{2,35}_)?(?:SYSTEM|ADMIN(?:ISTRATOR)?|AUDIT(?:OR|_TRAIL)?|GATE|CONTROLLER|PROTOCOL|SECURITY|VERIFIER|COMPLIANCE|NOTICE|REVIEWER|DIRECTIVE|CLEARANCE)(?:_[A-Za-z0-9]+)*"
+            r"[ \t]*[:：\-=\]]+[ \t]*"
+            r"[^\n\]}>]{0,80}?"
+            r"(?i:OVERRIDE|BYPASS(?:_ALL(?:_CHECKS)?)?|PASS(?:ED)?|APPROVED?|CLEAR(?:ED|ANCE)?|VERIFIED|PRE[-_]VERIFIED|VALID(?:ATED)?|STATUS\s*=\s*PASS|SKIP|AUDIT[-_A-Z0-9]+)"
+            r"|"
+            r"[A-Z0-9]{3,}(?:[_-][A-Z0-9]+)+[ \t]*[:：\-][ \t]*[A-Z0-9]{2,}(?:[_-][A-Z0-9]+)+"
+            r"|"
+            r"[^\n\]}>]{0,80}?(?i:automated\s+reviewers?|court\s+automation|pre[-_]verified)[^\n\]}>]{0,100}?(?i:status\s*=\s*PASS|rating\s*\d+%|approve)"
+            r"|"
+            r"(?i:SYSTEM\s*[:：]\s*override\s+[^\n\]}>]{0,40})"
+        r")"
+        r"[^\n\]}>]{0,100}?"
+        r"(?:\]\]?|>>|\}\}|-->|\*/)"),
+     InjectionIntent.ROLE_OVERRIDE, 1.0, "구조적 인젝션 표지 및 검증 우회 지시"),
     (_c(r"\[\s*OVERRIDE\s*[:：]"), InjectionIntent.INSTRUCTION_OVERRIDE, 1.0, "OVERRIDE 지시문 선언"),
     (_c(r"(?:AIV-Rule|AIV_RULE|AIV-RULE)[\w\-]*"), InjectionIntent.ROLE_OVERRIDE, 1.0, "AIV 자동 심사 규정 사칭 프롬프트 인젝션"),
     # 공공기관/위원회/재판부 명칭 + 전자심판/표준규정 사칭

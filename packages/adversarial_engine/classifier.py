@@ -191,6 +191,12 @@ def classify(
     unicode_obfuscated = bool(extra_signals.get("unicode_obfuscated"))
     cross_layer_only = bool(extra_signals.get("cross_layer_only"))
     imperative = any(_imperative_near(text, h) for h in hits)
+    # 구분자([], [[]], <<>>, {{}}, <!-- -->) 기반 시스템·감사·지시 표지 여부 사전 판별
+    is_bracket_directive = bool(re.search(
+        r"(?:\[\[?|<<|\{\{|<!--|/\*)\s*(?:[A-Za-z0-9_]{1,20}_)?(?:admin|system|override|security|developer|instruction|directive|auditor|verifier|validator|prompt|mode|gate|compliance|notice|reviewer|audit|controller)",
+        text,
+        re.IGNORECASE,
+    ))
     # 숨김·인코딩·유니코드 은닉·AI 호명이 있으면 '설명'이라는 겉모습을 믿지 않는다.
     descriptive = (not (is_hidden or encoded or unicode_obfuscated or cross_layer_only or addresses_ai)
                    and _mentions_only(text, hits))
@@ -218,6 +224,8 @@ def classify(
         score += 0.6
     if source_layer == "metadata":
         score += 0.6
+    if is_bracket_directive:
+        score += 1.0
     guideline_impersonation = bool(hits and OFFICIAL_GUIDELINE_RE.search(text))
     if quoted:
         if addresses_ai:
@@ -263,7 +271,6 @@ def classify(
     }
 
     # 단일 신호만으로 SUSPICIOUS 이상 금지: 보조 신호 수를 센다 (특정 사건 하드코딩 제거 및 범용화)
-    is_bracket_directive = bool(re.search(r"\[\s*(?:admin|system|override|security|developer|instruction|directive|auditor|prompt|mode)", text, re.IGNORECASE))
     corroboration = sum(
         [is_hidden, addresses_ai, encoded, unicode_obfuscated, cross_layer_only, len(distinct_intents) > 1,
          source_layer == "metadata", is_bracket_directive]
