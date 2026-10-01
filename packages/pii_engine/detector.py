@@ -24,12 +24,17 @@ LEGAL_IDENTIFIER_PATTERNS = [
     re.compile(r"\d{4}\.\s*\d{1,2}\.\s*\d{1,2}\.?"),          # 선고일자
     re.compile(r"\b(19|20)\d{2}\b"),                            # 연도
     re.compile(r"(?:계약번호\s*)?제\s*[\d]{4}-[가-힣A-Za-z0-9]+-\d+호?"), # 계약번호
-    re.compile(r"(?:사업자|법인)(?:등록)?번호\s*[:：]?\s*[\d\-]+"),         # 사업자/법인등록번호 라벨 문맥
+    re.compile(r"법인(?:등록)?번호\s*[:：]?\s*[\d\-]+"),         # 법인등록번호 라벨 문맥 (사건 검증용)
 ]
 
-# 법인등록번호·사업자등록번호는 사건 검증에 쓰이므로 기본 마스킹 대상에서 제외한다
-BUSINESS_NO_RE = re.compile(r"\b\d{3}-\d{2}-\d{5}\b")
+# 법인등록번호는 사건 검증에 쓰이므로 마스킹 대상에서 제외한다
 CORP_NO_RE = re.compile(r"\b\d{6}-\d{7}\b")
+# 사업자등록번호: NNN-NN-NNNNN 형태의 새 PII 종류(BUSINESS_REGISTRATION)로 마스킹
+BUSINESS_NO_RE = re.compile(r"\b\d{3}-\d{2}-\d{5}\b")
+BUSINESS_REG_LABELLED_RE = re.compile(
+    r"(?:사업자\s*(?:등록)?\s*번호|사업자번호)\s*[:：]?\s*(\d{3}[-\s]\d{2}[-\s]\d{5})(?!\d)"
+)
+BUSINESS_REG_STANDALONE_RE = re.compile(r"(?<![\d\-])(\d{3}-\d{2}-\d{5})(?![\d\-])")
 CORP_LABEL_PREFIX_RE = re.compile(r"(?:법인(?:등록)?번호|법인등기번호)\s*[:：]?\s*$")
 RRN_LABEL_PREFIX_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*$")
 
@@ -93,17 +98,35 @@ MILITARY_AFFILIATION_RE = re.compile(
     r"(?:\s*[가-힣]{2,15}(?:실|과|처|팀|반|소대|중대|대대|대|단))?\s*(?:소속\s*)?"
     r"(?:이병|일병|상병|병장|하사|중사|상사|원사|준위|소위|중위|대위|소령|중령|대령|준장|소장|중장|대장)(?![가-힣])"
 )
-# 서면 머리의 당사자 표시는 글자 사이를 띄워 쓴다("피 고 인   최 원 석"). 이름 글자 사이 공백도 허용한다.
+# 서면 머리의 당사자 표시는 글자 사이를 띄워 쓴다("피 고 인   최 원 석", "대표이사 정 해 승"). 이름 글자 사이 공백도 허용한다.
 PARTY_HEADER_NAME_RE = re.compile(
     r"(?:^|\n)[ \t]*(?:피[ \t]*고[ \t]*인|피[ \t]*의[ \t]*자|피[ \t]*신[ \t]*청[ \t]*인|피[ \t]*청[ \t]*구[ \t]*인|"
     r"피[ \t]*고|원[ \t]*고|신[ \t]*청[ \t]*인|청[ \t]*구[ \t]*인|상[ \t]*고[ \t]*인|항[ \t]*소[ \t]*인|"
+    r"대[ \t]*표[ \t]*이[ \t]*사|대[ \t]*표[ \t]*자|대[ \t]*표|이[ \t]*사[ \t]*장|원[ \t]*장|소[ \t]*장|이[ \t]*사|감[ \t]*사|"
     r"담[ \t]*당[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*인)[ \t]+"
     r"((?:[가-힣][ \t]?){1,3}[가-힣])(?=[ \t]*(?:\n|$|[(（]))"
 )
+
+# 법인·기관 대표자/임원 직책 라벨 뒤 성명 (본문 인적사항란의 띄어쓴 성명 일반 규칙 지원: "대표이사 정 해 승", "원장 김 철 수")
+REPRESENTATIVE_TITLE_RE = (
+    r"(?:대[ \t]*표[ \t]*이[ \t]*사|대[ \t]*표[ \t]*자|대[ \t]*표|"
+    r"이[ \t]*사[ \t]*장|원[ \t]*장|소[ \t]*장|이[ \t]*사|감[ \t]*사|"
+    r"지[ \t]*배[ \t]*인|관[ \t]*리[ \t]*인|회[ \t]*장|사[ \t]*장)"
+)
+REPRESENTATIVE_NAME_RE = re.compile(
+    rf"(?<![가-힣])(?:{REPRESENTATIVE_TITLE_RE})[ \t]*[:：]?[ \t]+"
+    r"((?:[가-힣][ \t]){1,3}[가-힣]|[가-힣]{2,4})"
+    r"(?=[ \t]*(?:[(（\n\r,.;]|$|[ \t]+(?:등기|인|귀하|배석|소송|의\b)))"
+)
+REPRESENTATIVE_NAME_STOPWORDS = {
+    "선임", "해임", "취임", "선출", "결의", "추천", "후보", "등기", "권한", "직무",
+    "대행", "회의", "의결", "정관", "규정", "조례", "이사회", "총회", "위원회", "선임서",
+    "인사", "명령", "발령", "공고", "보고", "안건", "통지", "공지", "일정", "변경", "취소",
+}
 PARTY_HEADER_STOPWORDS = {"대한민국", "국가", "검사", "미상", "불상",
                           # 서면 제목("변 호 인  의 견 서")
                           "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
-                          "탄원서", "소장", "항소장", "상고장"}
+                          "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"}
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
     r"\s*(?:장교|간부|병사|병력|부대|복무|당국|사법|검찰|수사|형법|인사|기밀|시설|부사관|병원|조직|내부|전산|보안|의무)")
@@ -217,6 +240,7 @@ DETECTORS: List[Tuple[str, re.Pattern[str], float]] = [
     ("ADDRESS", ADDRESS_RE, 0.85),
     ("VEHICLE", VEHICLE_RE, 0.9),
     ("AFFILIATION", MILITARY_AFFILIATION_RE, 0.7),
+    ("BUSINESS_REGISTRATION", BUSINESS_REG_STANDALONE_RE, 0.85),
 ]
 
 RRN_WEIGHTS = [2, 3, 4, 5, 6, 7, 8, 9, 2, 3, 4, 5]
@@ -331,12 +355,35 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             continue  # "은행 2024-12-24 거래내역"의 날짜는 계좌번호가 아니다
         matches.append(PIIMatch("ACCOUNT", m.group(1), start, end, block_id, page, 0.9, "은행명·계좌 표지 문맥"))
 
+    # 사업자등록번호 라벨 문맥 포착 (3-2-5 형식)
+    for m in BUSINESS_REG_LABELLED_RE.finditer(text):
+        start, end = m.start(1), m.end(1)
+        if _covered_by_span(guard_spans, start, end):
+            continue
+        matches.append(PIIMatch("BUSINESS_REGISTRATION", m.group(1), start, end, block_id, page, 1.0, "사업자등록번호 라벨 문맥"))
+
     for m in PARTY_HEADER_NAME_RE.finditer(text):
         name = re.sub(r"\s+", "", m.group(1))
         if name in PARTY_HEADER_STOPWORDS or name in LEGAL_MILITARY_STOPWORDS:
             continue
         # 가명은 띄어쓰기를 뺀 이름으로 만든다. 본문의 '최원석'과 머리의 '최 원 석'이 같은 가명을 받는다.
         matches.append(PIIMatch("PERSON", name, m.start(1), m.end(1), block_id, page, 0.8, "당사자 표시란"))
+
+    # 법인·기관 대표자/임원 직책 라벨 뒤 성명 (띄어쓴 성명 및 본문 인적사항란 일반 규칙)
+    for m in REPRESENTATIVE_NAME_RE.finditer(text):
+        raw_name = m.group(1).strip()
+        clean_name = re.sub(r"\s+", "", raw_name)
+        if clean_name in REPRESENTATIVE_NAME_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS:
+            continue
+        after_text = text[m.end(1):m.end(1) + 20]
+        if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건)", after_text):
+            continue
+        start, end = m.start(1), m.end(1)
+        if _covered_by_span(guard_spans, start, end):
+            continue
+        if len(clean_name) < 2 or len(clean_name) > 4:
+            continue
+        matches.append(PIIMatch("PERSON", clean_name, start, end, block_id, page, 0.85, "대표자·직책 라벨 문맥 성명"))
 
     for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON"), (LABELLED_NAME_RE, "PERSON")):
         for m in pattern.finditer(text):
