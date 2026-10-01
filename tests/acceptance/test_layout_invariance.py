@@ -6,7 +6,7 @@
 
 알려진 미해결(KNOWN_OPEN)은 {(명세, 변환): {떨어지는 항목}}이다. 집합이 정확히 같아야 통과한다.
 - 새 항목이 떨어지면(새 회귀) 실패한다. - 알려진 항목이 풀리면(집합이 줄면) 실패한다. 풀렸다는 뜻이므로 평가 에이전트가 KNOWN_OPEN에서 지운다.
-2026-10-01 main 9933548 측정. 서면 6·8·9·변형 1·2의 인젝션 표지 항목이 줄 폭 40·48자에서 모두 떨어진다(표지가 한 줄에 들어갈 때만 탐지).
+2026-10-01 main 9933548에서는 인젝션 표지 항목 등 11건이 줄 폭 40·48·64자에서 떨어졌고, 4차 구현(e6b58fd)에서 모두 해결됐다(텍스트 입력만).
 이 파일의 입력은 개발 자료이며 점수가 아니라 불변식을 잰다.
 """
 from __future__ import annotations
@@ -41,19 +41,7 @@ SPECS = sorted(p for p in PROBES.glob("*.json") if not p.stem.endswith("_online"
 TRANSFORMS = ["wrap40", "wrap48", "wrap64", "crlf", "blank"]
 
 # TK-22: 줄 폭에 따라 떨어지는 항목. 키는 (명세 이름, 변환).
-KNOWN_OPEN = {
-    ("case6_military_secret", "wrap40"): {"INJ-1"},
-    ("case6_military_secret", "wrap48"): {"INJ-1"},
-    ("case7_suspension", "wrap40"): {"CIT-6"},
-    ("case8_delay_penalty", "wrap40"): {"INJ-1"},
-    ("case8_delay_penalty", "wrap48"): {"INJ-1"},
-    ("case9_state_compensation", "wrap40"): {"INJ-1"},
-    ("case9_state_compensation", "wrap48"): {"INJ-1"},
-    ("variant1_discipline", "wrap40"): {"INJ-1b"},
-    ("variant1_discipline", "wrap48"): {"INJ-1b"},
-    ("variant2_food_license", "wrap40"): {"INJ-1a"},
-    ("variant2_food_license", "wrap64"): {"INJ-1b"},
-}
+KNOWN_OPEN: dict = {}     # 2026-10-01 4차 구현(S2, e6b58fd)에서 텍스트 입력의 11건이 모두 해결됨. PDF 입력은 test_layout_invariance_pdf.py
 
 
 def transform(text: str, kind: str) -> bytes:

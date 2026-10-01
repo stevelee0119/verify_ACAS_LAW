@@ -24,3 +24,10 @@
 - `python -m pytest tests/acceptance/test_case9_state_compensation.py -rxX`: `test_injection_stamp_survives_line_wrapping[w36·w40]`, `test_regulation_claim_is_not_split_by_line_wrapping[w36·w44]` 4건 XPASS(대조군 w56은 계속 통과).
 - 서면6~8·변형 1·2·서면9의 모든 입력 방식(PDF·텍스트·docx) 점수와 고정 시험 점수가 떨어지지 않는다. 당사자 표시란 개인정보 시험(줄 단위 의미) 유지.
 - 사용자 온라인 재실행에서 서면9 `claim_coverage.linked_claims`가 늘고 RAG-1·2(제22조 모순)가 잡히는지는 사용자가 확인한다.
+
+## 4차 결과(2026-10-01, e6b58fd) — 텍스트 입력만 해결, **PDF 입력은 그대로**
+- 4차 S2(348c079)는 문단 복원기를 `TextParser`에만 연결했다. PDF용 `reconstruct_page_blocks`는 호출자가 없다(`grep` 확인). 요청 13의 "TextParser 등 입력 계층"은 과장이다.
+- 평가 측 측정: 개발 서면 6종을 reportlab CID 글꼴 PDF로 줄 폭만 바꿔 만들어 기준(9933548)과 4차에서 같은 항목을 쟀다. 24개 조합(6서면×4폭) **모두 실패 항목이 기준과 같다**(예: 인젝션 표지 INJ-1이 폭 36·44에서, 인용 CIT-6이 폭 40에서). 비공개 서면 3도 PDF는 4차 전후 17·17·16·15(원본·64·48·40자)로 동일, 텍스트는 17·16·15 → 18·17·17.
+- 서면9에서 Drive 대조가 빠진 원인(규정 인용 문장이 PDF 줄 단위로 3토막)은 PDF 입력이므로 **해결되지 않았다**(온라인 PDF 재실행 필요, 사용자 확인 대상).
+- 새 보호 시험: `tests/acceptance/test_layout_invariance_pdf.py`(현재 미해결 10건을 KNOWN_OPEN으로 고정). 텍스트 입력의 11건은 해결되어 표시를 지웠다.
+- 요구(변경 없음, 범위 명확화): `PdfParser`(와 docx·hwp 파서)의 블록 생성 단계에서 같은 복원을 적용한다. 줄 단위가 의미인 영역(당사자 표시란·표·번호 목록)은 줄을 유지한다. 수용: `test_layout_invariance_pdf.py`의 KNOWN_OPEN이 비도록.

@@ -11,3 +11,7 @@
 - **인용 검증 커버리지:** 인용 10건 중 `fully_verified` 0, `temporal_pending` 6, `lookup_unverified` 1. `legal_history.select_version`이 같은 시행일 버전이 둘이면 `ValueError("Multiple versions share the requested effective boundary")`를 내 국가재정법 제96조가 미검증(INFO)으로 남았다. 안전하게 미검증으로 두는 현재 동작도 허용되나 커버리지 손실이다. 같은 시행일이면 공포일·버전 번호로 최신을 고르고 두 버전을 모두 보고서에 싣는 방안을 검토한다.
 - **모델 호출 12건 중 2건 실패:** anthropic `OUTPUT_TRUNCATED`(출력 4000토큰 한도), openai `INVALID_RESPONSE_SCHEMA`(최상위 required 위반). 다른 공급자·재시도로 이어져 실행은 `PARTIAL_COMPLETED`로 끝났다. 출력 한도 상향 또는 분할, 스키마 위반 응답의 복구·재요청이 필요하다.
 - **정상 동작(유지):** `AUTHORSHIP_METADATA_LEAK`(문서요약정보 작성자 노출, LOW)·`STYLE_SHIFT`(INFO)는 정답지에 없는 추가 관찰이며 근거(Producer 필드, 문체 변화)가 보고서에 있다.
+
+## 4차 결과(2026-10-01, e6b58fd)
+- 1절(scope): 해결(S5). 흔적 0건이어도 판정에 따라 `WHOLE_DOCUMENT`/`PART_OF_DOCUMENT`.
+- 2절(커버리지·모델 실패): 구현 측이 제안만 올렸다(요청 16). 승인 사안이라 구현하지 않은 것은 지시에 맞다. 사용자 결정 대기.

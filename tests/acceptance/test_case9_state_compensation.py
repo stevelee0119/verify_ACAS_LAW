@@ -6,6 +6,7 @@
 이 파일의 점수는 일반화 근거가 아니다(이제 구현 에이전트가 볼 수 있는 개발 자료다).
 
 두 번째 절은 **배치 불변** 시험이다. 같은 서면을 물리적 줄 길이만 바꿔 넣어도(PDF는 쪽 너비에 따라 줄이 달라진다) 결과가 같아야 한다(TK-22).
+TK-22의 텍스트 입력 부분은 4차 구현(S2, e6b58fd)에서 해결되어 표시를 지웠다(2026-10-01). PDF 입력은 test_layout_invariance_pdf.py.
 미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
 """
 from __future__ import annotations
@@ -85,8 +86,8 @@ def _observe(text: str, tmp_path: Path):
 
 
 WIDTHS = [
-    pytest.param(36, id="w36", marks=[pytest.mark.xfail(strict=True, reason="TK-22: 표지 줄이 줄바꿈으로 갈라지면 인젝션 미탐")]),
-    pytest.param(40, id="w40", marks=[pytest.mark.xfail(strict=True, reason="TK-22: 표지 줄이 줄바꿈으로 갈라지면 인젝션 미탐")]),
+    pytest.param(36, id="w36"),            # 4차 구현(S2, e6b58fd)에서 텍스트 입력은 해결됨. PDF 입력은 test_layout_invariance_pdf.py
+    pytest.param(40, id="w40"),
     pytest.param(56, id="w56"),            # 표지가 한 줄에 들어가는 너비(대조군)
 ]
 
@@ -100,8 +101,8 @@ def test_injection_stamp_survives_line_wrapping(width, tmp_path):
 
 
 CLAIM_WIDTHS = [
-    pytest.param(36, id="w36", marks=[pytest.mark.xfail(strict=True, reason="TK-22: 줄 단위 블록이 주장을 토막 낸다")]),
-    pytest.param(44, id="w44", marks=[pytest.mark.xfail(strict=True, reason="TK-22: 줄 단위 블록이 주장을 토막 낸다")]),
+    pytest.param(36, id="w36"),
+    pytest.param(44, id="w44"),
     pytest.param(56, id="w56"),            # 인용 문장이 한 줄에 들어가는 너비(대조군)
 ]
 
