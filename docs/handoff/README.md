@@ -24,7 +24,7 @@
 | [TK-17](TK-17_pii_representative_and_business_number.md) | 개인정보 | 대표이사의 띄어쓴 성명·사업자등록번호 미마스킹 | 서면8 PII-1·7 | 열림 |
 | [TK-18](TK-18_ai_axis_not_following_majority.md) | 정책 이행 | 보고서 머리의 AI 판정이 다수결을 따르지 않음 | `test_axis_follows_majority…` | 열림 |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [PROMPT_FOR_ANTIGRAVITY.md](PROMPT_FOR_ANTIGRAVITY.md) · 구현→평가 요청은 [requests/](requests/README.md)
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
 ## 측정 명령
 ```
