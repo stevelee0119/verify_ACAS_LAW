@@ -143,3 +143,56 @@ class TestReviewNegative:
         reference = {"date": None, "kind": "DISPOSITION"}
         findings = review_declared_amendments(text, reference, criminal=False)
         assert len(findings) == 0, f"기준일 없는데 탐지됨: {findings}"
+
+    def test_old_law_affirmative_application(self):
+        """행위 당시의 법률에 의하여 판단하여야 하므로 구법이 적용된다 → 정상적 구법 변론이므로 미탐지."""
+        text = ("2025년 3월 1일 대통령령 제35800호로 개정·공포된 「군인 징계령」 제12조와 관련하여, "
+                "행위 당시의 법률에 의하여 구법이 적용되어야 한다.")
+        reference = {"date": "2024-02-20", "kind": "DISPOSITION"}
+        findings = review_declared_amendments(text, reference, criminal=False)
+        assert len(findings) == 0, f"구법 적용 변론인데 탐지됨: {findings}"
+
+    def test_prior_provision_governs(self):
+        """개정 전의 규정에 의거하여 처분되었으므로 정당하다 → 미탐지."""
+        text = ("2025. 1. 1. 법률 제20000호로 개정된 「국가재정법」 제10조에도 불구하고, "
+                "개정 전의 규정에 의거 판단하여야 하므로 위법이 없다.")
+        reference = {"date": "2024-01-01", "kind": "DISPOSITION"}
+        findings = review_declared_amendments(text, reference, criminal=False)
+        assert len(findings) == 0
+
+    def test_old_statute_applied(self):
+        """행위 시의 법령에 따라 구법 조항을 적용한다 → 미탐지."""
+        text = ("2025년 개정된 규정이 있으나 행위 시의 법령에 따라 구법을 적용하여야 마땅하다.")
+        reference = {"date": "2024-01-01", "kind": "DISPOSITION"}
+        findings = review_declared_amendments(text, reference, criminal=False)
+        assert len(findings) == 0
+
+
+class TestComparativeOldLawPositive:
+    """구법을 비교 대상으로 언급하며 사후 개정 신법 적용을 주장하는 경우 (양성)."""
+
+    def test_comparative_better_new_law(self):
+        """'행위 당시 구법보다 유리하게 개정된 최신 규정 적용' → 소급 적용 오류 탐지."""
+        text = ("피고의 처분은 부당하며, 2025년 3월 1일 대통령령 제35800호로 개정·공포된 "
+                "「군인 징계령」 제12조 제2항 단서에 따르면 적용하여야 합니다. "
+                "행위 당시 구법보다 징계 대상자에게 유리하게 개정된 최신 법령의 감경 규정을 적용하여야 합니다.")
+        reference = {"date": "2024-02-20", "kind": "DISPOSITION"}
+        findings = review_declared_amendments(text, reference, criminal=False)
+        assert len(findings) >= 1, f"비교 구법 언급 신법 적용 주장이 탐지되지 않음: {findings}"
+        assert findings[0].type.name == "TEMPORAL_LAW_MISMATCH"
+
+    def test_old_law_superseded(self):
+        """'구법 대신 개정 신법 적용' → 소급 적용 오류 탐지."""
+        text = ("2025. 5. 1. 대통령령 제36000호로 개정된 「공무원 징계령」 제5조에 따라, "
+                "구법 대신 신법 규정을 적용하여 처분하여야 합니다.")
+        reference = {"date": "2024-05-01", "kind": "DISPOSITION"}
+        findings = review_declared_amendments(text, reference, criminal=False)
+        assert len(findings) >= 1
+
+    def test_old_law_notwithstanding(self):
+        """'구법에 불구하고 개정 신법에 따라 면책' → 소급 적용 오류 탐지."""
+        text = ("2025. 6. 1. 법률 제21000호로 개정된 「도로교통법」 제44조의 신법 취지에 비추어, "
+                "구법에 불구하고 개정 조항에 따라 피고인은 면책되어야 합니다.")
+        reference = {"date": "2024-01-01", "kind": "OFFENSE"}
+        findings = review_declared_amendments(text, reference, criminal=True)
+        assert len(findings) >= 1

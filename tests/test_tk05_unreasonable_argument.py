@@ -61,6 +61,25 @@ def test_management_of_affairs_defense_positive():
     rule_ids4 = [f.confidence_features.get("rule_id") for f in findings4]
     assert "CIVIL.MANAGEMENT_OF_AFFAIRS_DISCIPLINARY_DEFENSE" in rule_ids4
 
+    # 양성 5: 서면7 문장 틀 — 제734조의 사무관리 및 정당행위 병렬 원용 + 징계사유 원천적 부존재
+    text5 = (
+        "청구원인\n"
+        "원고의 행위는 제734조의 '사무관리' 및 형법 제20조의 '정당행위'에 해당하여 징계사유가 원천적으로 부존재합니다."
+    )
+    findings5 = review_legal_rules(_make_doc(text5))
+    rule_ids5 = [f.confidence_features.get("rule_id") for f in findings5]
+    assert "CIVIL.MANAGEMENT_OF_AFFAIRS_DISCIPLINARY_DEFENSE" in rule_ids5
+
+    # 양성 6: 줄바꿈으로 '민법'과 '제734조'가 갈라진 경우
+    text6 = (
+        "청구원인\n"
+        "원고의 행위는 민법\n"
+        "제734조의 사무관리에 해당하므로 징계사유가 아닙니다."
+    )
+    findings6 = review_legal_rules(_make_doc(text6))
+    rule_ids6 = [f.confidence_features.get("rule_id") for f in findings6]
+    assert "CIVIL.MANAGEMENT_OF_AFFAIRS_DISCIPLINARY_DEFENSE" in rule_ids6
+
 
 # ==============================================================================
 # 2. 대조군 테스트: 요건을 모두 구비하거나 정당한 인용 (대조군 3건 이상)
