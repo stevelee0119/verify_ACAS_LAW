@@ -730,8 +730,10 @@ def reconcile_model_fact_remarks(findings: List[Finding], stats: Optional[Dict[s
             out.append(remark)
         else:
             # TK-09: 결정론 판정으로 잡히지 않은 지적에 대해 서면 내부 날짜/기간 재계산 검증 수행
+            # (사용자 승인 전 기본 꺼짐: candidate_promotion_enabled 플래그 확인)
+            from packages.common.config import get_settings
             promoted = None
-            if doc_text:
+            if get_settings().candidate_promotion_enabled and doc_text:
                 from packages.verification_engine.candidate_verifier import verify_model_fact_recalculation
                 promoted, rej = verify_model_fact_recalculation(
                     text, doc_text, reference_date_str=reference_date, document_id=remark.document_id

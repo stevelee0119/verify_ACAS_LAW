@@ -411,12 +411,17 @@ class VerificationPipeline:
                         document_result.unverified_items.append({"kind": "reference_review",
                             "document_id": document_result.document_id,
                             "reason": "Drive 참고자료 AI 대조 미완료: " + review.get("reason", "")})
-                    # TK-09: RAG 관찰 결과 중 모순(CONTRADICTS) 후보를 결정적으로 검증하여 정식 Finding(SUSPICIOUS, B등급)으로 승격
-                    if review and review.get("observations") and document_result.normalized:
+                    # TK-09: RAG 관찰 결과 중 모순(CONTRADICTS) 후보를 결정적으로 검증하여 정식 Finding으로 승격
+                    # (사용자 승인 전 기본 꺼짐: candidate_promotion_enabled 플래그로 제어, exhibit_facts 결정론 관찰은 승격 제외)
+                    from packages.common.config import get_settings
+                    if get_settings().candidate_promotion_enabled and review and review.get("observations") and document_result.normalized:
                         from packages.verification_engine.candidate_verifier import ModelCandidate, verify_rag_candidate
                         doc_text = document_result.normalized.visible_text
                         sources = review.get("sources", [])
                         for obs in review.get("observations", []):
+                            # exhibit_facts 등 결정론 정규식 관찰은 승격 대상에서 제외
+                            if obs.get("engine") == "exhibit_facts" or obs.get("source_type") == "deterministic":
+                                continue
                             if obs.get("relationship") == "CONTRADICTS":
                                 candidate = ModelCandidate(
                                     candidate_id=obs.get("source_id", ""),
@@ -425,7 +430,7 @@ class VerificationPipeline:
                                     basis_quote=obs.get("source_quote", ""),
                                     source_id=obs.get("source_id"),
                                     explanation=obs.get("explanation", ""),
-                                    model_name="rag_primary_reasoner",
+                                    model_name=obs.get("model_name", "rag_primary_reasoner"),
                                 )
                                 f, rej = verify_rag_candidate(candidate, doc_text, sources, document_id=document_result.document_id)
                                 if f:

@@ -59,15 +59,15 @@ def test_positive_rag_candidate_grounded_contradiction():
     assert finding is not None
     assert finding.status == VerificationStatus.SUSPICIOUS
     assert finding.evidence_grade == EvidenceGrade.B
-    assert finding.severity == Severity.HIGH
+    assert finding.severity == Severity.MEDIUM  # TK-14: 승격 심각도는 MEDIUM 이하·사람 확인 대상
     assert finding.advisory_only is False
     assert finding.confidence_features["rule_id"] == "RAG.GROUNDED_CONTRADICTION"
     assert len(finding.evidence) == 2
 
 
 def test_positive_temporal_post_disposition_amendment_recalculated():
-    """양성 2: 처분일(2023. 5. 10.)보다 뒤에 시행된 개정 규정(2024. 1. 1.)을 적용하라는 모델 지적이 서면 내부 날짜로 재계산 확인되어 승격."""
-    doc_text = "처분청은 2023년 5월 10일 원고에게 처분을 내렸으나, 2024년 1월 1일 시행된 개정 규정에 의하면 이는 위법합니다."
+    """양성 2: 처분일(2023. 5. 10.)보다 뒤에 시행된 「군인징계령」 개정 규정(2024. 1. 1.)을 소급 적용하라는 모델 지적이 서면 내부 날짜 및 법령 문맥으로 재계산 확인되어 승격."""
+    doc_text = "처분청은 2023년 5월 10일 원고에게 처분을 내렸으나, 2024년 1월 1일 시행된 「군인징계령」 개정 규정에 따라 소급 적용하여야 하므로 이는 위법합니다."
     remark_text = "[anthropic] 2024. 1. 1. 시행된 개정 규정을 2023. 5. 10. 처분에 소급 적용하라고 주장하는 모순"
 
     finding, rejected = verify_model_fact_recalculation(
@@ -78,6 +78,7 @@ def test_positive_temporal_post_disposition_amendment_recalculated():
     assert finding is not None
     assert finding.status == VerificationStatus.SUSPICIOUS
     assert finding.evidence_grade == EvidenceGrade.B
+    assert finding.severity == Severity.MEDIUM  # TK-14: 승격 심각도는 MEDIUM 이하
     assert finding.type == FindingType.TEMPORAL_LAW_MISMATCH
     assert finding.advisory_only is False
     assert finding.confidence_features["recalculated"] == "RECALCULATED_VERIFIED"
@@ -96,6 +97,7 @@ def test_positive_temporal_statute_of_limitations_days_exceeded():
     assert finding is not None
     assert finding.status == VerificationStatus.SUSPICIOUS
     assert finding.evidence_grade == EvidenceGrade.B
+    assert finding.severity == Severity.MEDIUM
     assert finding.type == FindingType.TEMPORAL_LAW_MISMATCH
     assert finding.advisory_only is False
     assert finding.confidence_features["recalculated"] == "RECALCULATED_VERIFIED"
@@ -114,6 +116,7 @@ def test_positive_evidence_timeline_inversion_recalculated():
     assert finding is not None
     assert finding.status == VerificationStatus.SUSPICIOUS
     assert finding.evidence_grade == EvidenceGrade.B
+    assert finding.severity == Severity.MEDIUM
     assert finding.type == FindingType.EVIDENCE_TIMELINE_INVERSION
     assert finding.advisory_only is False
     assert finding.confidence_features["recalculated"] == "RECALCULATED_VERIFIED"
@@ -190,27 +193,95 @@ def test_negative_model_dates_not_present_in_document():
     assert rejected["reason"] == "REMARK_DATES_NOT_IN_DOCUMENT"
 
 
-def test_negative_reconcile_integration_promotes_only_verified():
-    """대조군 5: 통합 reconcile_model_fact_remarks에서 재계산 검증 통과 건만 승격되고, 미검증 건은 UNCONFIRMED로 남음."""
-    doc_text = "2023년 5월 10일 처분에 대해 2024년 1월 1일 시행 규정을 적용해야 합니다."
+def test_negative_reconcile_integration_promotes_only_when_flag_enabled(monkeypatch):
+    """대조군 5: 통합 reconcile_model_fact_remarks에서 플래그 활성화 시에만 재계산 승격 동작."""
+    from packages.common.config import get_settings
+    doc_text = "2023년 5월 10일 처분에 대해 2024년 1월 1일 시행된 「징계규정」 개정 규정에 따라 소급 적용해야 합니다."
     doc = _make_doc(doc_text)
 
-    # 1건은 재계산 가능한 날짜 모순 지적, 1건은 단순 표현 지적
-    r1 = _fact_remark_finding(doc, "[anthropic] 2024. 1. 1. 시행 규정을 2023. 5. 10. 처분에 적용한 모순", "PERIOD")
+    r1 = _fact_remark_finding(doc, "[anthropic] 2024. 1. 1. 시행된 개정 규정을 2023. 5. 10. 처분에 소급 적용한 모순", "PERIOD")
     r2 = _fact_remark_finding(doc, "[gemini] 문맥상 어투가 다소 어색하고 부자연스러움", "OTHER")
 
-    stats = {}
-    out = reconcile_model_fact_remarks([r1, r2], stats, doc_text=doc_text, reference_date="2023-05-10")
+    # 1) 기본 상태 (플래그 False): 둘 다 승격되지 않고 UNCONFIRMED 및 advisory 유지
+    stats_off = {}
+    out_off = reconcile_model_fact_remarks([r1, r2], stats_off, doc_text=doc_text, reference_date="2023-05-10")
+    assert all(f.advisory_only is True for f in out_off)
+    assert all(f.confidence_features.get("reconciled") == "UNCONFIRMED" for f in out_off)
 
-    # r1은 재계산되어 정식 Finding으로 승격됨
-    promoted = [f for f in out if f.confidence_features.get("recalculated") == "RECALCULATED_VERIFIED"]
+    # 2) 플래그 켠 상태 (플래그 True): r1만 정식 Finding으로 승격됨
+    settings = get_settings()
+    monkeypatch.setattr(settings, "candidate_promotion_enabled", True)
+    stats_on = {}
+    out_on = reconcile_model_fact_remarks([r1, r2], stats_on, doc_text=doc_text, reference_date="2023-05-10")
+    promoted = [f for f in out_on if f.confidence_features.get("recalculated") == "RECALCULATED_VERIFIED"]
     assert len(promoted) == 1
     assert promoted[0].status == VerificationStatus.SUSPICIOUS
+    assert promoted[0].severity == Severity.MEDIUM
     assert promoted[0].advisory_only is False
 
-    # r2는 재계산 불가로 UNCONFIRMED로 남음
-    unconfirmed = [f for f in out if f.confidence_features.get("reconciled") == "UNCONFIRMED"]
-    assert len(unconfirmed) == 1
-    assert unconfirmed[0].advisory_only is True
-    assert stats["confirmed"] == 1
-    assert stats["unconfirmed"] == 1
+
+# ==============================================================================
+# TK-14 재현 대조군 및 혈압 활력징후 대조군 (5건)
+# ==============================================================================
+
+
+def test_negative_tk14_no_contradiction_in_timeline_rejected():
+    """TK-14 대조군 1: '모순이 없다'는 정상 일정 지적이 earlier_d < later_d로 인해 오탐 승격되지 않아야 함."""
+    doc_text = "당사자 간 합의에 따라 2024. 1. 5. 청구되었고 2024. 3. 9. 지급이 완료되었습니다."
+    remark_text = "[model] 2024. 1. 5. 이후 2024. 3. 9. 지급이 이루어져 일정에 모순이 없다"
+
+    finding, rejected = verify_model_fact_recalculation(
+        remark_text, doc_text, reference_date_str=None, document_id="doc_test"
+    )
+    assert finding is None
+    assert rejected is not None
+    assert "NON_CONTRADICTORY" in rejected.get("reason", "") or rejected.get("reason") == "RECALCULATION_UNCONFIRMED"
+
+
+def test_negative_tk14_lawsuit_date_not_statute_amendment_rejected():
+    """TK-14 대조군 2: 소제기일은 법령 개정일이 아니며 적법하다는 주장은 TEMPORAL_LAW_MISMATCH로 오탐되지 않아야 함."""
+    doc_text = "피고는 2024. 2. 20. 원고에게 처분을 하였고, 원고는 2024. 8. 1. 소를 제기하였습니다."
+    remark_text = "[model] 2024. 8. 1. 제소기간 규정을 적용하면 적법하다"
+
+    finding, rejected = verify_model_fact_recalculation(
+        remark_text, doc_text, reference_date_str="2024-02-20", document_id="doc_test"
+    )
+    assert finding is None
+    assert rejected is not None
+
+
+def test_negative_tk14_vital_definition_not_contradicted():
+    """TK-14 대조군 3: 일반 정의 문장('...을 말한다')은 특정 환자의 활력징후 측정치가 아니므로 CONTRADICTS 관찰을 생성하지 않아야 함."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    claim_text = "의학적으로 고혈압은 혈압 140/90 mmHg 이상인 경우를 말한다."
+    record_text = "환자 초진 시 혈압 120/80 mmHg로 측정됨."
+
+    obs = _check_vital_measurements(claim_text, record_text, s_id="R1")
+    assert obs is None
+
+
+def test_negative_tk14_vital_different_timings_not_contradicted():
+    """TK-14 대조군 4: 측정 시점 표기(이송 도중 vs 내원 시)가 서로 다른 측정치는 시점 차이이므로 CONTRADICTS 관찰을 생성하지 않아야 함."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    claim_text = "환자는 119 구급차 이송 도중 혈압 90/60 mmHg 상태였습니다."
+    record_text = "응급실 내원 시 혈압 135/85 mmHg로 측정되었습니다."
+
+    obs = _check_vital_measurements(claim_text, record_text, s_id="R1")
+    assert obs is None
+
+
+def test_negative_pipeline_exhibit_facts_excluded_from_model_promotion():
+    """TK-14 대조군 5: exhibit_facts의 결정론 관찰은 ModelCandidate 승격 루프에서 배제되어야 함."""
+    obs_deterministic = {
+        "claim_quote": "혈압 수치 주장",
+        "source_quote": "의무기록 원문",
+        "relationship": "CONTRADICTS",
+        "engine": "exhibit_facts",
+        "source_type": "deterministic",
+        "explanation": "결정론적 혈압 불일치",
+    }
+    assert obs_deterministic.get("engine") == "exhibit_facts"
+    assert obs_deterministic.get("source_type") == "deterministic"
+

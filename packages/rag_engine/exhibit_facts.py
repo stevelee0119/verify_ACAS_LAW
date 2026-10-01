@@ -44,6 +44,11 @@ def check_exhibit_facts_generic(document: str, sources: List[Dict[str, Any]]) ->
         obs_neg = _check_negation_contradictions(document, text, s_id, title)
         observations.extend(obs_neg)
 
+    # 모든 서증 팩트체크 관찰에 결정론 엔진 표기 (모델 의견 승격 대상에서 제외하기 위함)
+    for obs in observations:
+        obs.setdefault("engine", "exhibit_facts")
+        obs.setdefault("source_type", "deterministic")
+
     return observations
 
 
@@ -70,15 +75,36 @@ def _check_vital_measurements(document: str, text: str, s_id: str) -> Optional[D
 
     # 서면의 혈압 수치와 서증 기록 수치가 유의미하게 불일치하는 경우
     if (claim_sys, claim_dia) != (src_sys, src_dia):
+        claim_span_match = re.search(r"[^\n.]{0,50}" + re.escape(m_claim.group(0)) + r"[^\n.]{0,50}", document)
+        src_span_match = re.search(r"[^\n.]{0,50}" + re.escape(m_src.group(0)) + r"[^\n.]{0,50}", text)
+        claim_context = claim_span_match.group(0) if claim_span_match else m_claim.group(0)
+        src_context = src_span_match.group(0) if src_span_match else m_src.group(0)
+
+        # 1. 일반 정의 문장 배제: 의학적/일반적 정의 문장은 특정 환자의 실제 측정치가 아님
+        def_pattern = re.compile(r"(?:말한다|의미한다|이라\s*한다|정의한다|일반적으로|기준으로|이상인\s*경우|이하인\s*경우)")
+        if def_pattern.search(claim_context) or def_pattern.search(src_context):
+            return None
+
+        # 2. 서로 다른 시점 표기 배제: 측정 시점(이송, 내원, 초진, 수술 등)이 다르면 불일치가 아님
+        timing_keywords = ("초진", "내원", "이송", "도착", "수술", "퇴원", "발병", "사고", "투약", "1차", "2차", "직후", "직전")
+        claim_timings = {k for k in timing_keywords if k in claim_context}
+        src_timings = {k for k in timing_keywords if k in src_context}
+        if claim_timings and src_timings and not (claim_timings & src_timings):
+            # 서로 다른 시점이 명시된 경우 불일치 관찰 생성 배제
+            return None
+        if (claim_timings or src_timings) and not (claim_timings & src_timings):
+            # 한쪽에만 구체적 시점 라벨이 있고 다른 쪽에는 없는 경우도 시점 특정 불가로 배제
+            return None
+
         claim_str = f"{claim_sys}/{claim_dia} mmHg"
         src_str = f"{src_sys}/{src_dia} mmHg"
-        claim_span = re.search(r"[^\n.]{0,50}" + re.escape(m_claim.group(0)) + r"[^\n.]{0,50}", document)
-        src_span = re.search(r"[^\n.]{0,50}" + re.escape(m_src.group(0)) + r"[^\n.]{0,50}", text)
         return {
-            "claim_quote": claim_span.group(0).strip() if claim_span else m_claim.group(0),
+            "claim_quote": claim_context.strip(),
             "source_id": s_id,
-            "source_quote": src_span.group(0).strip() if src_span else m_src.group(0),
+            "source_quote": src_context.strip(),
             "relationship": "CONTRADICTS",
+            "engine": "exhibit_facts",
+            "source_type": "deterministic",
             "explanation": (
                 f"서면은 혈압 측정치가 {claim_str}였다고 주장하나, "
                 f"의무기록 원문에는 {src_str}로 기재되어 있어 수치 불일치(확인 필요)."

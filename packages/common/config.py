@@ -146,6 +146,10 @@ class Settings:
     prompt_version: str = "v0.2"
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))
+    candidate_promotion_enabled: bool = field(
+        default_factory=lambda: _flag("LV_CANDIDATE_PROMOTION_ENABLED", False)
+    )
+    """TK-09 모델 의견 후보 승격 기능 활성화 여부 (사용자 승인 전 기본 꺼짐: False)."""
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     pricing: Dict[str, Any] = field(default_factory=dict)
 
