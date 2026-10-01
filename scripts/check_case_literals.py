@@ -19,7 +19,9 @@
 - 문구 베끼기: 사건 서면 본문(사건별 시험의 긴 문자열 상수, 서면 원문 텍스트)에 나오는 열 글자 이상의 연속 문구가
   제품 코드의 정규식·메시지에 그대로 들어 있는 경우. 숫자를 빼고 사건 문구로 정규식을 짜도 잡는다(숫자만 보는 점검의 구멍)
 
-코드 안에서는 주석·독스트링을 빼고 문자열 상수(정규식·메시지)만 본다. 법령·판례 원천을 근거로 인용하는 값은
+코드 안에서는 주석·독스트링을 빼고 문자열 상수(정규식·메시지)만 본다. `config/**/*.json`(규칙·군집 설정)도 같은 점검 대상이다 —
+규칙 판정 논리가 코드에서 설정 파일로 옮겨 갔는데 설정 파일은 보지 않아 맞춤 문구가 들어가도 못 잡던 구멍을 막는다(2026-10-01 TK-26).
+설정 파일에서는 인용·설명용 필드(url·version·text·explanation·title·detail·basis 등)를 빼고 판정에 쓰이는 문자열(pattern·context·unless·용어 목록)만 본다. 법령·판례 원천을 근거로 인용하는 값은
 `tests/acceptance/literal_allow.json`에 사유와 함께 올린다(평가 에이전트만).
 """
 from __future__ import annotations
@@ -46,6 +48,9 @@ SOURCE_GLOBS = [
     "tests/fixtures/probes/*.txt",
 ]
 SCAN_GLOB = "packages/**/*.py"
+SCAN_JSON_GLOB = "config/**/*.json"
+JSON_SKIP_KEYS = {"url", "version", "text", "explanation", "title", "detail", "description", "note", "verdict", "label",
+                  "name", "law_name", "source", "basis", "default"}
 CASE_NUMBER = re.compile(r"(?<!\d)(?:19|20)\d{2}[가-힣]{1,3}\d{2,6}(?!\d)")
 AMOUNT = re.compile(r"(?<![\d,])\d{1,3}(?:,\d{3}){2,}(?![\d,])")
 VITALS = re.compile(r"(?<!\d)\d{2,3}\s*/\s*\d{2,3}(?=\s*mmHg)")
@@ -101,6 +106,34 @@ def code_constants(source: str) -> List[str]:
 
 def code_strings(source: str) -> str:
     return "\n".join(code_constants(source))
+
+
+def json_strings(obj, key=None):
+    """설정 파일의 판정용 문자열. 인용·설명용 필드는 건너뛴다."""
+    if isinstance(obj, str):
+        if key not in JSON_SKIP_KEYS:
+            yield obj
+    elif isinstance(obj, dict):
+        for k, v in obj.items():
+            yield from json_strings(v, k)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from json_strings(v, key)
+
+
+def file_constants(path: Path) -> List[str]:
+    """제품 파일(코드 또는 설정)의 판정용 문자열 상수."""
+    raw = path.read_text(encoding="utf-8", errors="ignore")
+    if path.suffix == ".json":
+        try:
+            return list(json_strings(json.loads(raw)))
+        except ValueError:
+            return [raw]
+    return code_constants(raw)
+
+
+def product_files(root: Path = ROOT) -> List[Path]:
+    return sorted(root.glob(SCAN_GLOB)) + sorted(root.glob(SCAN_JSON_GLOB))
 
 
 _KEEP = re.compile(r"[^0-9A-Za-z가-힣]")
@@ -159,11 +192,11 @@ def scan_identifiers(identifiers: Dict[str, str], root: Path = ROOT,
     """{제품 코드 파일: [서면에서 그대로 따온 식별자]}"""
     allow = load_allow() if allow is None else allow
     hits: Dict[str, List[str]] = {}
-    for path in sorted(root.glob(SCAN_GLOB)):
+    for path in product_files(root):
         relative = path.relative_to(root).as_posix()
         skip = set(allow.get(relative, {}))
         found = set()
-        for const in code_constants(path.read_text(encoding="utf-8", errors="ignore")):
+        for const in file_constants(path):
             for token in IDENT.findall(const):
                 key = norm_ident(token)
                 if len(token) >= MIN_IDENT and key in identifiers and key not in skip:
@@ -179,11 +212,11 @@ def scan_phrases(documents: Dict[str, str], root: Path = ROOT, allow: Dict[str, 
     allow = load_allow() if allow is None else allow
     bodies = list(documents)
     hits: Dict[str, List[str]] = {}
-    for path in sorted(root.glob(SCAN_GLOB)):
+    for path in product_files(root):
         relative = path.relative_to(root).as_posix()
         skip = set(allow.get(relative, {}))
         found = set()
-        for const in code_constants(path.read_text(encoding="utf-8", errors="ignore")):
+        for const in file_constants(path):
             for run in literal_runs(const):
                 if run not in skip and any(run in body for body in bodies):
                     found.add(run)
@@ -205,9 +238,9 @@ def scan(literals: Dict[str, List[str]], root: Path = ROOT, allow: Dict[str, Dic
     allow = load_allow() if allow is None else allow
     patterns = {value: literal_regex(value) for value in literals}
     hits: Dict[str, List[str]] = {}
-    for path in sorted(root.glob(SCAN_GLOB)):
+    for path in product_files(root):
         relative = path.relative_to(root).as_posix()
-        text = code_strings(path.read_text(encoding="utf-8", errors="ignore"))
+        text = "\n".join(file_constants(path))
         skip = set(allow.get(relative, {}))
         present = sorted(value for value, pattern in patterns.items() if value not in skip and pattern.search(text))
         if present:

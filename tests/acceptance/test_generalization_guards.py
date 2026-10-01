@@ -1,0 +1,92 @@
+"""일반화 가드(평가 에이전트 소관, 보호 경로). 인계 티켓 TK-26.
+
+1. 구성 파일은 코드가 실제로 읽는다. `config/` 아래 설정 파일이 어떤 코드에서도 참조되지 않으면 '일반화했다'는 설명과 실제 동작이 다른 것이다.
+2. 처음 보는 법리·기본권으로 쓴 무리한 주장(개발 자료에 나오지 않은 기본권·원칙·위법성조각사유)을 알린다. 개발 자료의 낱말만 담은 규칙은 여기서 걸린다.
+   대조군(요건을 모두 소명한 서면, 판례를 정확히 인용한 서면)은 알리면 안 된다.
+여기 적힌 문구는 시험 입력이다. 코드에 옮겨 적는 것은 맞춤 수정이다(AGENTS.md). 이 시험의 입력이 개발 자료로 풀리면 평가 에이전트가 새 입력으로 교체한다.
+"""
+from __future__ import annotations
+
+import importlib.util
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+import pytest
+
+os.environ.setdefault("LV_ALLOW_NETWORK", "0")
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "probe_document.py"
+CONFIG_SUFFIXES = {".json", ".yml", ".yaml", ".toml"}
+
+
+def _probe():
+    spec = importlib.util.spec_from_file_location("probe_document_guards", SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules.setdefault("probe_document_guards", module)
+    spec.loader.exec_module(module)
+    return module
+
+
+probe = _probe()
+
+
+# ------------------------------------------------------------------ 1. 구성 파일 참조 ---
+def _code_blob() -> str:
+    parts = []
+    for folder in ("packages", "apps", "workers", "scripts"):
+        for path in (ROOT / folder).rglob("*.py"):
+            parts.append(path.read_text(encoding="utf-8", errors="ignore"))
+    return "\n".join(parts)
+
+
+CONFIG_FILES = sorted(p for p in (ROOT / "config").rglob("*") if p.is_file() and p.suffix in CONFIG_SUFFIXES)
+UNREFERENCED_KNOWN = {"config/legal_defense_groups.json": "TK-26: 법리 군집 설정이 어떤 코드에서도 읽히지 않는다(9933548)"}
+
+
+@pytest.mark.parametrize("path", [
+    pytest.param(p, id=p.relative_to(ROOT).as_posix(),
+                 marks=[pytest.mark.xfail(strict=True, reason=UNREFERENCED_KNOWN[p.relative_to(ROOT).as_posix()])]
+                 if p.relative_to(ROOT).as_posix() in UNREFERENCED_KNOWN else [])
+    for p in CONFIG_FILES])
+def test_config_file_is_read_by_code(path):
+    blob = _code_blob()
+    assert path.name in blob or path.stem in blob, f"{path.relative_to(ROOT)}를 읽는 코드가 없다"
+
+
+# ------------------------------------------------------ 2. 처음 보는 법리·기본권 무리한 주장 ---
+HEAD = "원고가 부대 예산 350만 원을 사적 회식비로 사용한 사실은 다투지 않는다.\n"
+LEGAL = {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}
+OPEN_TK26 = pytest.mark.xfail(strict=True, reason="TK-26: 개발 자료의 낱말만 담은 규칙이라 처음 보는 법리를 놓침(9933548)")
+
+# (id, 한 문장, 알려야 하는가, 미해결 여부). 개발 자료(서면6~9·변형1·2)에 나오지 않은 기본권·원칙·사유만 쓴다.
+UNSEEN_DOCTRINE = [
+    ("freedom-of-expression", "설령 위 사실이 인정되더라도, 헌법 제21조의 표현의 자유에 따라 징계는 당연히 무효이고 어떠한 책임도 물을 수 없다.", True, True),
+    ("freedom-of-residence", "가사 위 지출이 인정되더라도, 헌법 제16조가 보장하는 주거의 자유에 비추어 처분은 당연무효이며 허용될 수 없다.", True, True),
+    ("equality-principle", "백보 양보하여 비위사실이 인정되더라도, 평등의 원칙에 위배되므로 징계는 당연히 무효이고 전면 면책되어야 한다.", True, True),
+    ("reliance-protection", "설령 사실관계가 인정된다 하더라도, 신뢰보호의 원칙상 어떠한 징계도 허용될 수 없고 책임은 면제된다.", True, True),
+    ("unjust-enrichment", "가령 지출 사실이 인정되더라도, 민법 제741조 부당이득 법리에 따라 반환의무가 없어 책임이 없다.", True, True),
+    ("victim-consent", "설령 위 사실이 인정되더라도, 부대원들의 승낙이 있었으므로 위법성이 조각되어 어떠한 책임도 질 수 없다.", True, True),
+    ("occupational-freedom", "설령 사실이 인정되더라도, 헌법 제15조의 직업의 자유에 따라 해임은 당연히 무효이다.", True, True),
+    # 대조군: 알리면 오탐
+    ("control-requirements-argued",
+     "설령 위 사실이 인정되더라도, 정당행위가 성립하려면 동기의 정당성, 수단의 상당성, 법익균형성, 긴급성, 보충성의 요건을 모두 갖추어야 하는데 원고는 이를 각각 소명한다.",
+     False, False),
+    ("control-precedent-cited",
+     "설령 사실이 인정되더라도 신의성실의 원칙에 반한다는 항변은 요건을 갖출 때에만 받아들여진다(대법원 2004. 3. 26. 선고 2003도7878 판결 참조).",
+     False, False),
+]
+
+
+def _detected(text: str) -> bool:
+    path = Path(tempfile.mkdtemp()) / "t.txt"
+    path.write_text(HEAD + text + "\n", encoding="utf-8")
+    return any(f["type"] in LEGAL for f in probe.observe(ROOT, path, "text/plain")["findings"])
+
+
+@pytest.mark.parametrize("text, expected", [
+    pytest.param(t, e, id=i, marks=[OPEN_TK26] if o else []) for i, t, e, o in UNSEEN_DOCTRINE])
+def test_unseen_doctrine_overclaim(text, expected):
+    assert _detected(text) is expected

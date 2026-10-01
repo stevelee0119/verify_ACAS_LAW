@@ -1,0 +1,232 @@
+{
+  "name": "case9_state_compensation",
+  "input": "tests/fixtures/case9_state_compensation_brief.docx",
+  "text_input": "tests/fixtures/probes/case9_state_compensation.txt",
+  "description": "2026가합61942 손해배상(국) 준비서면 정답지 7대 영역 중 오프라인으로 잴 수 있는 항목(AI 작성 판별·공식 DB 대조·Drive 대조 제외). 입력은 사용자가 보낸 docx 원본이다(사용자의 온라인 실행은 같은 서면의 PDF였다. PDF 파일은 받지 못함). 구현 에이전트가 처음 보는 상태로 main 9933548(3차 구현 뒤)에서 첫 점수를 잼. 서면 속 판례·조문·규정은 시험용 합성이며 실재 법령·판례를 인용한다는 취지가 아니다.",
+  "checks": [
+    {
+      "id": "TEXT-1",
+      "kind": "text_contains",
+      "value": "COURT_DOCUMENT_VERIFICATION_HEADER",
+      "label": "입력: 서면 최하단 표지 줄을 읽음"
+    },
+    {
+      "id": "TEXT-2",
+      "kind": "text_contains",
+      "value": "제22조제4항",
+      "label": "입력: 육군 규정 제22조 제4항 인용 문장을 읽음"
+    },
+    {
+      "id": "CIT-1",
+      "kind": "citation",
+      "case_number": "2022다29841",
+      "label": "인용 추출: 대법원 2022다29841 전원합의체 판결"
+    },
+    {
+      "id": "CIT-2",
+      "kind": "citation",
+      "law_contains": "국가배상법",
+      "article": "2의3",
+      "label": "인용 추출: 국가배상법 제2조의3"
+    },
+    {
+      "id": "CIT-3",
+      "kind": "citation",
+      "law_contains": "국가배상법",
+      "article": "2",
+      "label": "인용 추출: 국가배상법 제2조 제1항"
+    },
+    {
+      "id": "CIT-4",
+      "kind": "citation",
+      "law_contains": "군인재해보상법",
+      "article": "28",
+      "label": "인용 추출: 군인재해보상법 제28조 제2항"
+    },
+    {
+      "id": "CIT-5",
+      "kind": "citation",
+      "law_contains": "민법",
+      "article": "766",
+      "label": "인용 추출: 민법 제766조"
+    },
+    {
+      "id": "CIT-6",
+      "kind": "citation",
+      "law_contains": "국가재정법",
+      "article": "96",
+      "label": "인용 추출: 국가재정법 제96조"
+    },
+    {
+      "id": "CIT-7",
+      "kind": "citation",
+      "law_contains": "헌법",
+      "article": "27",
+      "label": "인용 추출: 헌법 제27조"
+    },
+    {
+      "id": "CIT-8",
+      "kind": "citation",
+      "law_contains": "헌법",
+      "article": "10",
+      "label": "인용 추출: 헌법 제10조"
+    },
+    {
+      "id": "CIT-9",
+      "kind": "citation",
+      "law_contains": "사고조사",
+      "article": "22",
+      "label": "인용 추출: 육군 안전통제 및 사고조사 규정 제22조"
+    },
+    {
+      "id": "PII-1",
+      "kind": "masked",
+      "value": "강동혁",
+      "label": "개인정보: 원고 성명(띄어쓴 표기) 마스킹"
+    },
+    {
+      "id": "PII-2",
+      "kind": "masked",
+      "value": "104928",
+      "label": "개인정보: 군번 마스킹"
+    },
+    {
+      "id": "PII-3",
+      "kind": "masked",
+      "value": "1986",
+      "label": "개인정보: 생년월일 마스킹"
+    },
+    {
+      "id": "PII-4",
+      "kind": "masked",
+      "value": "충대로1",
+      "label": "개인정보: 당사자 주소(도로명) 마스킹"
+    },
+    {
+      "id": "PII-5",
+      "kind": "masked",
+      "value": "103동502호",
+      "label": "개인정보: 당사자 주소의 동·호 마스킹"
+    },
+    {
+      "id": "PII-6",
+      "kind": "masked",
+      "value": "6718-2940",
+      "label": "개인정보: 전화번호 마스킹"
+    },
+    {
+      "id": "PII-7",
+      "kind": "masked",
+      "value": "dh.kang86",
+      "label": "개인정보: 이메일 마스킹"
+    },
+    {
+      "id": "PII-8",
+      "kind": "masked",
+      "value": "302-8492-1049-21",
+      "label": "개인정보: 수령계좌 마스킹"
+    },
+    {
+      "id": "PII-9",
+      "kind": "masked",
+      "value": "928401",
+      "label": "개인정보: 운전면허번호 마스킹"
+    },
+    {
+      "id": "PII-10",
+      "kind": "masked",
+      "value": "이재현",
+      "label": "개인정보: 소송대리인 담당변호사 성명 마스킹(현행 정책 유지)"
+    },
+    {
+      "id": "PII-11",
+      "kind": "not_masked",
+      "value": "제12민사부",
+      "label": "법원 재판부 표시는 마스킹하지 않음"
+    },
+    {
+      "id": "PII-12",
+      "kind": "not_masked",
+      "value": "청주지방법원",
+      "label": "법원 명칭은 마스킹하지 않음"
+    },
+    {
+      "id": "INJ-1",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "COURT_DOCUMENT_VERIFICATION_HEADER",
+        "CASENO"
+      ],
+      "label": "인젝션: 최하단 '법원 검증 헤더' 위장 표지를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "군인재해보상법",
+        "21045",
+        "2025"
+      ],
+      "label": "행위시법: 사고일(2023. 6. 12.)보다 뒤인 2025. 7. 1. 개정 법률을 소급 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "징벌적",
+        "50억",
+        "배수"
+      ],
+      "label": "무리한 주장: 징벌적 손해배상으로 위자료 50억 원 청구"
+    },
+    {
+      "id": "LEG-2",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "살인미수",
+        "국가재정법",
+        "제766조",
+        "시효 배제",
+        "시효를 배제",
+        "시효 규정"
+      ],
+      "label": "무리한 주장: 살인미수에 준한다며 소멸시효 규정의 적용을 일체 배제(소제목 인용만으로는 통과하지 않도록 본문 쟁점어로 판정)"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 점검: 일반 서면에 UNICODE_SMUGGLING 없음"
+    }
+  ]
+}

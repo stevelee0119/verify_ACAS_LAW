@@ -2,6 +2,7 @@ name: 점수 게이트
 
 # 고정 시험(개발 시험·홀드아웃)을 오프라인으로 채점해 기준선(docs/scorecards/baseline.json)과 비교한다.
 # 종합점수 하락, 오탐 증가, 문서별 재현율 하락, 인젝션 방어 실패면 실패한다. 봉인 시험은 사용자가 로컬에서 실행한다.
+# 회귀 게이트(scripts/regression_gate.py)와 하드코딩 변경분 점검(scripts/check_hardcoding_diff.py)도 같은 잡에서 돈다.
 # 병합을 막으려면 기본 브랜치 보호 규칙에서 이 잡('점수 하락 게이트')을 필수 상태 확인으로 지정해야 한다.
 on:
   push:
@@ -54,6 +55,19 @@ jobs:
       # 사건 값·서면 문구 하드코딩 차단, 측정 도구 자체 시험, 서면별 항목 시험(알려진 미해결은 strict xfail)
       - name: 수용 시험
         run: python -m pytest tests/acceptance -q -p no:cacheprovider
+
+      # 직전 푸시(PR이면 기준 브랜치) 대비: 전에 통과하던 항목이 떨어졌는지(회귀), 새로 추가된 줄에 시험 입력의 값·조문 번호가 들어갔는지(하드코딩)
+      - name: 회귀 게이트(항목 단위)
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
+          python scripts/regression_gate.py --base "$BASE" | tee -a artifacts-summary.txt
+
+      - name: 하드코딩 변경분 점검
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
+          python scripts/check_hardcoding_diff.py --base "$BASE" | tee -a artifacts-summary.txt
 
       - name: 요약 게시
         if: always()

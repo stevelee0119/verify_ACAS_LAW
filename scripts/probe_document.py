@@ -160,12 +160,15 @@ def evaluate(spec: Dict[str, Any], obs: Dict[str, Any]) -> List[Dict[str, Any]]:
 def run_in_tree(spec: Dict[str, Any], tree: Path, *, text_input: bool, spec_dir: Path) -> Dict[str, Any]:
     source = spec["text_input"] if text_input else spec["input"]
     document = (spec_dir / source).resolve() if not Path(source).is_absolute() else Path(source)
-    mime = "text/plain" if document.suffix.lower() == ".txt" else "application/pdf"
+    suffix = document.suffix.lower()
+    mime = {".txt": "text/plain",
+            ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}.get(suffix, "application/pdf")
     if not document.is_file():
         raise FileNotFoundError(document)
     obs = observe(tree, document, mime)
     rows = evaluate(spec, obs)
-    return {"spec": spec["name"], "input": "text" if text_input else "pdf", "passed": sum(r["passed"] for r in rows),
+    kind = "text" if text_input else ("docx" if suffix == ".docx" else "pdf")
+    return {"spec": spec["name"], "input": kind, "passed": sum(r["passed"] for r in rows),
             "total": len(rows), "failed": [r["id"] for r in rows if not r["passed"]], "rows": rows,
             "errors": obs["errors"]}
 

@@ -72,7 +72,7 @@ def test_variant1_check(check_id):
 # ------------------------------------------------------------ 변형 서면 2번째(de243cc 첫 점수 16/20) ---
 # 구현 에이전트가 본 적 없는 서면으로 de243cc를 처음 잰 결과다(docs/scorecards/first_touch_log.jsonl). 미해결은 TK-20이다.
 CHECKS2 = {c["id"]: c.get("label", c["id"]) for c in probe.load_spec(SPEC2)["checks"]}
-VARIANT2_OPEN = {"PII-4", "PII-10", "PII-12", "INJ-1a", "LEG-1"}
+VARIANT2_OPEN: set = set()     # 9933548(3차 구현)에서 5건 모두 해결
 
 
 @functools.lru_cache(maxsize=None)
@@ -190,8 +190,8 @@ def test_unreasonable_argument_variants(text, expected):
 # de243cc(6e5cd78)에서 LAW_DATE_AFTER_RE가 '날짜 뒤 법·령·규칙으로 끝나는 낱말'을 법령명으로 읽어 '횡령하였다' 같은 행위 문장의 날짜를
 # 법령 개정일로 오인해 기준일 후보에서 뺐다(cf7c739는 잡았다). 법령 개정일이 아닌 날짜는 후보에 남아야 한다.
 REFERENCE_DATE_CASES = [
-    ("embezzle-verb", "피고인은 2021. 6. 1. 횡령하였다.", "2021-06-01", True),
-    ("unlawful-method", "피고인은 2021. 6. 1. 위법한 방법으로 회사 자금을 횡령하였다.", "2021-06-01", True),
+    ("embezzle-verb", "피고인은 2021. 6. 1. 횡령하였다.", "2021-06-01", False),
+    ("unlawful-method", "피고인은 2021. 6. 1. 위법한 방법으로 회사 자금을 횡령하였다.", "2021-06-01", False),
     ("plain-offense", "피고인은 2021. 6. 1. 회사 자금을 횡령하였다.", "2021-06-01", False),
     ("disposition", "피고는 2024. 5. 3. 원고에 대하여 징계처분을 하였다.", "2024-05-03", False),
 ]
@@ -216,7 +216,6 @@ def _temporal_helpers():
     return module
 
 
-@pytest.mark.xfail(strict=True, reason="TK-19: 행위일이 둘인데 첫 날짜를 버리고 VERIFIED로 확정(de243cc)")
 def test_two_offense_dates_are_never_verified():
     helpers = _temporal_helpers()
     citation = helpers.cite("가상형사법", "5", "는 업무상 횡령을 7년 이하의 징역에 처한다")
