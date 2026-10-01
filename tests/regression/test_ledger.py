@@ -92,6 +92,9 @@ LEDGER_RECORDS = [
     ("TK-27", "REFERENCE_DATE_ALL_CANDIDATES_POST", True, "개정일이 모든 후보보다 뒤인 경우 소급적용", "SUSPICIOUS HIGH 탐지"),
     ("TK-27", "REFERENCE_DATE_SPLIT_CANDIDATES", True, "개정일이 후보 사이에 끼는 경우", "UNVERIFIED 사람 확인"),
     ("TK-27", "REFERENCE_DATE_SINGLE_CANDIDATE_CONTROL", False, "단일 후보 날짜", "DOCUMENT_INFERRED 단일 추정"),
+    ("TK-25", "AI_SCOPE_INDEPENDENT_OF_TRACES", True, "흔적 0건 + 다수결 AI_FULL 판정", "scope=WHOLE_DOCUMENT, involvement=NO_OBJECTIVE_TRACES"),
+    ("TK-25", "AI_SCOPE_PARTIAL_WITHOUT_TRACES", True, "흔적 0건 + 다수결 AI_PARTIAL 판정", "scope=PART_OF_DOCUMENT, involvement=NO_OBJECTIVE_TRACES"),
+    ("TK-25", "AI_SCOPE_HUMAN_CONTROL", False, "흔적 0건 + 사람 작성 추정", "scope=NOT_APPLICABLE"),
 ]
 
 
@@ -684,7 +687,64 @@ def test_tk27_reference_date_single_candidate_control(text: str, criminal: bool,
 
 
 # ===========================================================================
-# 11. 원장 종합 무결성 검증
+# 11. TK-25: AI 판정 축 scope와 involvement 분리 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "verdict, traces, expected_scope, expected_involvement",
+    [
+        ("AI_FULL_GENERATION_LIKELY", 0, "WHOLE_DOCUMENT", "NO_OBJECTIVE_TRACES"),
+        ("AI_PARTIAL_GENERATION", 0, "PART_OF_DOCUMENT", "NO_OBJECTIVE_TRACES"),
+        ("AI_FULL_GENERATION_LIKELY", 2, "WHOLE_DOCUMENT", "TRACES_FOUND"),
+    ],
+)
+def test_tk25_scope_independent_of_traces_positive(
+    verdict: str, traces: int, expected_scope: str, expected_involvement: str
+):
+    """TK-25 양성: 객관적 흔적(traces)이 0건이어도 다수결 verdict에 따라 올바른 scope(WHOLE/PART)가 부여됨."""
+    from types import SimpleNamespace
+    from packages.verification_engine.scoring import unified_authorship
+
+    doc = SimpleNamespace(
+        document_id="synth_ai_doc",
+        authorship=None,
+        ai_detector_result={"verdict": verdict, "score": 0.88, "signals": {"objective_traces": traces}},
+    )
+    res = unified_authorship(doc)
+    assert res["verdict"] == verdict
+    assert res["scope"] == expected_scope
+    assert res["involvement"] == expected_involvement
+    assert res["objective_traces"] == traces
+
+
+@pytest.mark.parametrize(
+    "verdict, traces, expected_scope, expected_involvement",
+    [
+        ("HUMAN_AUTHORED_LIKELY", 0, "NOT_APPLICABLE", "NO_OBJECTIVE_TRACES"),
+        ("UNCERTAIN", 0, "NOT_APPLICABLE", "NO_OBJECTIVE_TRACES"),
+        ("UNCERTAIN", 1, "NOT_APPLICABLE", "TRACES_FOUND"),
+    ],
+)
+def test_tk25_scope_non_ai_control(
+    verdict: str, traces: int, expected_scope: str, expected_involvement: str
+):
+    """TK-25 대조군: 사람 작성 추정 또는 불확실 판정에서는 scope가 NOT_APPLICABLE로 설정됨."""
+    from types import SimpleNamespace
+    from packages.verification_engine.scoring import unified_authorship
+
+    doc = SimpleNamespace(
+        document_id="synth_ctrl_doc",
+        authorship=None,
+        ai_detector_result={"verdict": verdict, "score": 0.15, "signals": {"objective_traces": traces}},
+    )
+    res = unified_authorship(doc)
+    assert res["verdict"] == verdict
+    assert res["scope"] == expected_scope
+    assert res["involvement"] == expected_involvement
+    assert res["objective_traces"] == traces
+
+
+# ===========================================================================
+# 12. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -702,5 +762,6 @@ def test_ledger_records_integrity():
     assert "TK-20" in ticket_ids
     assert "TK-22" in ticket_ids
     assert "TK-23" in ticket_ids
+    assert "TK-25" in ticket_ids
     assert "TK-26" in ticket_ids
     assert "TK-27" in ticket_ids
