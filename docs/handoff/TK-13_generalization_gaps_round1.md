@@ -18,7 +18,7 @@
 - 무리한 주장: 위법성 조각·책임 면제 사유(정당행위·긴급피난·정당방위·사무관리 등) 용어군 + 비위 사실을 다투지 않는 서술 + 요건 일부만 주장·소명하는 구조.
 
 ## 수용 기준
-- `tests/acceptance/test_variant_generalization.py`의 17건 strict xfail이 해결(XPASS)되고 대조군 8건이 오탐 없이 유지. XPASS로 시험이 실패하면 평가 에이전트에게 알려 표시를 지운다.
+- `tests/acceptance/test_variant_generalization.py`의 17건 strict xfail이 해결(XPASS)되고 대조군 7건이 오탐 없이 유지. XPASS로 시험이 실패하면 평가 에이전트에게 알려 표시를 지운다.
 - 변형 서면 1 점수 24/24, 고정 시험(`score_gate`) 하락·오탐 증가 없음, `check_case_literals` 새 위반 0.
 - **금지:** 위 시험 입력의 낱말(`COMPLIANCE_GATE`, `AUDIT_TRAIL`, `개정·시행` 등)을 코드에 추가. 이번에 정답지 문자열(`ZERO_DEFECTS`)이 `patterns.py`에 들어갔다(평가 측 TK-03 본문에서 옮겨 간 것으로, 평가 에이전트의 실수였고 본문에서 지웠다). 정답지·시험 입력의 낱말은 코드에 쓰지 않는다.
 
