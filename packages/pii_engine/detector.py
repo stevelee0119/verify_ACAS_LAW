@@ -138,17 +138,42 @@ DOB_RE = re.compile(
 # 이어진 구간에서 시작 위치마다 끝까지 되짚어 비용이 길이의 제곱으로 늘었다.
 # 3MB 검증 결과 한 건에 25초가 걸려 보고서 생성 요청이 끊겼다. 실제 시·도명은
 # 2~4자, 시·군·구명은 1~5자, 도로·동명은 숫자를 포함해도 20자를 넘지 않는다.
+# 주소 상세 꼬리 구성요소: 동·호·층 및 건물명의 유연한 구조적 결합 지원
+# 영문/숫자/한글 1자 동(101동, A동, 가동), 층(9층, B1층, 지하1층), 호(1203호, B101호)
+_ADDR_BLD = r"[가-힣0-9]{1,15}(?:아파트|빌라|오피스텔|마을|단지|타운|맨션|타워|빌딩|상가)"
+_ADDR_DONG = r"(?:\d{1,4}|[A-Za-z]|[가-힣])동"
+_ADDR_FLOOR = r"(?:\d{1,3}|[Bb]\d{1,2}|지하\s*\d{1,2})층"
+_ADDR_HO = r"(?:\d{1,4}|[A-Za-z]\d{1,4}|\d{1,4}-[A-Za-z]|\d{1,4}-\d{1,4}|[A-Za-z])호"
+_ADDR_UNIT = rf"(?:{_ADDR_DONG}|{_ADDR_FLOOR}|{_ADDR_HO})"
+_ADDR_DETAIL = (
+    rf"(?:"
+    rf"(?:\s*,\s*|\s+)"
+    rf"(?:{_ADDR_BLD}\s*)?"
+    rf"(?:{_ADDR_UNIT}(?:\s*,\s*|\s+)?)*{_ADDR_UNIT}"
+    rf"|"
+    rf"(?:\s*,\s*|\s+)"
+    rf"{_ADDR_BLD}"
+    rf"(?:(?:\s*,\s*|\s+){_ADDR_UNIT})*"
+    rf")?"
+)
 ADDRESS_RE = re.compile(
     r"(?:(?:[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도)|서울|대전|대구|부산|인천|광주|울산|세종|제주|경기|강원|충북|충남|전북|전남|경북|경남)\s*)?"
     r"(?:[가-힣]{1,8}(?:시|군|구)\s+)+"
     r"(?:[가-힣]{1,8}(?:읍|면)\s+)?"
     r"(?:[가-힣0-9]{1,20}(?:로|길|동|리|가)\s*[\d\-]+(?:번지|호)?|[가-힣0-9]{1,20}(?:읍|면|동|가|로|길)\s*[\d\-]*(?:번지|호)?)"
-    r"(?:\s*,\s*|\s+)?(?:\d{1,4}동(?:\s*\d{1,4}호)?|\d{1,3}층(?:\s*\d{1,4}호)?|\d{1,4}호|[가-힣0-9]{1,15}(?:아파트|빌라|오피스텔|마을|단지|타운|맨션)(?:\s*\d{1,4}동\s*\d{1,4}호)?(?:\s*,\s*\d{1,4}호)?)?"
+    + _ADDR_DETAIL
 )
 # 소송대리인(변호사 사무소) 및 법원 주소 문맥 (주소 마스킹 제외용 정책 규칙)
 LAWYER_COURT_CONTEXT_RE = re.compile(
     r"(?:소송\s*대리인|대리인\s*변호사|법률\s*사무소|법무\s*법인|변호사\s*사무실|변호사\s*사무소|"
     r"(?:지방|고등|행정|가정|군사|회생|특허)?법원\s*(?:귀중|앞)?)"
+)
+# 소송대리인 및 담당변호사 성명 표지 (같은 줄 선행 법인명이나 별도 줄 배치 모두 허용)
+LAWYER_TITLE_RE = r"(?:담[ \t]*당[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*인|대[ \t]*리[ \t]*인[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*사)"
+LAWYER_NAME_RE = re.compile(
+    rf"(?<![가-힣])(?:{LAWYER_TITLE_RE})[ \t]*[:：]?[ \t]+"
+    r"((?:[가-힣][ \t]){1,3}[가-힣]|[가-힣]{2,4})"
+    r"(?=[ \t]*(?:[(（\n\r,.;]|$|[ \t]+(?:귀하|배석|소송|인|변호사|법무법인)))"
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
 JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
@@ -290,6 +315,42 @@ def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool
     return span_start <= start and end <= span_end
 
 
+def is_lawyer_court_address_context(text: str, start: int, end: int) -> bool:
+    """주소 구간이 소송대리인(변호사 사무소) 또는 법원 주소 문맥에 위치하는지 검사한다.
+
+    블록 경계를 넘거나 최대 3줄(250자) 범위 내에서 소송대리인이나 법원 표지가 존재하는지 확인하며,
+    도중에 당사자 본인(원고, 피고 등)의 인적사항 라벨이 새로 시작되면 해당하지 않는 것으로 본다.
+    """
+    start_line = text.rfind("\n", 0, start)
+    start_line = 0 if start_line < 0 else start_line + 1
+    end_line = text.find("\n", end)
+    end_line = len(text) if end_line < 0 else end_line
+    line_context = text[start_line:end_line]
+
+    # 당사자 본인의 직접적인 인적사항 라벨 줄이면 대리인/법원 주소가 아님
+    if re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", line_context.strip()):
+        return False
+
+    # 현재 줄에 소송대리인/법원 표지가 있는 경우
+    if LAWYER_COURT_CONTEXT_RE.search(line_context):
+        return True
+
+    # 앞선 최대 3줄(최대 250자) 범위의 문맥 수집
+    lookback_start = max(0, start_line - 250)
+    prev_text = text[lookback_start:start_line]
+    prev_lines = [l for l in prev_text.splitlines() if l.strip()]
+    context_lines = prev_lines[-3:] if len(prev_lines) >= 3 else prev_lines
+
+    # 이전 줄 중 가장 가까운 인적사항 라벨 역순 확인
+    for pl in reversed(context_lines):
+        if re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", pl.strip()):
+            return False
+        if LAWYER_COURT_CONTEXT_RE.search(pl):
+            return True
+
+    return False
+
+
 def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = None) -> List[PIIMatch]:
     """텍스트에서 개인정보 후보를 찾는다."""
     matches: List[PIIMatch] = []
@@ -324,21 +385,8 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                     continue  # 법인등록번호
             if kind == "ADDRESS":
                 # 소송대리인(변호사 사무소) 및 법원 주소는 마스킹하지 않고 보존한다(사용자 정책 결정).
-                start_line = text.rfind("\n", 0, start)
-                start_line = 0 if start_line < 0 else start_line + 1
-                end_line = text.find("\n", end)
-                end_line = len(text) if end_line < 0 else end_line
-                line_context = text[start_line:end_line]
-
-                prev_line_start = text.rfind("\n", 0, max(0, start_line - 1))
-                prev_line_start = 0 if prev_line_start < 0 else prev_line_start + 1
-                prev_line = text[prev_line_start:start_line]
-
-                full_context = prev_line + " " + line_context
-                if LAWYER_COURT_CONTEXT_RE.search(full_context):
-                    # 당사자(원고/피고 등)의 직접적인 인적사항 라벨 줄이 아니면 대리인/법원 주소로 보고 제외
-                    if not re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", line_context.strip()):
-                        continue
+                if is_lawyer_court_address_context(text, start, end):
+                    continue
             matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
 
     # 주민등록번호 라벨이 명시된 13자리 번호(변형/외국인/합성 포함) 포착
@@ -368,6 +416,21 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             continue
         # 가명은 띄어쓰기를 뺀 이름으로 만든다. 본문의 '최원석'과 머리의 '최 원 석'이 같은 가명을 받는다.
         matches.append(PIIMatch("PERSON", name, m.start(1), m.end(1), block_id, page, 0.8, "당사자 표시란"))
+
+    # 소송대리인 및 담당변호사 성명 (법인명 선행 등 같은 줄 배치 및 별도 줄 배치 모두 지원)
+    existing_spans = {(m.start, m.end) for m in matches}
+    for m in LAWYER_NAME_RE.finditer(text):
+        start, end = m.start(1), m.end(1)
+        if (start, end) in existing_spans or _covered_by_span(guard_spans, start, end):
+            continue
+        raw_name = m.group(1).strip()
+        clean_name = re.sub(r"\s+", "", raw_name)
+        if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS:
+            continue
+        if len(clean_name) < 2 or len(clean_name) > 4:
+            continue
+        matches.append(PIIMatch("PERSON", clean_name, start, end, block_id, page, 0.95, "담당변호사 라벨 문맥 성명"))
+        existing_spans.add((start, end))
 
     # 법인·기관 대표자/임원 직책 라벨 뒤 성명 (띄어쓴 성명 및 본문 인적사항란 일반 규칙)
     for m in REPRESENTATIVE_NAME_RE.finditer(text):

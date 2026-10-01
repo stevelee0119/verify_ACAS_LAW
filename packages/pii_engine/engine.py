@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from packages.common.enums import ExternalAIPolicy
 from packages.common.schemas import NormalizedDocument
 
-from .detector import PIIMatch, detect
+from .detector import PIIMatch, detect, is_lawyer_court_address_context
 from .pseudonym import PseudonymStore
 
 MIN_CONFIDENCE = 0.6
@@ -81,11 +81,18 @@ class PIIEngine:
         blocks = doc.body_blocks()
         # Labels and their values may be different table cells. Detect across the
         # assembled text, then map contained matches back to unchanged block spans.
-        contextual = [m for m in detect("\n".join(b.text for b in blocks)) if m.confidence >= MIN_CONFIDENCE]
+        assembled_text = "\n".join(b.text for b in blocks)
+        contextual = [m for m in detect(assembled_text) if m.confidence >= MIN_CONFIDENCE]
         offset = 0
         for block in blocks:
-            matches = [m for m in detect(block.text, block_id=block.block_id, page=block.page)
-                       if m.confidence >= MIN_CONFIDENCE]
+            raw_matches = [m for m in detect(block.text, block_id=block.block_id, page=block.page)
+                           if m.confidence >= MIN_CONFIDENCE]
+            # 블록 경계를 넘는 문맥 확인: 블록 단위로 탐지된 주소가 전체 문서 문맥상 소송대리인/법원 주소인 경우 보존
+            matches = []
+            for m in raw_matches:
+                if m.kind == "ADDRESS" and is_lawyer_court_address_context(assembled_text, offset + m.start, offset + m.end):
+                    continue
+                matches.append(m)
             spans = {(m.start, m.end) for m in matches}
             end_of_block = offset + len(block.text)
             for match in contextual:
