@@ -90,3 +90,27 @@ def _detected(text: str) -> bool:
     pytest.param(t, e, id=i, marks=[OPEN_TK26] if o else []) for i, t, e, o in UNSEEN_DOCTRINE])
 def test_unseen_doctrine_overclaim(text, expected):
     assert _detected(text) is expected
+
+
+# ------------------------------------------------------------ 3. 기준일 후보가 여럿이면 임의로 하나를 고르지 않는다(TK-27) ---
+# 외부 평가 의견(2026-10-01)을 평가 측이 재현했다. 계약 사건은 체결일·납기일 중 늦은 날짜, 처분 사건은 이른 날짜를 조용히 기준일로 정한다(`DOCUMENT_INFERRED`).
+# 행위일이 여럿이면 `AMBIGUOUS`로 두는 것(3차 Q1)과 같은 원칙을 적용해야 한다: 후보가 둘 이상이면 하나로 추정하지 않고 후보를 모두 보존한다.
+REFERENCE_CASES = [
+    ("contract-two-dates", "원고와 피고는 2023. 5. 30. 공급계약을 체결하였고, 납기는 2023. 12. 31.로 정하였다.", False,
+     pytest.mark.xfail(strict=True, reason="TK-27: 계약 사건의 후보 둘 중 늦은 날짜를 임의로 기준일로 추정(9933548)")),
+    ("disposition-two-dates", "피고는 2024. 5. 3. 1차 처분을 하였고, 2024. 7. 1. 재처분을 하였다.", False,
+     pytest.mark.xfail(strict=True, reason="TK-27: 처분 사건의 후보 둘 중 이른 날짜를 임의로 기준일로 추정(9933548)")),
+    ("offense-two-dates", "피고인은 2021. 6. 1. 횡령하였다. 피고인은 2022. 2. 3. 다시 횡령하였다.", True, None),   # 대조군: 이미 AMBIGUOUS
+]
+
+
+@pytest.mark.parametrize("text, criminal", [
+    pytest.param(t, c, id=i, marks=[m] if m else []) for i, t, c, m in REFERENCE_CASES])
+def test_reference_date_is_not_picked_arbitrarily_among_candidates(text, criminal):
+    from packages.legal_engine.temporal_review import document_reference_date
+
+    ref = document_reference_date(text, criminal=criminal)
+    kind = ref.get("kind")
+    same_kind = {c["date"] for c in ref.get("candidates", []) if c["kind"] == kind}
+    assert len(same_kind) >= 2, "시험 입력이 후보 둘을 만들지 못했다(시험 오류)"
+    assert ref.get("basis") != "DOCUMENT_INFERRED", f"후보 {sorted(same_kind)} 중 {ref.get('date')}를 기준일로 추정했다"

@@ -31,6 +31,7 @@
 | [TK-24](TK-24_unreasonable_argument_statutory_period.md) | 규칙 부족 | 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐 | `test_case9_check[*-LEG-2]` | 열림 |
 | [TK-25](TK-25_report_scope_and_coverage_notes.md) | 정책 이행 잔여 | AI 판정 축 `scope`가 흔적 0건이면 NOT_APPLICABLE, 커버리지·모델 실패 관찰 | 단위 시험 | 열림 |
 | [TK-26](TK-26_hardcoding_moved_to_config.md) | 하드코딩·일반화 불일치 | '법리 군집' 설정을 읽는 코드가 없고, 규칙은 시험 낱말만 담아 처음 보는 법리 7건 미탐, 시험 서면 문장이 설정에 복사됨 | `test_generalization_guards.py`, 리터럴 부채 감소 | 열림 |
+| [TK-27](TK-27_reference_date_arbitrary_pick.md) | 불확실성 보존 | 기준일 후보가 여럿이면 계약은 늦은 날짜·처분은 이른 날짜를 임의로 고름 | `test_reference_date_is_not_picked_arbitrarily…` | 열림 |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
