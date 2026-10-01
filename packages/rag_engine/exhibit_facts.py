@@ -52,6 +52,34 @@ def check_exhibit_facts_generic(document: str, sources: List[Dict[str, Any]]) ->
     return observations
 
 
+import json
+from pathlib import Path
+from packages.common.config import CONFIG_DIR
+
+_TIMING_GROUPS_CACHE: Optional[Dict[str, List[str]]] = None
+
+
+def _get_timing_groups(context: str) -> set[str]:
+    """텍스트에서 해당하는 시점 군들을 추출한다 (같은 군 = 같은 시점)."""
+    global _TIMING_GROUPS_CACHE
+    if _TIMING_GROUPS_CACHE is None:
+        cfg_file = CONFIG_DIR / "timing_groups.json"
+        if cfg_file.exists():
+            try:
+                data = json.loads(cfg_file.read_text(encoding="utf-8"))
+                _TIMING_GROUPS_CACHE = data.get("groups", {})
+            except Exception:
+                _TIMING_GROUPS_CACHE = {}
+        else:
+            _TIMING_GROUPS_CACHE = {}
+
+    matched = set()
+    for grp_name, keywords in _TIMING_GROUPS_CACHE.items():
+        if any(kw in context for kw in keywords):
+            matched.add(grp_name)
+    return matched
+
+
 def _check_vital_measurements(document: str, text: str, s_id: str) -> Optional[Dict[str, Any]]:
     """혈압 등 활력징후 측정 수치의 불일치 여부를 문맥 기반으로 대조한다.
 
@@ -85,15 +113,11 @@ def _check_vital_measurements(document: str, text: str, s_id: str) -> Optional[D
         if def_pattern.search(claim_context) or def_pattern.search(src_context):
             return None
 
-        # 2. 서로 다른 시점 표기 배제: 측정 시점(이송, 내원, 초진, 수술 등)이 다르면 불일치가 아님
-        timing_keywords = ("초진", "내원", "이송", "도착", "수술", "퇴원", "발병", "사고", "투약", "1차", "2차", "직후", "직전")
-        claim_timings = {k for k in timing_keywords if k in claim_context}
-        src_timings = {k for k in timing_keywords if k in src_context}
-        if claim_timings and src_timings and not (claim_timings & src_timings):
-            # 서로 다른 시점이 명시된 경우 불일치 관찰 생성 배제
-            return None
-        if (claim_timings or src_timings) and not (claim_timings & src_timings):
-            # 한쪽에만 구체적 시점 라벨이 있고 다른 쪽에는 없는 경우도 시점 특정 불가로 배제
+        # 2. 서로 다른 시점 표기 배제 (TK-19 2절: 같은 시점 군은 같은 시점, 양쪽 모두 시점 군이 명시되고 서로 다른 군일 때만 배제)
+        claim_groups = _get_timing_groups(claim_context)
+        src_groups = _get_timing_groups(src_context)
+        if claim_groups and src_groups and not (claim_groups & src_groups):
+            # 양쪽 모두 시점 군이 명시되었고, 서로 다른 시점 군인 경우만 불일치 관찰 생성 배제
             return None
 
         claim_str = f"{claim_sys}/{claim_dia} mmHg"
