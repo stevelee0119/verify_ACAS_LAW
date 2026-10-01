@@ -16,7 +16,14 @@
 피고는 2024. 5. 3. 법령에 따라 징계처분을 하였다.            ['2024-05-03'] → []      (처분일 후보 소실)
 피고인은 2021. 6. 1. 정직하게 신고하였다고 주장한다.         []             → ['2021-06-01'] (반대로 과잉 추출: 형용사 '정직하게'를 처분 '정직'으로 읽음, DISPOSITION_AFTER_RE 확장)
 ```
-횡령·배임 사건의 가장 흔한 문장 모양이라 **행위시법 검토가 조용히 꺼진다**. 기존 시험 `tests/test_v4_review_temporal.py::test_unknown_reference_date_is_a_temporal_review_warning_with_candidates`가 이로 인해 실패한다(범행일 후보 2개 중 1개만 남아 '기준일 불명'이 아니라 단일 날짜 판정으로 넘어감).
+횡령·배임 사건의 가장 흔한 문장 모양이다. 영향은 두 갈래이고, **두 번째가 더 위험하다**(외부 평가 의견을 받아 평가 측이 재현·확인함; 처음 적은 "조용히 꺼진다"는 부정확해 정정한다).
+```
+입력                                                      cf7c739                          de243cc
+날짜 1개  `피고인은 2021. 6. 1. 횡령하였다.`                    기준일 2021-06-01 추정             기준일 MISSING → UNVERIFIED·TEMPORAL_REVIEW·LOW(경고는 남음, HIGH 판정이 LOW로 약해짐)
+날짜 2개  `피고인은 2021. 6. 1. 횡령하였다. 피고인은 2022. 2. 3. 다시 횡령하였다.`
+                                                          후보 2개 유지 → UNVERIFIED·TEMPORAL_REVIEW(기준일 불명)   첫 날짜를 버리고 2022-02-03만 기준일로 추정 → **VERIFIED·REFERENCE_VERSION_MATCH·INFO(시험용 조문과 일치로 확정)**
+```
+날짜 2개 입력에서 **불확실한 상태가 확인된 상태로 바뀐다**(판정이 틀릴 때 사용자가 확인하지 않고 넘어갈 수 있다). 기존 시험 `tests/test_v4_review_temporal.py::test_unknown_reference_date_is_a_temporal_review_warning_with_candidates`가 이로 인해 실패한다.
 - 요구: 법령 개정·시행 표지는 **구조적 신호**(공포·시행·개정 동사, 법령번호 `제N호`, 「」로 싼 이름, 조문 번호와의 결합)로 잡고, 날짜 뒤의 임의 한글 낱말 끝음절(법·령·규칙)로 법령명을 판정하지 않는다.
 - 수용: `tests/acceptance/test_variant_generalization.py::test_reference_date_candidate_is_kept` 4건 중 xfail 2건(`embezzle-verb`, `unlawful-method`)이 XPASS, 위 v4 시험 통과.
 

@@ -40,7 +40,7 @@
 
 ## 2. 작업 묶음 (이 순서로, 묶음마다 커밋)
 
-### Q1. 기준일 후보 소실 회귀 (TK-19 1절) ← 먼저, 판정에 영향
+### Q1. 기준일 후보 소실 회귀 — 불확실을 확정으로 바꿈 (TK-19 1절) ← 먼저
 - **증거(평가 측 재현, 날짜 후보 cf7c739 → de243cc):**
   ```
   피고인은 2021. 6. 1. 횡령하였다.                   ['2021-06-01'] → []   (기준일 MISSING, 행위시법 검토가 꺼짐)
@@ -48,10 +48,11 @@
   피고는 2024. 5. 3. 법령에 따라 징계처분을 하였다.       ['2024-05-03'] → []
   피고인은 2021. 6. 1. 정직하게 신고하였다고 주장한다.    []            → ['2021-06-01']  (반대로 과잉)
   ```
+  **영향(평가 측 재현):** 날짜 2개(`…2021. 6. 1. 횡령하였다. …2022. 2. 3. 다시 횡령하였다.`)에서 cf7c739는 후보 2개를 유지하고 "기준일 불명"(UNVERIFIED)으로 표시했는데, de243cc는 첫 날짜를 버리고 둘째 날짜만 기준일로 삼아 **VERIFIED(조문 일치)**로 확정한다. 불확실을 확실로 바꾸는 오류라 이 묶음이 가장 먼저다. 날짜 1개는 기준일 MISSING으로 HIGH 판정이 LOW 경고로 약해진다.
   원인: 6e5cd78이 `temporal_review.LAW_DATE_AFTER_RE`에 넣은 `[가-힣]+(법률|법|령|규칙)` 가지가 날짜 뒤 임의 낱말의 끝음절(`횡령`·`방법`)을 법령명으로 읽는다. 같은 커밋의 `DISPOSITION_AFTER_RE` 확장이 형용사 `정직하게`를 처분 `정직`으로 읽는다. 기존 시험 `tests/test_v4_review_temporal.py::test_unknown_reference_date_is_a_temporal_review_warning_with_candidates`가 실패한다.
 - **개선:** 법령 개정·시행 표지는 **구조 신호의 조합**으로 잡는다: 변경 동사(개정·시행·공포·제정·신설) 근접, 법령번호 `제N호`, 「」·『』로 싼 이름, 뒤따르는 조문 번호. 날짜 뒤 임의 낱말의 끝음절로 법령명을 판정하지 않는다. 처분 종류 낱말은 **처분 행위와 결합할 때만**(`…처분을 하였다`, `…에 처하였다`, `…N월의 처분`) 처분일 후보로 센다.
 - **감사표(필수):** 2차에 넓힌 정규식 — `LAW_DATE_AFTER_RE`, `DISPOSITION_AFTER_RE`, `CONTRACT_SENTENCE_RE`, `_LAW_NAME`, `DECLARED_AMENDMENT_RES`, `classifier.is_bracket_directive`, `patterns.py`의 구조적 인젝션 가지, `rules.json`의 새 규칙 `pattern` — 각각에 **법·령·규칙·정직·시행·개정·승인·상태 같은 낱말이 일반 용법으로 들어간 문장 5개씩**(구현 측이 새로 지은 것)을 넣어 cf7c739와 현재의 결과를 비교한 표를 커밋 메시지나 `requests/`에 남긴다. 차이가 있으면 원인을 적는다.
-- **수용:** `tests/test_v4_review_temporal.py` 위 시험이 **시험 변경 없이** 통과, `tests/acceptance/test_variant_generalization.py::test_reference_date_candidate_is_kept` 2건 XPASS, 구현 측 새 시험(양성 5·대조군 3, 평가 측 입력과 겹치지 않게), 감사표.
+- **수용:** `tests/test_v4_review_temporal.py` 위 시험이 **시험 변경 없이** 통과, `tests/acceptance/test_variant_generalization.py::test_reference_date_candidate_is_kept` 2건 XPASS, `::test_two_offense_dates_are_never_verified` XPASS(행위일 둘이 VERIFIED로 확정되지 않음), 구현 측 새 시험(양성 5·대조군 3, 평가 측 입력과 겹치지 않게), 감사표.
 
 ### Q2. 시점 비교: 같은 시점 군은 같은 시점 (TK-19 2절)
 - **증거:** `exhibit_facts._check_vital_measurements`가 시점 낱말을 `초진·내원·…` 목록으로 비교해, `내원 당시 ↔ 초진`(같은 시점)과 한쪽만 라벨이 있는 경우를 배제한다. 실패 시험: `test_exhibit_facts_generic::test_vital_measurements_positive`, `test_case5…::test_case5_rag_exhibit_facts_contradiction_detection`(정답지가 요구한 수치 모순 1건이 사라짐).
@@ -119,7 +120,7 @@
 ```
 python scripts/scorecard.py && python scripts/score_gate.py                  # 기준 79.9/77.3 이상, 오탐 0 (현재 81.7/79.2)
 python scripts/check_case_literals.py                                         # 새 위반 0
-python -m pytest tests/acceptance -q -rxX                                     # 현재 xfail 8건(변형 2 5, 서면8 text-LEG-1, 기준일 2). XPASS 실패는 requests로 알림
+python -m pytest tests/acceptance -q -rxX                                     # 현재 xfail 9건(변형 2 5, 서면8 text-LEG-1, 기준일 후보 2, 행위일 둘 VERIFIED 1). XPASS 실패는 requests로 알림
 python -m pytest -q --ignore=tests/acceptance                                 # 실패는 환경 1건(test_v5_ocr_dates)·TK-12 2건·test_sec01(Q4, 결정 대기) 외 0
 python scripts/probe_document.py run --spec tests/fixtures/probes/variant2_food_license.json --text   # 현재 16/21, 목표 21/21
 python scripts/probe_document.py run --spec tests/fixtures/probes/variant1_discipline.json --text     # 24/24 유지

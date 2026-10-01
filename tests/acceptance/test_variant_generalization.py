@@ -204,3 +204,24 @@ def test_reference_date_candidate_is_kept(text, expected_date):
     from packages.legal_engine.temporal_review import reference_candidates
 
     assert expected_date in {c["date"] for c in reference_candidates(text)}
+
+
+# ------------------------------------------------------------ 불확실을 확정으로 바꾸지 않는다(TK-19) ---
+# 외부 평가 의견(2026-10-01)을 평가 측이 재현했다. 행위일이 둘이면 cf7c739는 기준일 불명(UNVERIFIED)으로 두었는데,
+# de243cc는 첫 날짜를 버리고 둘째 날짜로 기준일을 정해 VERIFIED(조문 일치)로 확정한다.
+def _temporal_helpers():
+    spec = importlib.util.spec_from_file_location("v4_temporal_helpers", ROOT / "tests" / "test_v4_review_temporal.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.xfail(strict=True, reason="TK-19: 행위일이 둘인데 첫 날짜를 버리고 VERIFIED로 확정(de243cc)")
+def test_two_offense_dates_are_never_verified():
+    helpers = _temporal_helpers()
+    citation = helpers.cite("가상형사법", "5", "는 업무상 횡령을 7년 이하의 징역에 처한다")
+    text = "피고인은 2021. 6. 1. 횡령하였다. 피고인은 2022. 2. 3. 다시 횡령하였다."
+    reference = helpers.reference_for(citation, "", text, None, criminal=True)
+    finding = helpers.review_temporal_application(citation, helpers.VERSIONS, reference, criminal=True)
+    status = getattr(finding.status, "value", finding.status)
+    assert status != "VERIFIED", f"기준일 {reference.get('date')} ({reference.get('basis')}) 로 {status} 확정"
