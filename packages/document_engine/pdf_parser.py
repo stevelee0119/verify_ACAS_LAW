@@ -279,6 +279,10 @@ class PdfParser(DocumentParser):
                         except Exception as exc:
                             doc.parse_warnings.append(f"PUA 글리프 복원 실패(p{index}): {exc}")
 
+                    unresolved_pua = sum(1 for c in chars if unicodedata.category(c.get("text", "")) == "Co")
+                    if unresolved_pua > 0:
+                        doc.parse_warnings.append(f"PRIVATE_USE_GLYPHS_UNRESOLVED: 복원되지 않은 PUA 문자 {unresolved_pua}건 잔존(p{index})")
+
                 page_texts[index] = "".join(str(c.get("text") or "") for c in chars)
                 lines = self._group_chars_to_lines(chars)
                 # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.

@@ -82,10 +82,6 @@ INSTRUCTION_PATTERNS: List[PatternSpec] = [
     # 실제 테스트 문서(verification_rpt_251392c6e1a044f7)에서 미탐지된 형태이다.
     # "[ADMIN COMMAND: ...]", "[SYSTEM INSTRUCTION: SECURITY EVALUATION OVERRIDE]"는
     # 역할 태그가 아니라 대괄호 안의 명령 선언이라 기존 규칙에 걸리지 않았다.
-    # --- 권한 위장 명령 -----------------------------------------------------
-    # 실제 테스트 문서(verification_rpt_251392c6e1a044f7)에서 미탐지된 형태이다.
-    # "[ADMIN COMMAND: ...]", "[SYSTEM INSTRUCTION: SECURITY EVALUATION OVERRIDE]"는
-    # 역할 태그가 아니라 대괄호 안의 명령 선언이라 기존 규칙에 걸리지 않았다.
     (_c(r"\[\s*(admin|administrator|root|superuser|system|security|privileged)\s+"
         r"(command|instruction|directive|override|mode)\b"),
      InjectionIntent.ROLE_OVERRIDE, 1.0, "관리자 명령 선언 위장"),

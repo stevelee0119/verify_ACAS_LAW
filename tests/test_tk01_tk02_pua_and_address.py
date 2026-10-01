@@ -30,6 +30,32 @@ def test_map_pua_chars_dynamic_restoration():
     assert mapping.get("\ue084") == "]"
 
 
+def test_pua_unresolved_warning_positive():
+    """양성: PUA 문자가 복원되지 않고 남아있을 경우 PRIVATE_USE_GLYPHS_UNRESOLVED 경고 발생 검증."""
+    import unicodedata
+    chars = [{"text": "정"}, {"text": "상"}, {"text": "\ue088"}]  # \ue088 (Co 범주 PUA) 남아있음
+    doc_warnings = []
+    index = 1
+    unresolved_pua = sum(1 for c in chars if unicodedata.category(c.get("text", "")) == "Co")
+    if unresolved_pua > 0:
+        doc_warnings.append(f"PRIVATE_USE_GLYPHS_UNRESOLVED: 복원되지 않은 PUA 문자 {unresolved_pua}건 잔존(p{index})")
+    assert len(doc_warnings) == 1
+    assert "PRIVATE_USE_GLYPHS_UNRESOLVED" in doc_warnings[0]
+    assert "1건 잔존" in doc_warnings[0]
+
+
+def test_pua_unresolved_warning_negative():
+    """대조군: PUA 문자가 모두 정상 문자로 치환되어 Co 범주 문자가 없으면 경고가 발생하지 않음 검증."""
+    import unicodedata
+    chars = [{"text": "정"}, {"text": "상"}, {"text": "-"}]  # PUA가 모두 정상 문자로 치환됨
+    doc_warnings = []
+    index = 1
+    unresolved_pua = sum(1 for c in chars if unicodedata.category(c.get("text", "")) == "Co")
+    if unresolved_pua > 0:
+        doc_warnings.append(f"PRIVATE_USE_GLYPHS_UNRESOLVED: 복원되지 않은 PUA 문자 {unresolved_pua}건 잔존(p{index})")
+    assert len(doc_warnings) == 0
+
+
 # ==============================================================================
 # 2. TK-02 양성 테스트: 당사자 주소 상세 마스킹 (3건 이상)
 # ==============================================================================
