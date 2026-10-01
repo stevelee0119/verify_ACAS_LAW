@@ -1360,9 +1360,10 @@ def _is_line_break_marker(text: str, data: bytes, end: int, routine: Optional[Di
     if counts.get((font, hex_glyph), 0) >= ROUTINE_GLYPH_MIN:
         return True
 
-    # 2. 목록 항목 태그(/LI) 내부의 공백 글리프(<0003>, <0020> 등)인 경우 (Google Docs 목록 번호 경계)
+    # 2. 목록 항목 태그(/LI) 내부에서 목록 번호 뒤의 단일 글리프 경계인 경우 (Google Docs 목록 번호 경계)
+    # 특정 글꼴의 글리프 코드(0003, 0020 등)를 하드코딩하지 않고, 태그 구조(/LI)와 독립 블록(is_et)으로 일반화
     before_span = data[max(0, end - 300):end]
-    if re.search(rb"/LI\s*<<", before_span) and hex_glyph in (b"0003", b"0020", b"06D3"):
+    if re.search(rb"/LI\s*<<", before_span):
         return True
 
     return False

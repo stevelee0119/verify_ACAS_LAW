@@ -119,6 +119,29 @@ def test_zwsp_covering_multiple_glyphs_positive():
     assert markers.get("U+200B ZERO WIDTH SPACE", 0) == 0
 
 
+def test_zwsp_mixed_with_other_chars_positive():
+    """양성 5: ActualText에 U+200B 외에 다른 문자가 혼합되어 있는 경우(ZWSP+ZWNJ)."""
+    # <FEFF200B200C> : ZWSP(200B) + ZWNJ(200C)
+    stream = (
+        ROUTINE_SPACES
+        + b"BT\n"
+        b"/Span<</ActualText <FEFF200B200C> >> BDC\n"
+        b"/F6 12 Tf\n"
+        b"<0003> Tj\n"
+        b"EMC\n"
+        b"ET\n"
+    )
+    markers = {}
+    counts = _actual_text_zero_width(
+        b"stream\n" + stream + b"\nendstream",
+        collect=False,
+        line_break_markers=markers,
+    )
+    assert counts.get("U+200B ZERO WIDTH SPACE", 0) == 1
+    assert counts.get("U+200C ZERO WIDTH NON-JOINER", 0) == 1
+    assert markers.get("U+200B ZERO WIDTH SPACE", 0) == 0
+
+
 # ==============================================================================
 # 2. 대조군 테스트: 정상적인 줄바꿈 및 목록 경계 표시 (3건 이상)
 # ==============================================================================
