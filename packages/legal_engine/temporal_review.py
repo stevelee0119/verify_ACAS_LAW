@@ -501,16 +501,11 @@ def document_reference_date(text: str, *, criminal: bool) -> Dict[str, Any]:
     dates = sorted({c["date"] for c in candidates if c["kind"] == kind})
     if len(dates) == 1:
         chosen = dates[0]
-    elif len(dates) > 1 and kind == "CONTRACT":
-        # 계약 사건(계약일·납기일 등): 소급적용 검토를 위해 최종 이행일(납기일)을 기준일로 설정
-        chosen = max(dates)
-    elif len(dates) > 1 and kind == "DISPOSITION":
-        # 행정 사건: 처분의 최초 성립 시점을 기준일로 설정
-        chosen = min(dates)
-    else:
-        return {"date": None, "basis": "AMBIGUOUS", "kind": kind, "candidates": candidates}
-    return {"date": chosen, "basis": "DOCUMENT_INFERRED", "kind": kind, "candidates": candidates,
-            "note": f"문서에서 {REFERENCE_KINDS[kind]}로 추정한 {chosen}을 기준일로 썼다(추정 기준일)"}
+        return {"date": chosen, "basis": "DOCUMENT_INFERRED", "kind": kind, "candidates": candidates,
+                "note": f"문서에서 {REFERENCE_KINDS[kind]}로 추정한 {chosen}을 기준일로 썼다(추정 기준일)"}
+    # 후보가 둘 이상이면 임의로 하나를 고르지 않고 불확실성을 보존한다(TK-27)
+    return {"date": None, "basis": "AMBIGUOUS", "kind": kind, "candidates": candidates, "dates": dates,
+            "note": f"문서에서 {REFERENCE_KINDS[kind]} 후보가 여러 개({', '.join(dates)}) 있어 특정하지 않았다"}
 
 
 def _official_history_check(adapter, declared: Dict[str, Any]) -> Dict[str, Any]:
@@ -558,11 +553,36 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
                                document_id: Optional[str] = None) -> List[Finding]:
     """서면이 밝힌 시행일이 기준일(행위일) 뒤인 조항을 행위에 적용하라고 주장하는 경우를 알린다."""
     when = reference.get("date")
+    basis_type = reference.get("basis")
+    candidates = reference.get("candidates", [])
+    kind = reference.get("kind")
+    candidate_dates = sorted({c["date"] for c in candidates if c.get("kind") == kind}) if kind else []
+
     findings: List[Finding] = []
     for declared in declared_amendments(text):
         effective = declared["effective"]
-        if not when or not effective or effective <= when:
+        if not effective:
             continue
+
+        # 단일 기준일 vs 복수 기준일 후보 판정
+        is_ambiguous = False
+        if when:
+            if effective <= when:
+                continue
+            date_label = when
+        elif basis_type == "AMBIGUOUS" and candidate_dates:
+            # 개정·시행일이 모든 후보보다 뒤인 경우: 근거 강함 (소급 적용 주장 확실)
+            if all(effective > d for d in candidate_dates):
+                date_label = f"후보 전체({', '.join(candidate_dates)})"
+            # 개정·시행일이 일부 후보보다만 뒤인 경우: 불확실 (사람 확인)
+            elif any(effective > d for d in candidate_dates):
+                is_ambiguous = True
+                date_label = f"후보 일부({', '.join(d for d in candidate_dates if effective > d)})"
+            else:
+                continue
+        else:
+            continue
+
         start, end = declared["span"]
         context = text[max(0, start - 80):min(len(text), end + 400)]
         # 구법·행위시법 논의는 개정 이력을 적은 문장부터 뒤에서만 본다(앞 표제의 '행위시법'은 주장이 아니다).
@@ -580,6 +600,11 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
                              "공식 연혁의 같은 번호 개정과 공포일·시행일이 다르다: "
                              + "; ".join(f"{r['promulgation_date']} 공포·{r['effective_from']} 시행" for r in official["matches"]))
             tail = "공식 연혁과 다른 개정 이력에 근거한 소급 적용 주장"
+        elif is_ambiguous:
+            status, grade, severity = VerificationStatus.UNVERIFIED, EvidenceGrade.B, Severity.MEDIUM
+            official_note = ("적힌 개정 이력은 공식 연혁과 일치하나, 기준일 후보가 여럿이어 적용 여부는 사람이 확인해야 한다."
+                             if official["status"] == "MATCH" else f"공식 연혁 대조 미실행: {official.get('reason', '')}")
+            tail = "기준일 후보 일부 이후 시행 조항에 근거한 주장(기준일 특정 확인 필요)"
         else:
             status, grade, severity = VerificationStatus.SUSPICIOUS, EvidenceGrade.B, Severity.HIGH
             official_note = ("적힌 개정 이력은 공식 연혁과 일치한다. 조문 내용은 인용 검증 결과를 따로 본다."
@@ -597,19 +622,19 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
             basis = CIVIL_TIME_BASIS
         findings.append(Finding.create(
             type=FindingType.TEMPORAL_LAW_MISMATCH, status=status, severity=severity, evidence_grade=grade,
-            title=(f"법령 적용 시점 검토: {label} — 시행일 {effective}이 기준일({when}, "
+            title=(f"법령 적용 시점 검토: {label} — 시행일 {effective}이 기준일({date_label}, "
                    f"{REFERENCE_KINDS.get(reference.get('kind'), '입력 기준일')}) 뒤인데 {tail} (RETROACTIVE_APPLICATION_ERROR)"),
             detail=" ".join(_sentence(x) for x in (
                 stated, reference.get("note") or "", official_note, basis,
                 "적힌 조항이 실제로 행위에 적용되는지(유리한 신법·부칙·경과규정)는 법률 판단이므로 결론을 내리지 않는다.") if x),
-            confidence=0.85 if status == VerificationStatus.CONTRADICTED else 0.7,
+            confidence=0.85 if status == VerificationStatus.CONTRADICTED else (0.5 if is_ambiguous else 0.7),
             confidence_features={"deterministic_rule": True, "rule_id": "TEMPORAL.POST_OFFENSE_AMENDMENT_RELIANCE",
                                  "defect_code": "RETROACTIVE_APPLICATION_ERROR", "declared": {
                                      k: declared[k] for k in ("law_name", "article", "paragraph", "kind", "number",
                                                               "promulgated", "effective")},
-                                 "reference_date": when, "reference_basis": reference.get("basis"),
+                                 "reference_date": when or candidate_dates, "reference_basis": reference.get("basis"),
                                  "reference_kind": reference.get("kind"), "official_history": official,
-                                 "legal_basis": [basis], "human_review": True},
+                                 "legal_basis": [basis], "human_review": True, "is_ambiguous_candidates": is_ambiguous},
             document_id=document_id, span=declared["span"], engine=ENGINE_NAME,
             tags=["LEGAL", "STATUTE", "TEMPORAL", "RETROACTIVE_APPLICATION_ERROR"],
             evidence=[Evidence.create(description="서면의 개정 이력 기재", grade=EvidenceGrade.B,

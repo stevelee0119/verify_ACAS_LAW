@@ -89,6 +89,9 @@ LEDGER_RECORDS = [
     ("TK-23", "STATUTE_NONEXISTENT_CONTROL", True, "공식 법령 목록에 없는 가공민사소송법", "기존 CRITICAL 유지 (대조군)"),
     ("TK-26", "DEFENSE_OVERCLAIM_POSITIVE", True, "헌법 제19조 양심의 자유에 따라 징계는 당연무효", "과대주장 탐지"),
     ("TK-26", "DEFENSE_OVERCLAIM_CONTROL", False, "정당방위 요건인 상당한 이유를 입증합니다", "과대주장 미탐"),
+    ("TK-27", "REFERENCE_DATE_ALL_CANDIDATES_POST", True, "개정일이 모든 후보보다 뒤인 경우 소급적용", "SUSPICIOUS HIGH 탐지"),
+    ("TK-27", "REFERENCE_DATE_SPLIT_CANDIDATES", True, "개정일이 후보 사이에 끼는 경우", "UNVERIFIED 사람 확인"),
+    ("TK-27", "REFERENCE_DATE_SINGLE_CANDIDATE_CONTROL", False, "단일 후보 날짜", "DOCUMENT_INFERRED 단일 추정"),
 ]
 
 
@@ -579,8 +582,109 @@ def test_tk23_statute_nonexistent_control(statute_name: str):
     assert finding.severity == Severity.CRITICAL, f"가공 법령에 CRITICAL이 유지되지 않음: {finding.severity}"
 
 
+
 # ===========================================================================
-# 10. 원장 종합 무결성 검증
+# 10. TK-27: 기준일 후보 불확실성 보존 및 개정일 대조 (양성 6건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text, criminal, kind",
+    [
+        (
+            "원고와 피고는 2023. 5. 30. 공급계약을 체결하였고, 납기는 2023. 12. 31.로 정하였다.\n"
+            "2025. 1. 1. 개정된 방위사업법 시행규칙 제75조를 소급 적용하여야 한다.",
+            False,
+            "CONTRACT",
+        ),
+        (
+            "피고 행정청은 2024. 5. 3. 1차 처분을 하였고, 2024. 7. 1. 재처분을 하였다.\n"
+            "2025. 1. 1. 개정된 식품위생법 제75조를 소급 적용하여야 한다.",
+            False,
+            "DISPOSITION",
+        ),
+        (
+            "피고인은 2021. 6. 1. 횡령하였다. 피고인은 2022. 2. 3. 다시 횡령하였다.\n"
+            "2023. 1. 1. 개정된 형법 제355조를 소급 적용하여야 한다.",
+            True,
+            "OFFENSE",
+        ),
+    ],
+)
+def test_tk27_reference_date_all_candidates_positive(text: str, criminal: bool, kind: str):
+    """TK-27 양성: 기준일 후보가 둘 이상이어도 개정·시행일이 모든 후보보다 뒤이면 SUSPICIOUS HIGH 판정."""
+    from packages.common.enums import Severity, VerificationStatus
+    from packages.legal_engine.temporal_review import document_reference_date, review_declared_amendments
+
+    ref = document_reference_date(text, criminal=criminal)
+    assert ref.get("basis") == "AMBIGUOUS"
+    assert ref.get("date") is None
+    assert len(ref.get("dates", [])) >= 2
+
+    findings = review_declared_amendments(text, ref, criminal=criminal)
+    assert len(findings) >= 1
+    finding = findings[0]
+    assert finding.status in (VerificationStatus.SUSPICIOUS, VerificationStatus.CONTRADICTED)
+    assert finding.severity == Severity.HIGH
+
+
+@pytest.mark.parametrize(
+    "text, criminal, kind",
+    [
+        (
+            "원고와 피고는 2023. 5. 30. 공급계약을 체결하였고, 납기는 2023. 12. 31.로 정하였다.\n"
+            "2023. 8. 1. 개정된 방위사업법 시행규칙 제75조를 소급 적용하여야 한다.",
+            False,
+            "CONTRACT",
+        ),
+        (
+            "피고 행정청은 2024. 5. 3. 1차 처분을 하였고, 2024. 7. 1. 재처분을 하였다.\n"
+            "2024. 6. 1. 개정된 식품위생법 제75조를 소급 적용하여야 한다.",
+            False,
+            "DISPOSITION",
+        ),
+        (
+            "피고인은 2021. 6. 1. 횡령하였다. 피고인은 2022. 2. 3. 다시 횡령하였다.\n"
+            "2021. 10. 1. 개정된 형법 제355조를 소급 적용하여야 한다.",
+            True,
+            "OFFENSE",
+        ),
+    ],
+)
+def test_tk27_reference_date_split_candidates_positive(text: str, criminal: bool, kind: str):
+    """TK-27 양성: 개정·시행일이 후보 날짜들 사이에 끼는 경우 단정하지 않고 UNVERIFIED 및 사람 확인."""
+    from packages.common.enums import Severity, VerificationStatus
+    from packages.legal_engine.temporal_review import document_reference_date, review_declared_amendments
+
+    ref = document_reference_date(text, criminal=criminal)
+    assert ref.get("basis") == "AMBIGUOUS"
+    assert ref.get("date") is None
+    assert len(ref.get("dates", [])) >= 2
+
+    findings = review_declared_amendments(text, ref, criminal=criminal)
+    assert len(findings) >= 1
+    finding = findings[0]
+    assert finding.status == VerificationStatus.UNVERIFIED
+    assert finding.severity == Severity.MEDIUM
+
+
+@pytest.mark.parametrize(
+    "text, criminal, expected_date",
+    [
+        ("원고와 피고는 2023. 5. 30. 공급계약을 체결하였다.", False, "2023-05-30"),
+        ("피고 행정청은 2024. 5. 3. 영업정지처분을 하였다.", False, "2024-05-03"),
+        ("피고인은 2021. 6. 1. 금원을 횡령하였다.", True, "2021-06-01"),
+    ],
+)
+def test_tk27_reference_date_single_candidate_control(text: str, criminal: bool, expected_date: str):
+    """TK-27 대조군: 단일 후보 날짜는 기존처럼 DOCUMENT_INFERRED 단일 추정 기준일로 설정."""
+    from packages.legal_engine.temporal_review import document_reference_date
+
+    ref = document_reference_date(text, criminal=criminal)
+    assert ref.get("basis") == "DOCUMENT_INFERRED"
+    assert ref.get("date") == expected_date
+
+
+# ===========================================================================
+# 11. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -599,3 +703,4 @@ def test_ledger_records_integrity():
     assert "TK-22" in ticket_ids
     assert "TK-23" in ticket_ids
     assert "TK-26" in ticket_ids
+    assert "TK-27" in ticket_ids
