@@ -41,12 +41,13 @@ DATE_RE = re.compile(r"(?P<y>(?:19|20)\d{2})\s*[.년]\s*(?P<m>\d{1,2})\s*[.월]\
 # 문서가 행위(범행)일로 적은 날짜: '피고인은 2021. 6. 1. …', '2021. 6. 1. … 범행·횡령·공소사실'
 ACT_SUBJECT_RE = re.compile(r"(?:피고인|피의자|행위자)\s*(?:은|는|이|가)?\s*$")
 ACT_SENTENCE_RE = re.compile(r"공소사실|범행|횡령|절취|편취|폭행|배임|사기|위반행위")
-DISPOSITION_AFTER_RE = re.compile(r"^[^.\n]{0,20}?(?:처분|부과|징계)")
+DISPOSITION_AFTER_RE = re.compile(r"^[^.\n]{0,20}?(?:처분|부과|징계|해임|파면|강등|정직|감봉|견책)")
+DISPOSITION_BEFORE_RE = re.compile(r"(?:처분일(?:자)?|징계일(?:자)?|해임(?:처분)?일(?:자)?|발령일(?:자)?)\s*[:：]?\s*$")
 CRIMINAL_HINT_RE = re.compile(r"피고인|공소|형사|징역|벌금|법정형|범행")
 CRIMINAL_BASIS = ("형법 제1조 제1항(범죄의 성립과 처벌은 행위 시의 법률에 따른다) 및 제2항(범죄 후 법률 변경 시 "
                   "경한 신법)을 기준으로 어느 버전을 적용할지 사람이 검토해야 한다")
 # 계약·약정·체결 관련 키워드 정규식 (민사 계약 사건 기준일 특정용)
-CONTRACT_SENTENCE_RE = re.compile(r"계약|체결|약정|합의|용역|공급|도급|위탁|납품|발주")
+CONTRACT_SENTENCE_RE = re.compile(r"계약|체결|약정|합의|용역|공급|도급|위탁|납품|발주|납기|준공|이행기")
 
 
 def paragraph_text(article_text: str, paragraph: Optional[str]) -> str:
@@ -128,8 +129,11 @@ def _sentences(text: str):
     return [s for s in re.split(r"(?<=[다음함])\s*[.。]\s*|\n", text or "") if s.strip()]
 
 
-LAW_DATE_AFTER_RE = re.compile(r"\s*(?:(?:법률|대통령령|총리령|[가-힣]{1,8}부령|훈령|예규|고시)\s*제\s*\d+\s*호|"
-                               r"(?:부터|자로)?\s*시행(?:된|되는|되어|한다|하는|일)|공포)")
+LAW_DATE_AFTER_RE = re.compile(
+    r"\s*(?:(?:법률|대통령령|총리령|[가-힣]{1,8}부령|훈령|예규|고시)\s*제\s*\d+\s*호|"
+    r"(?:부터|자로)?\s*(?:개정[·ㆍ\s]?(?:공포|시행)|공포[·ㆍ\s]?(?:시행|개정)|시행[·ㆍ\s]?개정|개정|제정|신설|공포|시행)(?:된|되는|되어|한다|하는|일)?|"
+    r"[「『]?\s*[가-힣]+(?:법률|법|령|규칙))"
+)
 
 
 def reference_candidates(text: str) -> List[Dict[str, Any]]:
@@ -148,7 +152,7 @@ def reference_candidates(text: str) -> List[Dict[str, Any]]:
             kinds = []
             if ACT_SUBJECT_RE.search(before) and ACT_SENTENCE_RE.search(sentence):
                 kinds.append("OFFENSE")
-            if DISPOSITION_AFTER_RE.match(after):
+            if DISPOSITION_AFTER_RE.match(after) or DISPOSITION_BEFORE_RE.search(before):
                 kinds.append("DISPOSITION")
             if LOWER_JUDGMENT_RE.search(sentence) and re.match(r"^\s*(?:에\s*)?선고", after):
                 kinds.append("LOWER_JUDGMENT")
@@ -377,21 +381,24 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
 # 그 법령의 연혁에 있는지도 대조한다. 어느 법을 적용할지는 결론 내리지 않는다.
 _D = r"(?:19|20)\d{2}\s*[.년]\s*\d{1,2}\s*[.월]\s*\d{1,2}\s*[.일]?"
 _LAW_KIND = r"(?:법률|대통령령|총리령|[가-힣]{1,8}부령)"
-_LAW_NAME = r"[「『]?\s*(?P<law>[가-힣][가-힣A-Za-z0-9ㆍ·\s]{0,40}?(?:법률|법|령|규칙))\s*[」』]?"
+_LAW_NAME = r"[「『]?\s*(?P<law>[가-힣][가-힣A-Za-z0-9ㆍ·\s\r\n]{0,40}?(?:법률|법|령|규칙))\s*[」』]?"
 _ARTICLE = r"제\s*(?P<art>\d+)\s*조(?:\s*의\s*(?P<sub>\d+))?(?:\s*제\s*(?P<para>\d+)\s*항)?"
+_AMEND_VERB = r"(?:개정[·ㆍ\s]?(?:공포|시행)|공포[·ㆍ\s]?(?:시행|개정)|시행[·ㆍ\s]?개정|개정|제정|신설|공포|시행)"
 DECLARED_AMENDMENT_RES = (
-    # "2024년 12월 24일 법률 제20589호로 개정되어 2025년 1월 1일부터 시행된 (개정) 「방위사업법」 제35조 제4항"
-    re.compile(rf"(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호\s*(?:로|으로)?\s*"
+    # (1) "2024년 12월 24일 법률 제20589호로 개정되어 2025년 1월 1일부터 시행된 (개정) 「방위사업법」 제35조 제4항"
+    re.compile(rf"(?P<prom>{_D})\s*(?:(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{1,6}})\s*호\s*(?:로|으로)?\s*)?"
                rf"(?:일부|전부)?\s*(?:개정|제정|신설)(?:되어|된|되고|되었으며|하여)?\s*,?\s*"
-               rf"(?P<eff>{_D})\s*(?:부터|자로)\s*시행(?:된|되는|되어|되고|중인)?\s*(?:개정\s*|현행\s*)?{_LAW_NAME}\s*{_ARTICLE}"),
-    # "「방위사업법」(2024. 12. 24. 법률 제20589호로 개정, 2025. 1. 1. 시행) 제35조"
-    re.compile(rf"{_LAW_NAME}\s*\(\s*(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호[^)\n]{{0,20}}?"
+               rf"(?P<eff>{_D})\s*(?:부터|자로)?\s*시행(?:된|되는|되어|되고|중인)?\s*(?:개정\s*|현행\s*)?{_LAW_NAME}\s*{_ARTICLE}"),
+    # (2) "「방위사업법」(2024. 12. 24. 법률 제20589호로 개정, 2025. 1. 1. 시행) 제35조"
+    re.compile(rf"{_LAW_NAME}\s*\(\s*(?P<prom>{_D})\s*(?:(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{1,6}})\s*호[^)\n]{{0,20}}?)?"
                rf"(?P<eff>{_D})\s*시행\s*\)\s*{_ARTICLE}"),
-    # TK-04: "2025년 3월 1일 대통령령 제35800호로 개정·공포된 「군인 징계령」 제12조"
-    # — 시행일 없이 공포일만 있는 단일 날짜 패턴. effective = promulgated로 취급.
-    re.compile(rf"(?P<prom>{_D})\s*(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{2,6}})\s*호\s*(?:로|으로)?\s*"
-               rf"(?:일부|전부)?\s*(?:개정[·ㆍ]?공포|공포[·ㆍ]?개정|개정|제정|신설|공포)"
-               rf"(?:된|되어|되고|하여|한)?\s*(?:개정\s*|현행\s*)?"
+    # (3) 단일 날짜 개정/시행/공포 패턴 (호수 유무 무관, 개정·시행/개정·공포 등 모든 동사 지원, 서면8·변형1 포섭)
+    re.compile(rf"(?P<prom>{_D})\s*"
+               rf"(?:(?P<kind>{_LAW_KIND})\s*제\s*(?P<num>\d{{1,6}})\s*호\s*(?:로|으로)?\s*)?"
+               rf"(?:일부|전부)?\s*"
+               rf"{_AMEND_VERB}"
+               rf"(?:된|되어|되고|되었으며|하여|한|되는)?\s*"
+               rf"(?:개정\s*|현행\s*)?"
                rf"{_LAW_NAME}\s*{_ARTICLE}"),
 )
 # 행위 후 시행 조항을 사건에 적용하라는 주장인지(부합·소급·신법·면책 등)
@@ -447,19 +454,22 @@ def declared_amendments(text: str) -> List[Dict[str, Any]]:
     for regex in DECLARED_AMENDMENT_RES:
         for m in regex.finditer(text or ""):
             law = " ".join(m.group("law").split())
-            key = (law, m.group("art"), m.group("num"))
+            art = m.group("art")
+            num = m.group("num") if "num" in m.groupdict() and m.group("num") else ""
+            kind = m.group("kind") if "kind" in m.groupdict() and m.group("kind") else ""
+            key = (law, art, num)
             if key in seen:
                 continue
             seen.add(key)
-            article = m.group("art") + (f"의{m.group('sub')}" if m.group("sub") else "")
-            # TK-04: 단일 날짜 패턴(3번째)에는 eff 그룹이 없으므로 prom을 fallback으로 사용
+            article = art + (f"의{m.group('sub')}" if m.group("sub") else "")
+            # 단일 날짜 패턴에는 eff 그룹이 없으므로 prom을 fallback으로 사용
             prom_iso = _iso(m.group("prom"))
             try:
                 eff_iso = _iso(m.group("eff"))
-            except IndexError:
+            except (IndexError, KeyError):
                 eff_iso = None
             out.append({"law_name": law, "article": article, "paragraph": m.group("para"),
-                        "kind": m.group("kind"), "number": m.group("num"),
+                        "kind": kind, "number": num,
                         "promulgated": prom_iso, "effective": eff_iso or prom_iso,
                         "span": m.span(), "raw": " ".join(m.group(0).split())})
     return out
@@ -473,10 +483,18 @@ def document_reference_date(text: str, *, criminal: bool) -> Dict[str, Any]:
     if kind is None:
         return {"date": None, "basis": "MISSING", "candidates": candidates}
     dates = sorted({c["date"] for c in candidates if c["kind"] == kind})
-    if len(dates) != 1:
+    if len(dates) == 1:
+        chosen = dates[0]
+    elif len(dates) > 1 and kind == "CONTRACT":
+        # 계약 사건(계약일·납기일 등): 소급적용 검토를 위해 최종 이행일(납기일)을 기준일로 설정
+        chosen = max(dates)
+    elif len(dates) > 1 and kind == "DISPOSITION":
+        # 행정 사건: 처분의 최초 성립 시점을 기준일로 설정
+        chosen = min(dates)
+    else:
         return {"date": None, "basis": "AMBIGUOUS", "kind": kind, "candidates": candidates}
-    return {"date": dates[0], "basis": "DOCUMENT_INFERRED", "kind": kind, "candidates": candidates,
-            "note": f"문서에서 {REFERENCE_KINDS[kind]}로 추정한 {dates[0]}을 기준일로 썼다(추정 기준일)"}
+    return {"date": chosen, "basis": "DOCUMENT_INFERRED", "kind": kind, "candidates": candidates,
+            "note": f"문서에서 {REFERENCE_KINDS[kind]}로 추정한 {chosen}을 기준일로 썼다(추정 기준일)"}
 
 
 def _official_history_check(adapter, declared: Dict[str, Any]) -> Dict[str, Any]:
@@ -498,6 +516,8 @@ def _official_history_check(adapter, declared: Dict[str, Any]) -> Dict[str, Any]
     rows = history.records or []
     if not rows:
         return {"status": "UNAVAILABLE", "reason": "법령 연혁이 비어 있음"}
+    if not declared.get("number"):
+        return {"status": "UNAVAILABLE", "reason": "법령번호 없음"}
     wanted = str(int(declared["number"]))
     same_number = [r for r in rows if str(r.get("promulgation_number") or "").strip().lstrip("0") == wanted]
     listed = [{"promulgation_number": r.get("promulgation_number"), "promulgation_date": legal_date(r.get("promulgation_date")),
@@ -549,11 +569,14 @@ def review_declared_amendments(text: str, reference: Dict[str, Any], *, criminal
             official_note = ("적힌 개정 이력은 공식 연혁과 일치한다. 조문 내용은 인용 검증 결과를 따로 본다."
                              if official["status"] == "MATCH" else f"공식 연혁 대조 미실행: {official.get('reason', '')}")
             tail = "행위 후 시행 조항에 근거한 소급 적용 주장"
-        # TK-04: 처분시법주의 — 처분일 기준이면 전용 법적 근거, 그 밖은 기존 분기
+        # TK-04: 처분시법주의 및 계약시법주의 분기
         if criminal:
             basis = FAVORABLE_NEW_LAW_BASIS
         elif reference.get("kind") == "DISPOSITION":
             basis = DISPOSITION_TIME_BASIS
+        elif reference.get("kind") == "CONTRACT":
+            basis = ("계약 관계에 적용되는 법령은 원칙적으로 계약 당시의 법령이고, "
+                     "계약 체결·이행 후 개정된 법령을 소급 적용하려면 특별한 경과규정이 있어야 한다(계약시법주의)")
         else:
             basis = CIVIL_TIME_BASIS
         findings.append(Finding.create(
