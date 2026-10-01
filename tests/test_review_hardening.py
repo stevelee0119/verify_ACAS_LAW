@@ -134,10 +134,15 @@ def test_failed_model_review_does_not_claim_document_coverage(raises):
 
 
 def test_model_agreement_does_not_promote_only_style_or_metadata():
+    # 사용자 결정(2026-09-30, TK-11): AI 판정은 모델 의견의 다수결이 정한다.
+    # 객관적 흔적(objective traces) 부재가 다수결 판정을 차단하지 않으며,
+    # 객관적 기술적 흔적의 부재 여부는 별도 축(involvement: NO_OBJECTIVE_TRACES, objective_traces: 0)으로 표시한다.
     router = AgreeingRouter()
     result = asyncio.run(detect_ai_document(document("요약하자면 원고의 책임이 인정됩니다."), [],
                                             router=router, metadata_indications=True))
-    assert result.verdict == "UNCERTAIN"
+    assert result.verdict == "AI_FULL_GENERATION_LIKELY"
+    assert result.signals.get("decision_rule") == "MAJORITY_AI_CONSENSUS"
+    assert result.signals.get("objective_traces", 0) == 0
 
 
 @pytest.mark.parametrize("marker", ["C2PA", "Content Credentials"])

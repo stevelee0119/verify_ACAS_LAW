@@ -23,7 +23,11 @@ def test_8803_chars_are_all_reviewed_without_extra_calls():
     coverage = result.signals["coverage"]
     assert coverage["inspected_chars"] == 8803 and coverage["omitted_chars"] == 0
     assert coverage["is_full_coverage"] and coverage["char_limit"] == 24000
-    assert result.verdict == "UNCERTAIN"  # Full input is not proof of AI authorship.
+    # 사용자 결정(2026-09-30, TK-11): AI 판정은 모델 의견의 다수결이 정한다.
+    # 객관적 흔적 부재는 별도 축(objective_traces: 0)으로 표시되며 판정을 제한하지 않는다.
+    assert result.verdict == "AI_FULL_GENERATION_LIKELY"
+    assert result.signals.get("decision_rule") == "MAJORITY_AI_CONSENSUS"
+    assert result.signals.get("objective_traces", 0) == 0
 
 
 def test_human_model_inference_is_not_admitted_as_a_fact():

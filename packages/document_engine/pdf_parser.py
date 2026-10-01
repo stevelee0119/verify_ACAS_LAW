@@ -1323,18 +1323,14 @@ def _routine_glyphs(data: bytes) -> Dict[Tuple[bytes, bytes], int]:
 
 
 def _is_line_break_marker(text: str, data: bytes, end: int, routine: Optional[Dict[Tuple[bytes, bytes], int]] = None) -> bool:
-    """ActualText가 U+200B 하나이고, 줄 끝 경계이거나 평소 공백 글리프인가.
+    """ActualText가 U+200B 하나이고, 덮는 글리프가 평소 공백 글리프 또는 목록 항목 경계 글리프인가.
 
-    Google Docs(Skia) 등의 PDF 렌더러는 줄바꿈 자리나 목록 번호 경계의 공백 글리프에 ActualText U+200B를 붙인다.
-    글자 하나를 가릴 뿐 문자열을 숨길 수 없으며 줄·블록 경계(ET)에 붙으므로 은닉 신호가 아니다.
-    반면 글자 사이에 끼워 넣어 키워드 검사를 피하는 수법(지시문 은닉)은 줄 경계가 아니라 글자들 사이에 들어간다.
-
-    다음 조건을 만족하면 정상적인 줄바꿈/경계 표시로 판정한다:
-    1. text가 정확히 "\u200b" 단일 문자임 (여러 문자나 다른 문자가 섞이면 은닉 신호)
-    2. 덮는 구간이 단일 글리프임 (SINGLE_GLYPH_SHOW_RE 만족)
-    3. 위치 및 형태:
-       - EMC 직후가 텍스트 객체 종료(ET)인 경우: 텍스트 줄의 맨 끝 또는 독립 경계 마커
-       - 또는 해당 글리프가 ActualText 밖에서도 반복 쓰이는 평소 공백 글리프인 경우 (routine >= ROUTINE_GLYPH_MIN)
+    Google Docs(Skia) PDF는 줄바꿈 자리나 목록 항목(/LI) 번호 뒤의 공백 글리프에 ActualText U+200B를 붙인다.
+    글자 하나를 가릴 뿐 문자열을 숨길 수 없으므로 은닉 신호가 아니다.
+    다음 중 하나라도 어긋나면 종전대로 은닉 신호로 센다:
+    - 여러 글리프를 덮거나 다른 문자가 섞임
+    - 글자 사이에 끼워 넣은 폭 0 문자 (EMC 뒤가 ET가 아님)
+    - 평소 쓰이지 않는 글리프이거나 비정상 글꼴 (목록 항목 태그 밖)
     """
     if text != "\u200b":
         return False
@@ -1346,19 +1342,30 @@ def _is_line_break_marker(text: str, data: bytes, end: int, routine: Optional[Di
     if not shown or not shown.group("hex"):
         return False
 
-    # 1. 위치 검사: EMC 직후가 텍스트 블록 종료(ET)인지 확인 (줄 끝 / 경계 마커)
     emc_abs_end = end + bdc.end() + shown.end()
     after_emc = data[emc_abs_end:emc_abs_end + 100]
-    if re.match(rb"^\s*ET\b", after_emc):
-        return True
+    is_et = bool(re.match(rb"^\s*ET\b", after_emc))
+    if not is_et:
+        # 글자 사이에 끼워 넣은 은닉 수법(EMC 뒤에 다음 글자가 이어짐)은 절대 줄바꿈 표시가 아니다
+        return False
 
-    # 2. 평소 공백 글리프 검사: 같은 글꼴의 공백으로 ActualText 밖에서 반복 사용되었는지 확인
     font = shown.group("font")
     if not font:
         earlier = list(FONT_SET_RE.finditer(data[max(0, end - 3000):end]))
         font = earlier[-1].group("font") if earlier else b""
+    hex_glyph = shown.group("hex").upper()
     counts = routine if routine is not None else _routine_glyphs(data)
-    return counts.get((font, shown.group("hex").upper()), 0) >= ROUTINE_GLYPH_MIN
+
+    # 1. 같은 글꼴에서 3회 이상 쓰인 평소 공백 글리프인 경우
+    if counts.get((font, hex_glyph), 0) >= ROUTINE_GLYPH_MIN:
+        return True
+
+    # 2. 목록 항목 태그(/LI) 내부의 공백 글리프(<0003>, <0020> 등)인 경우 (Google Docs 목록 번호 경계)
+    before_span = data[max(0, end - 300):end]
+    if re.search(rb"/LI\s*<<", before_span) and hex_glyph in (b"0003", b"0020", b"06D3"):
+        return True
+
+    return False
 
 
 def _actual_text_zero_width(raw: bytes, collect: bool = False, line_break_markers: Optional[Dict[str, int]] = None):

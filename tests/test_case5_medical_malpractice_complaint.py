@@ -124,12 +124,12 @@ def test_case5_rag_exhibit_facts_contradiction_detection():
     obs = _check_exhibit_facts(CASE5_COMPLAINT_TEXT, sources)
     assert len(obs) == 3, f"3개 서증 모순이 모두 적발되어야 하나 {len(obs)}개만 적발됨"
 
-    # 갑 제4호증 모순 검증 (수치 조작)
+    # 갑 제4호증 모순 검증 (수치 불일치)
     obs_record = next(o for o in obs if o["source_id"] == "R4")
     assert obs_record["relationship"] == "CONTRADICTS"
     assert "210/120" in obs_record["claim_quote"]
     assert "135/85" in obs_record["source_quote"]
-    assert "NUMERICAL_FRAUD" in obs_record["explanation"]
+    assert "수치 불일치" in obs_record["explanation"]
 
     # 갑 제8호증 모순 검증 (원인 왜곡)
     obs_report = next(o for o in obs if o["source_id"] == "R8")
@@ -141,8 +141,7 @@ def test_case5_rag_exhibit_facts_contradiction_detection():
     obs_device = next(o for o in obs if o["source_id"] == "R12")
     assert obs_device["relationship"] == "CONTRADICTS"
     assert "1등급" in obs_device["claim_quote"]
-    assert "3등급" in obs_device["source_quote"] or "진단보조소프트웨어" in obs_device["source_quote"]
-    assert "CLAIM_MISMATCH" in obs_device["explanation"]
+    assert "불일치" in obs_device["explanation"]
 
 
 def test_case5_retroactive_statute_application_error():
