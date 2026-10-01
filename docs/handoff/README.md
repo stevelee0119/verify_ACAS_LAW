@@ -27,7 +27,7 @@
 | [TK-20](TK-20_generalization_gaps_round2.md) | 일반화 | 변형 2 첫 점수 16/20: 주소 꼬리·변호사 주소·변호사 성명·`@@` 표지·무리한 주장, 조문 단위 열거 규칙 | `test_variant2_check`·`test_case8_check[text-LEG-1]` | 열림 |
 | [TK-21](TK-21_process_round2.md) | 절차·증거 | 출처 없는 시험 자료 작성(요청 06), 점수 표기, 은닉 탐지 시험 약화 | 다음 커밋 메시지 | 열림 |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md)(3차는 사용자 요청 시) · 구현→평가 요청은 [requests/](requests/README.md)
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
 ## 측정 명령
 ```
