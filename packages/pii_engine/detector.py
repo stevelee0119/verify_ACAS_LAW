@@ -327,8 +327,8 @@ def is_lawyer_court_address_context(text: str, start: int, end: int) -> bool:
     end_line = len(text) if end_line < 0 else end_line
     line_context = text[start_line:end_line]
 
-    # 당사자 본인의 직접적인 인적사항 라벨 줄이면 대리인/법원 주소가 아님
-    if re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", line_context.strip()):
+    # 당사자 본인의 직접적인 인적사항 라벨 또는 주소 문맥이면 대리인/법원 주소가 아님
+    if re.search(r"(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)(?:[ \t]*(?:은|는|의|이|가)|[ \t]+|\b)", line_context):
         return False
 
     # 현재 줄에 소송대리인/법원 표지가 있는 경우
@@ -343,7 +343,7 @@ def is_lawyer_court_address_context(text: str, start: int, end: int) -> bool:
 
     # 이전 줄 중 가장 가까운 인적사항 라벨 역순 확인
     for pl in reversed(context_lines):
-        if re.search(r"^(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)\b", pl.strip()):
+        if re.search(r"(?:원\s*고|피\s*고(?:\s*인)?|신\s*청\s*인|채\s*권\s*자|채\s*무\s*자)(?:[ \t]*(?:은|는|의|이|가)|[ \t]+|\b)", pl):
             return False
         if LAWYER_COURT_CONTEXT_RE.search(pl):
             return True

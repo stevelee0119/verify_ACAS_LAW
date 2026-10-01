@@ -26,11 +26,11 @@ class TextParser(DocumentParser):
             parser_name=self.name,
         )
         page = Page(page_number=1)
-        for line in text.splitlines():
-            if line.strip():
-                page.blocks.append(Block(block_id=new_id("B"), text=line.strip(), page=1))
+        # TK-22: 물리적 줄(하드 래핑)을 구조 신호에 기반하여 문단 단위로 복원
+        from .paragraph_reconstruction import reconstruct_paragraphs_from_text
+        page.blocks = reconstruct_paragraphs_from_text(text, page_num=1)
         doc.pages.append(page)
-        doc.raw_layers["rendered_text"] = text
+        doc.raw_layers["rendered_text"] = "\n".join(b.text for b in page.blocks)
         doc.raw_layers["raw_text"] = text
         return doc
 
