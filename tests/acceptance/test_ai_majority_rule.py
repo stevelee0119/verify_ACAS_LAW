@@ -98,7 +98,6 @@ def _axis(verdict, traces):
     return unified_authorship(doc)
 
 
-@pytest.mark.xfail(strict=True, reason="TK-18: 머리 축이 옛 규칙(흔적 0건 → UNCERTAIN)을 유지(cf7c739)")
 @pytest.mark.parametrize("verdict", [FULL, PARTIAL])
 def test_axis_follows_majority_verdict_without_traces(verdict):
     assert _axis(verdict, 0)["verdict"] == verdict

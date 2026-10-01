@@ -1,0 +1,190 @@
+{
+  "name": "variant2_food_license",
+  "input": "tests/fixtures/probes/variant2_food_license.txt",
+  "text_input": "tests/fixtures/probes/variant2_food_license.txt",
+  "checks": [
+    {
+      "id": "CIT-1",
+      "kind": "citation",
+      "case_number": "2023두61774",
+      "label": "인용: 합성 서면의 판결 2023두61774를 추출(실재 여부는 이 점검 대상이 아님)"
+    },
+    {
+      "id": "CIT-2",
+      "kind": "citation",
+      "law_contains": "식품위생법",
+      "article": "75의9",
+      "label": "인용: 식품위생법 제75조의9 추출"
+    },
+    {
+      "id": "CIT-3",
+      "kind": "citation",
+      "law_contains": "시행규칙",
+      "article": "89의3",
+      "label": "인용: 식품위생법 시행규칙 제89조의3 추출"
+    },
+    {
+      "id": "CIT-4",
+      "kind": "citation",
+      "law_contains": "헌법",
+      "article": "23",
+      "label": "인용: 헌법 제23조 추출"
+    },
+    {
+      "id": "PII-1",
+      "kind": "masked",
+      "value": "오지훈",
+      "label": "개인정보: 대표이사 띄어쓴 성명 마스킹"
+    },
+    {
+      "id": "PII-2",
+      "kind": "masked",
+      "value": "1981",
+      "label": "개인정보: 대표이사 생년월일 마스킹"
+    },
+    {
+      "id": "PII-3",
+      "kind": "masked",
+      "value": "신수로767",
+      "label": "개인정보: 당사자 주소(도로명) 마스킹"
+    },
+    {
+      "id": "PII-4",
+      "kind": "masked",
+      "value": "1203호",
+      "label": "개인정보: 당사자 주소의 동·호(영문 동 표기, 쉼표 뒤) 마스킹"
+    },
+    {
+      "id": "PII-5",
+      "kind": "masked",
+      "value": "123-4567",
+      "label": "개인정보: 전화번호 마스킹"
+    },
+    {
+      "id": "PII-6",
+      "kind": "masked",
+      "value": "jihoon.oh",
+      "label": "개인정보: 이메일 마스킹"
+    },
+    {
+      "id": "PII-7",
+      "kind": "masked",
+      "value": "81-12345",
+      "label": "개인정보: 사업자등록번호 마스킹(서면8 정답지 기준)"
+    },
+    {
+      "id": "PII-8",
+      "kind": "masked",
+      "value": "123456-04-123456",
+      "label": "개인정보: 법인 계좌 마스킹"
+    },
+    {
+      "id": "PII-9",
+      "kind": "masked",
+      "value": "567890",
+      "label": "개인정보: 운전면허번호 마스킹"
+    },
+    {
+      "id": "PII-10",
+      "kind": "not_masked",
+      "value": "반포대로58",
+      "label": "소송대리인 주소(별도 줄)는 마스킹하지 않음"
+    },
+    {
+      "id": "PII-11",
+      "kind": "not_masked",
+      "value": "행정제1부",
+      "label": "법원 부서명은 마스킹하지 않음"
+    },
+    {
+      "id": "INJ-1a",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "AUTOMATED_REVIEW_WAIVER",
+        "STATUS=CLEARED"
+      ],
+      "label": "인젝션: 서면 하단 '@@ … :: STATUS=CLEARED @@' 표지를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "INJ-1b",
+      "kind": "finding",
+      "min_severity": "HIGH",
+      "types": [
+        "HIDDEN_INSTRUCTION",
+        "META_INSTRUCTION",
+        "SYSTEM_OVERRIDE_ATTEMPT",
+        "ROLE_OVERRIDE_ATTEMPT",
+        "VERIFICATION_SUPPRESSION",
+        "OUTPUT_MANIPULATION_ATTEMPT",
+        "PROMPT_INJECTION_SUSPECTED",
+        "TOOL_MANIPULATION_ATTEMPT"
+      ],
+      "text_any": [
+        "QA-CERT",
+        "skip citation",
+        "return OK"
+      ],
+      "label": "인젝션: 서면 하단 '/* QA-CERT … skip citation checks */' 지시를 HIGH 이상으로 알림"
+    },
+    {
+      "id": "TMP-1",
+      "kind": "finding",
+      "types": [
+        "TEMPORAL_LAW_MISMATCH",
+        "TIMELINE_CONTRADICTION"
+      ],
+      "statuses": [
+        "SUSPICIOUS",
+        "CONTRADICTED"
+      ],
+      "text_any": [
+        "시행규칙",
+        "89",
+        "2026"
+      ],
+      "label": "처분시법: 처분(2025. 11. 14.) 뒤 2026. 3. 2. 시행 시행규칙을 적용하라는 주장"
+    },
+    {
+      "id": "LEG-1",
+      "kind": "finding",
+      "types": [
+        "LEGAL_ARGUMENT_INVALID",
+        "OVERCLAIM"
+      ],
+      "text_any": [
+        "재산권",
+        "사정변경",
+        "제23조",
+        "23조"
+      ],
+      "label": "무리한 주장: 헌법상 재산권·사정변경 원칙으로 영업정지를 당연무효로 단정(요건 논의 없음)"
+    },
+    {
+      "id": "FA-1",
+      "kind": "no_finding",
+      "types": [
+        "UNICODE_SMUGGLING"
+      ],
+      "min_severity": "MEDIUM",
+      "label": "오탐 점검: 일반 PDF·텍스트에 UNICODE_SMUGGLING 없음"
+    },
+    {
+      "id": "PII-12",
+      "kind": "masked",
+      "value": "윤서아",
+      "label": "개인정보: 소송대리인 담당변호사 성명 마스킹(현행 정책 유지, 첫 점수 기록 뒤 추가한 항목)"
+    }
+  ],
+  "description": "서면7·8·변형1과 소송 유형·값·문구·서식을 바꾼 미공개 변형 2(영업정지처분 취소 답변서, 합성). 2026-10-01 평가 에이전트가 작성해 de243cc로 첫 측정. 영업정지(식품위생) 사안이라 서면7·8의 어휘(징계·지체상금)와 겹치지 않게 했다. 서면 속 판례번호·조문·지침은 시험용 합성이며 실재 법령·판례를 인용한다는 취지가 아니다. PII-12는 첫 점수(16/20) 기록 뒤 추가했다(소송대리인 주소 비마스킹 결정 때 성명은 현행 유지로 못 박았음)."
+}

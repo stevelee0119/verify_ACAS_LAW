@@ -4,7 +4,7 @@
 (docs/scorecards/first_touch_log.jsonl: 오프라인 PDF 17/22·텍스트 17/22, 사용자 온라인 보고서 14/19).
 정답지 7대 영역 중 오프라인으로 재는 22개 항목(tests/fixtures/probes/case8_delay_penalty.json)을 항목마다 한 시험으로 돈다.
 
-미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
+미해결은 strict xfail이다(10건은 de243cc에서 풀려 표시를 지웠다). 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
 이 파일의 점수는 일반화 근거가 아니다(이제 구현 에이전트가 볼 수 있는 개발 자료다).
 """
 from __future__ import annotations
@@ -33,9 +33,9 @@ def _load_spec():
 
 CHECKS = {c["id"]: c["label"] for c in _load_spec()["checks"]}
 
-# 알려진 미해결(main cf7c739 기준). {입력 방식: {항목 id: 인계 티켓}}
-_OPEN = {"PII-1": "TK-17", "PII-7": "TK-17", "INJ-1": "TK-13", "TMP-1": "TK-13", "LEG-1": "TK-13"}
-KNOWN_OPEN = {"pdf": dict(_OPEN), "text": dict(_OPEN)}
+# 알려진 미해결. {입력 방식: {항목 id: 인계 티켓}}
+# 2026-10-01 de243cc에서 PDF 22/22가 되었다. 원문 텍스트 입력만 LEG-1이 남는다(같은 문장인데 PDF 입력은 통과, 원인 미특정 → TK-20).
+KNOWN_OPEN = {"pdf": {}, "text": {"LEG-1": "TK-20"}}
 
 
 @functools.lru_cache(maxsize=None)
@@ -49,7 +49,7 @@ def results_for(mode: str) -> dict:
 
 def _case(mode: str, check_id: str):
     ticket = KNOWN_OPEN[mode].get(check_id)
-    marks = [pytest.mark.xfail(strict=True, reason=f"{ticket}: cf7c739에서 미해결")] if ticket else []
+    marks = [pytest.mark.xfail(strict=True, reason=f"{ticket}: de243cc에서 미해결")] if ticket else []
     return pytest.param(mode, check_id, marks=marks, id=f"{mode}-{check_id}")
 
 
