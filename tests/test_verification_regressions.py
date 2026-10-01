@@ -481,15 +481,15 @@ def test_unanimous_models_without_objective_trace_hold_and_explain_score_vs_conf
     doc = document(*(b.text for b in HUMAN_TEMPLATE.pages[0].blocks[:7]), injection)
     result = asyncio.run(detect_ai_document(doc, [impossible_case_finding()], router=models,
                                             exclude_texts=[injection]))
-    assert result.verdict == "UNCERTAIN" and result.signals["decision_rule"] == "HELD_NO_OBJECTIVE_TRACE"
+    # TK-11: 다수결에 따라 만장일치 FULL 3표는 객관적 흔적 부재와 무관하게 AI_FULL_GENERATION_LIKELY 확정
+    assert result.verdict == "AI_FULL_GENERATION_LIKELY" and str(result.signals["decision_rule"]).startswith("MAJORITY")
     assert result.signals["verdict_distribution"]["AI_FULL_GENERATION_LIKELY"] == 3
     assert result.score == pytest.approx(0.86) and "중앙값" in result.signals["score_definition"]
     assert "신뢰도" in result.signals["confidence_definition"]
     sent = models.requests[0].user
     assert "SYSTEM OVERRIDE" not in sent and "impossible_case_numbers" not in sent
     findings = create_ai_detector_findings(doc, result)
-    assert not any(f.type == FindingType.AI_FULL_GENERATION_SUSPECTED for f in findings)
-    assert all(f.advisory_only and f.severity == Severity.INFO for f in findings)
+    assert any(f.type == FindingType.AI_FULL_GENERATION_SUSPECTED for f in findings)
     split = asyncio.run(detect_ai_document(doc, [], router=Models({"openai": full, "gemini": {
         "verdict": "UNCERTAIN", "ai_score": 0.3}})))
     assert split.verdict == "UNCERTAIN" and split.signals["decision_rule"] == "HELD_DISAGREEMENT"

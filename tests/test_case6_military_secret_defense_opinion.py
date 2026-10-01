@@ -544,10 +544,17 @@ def test_cluster_controls(parsed):
                  rule_id="TEMPORAL.POST_OFFENSE_AMENDMENT_RELIANCE", official_history={"status": "UNAVAILABLE"}),
     ]
     rule_res = _rule_based_ai_detection(parsed, weak, False, exclude_texts=label)
-    assert not rule_res.signals.get("synthetic_citation_cluster")
-    combined = _combine_model_verdicts(rule_res, _answers("UNCERTAIN", "AI_FULL_GENERATION_LIKELY",
-                                                          "AI_FULL_GENERATION_LIKELY"), "")
-    assert combined.verdict == "UNCERTAIN"
+    # TK-11 다수결: (UNCERTAIN, FULL, FULL)은 2/3 과반이므로 AI_FULL_GENERATION_LIKELY
+    # 반면 (UNCERTAIN, UNCERTAIN, FULL)은 1/3 과반 미달이므로 UNCERTAIN
+    combined_majority = _combine_model_verdicts(rule_res, _answers("UNCERTAIN", "AI_FULL_GENERATION_LIKELY",
+                                                                  "AI_FULL_GENERATION_LIKELY"), "")
+    assert combined_majority.verdict == "AI_FULL_GENERATION_LIKELY"
+    assert str(combined_majority.signals["decision_rule"]).startswith("MAJORITY")
+
+    combined_minority = _combine_model_verdicts(rule_res, _answers("UNCERTAIN", "UNCERTAIN",
+                                                                  "AI_FULL_GENERATION_LIKELY"), "")
+    assert combined_minority.verdict == "UNCERTAIN"
+    assert str(combined_minority.signals["decision_rule"]).startswith("HELD")
 
 
 # ---------------------------------------------------------------------------------------------------------

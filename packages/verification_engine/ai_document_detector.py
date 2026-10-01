@@ -487,6 +487,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     agreement = ("SINGLE" if len(opinions) == 1
                  else "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE")
 
+    n = len(opinions)
     objective = int(rule_res.signals.get("objective_traces") or 0)
     has_stylometry = bool((rule_res.signals.get("stylometry") or {}).get("stylometry_alert", False))
     has_synthetic_cluster = bool(rule_res.signals.get("synthetic_citation_cluster", False))
@@ -494,54 +495,49 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
     held_reason = ""
     reasons_prefix = ""
     ai_opinions = [o for o in opinions if o["verdict"] in ("AI_FULL_GENERATION_LIKELY", "AI_PARTIAL_GENERATION")]
+    full_votes = sum(1 for o in ai_opinions if o["verdict"] == "AI_FULL_GENERATION_LIKELY")
     model_median = float(statistics.median(o["score"] for o in opinions))
 
-    # 모델 간 합의 도출
-    if agreement == "AGREE":
+    # TK-11 다수결 판정 규칙
+    if n == 1:
         verdict = opinions[0]["verdict"]
-        if verdict.startswith("AI_") and not objective and not has_stylometry and not has_synthetic_cluster:
-            verdict, held_reason = "UNCERTAIN", (
-                "모든 모델이 AI 작성 가능성을 유력하게 판단(점수 중앙값 반영)하였으나, 문체·형식 밖의 객관적 작성 흔적"
-                "(도구 메타데이터·챗봇 응답 잔재·프롬프트 토큰)이 없어 사법적 판단을 유보함"
-                "(단순 문체·표준 서식·판례 인용 오류만으로 작성 주체를 단정하지 않음)")
-        elif verdict.startswith("AI_") and len(opinions) >= 2:
-            reasons_prefix = (
-                f"AI 교차검토 복수 모델({len(opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하여 "
-                f"{verdict}로 최종 확정함"
-            )
-    elif agreement == "SINGLE":
-        verdict = opinions[0]["verdict"]
+        agreement = "SINGLE"
         if _VERDICT_RANK[verdict] > _VERDICT_RANK.get(rule_res.verdict, _VERDICT_RANK["UNCERTAIN"]):
             if (has_stylometry or has_synthetic_cluster or objective) and opinions[0]["score"] >= 0.80:
-                # Stylometry 경보 또는 가상판례+번역투/인젝션 복합 정황과 고점수 모델 의견이 결합된 경우 확정 유지
                 single_downgraded = False
             else:
                 verdict, single_downgraded = rule_res.verdict, True
+        decision_rule = "SINGLE_MODEL_CAPPED_BY_RULES" if single_downgraded else "SINGLE_MODEL_CONFIRMED"
     else:
-        # 복수 모델 중 2개 이상이 AI 작성을 지목하고 객관적 작성 흔적, 문체 이상(Stylometry), 또는 가상판례 군집이 확인된 경우
-        if len(ai_opinions) >= 2 and (has_stylometry or has_synthetic_cluster or objective):
-            full_votes = sum(1 for o in ai_opinions if o["verdict"] == "AI_FULL_GENERATION_LIKELY")
-            verdict = "AI_FULL_GENERATION_LIKELY" if full_votes >= 2 else "AI_PARTIAL_GENERATION"
-            agreement = "MAJORITY_AI_AGREE"
+        # 복수 모델(n >= 2): AI 표(FULL + PARTIAL)가 과반(n/2 초과)이면 AI 판정
+        if len(ai_opinions) > n / 2:
+            verdict = "AI_FULL_GENERATION_LIKELY" if full_votes > n / 2 else "AI_PARTIAL_GENERATION"
+            agreement = "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "MAJORITY_AI_AGREE"
+            decision_rule = "MAJORITY_AI_CONSENSUS"
             reasons_prefix = (
-                f"AI 교차검토 다수 모델({len(ai_opinions)}/{len(opinions)}개)이 AI 작성을 일치 지목(점수 중앙값 {round(model_median*100, 1)}%)하고 "
-                f"가상 판례/문체 이상 정황이 확인되어 {verdict}로 최종 확정함"
+                f"AI 교차검토 다수 모델({len(ai_opinions)}/{n}개)이 AI 작성을 지목(점수 중앙값 {round(model_median*100, 1)}%)하여 "
+                f"{verdict}로 최종 확정함(다수결)"
             )
         else:
             verdict = "UNCERTAIN"
+            agreement = "AGREE" if len({o["verdict"] for o in opinions}) == 1 else "DISAGREE"
+            decision_rule = "AGREED_UNCERTAIN" if agreement == "AGREE" else "HELD_DISAGREEMENT"
+
     if verdict == "HUMAN_AUTHORED_LIKELY":
         verdict, held_reason = "UNCERTAIN", (
             "모델이 사람 작성 쪽으로 판단했으나 AI 흔적이 없다는 사실만으로 사람 작성을 단정하지 않으므로 판단을 유보함")
+        decision_rule = "HELD_NO_OBJECTIVE_TRACE"
     incomplete_coverage = verdict == "AI_FULL_GENERATION_LIKELY" and (rule_res.signals.get("coverage") or {}).get("is_full_coverage") is False
     if incomplete_coverage:
         verdict, held_reason = "UNCERTAIN", "문서 일부만 모델이 검토했으므로 전체 작성 범위의 판단을 유보함"
+        decision_rule = "HELD_INCOMPLETE_COVERAGE"
 
     reasons = []
     if reasons_prefix and verdict.startswith("AI_"):
         reasons.append(reasons_prefix)
     if agreement == "DISAGREE":
         reasons.append("모델 간 판단 불일치: " + ", ".join(f"{o['provider']}={o['verdict']}" for o in opinions)
-                       + ". 의견이 갈려 판단을 유보함(과반수로 확정하지 않음)")
+                       + ". 의견이 갈려 판단을 유보함(과반수 미달)")
     if held_reason:
         reasons.append(held_reason)
     elif agreement == "SINGLE":
@@ -594,14 +590,7 @@ def _combine_model_verdicts(rule_res: AIDetectorResult, answers: List[Any], samp
                  "rule_score": rule_res.score,
                  "model_score_median": round(model_median, 3),
                  "verdict_distribution": {v: sum(o["verdict"] == v for o in opinions) for v in _VERDICT_RANK},
-                 "decision_rule": ("UNANIMOUS_WITH_OBJECTIVE_TRACE" if agreement == "AGREE" and not held_reason and verdict.startswith("AI_")
-                                   else "MAJORITY_AI_CONSENSUS" if agreement == "MAJORITY_AI_AGREE" and verdict.startswith("AI_")
-                                   else "SYNTHETIC_CLUSTER_CONFIRMED" if has_synthetic_cluster and verdict.startswith("AI_")
-                                   else "HELD_INCOMPLETE_COVERAGE" if incomplete_coverage
-                                   else "HELD_NO_OBJECTIVE_TRACE" if held_reason
-                                   else "HELD_DISAGREEMENT" if agreement == "DISAGREE"
-                                   else "AGREED_UNCERTAIN" if agreement == "AGREE"
-                                   else "SINGLE_MODEL_CAPPED_BY_RULES"),
+                 "decision_rule": decision_rule,
                  **SCORE_DEFINITIONS},
         used_llm=True,
     )
