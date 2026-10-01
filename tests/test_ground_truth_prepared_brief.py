@@ -11,7 +11,10 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
 import pytest
+
+MIRROR_ROOT = Path(__file__).parent / "fixtures" / "prepared_brief_mirror"
 
 from packages.adversarial_engine.classifier import classify
 from packages.common.enums import AdversarialClass, FindingType, Severity, VerificationStatus
@@ -91,7 +94,7 @@ def test_precedent_and_regulation_existence(monkeypatch):
     assert parsed_law == "민법"  # '의채무불이행및민법' 오탐 원천 박멸
 
     # 2-2. 실재 판례 확인 (대법원 2018도15313 판결)
-    mirror = LocalLegalMirror()
+    mirror = LocalLegalMirror(root=MIRROR_ROOT if MIRROR_ROOT.exists() else None)
     real_case = mirror.find_case("2018도15313")
     assert real_case is not None
     assert "2018도15313" in real_case["case_number"]
@@ -154,7 +157,7 @@ def test_precedent_and_regulation_existence(monkeypatch):
 # 3. 인용 법령 정확성 (행위시법 원칙 및 소급적용 오류 탐지) 검증
 # ---------------------------------------------------------------------------
 def test_temporal_retroactive_application_review():
-    mirror = LocalLegalMirror()
+    mirror = LocalLegalMirror(root=MIRROR_ROOT if MIRROR_ROOT.exists() else None)
     action_date = "2020-05-12"  # 서면상 행위일
 
     # 3-1. 신설 조항 소급 적용 오류 (부경법 제2조 제1호 카목 - 2022-04-20 신설)
