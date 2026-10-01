@@ -3,3 +3,9 @@ tests/fixtures/school_violence_synthetic.pdf -text -diff
 tests/fixtures/case6_defense_opinion_google_docs.pdf -text -diff
 # 모든 시험용 PDF는 바이트 그대로 보존한다(줄바꿈 변환 시 startxref 오프셋이 어긋나 MALFORMED_PDF 오탐이 난다). 요청 01.
 *.pdf -text -diff
+
+*.py text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.txt text eol=lf
