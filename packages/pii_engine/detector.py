@@ -190,8 +190,12 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
     if not has_surname:
         return False
 
-    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문
-    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건)", after_text):
+    # 직책/대리인 뒤 선임·해임·지명 등 인사 행위 또는 권리(선임권 등) 배제
+    if clean.startswith(("선임", "해임", "취임", "선출", "지명", "추천", "임명")):
+        return False
+
+    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문, 침해/행사
+    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용)", after_text):
         return False
     if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다)", after_text):
         return False
@@ -508,8 +512,20 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         start, end = m.start(1), m.end(1)
         if _covered_by_span(guard_spans, start, end):
             continue
+
+        # 이름 끝에 조사가 결합된 형태(예: '홍길동은', '박영훈은')인 경우 조사를 분리하여 성명만 추출
+        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+        if josa_match and len(clean_name) >= 3:
+            stem = clean_name[:josa_match.start()]
+            trailing_part = clean_name[josa_match.start():]
+            after_preview = trailing_part + text[end:end + 25]
+            if is_valid_korean_name_structure(stem, after_preview):
+                # 조사 앞부분(성명)만 분리
+                clean_name = stem
+                end = end - len(trailing_part)
+
         after_text = text[end:end + 30]
-        if not is_valid_korean_name_structure(raw_name, after_text):
+        if not is_valid_korean_name_structure(clean_name, after_text):
             continue
         if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
             continue

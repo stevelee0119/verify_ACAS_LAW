@@ -106,6 +106,8 @@ LEDGER_RECORDS = [
     ("TK-28", "SYSTEM_PROMPT_ALL_PII_TYPES_BLOCKED", True, "system 프롬프트에 다양한 PII(이름·생년월일·법인 등) 동적 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("TK-28", "SYSTEM_PROMPT_TAMPERED_WITH_DATA_BLOCKED", True, "등록된 시스템 상수에 동적 사용자 값 혼입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("TK-28", "ALL_ACTUAL_SYSTEM_AND_SCHEMA_CONSTANTS_PASSED", False, "코드베이스 내 모든 실제 system/schema 등록 상수", "PASSED (STATIC_PROMPT_FALSE_POSITIVE 또는 정상)"),
+    ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_POSITIVE", True, "민법 편·장·절 범위(상계·변제·면제·해제·표현대리 등) 과대주장 탐지", "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS 탐지"),
+    ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_CONTROL", False, "민법 요건사실 소명 및 판례 인용 항변", "과대주장 미탐지 보존"),
 ]
 
 
@@ -993,7 +995,52 @@ def test_tk28_system_prompt_tampered_with_data_blocked():
 
 
 # ===========================================================================
-# 16. 원장 종합 무결성 검증
+# 17. TK-26: 민법 편·장·절 체계화 및 과대주장 범위 확장 (양성 5건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 금원 차용 사실이 인정되더라도, 민법 제492조 상계 항변에 따라 채무는 전액 소멸하였으므로 책임이 없다.",
+        "가사 일부 손해가 인정되더라도, 민법 제460조 변제 완료로 의무가 소멸하였으므로 어떠한 책임도 질 수 없다.",
+        "백보 양보하여 귀책사유가 인정되더라도, 민법 제506조 채무면제에 의하여 책임은 전면 면책되어 징계될 수 없다.",
+        "만약 계약 불이행이 인정되더라도, 민법 제544조 해제 통고로 계약이 실효되었으므로 어떠한 배상 책임도 인정될 수 없다.",
+        "가령 대리권 수여 사실이 인정된다 하더라도, 민법 제125조 표현대리는 성립하지 않아 당연무효이다.",
+    ],
+)
+def test_tk26_civil_code_ranges_positive(text: str):
+    """TK-26 양성 5건: 민법 편·장·절 체계(상계, 변제, 면제, 해제, 표현대리) 기반 단정적 과대주장 탐지."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) >= 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 금원 차용 사실이 인정되더라도, 피고는 상계적상 요건 사실을 구체적으로 증명하여 정당한 상계를 주장합니다.",
+        "가사 손해가 발생하였다 하더라도, 변제의 제공 및 수령지체 요건에 관하여 대법원 판례의 취지에 따라 소명합니다.",
+        "백보 양보하여 피고에게 책임이 인정되더라도, 원고 또한 과실이 있으므로 과실상계 법리에 따라 손해배상액의 적정한 감경을 구합니다.",
+    ],
+)
+def test_tk26_civil_code_ranges_control(text: str):
+    """TK-26 대조군 3건: 요건사실 구체적 소명, 대법원 판례 취지 주장, 감경 청구 등 비단정적 항변은 오탐하지 않음."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) == 0
+
+
+# ===========================================================================
+# 18. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""

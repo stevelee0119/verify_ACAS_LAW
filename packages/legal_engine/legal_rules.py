@@ -58,6 +58,13 @@ def get_defense_overclaim_pattern() -> re.Pattern[str]:
     all_terms = set()
     for c in clusters.values():
         all_articles.update(c.get("article_numbers", c.get("articles", [])))
+        # 편·장·절 범위(ranges 또는 article_ranges)가 정의된 경우 조문 번호 전체를 체계로 닫아 포함
+        for r in c.get("ranges", c.get("article_ranges", [])):
+            start = r.get("from") or r.get("start")
+            end = r.get("to") or r.get("end")
+            if start and end:
+                for art_num in range(int(start), int(end) + 1):
+                    all_articles.add(str(art_num))
         all_terms.update(c.get("terms", []))
 
     concessions = "|".join(signals.get("hypothetical_concessions", ["설령", "가사", "백보\\s*양보하여", "가령", "만일", "만약"]))
