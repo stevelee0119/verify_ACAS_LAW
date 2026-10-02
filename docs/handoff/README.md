@@ -72,14 +72,19 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | TK-09 모델 의견 승격 | 기본 꺼짐 유지 | 변경 없음 |
 | 기준선 상향(2026-10-03 갱신) | **회귀 해소 뒤 81.7 이상으로 상향**(5차 실측 dev 81.2는 회귀 상태라 올리지 않음) | 평가 측이 실측으로 사용자 승인 후 |
 | 동일 시행일 복수 버전 | 두 버전 병기·대조 | 6차 |
-| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만**, 요청 16(병기·모델 응답 안정화)·F1·TK-24는 그 검증 뒤 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md) |
+| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만** → 그 검증 뒤 **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 → TK-24 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md) |
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
 | `main` 병합 | 5차 검증 뒤 PR(사용자 요청 시에만 PR 생성) | 사용자 |
 | 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · **회귀 보완(6차) 검증 뒤 순차** · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
 | 프로그램 버전 | 성능 기준으로만 상향(정수 급격·첫째 자리 일부·둘째 자리 미세), 커밋마다 올리지 않음 | [VERSION_POLICY](../scorecards/VERSION_POLICY.md), `scripts/check_version_policy.py` |
+| 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
+| Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가**(2026-10-03 현재 1회: CI run 263) | 평가 측이 `CI` 실행마다 이 job 결과를 세어 3회째에 사용자에게 요청 |
+| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 6차 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
+| TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
 
 ## 아직 사용자가 정할 것
-- 버전 등급 임계값(VERSION_POLICY 5절, 평가 측 제안·잠정)의 확정 또는 조정, 정수 상향 승인(해당 판정이 생길 때).
+- 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
+- `main` 보호의 **관리자 포함 적용**(`Do not allow bypassing the above settings`) 여부: 지금은 꺼짐(2026-10-02 결정). 사용자 문의(2026-10-03)에 대한 평가 측 권고는 "지금은 유지, 첫 병합 PR에서 두 필수 확인이 PR 위에서 초록으로 도는 것을 확인한 뒤 켤지 다시 결정"이다(근거: [GitHub 문서](https://docs.github.com/repositories/configuring-branches-and-merges-in-your-repository/defining-the-mergeability-of-pull-requests/about-protected-branches)).
 - **CI를 `main`의 필수 확인에 추가: 완료·확인됨(2026-10-03).** 사용자가 설정했고 평가 측이 `GET branches/main`으로 필수 확인 2개(`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`)를 읽어 확인했다(적용 수준 `non_admins` 유지). Docker OCR readiness 추가 여부(연속 초록 확인 뒤)는 별도 결정.
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
