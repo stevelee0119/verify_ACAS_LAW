@@ -28,7 +28,7 @@ from packages.common.schemas import Citation, CitationType  # noqa: E402
 from packages.legal_engine.source_review import _law_absent  # noqa: E402
 from packages.legal_engine.verifier import CitationVerdict  # noqa: E402
 
-OPEN = pytest.mark.xfail(strict=True, reason="TK-29: 참고자료 제목 부분 일치·미독 파일로 부존재 판정을 낮춘다(e6b58fd)")
+# TK-29는 5차(c6a9dc0, U1)에서 해결됐다(평가 측 독립 재현 2026-10-02, 독립 감사 Astra 5차 18/18과 일치). 이제 일반 회귀 시험이다.
 
 
 class _Library:
@@ -66,7 +66,6 @@ def test_internal_norm_with_read_reference_of_same_title_goes_to_reference_compa
     assert not any(f.severity == Severity.CRITICAL for f in verdict.findings)
 
 
-@OPEN
 def test_unread_file_with_same_title_does_not_raise_verification_status():
     """읽기 실패(HTTP 403)·미처리 파일은 제목이 같아도 확인으로 보지 않는다."""
     verdict = _run(INTERNAL, inventory=[_entry(f"[RAG참고자료] {INTERNAL}", "UNAVAILABLE", "DRIVE_HTTP_403")], sources=[])
@@ -74,7 +73,6 @@ def test_unread_file_with_same_title_does_not_raise_verification_status():
     assert verdict.levels.get("existence") != "FOUND_IN_USER_REFERENCES"
 
 
-@OPEN
 def test_fabricated_statute_name_inside_a_commentary_title_keeps_critical():
     """가공 법률명이 해설서 제목에 들어 있어도 그 법률이 존재하는 것이 아니다(법령 형태 인용은 참고자료로 면책하지 않는다)."""
     title = f"{FAKE_STATUTE} 비판 해설.pdf"
@@ -82,7 +80,6 @@ def test_fabricated_statute_name_inside_a_commentary_title_keeps_critical():
     assert any(f.type == FindingType.STATUTE_NONEXISTENT and f.severity == Severity.CRITICAL for f in verdict.findings)
 
 
-@OPEN
 def test_short_statute_name_contained_in_a_reference_title_keeps_critical():
     title = "행정법 표준판례.pdf"
     verdict = _run("행정법", inventory=[_entry(title, "READ", "OK")], sources=[{"name": title}])

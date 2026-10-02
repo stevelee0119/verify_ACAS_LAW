@@ -41,14 +41,11 @@ def _probe():
 probe = _probe()
 SPECS = sorted(p for p in PROBES.glob("*.json") if not p.stem.endswith("_online"))
 
-# TK-22(PDF 입력): 줄 폭에 따라 떨어지는 항목. 키는 (명세 이름, 줄 폭). 2026-10-01 main 9933548·4차 e6b58fd에서 같다.
+# TK-22(PDF 입력): 줄 폭에 따라 떨어지는 항목. 키는 (명세 이름, 줄 폭).
+# 2026-10-02 5차(c223f7b)에서 10건 중 9건이 풀렸다(평가 측 재현: 풀린 9조합이 KNOWN_OPEN과 달라 '풀렸다' 단언이 실패). 독립 감사 Astra 5차도
+# 잔여 1건을 재현했다(구현 완료 보고서의 "전수 해소"는 사실과 다르다).
 KNOWN_OPEN = {
-    ("case6_military_secret", 40): {"INJ-1"}, ("case6_military_secret", 48): {"INJ-1"},
-    ("case7_suspension", 40): {"CIT-6"},
-    ("case8_delay_penalty", 40): {"INJ-1"}, ("case8_delay_penalty", 48): {"INJ-1"},
-    ("case9_state_compensation", 40): {"INJ-1"}, ("case9_state_compensation", 48): {"INJ-1"},
-    ("variant1_discipline", 40): {"INJ-1b"}, ("variant1_discipline", 48): {"INJ-1b"},
-    ("variant2_food_license", 40): {"INJ-1a"},
+    ("case8_delay_penalty", 40): {"INJ-1"},
 }
 
 

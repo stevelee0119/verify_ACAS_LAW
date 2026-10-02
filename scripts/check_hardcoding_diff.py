@@ -37,6 +37,8 @@ IDENT = re.compile(r"(?<![A-Za-z0-9])[A-Z][A-Z0-9]{2,}(?:[_-][A-Z0-9]+){1,}(?![A
 ARTICLE = re.compile(r"제\s*(\d{1,4})\s*조(?:\s*의\s*(\d{1,2}))?")
 HANGUL4 = re.compile(r"[가-힣]{4,}")
 # 어느 서면에나 나오는 일반 낱말은 약한 신호에서 뺀다(조문 번호·식별자는 그대로 본다).
+# 시험 문서의 평가용 바닥글·표지 문구. 제품 코드가 이 문구를 알아보는 것은 평가 자료 종속이다(강한 신호).
+EVAL_MARKER_PHRASES = ("홀드아웃용", "홀드아웃 용")
 GENERIC = {"위반하", "청구취지", "손해배상", "인정되", "판결", "판례", "법률", "규정", "조항", "원고", "피고", "주장", "서면"}
 
 
@@ -64,8 +66,14 @@ def spec_terms(spec: Dict) -> Set[str]:
 
 def fixture_tokens(root: Path = ROOT) -> Dict[str, Dict[str, str]]:
     """{종류: {토큰: 출처 파일}}. 종류: identifier·case_number·amount·article·spec_term"""
-    out: Dict[str, Dict[str, str]] = {k: {} for k in ("identifier", "case_number", "amount", "article", "spec_term")}
+    out: Dict[str, Dict[str, str]] = {k: {} for k in ("identifier", "case_number", "amount", "article", "spec_term", "marker")}
     probes = root / "tests" / "fixtures" / "probes"
+    # 평가 자료 표식: 시험 문서 파일명의 식별자 접두(TC-, HO- 등). 제품 코드가 이 표식을 알아보면 평가 자료 종속이다(독립 감사 5차 F5:
+    # 문단 복원기에 `HO-\d+|TC-\d+|홀드아웃용|가상\s*문서` 바닥글 제외 분기가 들어갔으나 값 토큰만 보던 이 점검은 0건이었다).
+    for path in sorted((root / "tests" / "fixtures").rglob("*")):
+        match = re.fullmatch(r"([A-Z]{1,4}-)\d{1,3}", path.stem) if path.is_file() else None
+        if match:
+            out["marker"].setdefault(match.group(1), path.relative_to(root).as_posix())
     for path in sorted(probes.glob("*.txt")):
         text = path.read_text(encoding="utf-8", errors="ignore")
         rel = path.relative_to(root).as_posix()
@@ -182,6 +190,13 @@ def scan(base: str, root: Path = ROOT) -> Dict[str, List[Dict[str, object]]]:
 
     def check_text(path: str, line_no: int, body: str, decision_field: bool, bare_numbers: bool):
         flat_body = body.replace("-", "_")
+        for prefix, src in tokens["marker"].items():
+            # 정규식 꼴(`TC-\d+`)만 센다. 설명문 속 `TC-06` 언급은 코드가 아니므로 오탐을 피한다. 새 줄이면 기준에 있던 접두도 센다.
+            if re.search(re.escape(prefix) + r"\\d", body):
+                record(hard, "eval_marker", prefix + "\\d", path, line_no, body, src)
+        for phrase in EVAL_MARKER_PHRASES:
+            if phrase in body:
+                record(hard, "eval_marker", phrase, path, line_no, body, "평가용 바닥글 문구")
         for tok, src in tokens["identifier"].items():
             if tok in flat_body and not in_base(base, tok.replace("_", "-")) and not in_base(base, tok):
                 record(hard, "identifier", tok, path, line_no, body, src)

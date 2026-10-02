@@ -121,3 +121,120 @@ def test_jobs_reports_specs_whose_input_file_is_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(gate, "ROOT", tmp_path)
     work, missing = gate.jobs()
     assert work == [] and len(missing) == 2 and all("입력 파일 없음" in m for m in missing)
+
+
+# ------------------------------------------------------------------ 독립 감사 5차(c223f7b) F4: ERROR·요약 불일치 ---
+CLEAN = (set(), set(), {"passed": 10}, 0)
+
+
+def test_errored_tests_parses_pytest_rE_output():
+    out = "ERROR tests/test_a.py::test_x - fixture 'y' not found\nERROR tests/test_b.py - collection\n== 1 error ==\n"
+    assert gate.errored_tests(out) == {"tests/test_a.py::test_x", "tests/test_b.py"}
+
+
+def test_passed_with_a_new_setup_error_is_not_clean():
+    """기준 passed 10, 현재 passed 10 + fixture ERROR 1, 종료 코드 1, FAILED 없음 — 감사가 재현한 구멍(종료 코드 0이었다)."""
+    head = (set(), {"tests/test_a.py::test_x"}, {"passed": 10, "error": 1}, 1)
+    new_failures, reasons = gate.pytest_findings(CLEAN, head)
+    assert new_failures == ["ERROR tests/test_a.py::test_x"]
+    assert any("ERROR" in r for r in reasons)
+
+
+def test_same_error_on_both_sides_is_still_unmeasured_not_clean():
+    both = (set(), {"tests/test_a.py::test_x"}, {"passed": 10, "error": 1}, 1)
+    new_failures, reasons = gate.pytest_findings(both, both)
+    assert new_failures == []
+    assert sum("ERROR" in r for r in reasons) == 2          # 기준·현재 모두 '통과가 아니다'
+
+
+def test_exit_code_one_without_readable_failures_is_unmeasured():
+    head = (set(), set(), {"passed": 10}, 1)
+    _, reasons = gate.pytest_findings(CLEAN, head)
+    assert any("읽지 못했다" in r for r in reasons)
+
+
+def test_summary_failed_count_must_match_parsed_nodes():
+    head = ({"tests/test_a.py::test_x"}, set(), {"passed": 8, "failed": 3}, 1)
+    _, reasons = gate.pytest_findings(CLEAN, head)
+    assert any("요약의 실패 3건 중 1건만" in r for r in reasons)
+
+
+def test_fewer_passed_tests_without_failures_is_flagged():
+    head = (set(), set(), {"passed": 7}, 0)
+    new_failures, reasons = gate.pytest_findings(CLEAN, head)
+    assert new_failures == [] and any("통과 건수 감소" in r for r in reasons)
+
+
+def test_clean_runs_have_no_findings():
+    assert gate.pytest_findings(CLEAN, (set(), set(), {"passed": 12}, 0)) == ([], [])
+
+
+# ------------------------------------------------------------------ 성적표 문서별 비교(probe가 못 본 TC-06 손실) ---
+def test_scorecard_diff_flags_a_document_that_dropped_even_if_the_total_is_fine():
+    base = {"dev": {"TC-06": 0.357, "TC-01": 0.9}, "holdout": {"HO-01": 0.5}}
+    head = {"dev": {"TC-06": 0.321, "TC-01": 1.0}, "holdout": {"HO-01": 0.5}}
+    regressions, reasons = gate.scorecard_diff(base, head)
+    assert regressions == ["성적표 dev/TC-06: 0.357 → 0.321"] and reasons == []
+
+
+def test_scorecard_diff_missing_document_or_empty_base_is_unmeasured():
+    _, missing = gate.scorecard_diff({"dev": {"TC-06": 0.3}}, {"dev": {}})
+    assert any("TC-06" in r for r in missing)
+    _, empty = gate.scorecard_diff({}, {"dev": {"TC-06": 0.3}})
+    assert any("값이 없다" in r for r in empty)
+
+
+def test_scorecard_diff_ignores_improvements_and_new_documents():
+    regressions, reasons = gate.scorecard_diff({"dev": {"TC-06": 0.3}}, {"dev": {"TC-06": 0.4, "TC-99": 0.1}})
+    assert regressions == [] and reasons == []
+
+
+# ------------------------------------------------------------------ 독립 감사 5차 F5: 평가 자료 표식 분기 ---
+def _git(root, *args):
+    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
+                   env={**__import__("os").environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t",
+                        "GIT_COMMITTER_EMAIL": "t@t"})
+
+
+def test_fixture_tokens_include_evaluation_document_marker_prefixes():
+    markers = hard.fixture_tokens()["marker"]
+    assert "TC-" in markers and "HO-" in markers
+
+
+def test_product_code_that_recognises_evaluation_document_markers_is_a_strong_signal(tmp_path):
+    """제품 코드가 시험 문서의 표식(`TC-\\d+`, `HO-\\d+`, '홀드아웃용')을 알아보는 분기는 값 토큰이 아니어도 강한 신호다."""
+    (tmp_path / "tests" / "fixtures" / "holdout").mkdir(parents=True)
+    (tmp_path / "tests" / "fixtures" / "holdout" / "HO-01.pdf").write_bytes(b"%PDF")
+    (tmp_path / "tests" / "fixtures" / "probes").mkdir(parents=True)
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "x.py").write_text("X = 1\n", encoding="utf-8")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    (tmp_path / "packages" / "x.py").write_text(
+        'import re\nX = 1\nFOOTER = re.compile(r"^\\s*(?:HO-\\d+|홀드아웃용).*$")\n# HO-01 설명 주석은 센다 아니다\n', encoding="utf-8")
+    result = hard.scan("HEAD", tmp_path)
+    kinds = {(item["kind"], item["token"]) for item in result["hard"]}
+    assert ("eval_marker", "HO-\\d") in kinds and ("eval_marker", "홀드아웃용") in kinds
+
+
+def test_explanatory_mention_of_a_document_id_is_not_flagged(tmp_path):
+    (tmp_path / "tests" / "fixtures" / "holdout").mkdir(parents=True)
+    (tmp_path / "tests" / "fixtures" / "holdout" / "HO-01.pdf").write_bytes(b"%PDF")
+    (tmp_path / "tests" / "fixtures" / "probes").mkdir(parents=True)
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "x.py").write_text("X = 1\n", encoding="utf-8")
+    _git(tmp_path, "init", "-q")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    (tmp_path / "packages" / "x.py").write_text('X = 1\nNOTE = "HO-01에서 확인한 회귀를 막는다"\n', encoding="utf-8")
+    assert hard.scan("HEAD", tmp_path)["hard"] == []
+
+
+def test_run_pytest_reads_the_summary_even_when_the_repo_config_adds_quiet(tmp_path):
+    """저장소 pytest.ini의 `addopts = -q`와 게이트의 `-q`가 겹치면 요약 줄이 사라져 개수를 못 읽었다(평가 측 점검에서 발견)."""
+    (tmp_path / "pytest.ini").write_text("[pytest]\naddopts = -q\n", encoding="utf-8")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_ok.py").write_text("def test_a():\n    assert True\n\ndef test_b():\n    assert True\n", encoding="utf-8")
+    failed, errored, counts, rc = gate.run_pytest(tmp_path)
+    assert counts.get("passed") == 2 and rc == 0 and not failed and not errored

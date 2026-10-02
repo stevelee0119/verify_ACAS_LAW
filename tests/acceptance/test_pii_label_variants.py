@@ -5,7 +5,7 @@
 평가 측 서면 6~9·변형 1·2는 라벨과 이름을 공백으로만 이어 써서 이 변형을 한 번도 시험하지 못했다(평가 측 변형 설계의 빈틈).
 전송 전 검사(`llm_router.privacy.inspect_request`)도 같은 탐지기를 쓰므로, 마스킹되지 않은 이름은 외부 모델 전송 검사에서도 걸리지 않는다.
 
-한 문서에 서로 다른 이름의 양성 줄을 모아 한 번 처리하고 줄마다 판정한다. 미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
+한 문서에 서로 다른 이름의 양성 줄을 모아 한 번 처리하고 줄마다 판정한다(5차 c223f7b에서 라벨 구분자 변형 13건이 풀려 표시를 지웠다 — 독립 재현 2026-10-02). 미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
 여기 적힌 이름은 시험 입력이다. 코드에 옮겨 적는 것은 맞춤 수정이다(AGENTS.md).
 """
 from __future__ import annotations
@@ -42,19 +42,19 @@ POSITIVE = [
     ("space", "홍길동", "원고 {n}", False),
     ("tab", "김철수", "원고\t{n}", False),
     ("spaced-name", "박 영 희", "피고인 {n}", False),
-    ("colon", "이민수", "원고: {n}", True),
-    ("colon-spaced", "최지훈", "피고인 : {n}", True),
-    ("hyphen", "정수진", "원고 - {n}", True),
-    ("fullwidth-colon", "강하늘", "원고：{n}", True),
-    ("fullwidth-slash", "조민재", "원고／{n}", True),
-    ("bracket-label", "윤서연", "[원고] {n}", True),
-    ("paren-name", "한지우", "원고({n})", True),
-    ("claimant", "오세훈", "청구인: {n}", True),
-    ("applicant", "임나래", "신청인: {n}", True),
-    ("creditor", "문재원", "채권자: {n}", True),
-    ("witness", "서도윤", "증인: {n}", True),
-    ("victim", "백승아", "피해자: {n}", True),
-    ("spaced-name-colon", "남 궁 민", "원고: {n}", True),
+    ("colon", "이민수", "원고: {n}", False),
+    ("colon-spaced", "최지훈", "피고인 : {n}", False),
+    ("hyphen", "정수진", "원고 - {n}", False),
+    ("fullwidth-colon", "강하늘", "원고：{n}", False),
+    ("fullwidth-slash", "조민재", "원고／{n}", False),
+    ("bracket-label", "윤서연", "[원고] {n}", False),
+    ("paren-name", "한지우", "원고({n})", False),
+    ("claimant", "오세훈", "청구인: {n}", False),
+    ("applicant", "임나래", "신청인: {n}", False),
+    ("creditor", "문재원", "채권자: {n}", False),
+    ("witness", "서도윤", "증인: {n}", False),
+    ("victim", "백승아", "피해자: {n}", False),
+    ("spaced-name-colon", "남 궁 민", "원고: {n}", False),
 ]
 # 대조군: 이름이 아닌 값은 그대로 남아야 한다(마스킹하면 오탐).
 CONTROLS = [

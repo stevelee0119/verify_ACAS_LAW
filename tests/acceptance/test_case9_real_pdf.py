@@ -11,7 +11,7 @@
   docx는 같은 문장이 LEGAL_RULE 청구 1개다. 온라인 실행(9933548)의 70개·3조각 분할이 오프라인에서 그대로 재현된다.
 - 인용 법령명: PDF는 '육군 야외 기동훈련안전통제 및 사고조사 규정'(줄바꿈에서 띄어쓰기가 빠짐), docx는 '육군 야외 기동훈련 안전통제 및 사고조사 규정'.
   이 어긋남이 온라인에서 Drive 참고자료 연결(linked_claims 1/17)이 빠진 직접 원인 후보다(참고자료 이름과 일치하지 않는다).
-미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다.
+5차(c223f7b)에서 PDF 3건(제22조 문장 단일 청구·법령명 일치·청구 수)이 풀려 표시를 지웠다(평가 측 재현: 청구 70→47, 검증 대상 17→19, 법령명 일치). 남은 미해결은 LEG-2(TK-24)뿐이다.
 """
 from __future__ import annotations
 
@@ -129,14 +129,12 @@ def test_docx_regulation_sentence_is_one_claim():
     assert len(hits) == 1 and hits[0]["target"] is True
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="TK-22: PDF는 줄 하나가 청구 하나라 인용 문장이 쪼개진다(9933548·e6b58fd 같음)")
 def test_pdf_regulation_sentence_is_one_claim():
     """같은 문장이 PDF에서도 청구 하나(검증 대상)여야 한다."""
     hits = _claim_with(processed(str(PDF))["claims"], "제22조 제4항", "일체 인정하지 아니한다")
     assert len(hits) == 1 and hits[0]["target"] is True
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="TK-22: PDF 줄바꿈에서 인용 법령명의 띄어쓰기가 빠진다(9933548·e6b58fd 같음)")
 def test_pdf_citation_law_name_matches_docx():
     """인용 법령명은 입력 방식과 무관해야 한다. 참고자료(Drive) 이름 대조가 이 값에 의존한다."""
     def regulation(path):
@@ -144,7 +142,6 @@ def test_pdf_citation_law_name_matches_docx():
     assert regulation(str(PDF)) == regulation(str(DOCX)) != set()
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="TK-22: PDF는 문단이 아니라 줄 단위로 청구가 된다(PDF 70개·docx 40개, 9933548·e6b58fd 같음)")
 def test_pdf_claim_count_close_to_docx():
     """같은 서면의 청구 수는 입력 방식에 따라 크게 달라지지 않아야 한다(머리말 표 등으로 약간 다를 수 있어 20% 이내를 허용)."""
     pdf, docx = len(processed(str(PDF))["claims"]), len(processed(str(DOCX))["claims"])

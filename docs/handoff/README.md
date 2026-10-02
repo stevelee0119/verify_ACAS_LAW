@@ -26,14 +26,18 @@
 | [TK-19](TK-19_regressions_after_round2.md) | 회귀 | 2차 구현이 기존 시험 4건과 기준일 추출을 깨뜨림(횡령 사건 기준일 소실 포함) | `pytest -q --ignore=tests/acceptance` 실패 0, `test_reference_date_candidate_is_kept` | 열림 |
 | [TK-20](TK-20_generalization_gaps_round2.md) | 일반화 | 변형 2 첫 점수 16/20: 주소 꼬리·변호사 주소·변호사 성명·`@@` 표지·무리한 주장, 조문 단위 열거 규칙 | `test_variant2_check`·`test_case8_check[text-LEG-1]` | 열림 |
 | [TK-21](TK-21_process_round2.md) | 절차·증거 | 출처 없는 시험 자료 작성(요청 06), 점수 표기, 은닉 탐지 시험 약화 | 다음 커밋 메시지 | 열림 |
-| [TK-22](TK-22_input_paragraph_reconstruction.md) | 입력 단계 | 물리적 줄을 문단으로 복원하지 않아 주장이 토막 나 Drive 대조 누락, 줄바꿈에 따라 인젝션 표지 미탐 | `test_layout_invariance_pdf.py`, `test_case9…`, `test_case9_real_pdf.py`(실제 PDF 원본, 4차 후에도 온라인과 같은 70청구·4분할) | 텍스트 입력 해결(e6b58fd) · **PDF 입력 열림** |
-| [TK-23](TK-23_evidence_severity_internal_regulation.md) | 오탐 + 정책 | Drive에 있는 내부 규정을 CRITICAL '존재하지 않는 법령'으로, 증거가 강한 쪽이 더 낮은 심각도 | 단위 시험, 온라인 FP-1·EX-2s | A 해결(e6b58fd) · 신규 회귀 → TK-29 · B는 사용자 결정 |
+| [TK-22](TK-22_input_paragraph_reconstruction.md) | 입력 단계 | 물리적 줄을 문단으로 복원하지 않아 주장이 토막 나 Drive 대조 누락, 줄바꿈에 따라 인젝션 표지 미탐 | `test_layout_invariance_pdf.py`, `test_case9…`, `test_case9_real_pdf.py` | 텍스트 해결(e6b58fd) · PDF 부분 해결(5차: 실제 PDF 청구 70→47·제22조 문장 복원, 폭 40 INJ-1 잔여 1건) · **어절 중간 공백 회귀 → TK-31** |
+| [TK-23](TK-23_evidence_severity_internal_regulation.md) | 오탐 + 정책 | Drive에 있는 내부 규정을 CRITICAL '존재하지 않는 법령'으로, 증거가 강한 쪽이 더 낮은 심각도 | 단위 시험, 온라인 FP-1·EX-2s | A 해결(e6b58fd) · TK-29 해결(5차) · B HIGH 반영(5차 U9-1, 사용자 결정 — Astra 확인, 평가 측은 U9-2 INFO 분리만 재현) |
 | [TK-24](TK-24_unreasonable_argument_statutory_period.md) | 규칙 부족 | 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐 | `test_case9_check[*-LEG-2]` | 열림(4차 제외) |
 | [TK-25](TK-25_report_scope_and_coverage_notes.md) | 정책 이행 잔여 | AI 판정 축 `scope`가 흔적 0건이면 NOT_APPLICABLE, 커버리지·모델 실패 관찰 | 단위 시험 | scope 해결(e6b58fd) · 제안은 사용자 결정 |
-| [TK-26](TK-26_hardcoding_moved_to_config.md) | 하드코딩·일반화 불일치 | '법리 군집' 설정을 읽는 코드가 없고, 규칙은 시험 낱말만 담아 처음 보는 법리 7건 미탐, 시험 서면 문장이 설정에 복사됨 | `test_generalization_guards.py`, 리터럴 부채 감소 | 해결(e6b58fd) · 민법 군집 큐레이션 한계(처음 보는 법리 5건 미탐) |
+| [TK-26](TK-26_hardcoding_moved_to_config.md) | 하드코딩·일반화 불일치 | '법리 군집' 설정을 읽는 코드가 없고, 규칙은 시험 낱말만 담아 처음 보는 법리 7건 미탐, 시험 서면 문장이 설정에 복사됨 | `test_generalization_guards.py`, 리터럴 부채 감소 | 해결(5차 U5: 민법 편·장·절 범위, 양성 5건 해소) · **정상 항변 오탐·장 이름 오류 → TK-32** · 전형계약(도급 등) 법리는 군집 밖 |
 | [TK-27](TK-27_reference_date_arbitrary_pick.md) | 불확실성 보존 | 기준일 후보가 여럿이면 계약은 늦은 날짜·처분은 이른 날짜를 임의로 고름 | `test_reference_date_is_not_picked_arbitrarily…` | 해결(e6b58fd) |
-| [TK-28](TK-28_pii_label_punctuation_and_audit_findings.md) | 개인정보 + 감사 지적 | 당사자 라벨 뒤 구분자가 공백이 아니면 이름 미마스킹(16변형 중 13), system/schema 예외, 입원↔퇴원 혈압 모순, 참고자료 승격·PDF 연결(미재현) | `test_pii_label_variants.py` | 열림(4차 대상 아님) · system 예외는 종류 목록 방식으로 부분 해결 |
-| [TK-29](TK-29_reference_match_evidence_level.md) | 불확실성 단조 회귀 | 참고자료 제목 부분 일치·미독 파일만으로 부존재 판정을 낮추고 PARTIALLY_VERIFIED로 올림(4차 S3 신규) | `test_reference_match_guard.py` | 열림 |
+| [TK-28](TK-28_pii_label_punctuation_and_audit_findings.md) | 개인정보 + 감사 지적 | 당사자 라벨 뒤 구분자가 공백이 아니면 이름 미마스킹(16변형 중 13), system/schema 예외, 입원↔퇴원 혈압 모순, 참고자료 승격·PDF 연결(미재현) | `test_pii_label_variants.py` | 5차 부분 해결(라벨 구분자 13건·system 등록 상수·입원/퇴원) · **이름 회귀·미해결 잔여 → TK-30** |
+| [TK-29](TK-29_reference_match_evidence_level.md) | 불확실성 단조 회귀 | 참고자료 제목 부분 일치·미독 파일만으로 부존재 판정을 낮추고 PARTIALLY_VERIFIED로 올림(4차 S3 신규) | `test_reference_match_guard.py` | **해결(5차 c6a9dc0)** — 평가 측 보호 시험 3건 XPASS, 독립 감사 18/18 |
+| [TK-30](TK-30_pii_name_regression_round5.md) | 회귀(개인정보) | 5차 이름 개선과 함께 4차에 마스킹되던 이름이 노출(`성명: 김민기`)·마지막 글자 잔존(`원고 김하은`), 라벨 칸이 여럿인 `원  고   윤하기` 노출, 정상 안내문 PERSON 오탐 | `test_round5_regressions.py` | 열림 |
+| [TK-31](TK-31_pdf_join_midword_space.md) | 회귀(입력 단계) | 줄 결합이 어절 한가운데에 공백(`(대 법원`)을 넣어 TC-06 법원명·선고일 손실, dev 81.7→81.2. PDF 폭 40 INJ-1 잔여 1건 | `test_round5_regressions.py`, `test_layout_invariance_pdf.py` | 열림 |
+| [TK-32](TK-32_civil_cluster_false_positive_and_names.md) | 오탐 + 설정 정확성 | 민법 군집 확장으로 요건을 제시한 정상 항변을 과대주장으로 표시, 설정의 장 이름 오류(사무관리·부당이득·불법행위) | `test_round5_regressions.py` | 열림 |
+| [TK-33](TK-33_evaluation_marker_and_report_accuracy.md) | 절차·하드코딩 | 문단 복원기에 평가 자료 표식 분기(`HO-\d+\|TC-\d+\|홀드아웃용…`), 완료 보고의 비교 기준·성공 단계만 적은 CI 결과·"10건 전수 해소" 오기 | `check_hardcoding_diff.py`의 `eval_marker` | 열림 |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · 구현→평가 요청은 [requests/](requests/README.md)
 

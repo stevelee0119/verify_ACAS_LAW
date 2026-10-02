@@ -46,6 +46,35 @@ def failed_tests(output: str) -> Set[str]:
     return {m.group(1).strip() for m in re.finditer(r"^FAILED\s+(\S+)", output, flags=re.M)}
 
 
+def errored_tests(output: str) -> Set[str]:
+    """`pytest -rE` 출력에서 ERROR(수집·setup·teardown 오류)가 난 시험·파일 id 집합."""
+    return {m.group(1).strip() for m in re.finditer(r"^ERROR\s+(\S+)", output, flags=re.M)}
+
+
+def pytest_findings(base: Tuple[Set[str], Set[str], Dict[str, int], int],
+                    head: Tuple[Set[str], Set[str], Dict[str, int], int]) -> Tuple[List[str], List[str]]:
+    """기준·현재의 (실패 집합, ERROR 집합, 요약 개수, 종료 코드)를 비교한다. (새 실패 목록, 측정 못 함 사유 목록).
+
+    FAILED만 보면 'passed가 조금 있고 ERROR가 있는' 실행이 통과로 보인다(독립 감사 5차 F4). ERROR는 통과도 실패 판정도 아니므로
+    양쪽 모두에서 측정 못 함으로 두고, 현재에만 있는 ERROR는 새 실패로 센다."""
+    reasons: List[str] = []
+    for side, (failed, errored, counts, rc) in (("기준", base), ("현재", head)):
+        if rc not in (0, 1) or not counts.get("passed"):
+            reasons.append(f"pytest {side}: 종료 코드 {rc}, 통과 {counts.get('passed', 0)}건 — 시험이 제대로 돌지 않았다")
+        if errored or counts.get("error"):
+            reasons.append(f"pytest {side}: ERROR {max(len(errored), counts.get('error', 0))}건 — ERROR는 통과가 아니다"
+                           f"(수집·준비 단계 오류, 예: {sorted(errored)[:3]})")
+        if rc == 1 and not failed and not errored:
+            reasons.append(f"pytest {side}: 종료 코드 1인데 실패·ERROR 시험을 읽지 못했다(출력 형식 또는 요약 파싱 문제)")
+        if counts.get("failed", 0) > len(failed):
+            reasons.append(f"pytest {side}: 요약의 실패 {counts['failed']}건 중 {len(failed)}건만 읽었다")
+    new_failures = sorted((head[0] - base[0]) | {f"ERROR {e}" for e in head[1] - base[1]})
+    base_passed, head_passed = base[2].get("passed", 0), head[2].get("passed", 0)
+    if head_passed < base_passed and not new_failures:
+        reasons.append(f"pytest 통과 건수 감소(기준 {base_passed} → 현재 {head_passed}) — 시험이 삭제됐거나 실행되지 않았다")
+    return new_failures, reasons
+
+
 def pytest_counts(output: str) -> Dict[str, int]:
     """`pytest -q` 마지막 요약 줄에서 {passed, failed, error, skipped, xfailed, xpassed}를 읽는다. 읽지 못하면 빈 딕셔너리."""
     counts: Dict[str, int] = {}
@@ -124,15 +153,53 @@ def jobs() -> Tuple[List[Tuple[Path, bool]], List[str]]:
     return out, missing
 
 
-def run_pytest(tree: Path) -> Tuple[Set[str], Dict[str, int], int]:
-    """(실패한 시험 id 집합, 요약 개수, 종료 코드). 시간 초과는 예외로 올린다."""
+def scorecard_run(tree: Path) -> Dict[str, Dict[str, float]]:
+    """그 코드 트리의 고정 시험 성적표에서 {집합: {문서: 재현율}}을 읽는다(독립 감사 5차: probe는 TC-06 법원명 손실을 못 봤다)."""
+    out = Path(tempfile.mkdtemp(prefix="gate_score_")) / "scorecard.json"
+    script = tree / "scripts" / "scorecard.py"
+    if not script.is_file():
+        raise RuntimeError("성적표 도구가 이 커밋에 없다")
+    try:
+        proc = subprocess.run([sys.executable, str(script), "--out", str(out)], cwd=tree, capture_output=True, text=True,
+                              timeout=900, env=dict(os.environ, LV_ALLOW_NETWORK="0", PYTHONPATH=str(tree)))
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"성적표 시간 초과({exc.timeout}s)") from exc
+    if proc.returncode != 0 or not out.is_file():
+        raise RuntimeError(f"성적표 실행 실패(종료 코드 {proc.returncode}) {proc.stderr[-200:]}")
+    data = json.loads(out.read_text(encoding="utf-8"))
+    # 값이 없는(채점하지 않은) 문서는 비교 대상에서 뺀다. 기준에 값이 있던 문서가 현재에 없으면 scorecard_diff가 측정 못 함으로 센다.
+    return {name: {str(k): float(v) for k, v in (st.get("per_document") or {}).items() if v is not None}
+            for name, st in data.get("sets", {}).items()}
+
+
+def scorecard_diff(base: Dict[str, Dict[str, float]], head: Dict[str, Dict[str, float]]) -> Tuple[List[str], List[str]]:
+    """문서별 재현율이 내려갔으면 회귀. 기준 문서·집합이 현재에 없거나 비어 있으면 측정 못 함."""
+    regressions: List[str] = []
+    reasons: List[str] = []
+    if not base or not any(base.values()):
+        reasons.append("성적표(기준)에 문서별 값이 없다")
+    for name, docs in base.items():
+        for doc, value in docs.items():
+            now = head.get(name, {}).get(doc)
+            if now is None:
+                reasons.append(f"성적표 {name}/{doc}: 현재에 없다(문서·집합 누락)")
+            elif now < value - 1e-9:
+                regressions.append(f"성적표 {name}/{doc}: {value} → {now}")
+    return regressions, reasons
+
+
+def run_pytest(tree: Path) -> Tuple[Set[str], Set[str], Dict[str, int], int]:
+    """(실패한 시험 id 집합, ERROR id 집합, 요약 개수, 종료 코드). 시간 초과는 예외로 올린다.
+
+    저장소 `pytest.ini`의 `addopts = -q`와 여기의 `-q`가 겹치면 `-qq`가 되어 마지막 요약 줄이 나오지 않아 개수를 읽지 못한다(평가 측 점검에서 발견).
+    그래서 `-o addopts=`로 비우고 `-q` 한 번만 준다."""
     try:
         proc = subprocess.run([sys.executable, "-m", "pytest", "-q", "--ignore=tests/acceptance", "-p", "no:cacheprovider",
-                               "--tb=no", "-rf"], cwd=tree, capture_output=True, text=True, timeout=3000,
+                               "--tb=no", "-rfE", "-o", "addopts="], cwd=tree, capture_output=True, text=True, timeout=3000,
                               env=dict(os.environ, LV_ALLOW_NETWORK="0", PYTHONPATH=str(tree)))
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(f"pytest 시간 초과({exc.timeout}s)") from exc
-    return failed_tests(proc.stdout), pytest_counts(proc.stdout), proc.returncode
+    return failed_tests(proc.stdout), errored_tests(proc.stdout), pytest_counts(proc.stdout), proc.returncode
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -165,6 +232,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             head_futures = {j: pool.submit(probe_run, j[0], j[1], None) for j in work}
             pytest_futures = ({"base": pool.submit(run_pytest, base_tree), "head": pool.submit(run_pytest, ROOT)}
                               if args.pytest else {})
+            score_futures = {"base": pool.submit(scorecard_run, base_tree), "head": pool.submit(scorecard_run, ROOT)}
             for j in work:
                 spec, text = j
                 label = f"{spec.stem}/{'text' if text else 'primary'}"
@@ -180,19 +248,24 @@ def main(argv: Optional[List[str]] = None) -> int:
                                         "head": f"{sum(head_rows.values())}/{len(head_rows)}"})
                 report["regressions"] += [f"{label}:{i}" for i in regressions]
                 report["improved"] += [f"{label}:{i}" for i in improved]
+            try:
+                score_regressions, score_reasons = scorecard_diff(score_futures["base"].result(), score_futures["head"].result())
+            except (RuntimeError, ValueError, KeyError, OSError, TypeError) as exc:
+                unmeasured_reasons.append(f"성적표 비교 못 함: {exc}")
+            else:
+                report["regressions"] += score_regressions
+                unmeasured_reasons += score_reasons
             if args.pytest:
                 try:
-                    (base_failed, base_counts, base_rc), (head_failed, head_counts, head_rc) = (
-                        pytest_futures["base"].result(), pytest_futures["head"].result())
+                    base_run, head_run = pytest_futures["base"].result(), pytest_futures["head"].result()
                 except RuntimeError as exc:
                     unmeasured_reasons.append(str(exc))
                 else:
-                    for side, counts, rc in (("기준", base_counts, base_rc), ("현재", head_counts, head_rc)):
-                        if rc not in (0, 1) or not counts.get("passed"):
-                            unmeasured_reasons.append(f"pytest {side}: 종료 코드 {rc}, 통과 {counts.get('passed', 0)}건 — 시험이 제대로 돌지 않았다")
-                    report["pytest"] = {"base": base_counts, "head": head_counts}
-                    report["new_test_failures"] = sorted(head_failed - base_failed)
-                    report["fixed_test_failures"] = sorted(base_failed - head_failed)
+                    new_failures, reasons = pytest_findings(base_run, head_run)
+                    unmeasured_reasons += reasons
+                    report["pytest"] = {"base": base_run[2], "head": head_run[2]}
+                    report["new_test_failures"] = new_failures
+                    report["fixed_test_failures"] = sorted(base_run[0] - head_run[0])
     finally:
         remove_worktree(base_tree)
     bad = bool(report["regressions"] or report["new_test_failures"])
