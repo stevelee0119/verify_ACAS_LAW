@@ -40,7 +40,7 @@
 
 ### R0. 시작 점검
 - `Steve_ACASiaLAW`를 받아 시작한다. `git config core.autocrlf input`. 강제 푸시 금지.
-- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/20_round6_baseline.md`에 붙인다. **기대 기준선(평가 측 측정):** 고정 dev 81.2 / holdout 79.2, probe 12종 278/280, 전체 시험 실패 1건 기대(2026-10-03 전체 재실행 확정 전 — 이전 측정 3건에서 TK-12 2건 해소; OCR 날짜 환경 1건 `test_v5_ocr_dates::test_rotated_scan_page_impossible_date_is_found` — TK-12 시험 2건은 2026-10-03에 해소되어 통과한다), `tests/acceptance`의 미해결은 **strict xfail 26건**(서면9 LEG-2 3건[docx·텍스트·실제 PDF] + `test_round5_regressions.py` 22건[TK-30 15·TK-28 4·TK-31 2·TK-32 1] + **TK-34 1건**[`test_prepared_brief_mirror_official.py::test_new_data_ka_cited_for_2020_act_is_flagged` — **이번 라운드 범위 밖**, 아래 0.3. 이 xfail이 XPASS가 되면 새 탐지를 넣은 것이므로 requests로 알리고 범위 위반으로 본다])과 `test_layout_invariance_pdf.py`의 KNOWN_OPEN 1건(case8 폭 40 INJ-1). 달라지면 사유를 적는다.
+- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/20_round6_baseline.md`에 붙인다. **기대 기준선(평가 측 측정):** 고정 dev 81.2 / holdout 79.2, probe 12종 278/280, 전체 시험 실패 1건(평가 측 2026-10-03 측정: 3,007 통과·13 건너뜀·실패 1; 이전 측정 3건에서 TK-12 2건 해소; OCR 날짜 환경 1건 `test_v5_ocr_dates::test_rotated_scan_page_impossible_date_is_found` — TK-12 시험 2건은 2026-10-03에 해소되어 통과한다), `tests/acceptance`의 미해결은 **strict xfail 26건**(서면9 LEG-2 3건[docx·텍스트·실제 PDF] + `test_round5_regressions.py` 22건[TK-30 15·TK-28 4·TK-31 2·TK-32 1] + **TK-34 1건**[`test_prepared_brief_mirror_official.py::test_new_data_ka_cited_for_2020_act_is_flagged` — **이번 라운드 범위 밖**, 아래 0.3. 이 xfail이 XPASS가 되면 새 탐지를 넣은 것이므로 requests로 알리고 범위 위반으로 본다])과 `test_layout_invariance_pdf.py`의 KNOWN_OPEN 1건(case8 폭 40 INJ-1). 달라지면 사유를 적는다.
 - `tests/regression/test_ledger.py`에 묶음마다 **고친 결함의 재현 입력 + 대조군**을 추가한다(입력은 구현 측이 새로 짓는다. 평가 측 시험 입력을 복사하지 않는다).
 
 ### R1. TK-30 이름 마스킹 회귀 — 개인정보 노출 위험이라 첫째
