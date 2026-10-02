@@ -98,32 +98,127 @@ MILITARY_AFFILIATION_RE = re.compile(
     r"(?:\s*[가-힣]{2,15}(?:실|과|처|팀|반|소대|중대|대대|대|단))?\s*(?:소속\s*)?"
     r"(?:이병|일병|상병|병장|하사|중사|상사|원사|준위|소위|중위|대위|소령|중령|대령|준장|소장|중장|대장)(?![가-힣])"
 )
-# 서면 머리의 당사자 표시는 글자 사이를 띄워 쓴다("피 고 인   최 원 석", "대표이사 정 해 승"). 이름 글자 사이 공백도 허용한다.
-PARTY_HEADER_NAME_RE = re.compile(
-    r"(?:^|\n)[ \t]*(?:피[ \t]*고[ \t]*인|피[ \t]*의[ \t]*자|피[ \t]*신[ \t]*청[ \t]*인|피[ \t]*청[ \t]*구[ \t]*인|"
-    r"피[ \t]*고|원[ \t]*고|신[ \t]*청[ \t]*인|청[ \t]*구[ \t]*인|상[ \t]*고[ \t]*인|항[ \t]*소[ \t]*인|"
-    r"대[ \t]*표[ \t]*이[ \t]*사|대[ \t]*표[ \t]*자|대[ \t]*표|이[ \t]*사[ \t]*장|원[ \t]*장|소[ \t]*장|이[ \t]*사|감[ \t]*사|"
-    r"담[ \t]*당[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*인)[ \t]+"
-    r"((?:[가-힣][ \t]?){1,3}[가-힣])(?=[ \t]*(?:\n|$|[(（]))"
+# ===========================================================================
+# TK-28: 당사자·소송관계인·직책·성명 라벨 문맥 인명(PERSON) 탐지 일반화
+# ===========================================================================
+# 한국 성씨 사전 (통계청 인구주택총조사 주요 성씨 및 복성 체계)
+DOUBLE_SURNAMES = {"남궁", "황보", "제갈", "사공", "선우", "서문", "독고"}
+SINGLE_SURNAMES = {
+    "김", "이", "박", "최", "정", "강", "조", "윤", "장", "임", "한", "오", "서", "신", "권", "황", "안", "송", "류", "유",
+    "홍", "고", "문", "양", "손", "배", "백", "허", "남", "심", "노", "하", "곽", "성", "차", "주", "우", "구", "라", "나",
+    "전", "민", "진", "지", "엄", "채", "원", "천", "방", "공", "현", "함", "변", "염", "여", "추", "도", "소", "석", "선",
+    "설", "마", "길", "연", "위", "표", "명", "기", "반", "왕", "금", "옥", "육", "인", "맹", "제", "모", "탁", "국", "어",
+    "은", "편", "용", "예", "경", "봉", "사", "부", "복", "태", "목", "형", "계", "피", "두", "감", "음", "빈", "동", "온",
+    "호", "범", "좌", "팽", "승", "간", "상", "시", "갈", "단", "견", "당", "화", "로", "리", "려"
+}
+
+# 당사자, 소송관계인, 대표자, 직책, 성명/서명, 변호사 라벨 어휘군
+PARTY_AND_TITLE_LABELS = [
+    # 변호사 및 소송대리인
+    "소송대리인변호사", "소송대리인", "담당변호사", "대리인변호사", "변호인", "변호사",
+    # 대표자 및 직책
+    "대표이사", "대표자", "대표", "이사장", "원장", "소장", "이사", "감사",
+    "지배인", "관리인", "회장", "사장",
+    # 성명/서명 표지
+    "성명", "서명자", "명의인",
+    # 소송 당사자 및 관계인
+    "피고인", "피의자", "피신청인", "피청구인", "피고", "원고",
+    "신청인", "청구인", "상고인", "항소인",
+    "채권자", "채무자", "증인", "피해자", "고소인", "고발인", "참고인",
+    "망", "소외", "배우자", "자녀", "남편", "아들", "딸", "가족", "대리인",
+]
+
+def _build_spaced_label_regex(labels: Sequence[str]) -> str:
+    spaced = []
+    for label in sorted(labels, key=len, reverse=True):
+        spaced.append(r"[ \t]*".join(re.escape(ch) for ch in label))
+    return r"(?:" + "|".join(spaced) + r")"
+
+LABEL_PATTERN_STR = _build_spaced_label_regex(PARTY_AND_TITLE_LABELS)
+
+# 통합 구분자: 콜론, 전각콜론, 하이픈, 전각하이픈/대시, 슬래시, 전각슬래시, 파이프, 괄호, 공백, 줄바꿈
+COMMON_DELIMITER_STR = (
+    r"(?:"
+    r"[ \t]*[:：\-－—―–/／|｜][ \t]*(?:[(（\[［][ \t]*)?"
+    r"|"
+    r"[ \t]*[(（\[［][ \t]*"
+    r"|"
+    r"\r?\n[ \t]*"
+    r"|"
+    r"[ \t]+"
+    r")"
 )
 
-# 법인·기관 대표자/임원 직책 라벨 뒤 성명 (본문 인적사항란의 띄어쓴 성명 일반 규칙 지원: "대표이사 정 해 승", "원장 김 철 수")
+# 라벨 어휘군 × 구분자군 결합 정규식 (이름 2~4글자 포착, 조사는 이름 외부에서 분리)
+LABELLED_PARTY_PERSON_RE = re.compile(
+    rf"(?<![가-힣])"
+    rf"(?:[\[(（［【〈《][ \t]*)?"
+    rf"{LABEL_PATTERN_STR}"
+    rf"(?:[\])）］】〉》][ \t]*)?"
+    rf"{COMMON_DELIMITER_STR}"
+    rf"((?:[가-힣][ \t]?){{1,3}}[가-힣])"
+    rf"(?:[)）\]］])?"
+    rf"(?=[ \t\r\n)）\]］,.;:]|$)"
+)
+
+def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
+    """이름 후보의 구조적 유효성을 판단한다 (TK-28).
+    
+    특정 낱말 목록에 의존하지 않고 이름 후보의 구조(음절 수, 성씨 체계, 문장 서술 여부)로 판단한다.
+    1. 음절 수: 공백 제외 2~4음절 완성형 한글.
+    2. 성씨 체계: 첫 2음절(복성) 또는 1음절(단성)이 한국 성씨 체계에 부합.
+    3. 문장 서술형 종결 어미 배제 ('~다', '~음', '~임', '~됨', '~기').
+    4. 후행 서술문 맥락 배제 ('판결을 구한다', '기재와 같다' 등).
+    """
+    clean = re.sub(r"\s+", "", raw_name)
+    if len(clean) < 2 or len(clean) > 4:
+        return False
+    if not all("\uac00" <= ch <= "\ud7a3" for ch in clean):
+        return False
+    if clean.endswith(("다", "음", "임", "됨", "기")):
+        return False
+    # 조사가 이름 끝에 결합된 형태 배제 (을, 를, 에게, 으로, 라고, 에서)
+    if clean.endswith(("을", "를", "에게", "으로", "라고", "에서")):
+        return False
+    
+    # 성씨 확인
+    has_surname = False
+    if len(clean) >= 3 and clean[:2] in DOUBLE_SURNAMES:
+        has_surname = True
+    elif clean[0] in SINGLE_SURNAMES:
+        has_surname = True
+    if not has_surname:
+        return False
+
+    # 직책/대리인 뒤 선임·해임·지명 등 인사 행위 또는 권리(선임권 등) 배제
+    if clean.startswith(("선임", "해임", "취임", "선출", "지명", "추천", "임명")):
+        return False
+
+    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문, 침해/행사
+    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용)", after_text):
+        return False
+    if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다)", after_text):
+        return False
+
+    return True
+
+# 기존 정규식과의 호환성 유지용 정의
+PARTY_HEADER_NAME_RE = LABELLED_PARTY_PERSON_RE
+
+# 법인·기관 대표자/임원 직책 라벨 뒤 성명 (본문 인적사항란의 띄어쓴 성명 일반 규칙 지원)
 REPRESENTATIVE_TITLE_RE = (
     r"(?:대[ \t]*표[ \t]*이[ \t]*사|대[ \t]*표[ \t]*자|대[ \t]*표|"
     r"이[ \t]*사[ \t]*장|원[ \t]*장|소[ \t]*장|이[ \t]*사|감[ \t]*사|"
     r"지[ \t]*배[ \t]*인|관[ \t]*리[ \t]*인|회[ \t]*장|사[ \t]*장)"
 )
-REPRESENTATIVE_NAME_RE = re.compile(
-    rf"(?<![가-힣])(?:{REPRESENTATIVE_TITLE_RE})[ \t]*[:：]?[ \t]+"
-    r"((?:[가-힣][ \t]){1,3}[가-힣]|[가-힣]{2,4})"
-    r"(?=[ \t]*(?:[(（\n\r,.;]|$|[ \t]+(?:등기|인|귀하|배석|소송|의\b)))"
-)
+REPRESENTATIVE_NAME_RE = LABELLED_PARTY_PERSON_RE
 REPRESENTATIVE_NAME_STOPWORDS = {
     "선임", "해임", "취임", "선출", "결의", "추천", "후보", "등기", "권한", "직무",
     "대행", "회의", "의결", "정관", "규정", "조례", "이사회", "총회", "위원회", "선임서",
     "인사", "명령", "발령", "공고", "보고", "안건", "통지", "공지", "일정", "변경", "취소",
 }
-PARTY_HEADER_STOPWORDS = {"대한민국", "국가", "검사", "미상", "불상",
+PARTY_HEADER_STOPWORDS = {"대한민국", "국가", "검사", "미상", "불상", "무죄", "유죄",
+                          "기각", "각하", "인용", "취하",
                           # 서면 제목("변 호 인  의 견 서")
                           "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
                           "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"}
@@ -410,45 +505,39 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             continue
         matches.append(PIIMatch("BUSINESS_REGISTRATION", m.group(1), start, end, block_id, page, 1.0, "사업자등록번호 라벨 문맥"))
 
-    for m in PARTY_HEADER_NAME_RE.finditer(text):
-        name = re.sub(r"\s+", "", m.group(1))
-        if name in PARTY_HEADER_STOPWORDS or name in LEGAL_MILITARY_STOPWORDS:
-            continue
-        # 가명은 띄어쓰기를 뺀 이름으로 만든다. 본문의 '최원석'과 머리의 '최 원 석'이 같은 가명을 받는다.
-        matches.append(PIIMatch("PERSON", name, m.start(1), m.end(1), block_id, page, 0.8, "당사자 표시란"))
-
-    # 소송대리인 및 담당변호사 성명 (법인명 선행 등 같은 줄 배치 및 별도 줄 배치 모두 지원)
-    existing_spans = {(m.start, m.end) for m in matches}
-    for m in LAWYER_NAME_RE.finditer(text):
-        start, end = m.start(1), m.end(1)
-        if (start, end) in existing_spans or _covered_by_span(guard_spans, start, end):
-            continue
+    # 라벨 문맥 인명(PERSON) 통합 탐지: 당사자/직책/성명/변호사 라벨 × 공통 구분자 (TK-28)
+    for m in LABELLED_PARTY_PERSON_RE.finditer(text):
         raw_name = m.group(1).strip()
         clean_name = re.sub(r"\s+", "", raw_name)
-        if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS:
-            continue
-        if len(clean_name) < 2 or len(clean_name) > 4:
-            continue
-        matches.append(PIIMatch("PERSON", clean_name, start, end, block_id, page, 0.95, "담당변호사 라벨 문맥 성명"))
-        existing_spans.add((start, end))
-
-    # 법인·기관 대표자/임원 직책 라벨 뒤 성명 (띄어쓴 성명 및 본문 인적사항란 일반 규칙)
-    for m in REPRESENTATIVE_NAME_RE.finditer(text):
-        raw_name = m.group(1).strip()
-        clean_name = re.sub(r"\s+", "", raw_name)
-        if clean_name in REPRESENTATIVE_NAME_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS:
-            continue
-        after_text = text[m.end(1):m.end(1) + 20]
-        if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건)", after_text):
-            continue
         start, end = m.start(1), m.end(1)
         if _covered_by_span(guard_spans, start, end):
             continue
-        if len(clean_name) < 2 or len(clean_name) > 4:
-            continue
-        matches.append(PIIMatch("PERSON", clean_name, start, end, block_id, page, 0.85, "대표자·직책 라벨 문맥 성명"))
 
-    for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON"), (LABELLED_NAME_RE, "PERSON")):
+        # 이름 끝에 조사가 결합된 형태(예: '홍길동은', '박영훈은')인 경우 조사를 분리하여 성명만 추출
+        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+        if josa_match and len(clean_name) >= 3:
+            stem = clean_name[:josa_match.start()]
+            trailing_part = clean_name[josa_match.start():]
+            after_preview = trailing_part + text[end:end + 25]
+            if is_valid_korean_name_structure(stem, after_preview):
+                # 조사 앞부분(성명)만 분리
+                clean_name = stem
+                end = end - len(trailing_part)
+
+        after_text = text[end:end + 30]
+        if not is_valid_korean_name_structure(clean_name, after_text):
+            continue
+        if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
+            continue
+        matched_str = m.group(0)
+        is_lawyer = any(k in matched_str for k in ("변호사", "변호인"))
+        conf = 0.95 if is_lawyer else 0.85
+        note = "담당변호사 라벨 문맥 성명" if is_lawyer else "당사자·직책·성명 라벨 문맥"
+        matches.append(PIIMatch("PERSON", clean_name, start, end, block_id, page, conf, note))
+
+    # 본문 직함 뒤 인명 및 친족 표기 보조 탐지
+    existing_spans = {(m.start, m.end) for m in matches}
+    for pattern, kind in ((NAME_RE, "PERSON"), (NAME_TITLE_RE, "PERSON")):
         for m in pattern.finditer(text):
             name = m.group(1).strip()
             start, end = m.start(1), m.end(1)

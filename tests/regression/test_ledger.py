@@ -98,6 +98,26 @@ LEDGER_RECORDS = [
     ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_PHONE_BLOCKED", True, "system 프롬프트에 합성 전화번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_RRN_BLOCKED", True, "system 프롬프트에 합성 주민번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("ASTRA-V5", "STATIC_PROMPT_CLEAN_CONTROL", False, "고정 시스템 프롬프트 및 메타 지시문", "PASSED"),
+    ("TK-29", "READ_REFERENCE_EXACT_MATCH", True, "본문 읽은 참고자료와 정규화 제목 완전 일치", "PARTIALLY_VERIFIED 및 INFO 생성"),
+    ("TK-29", "UNREAD_OR_PARTIAL_MATCH_CONTROL", False, "미독 파일 또는 부분 일치 해설서", "승격 차단 (LOW/CRITICAL 유지)"),
+    ("TK-29", "STATUTE_FORM_REFERENCE_CONTROL", False, "법령 형태 인용(법·시행령 등)", "참고자료 일치 무관 CRITICAL 유지"),
+    ("TK-28", "PII_LABEL_DELIMITER_GENERALIZATION_POSITIVE", True, "당사자·직책 라벨 × 구분자 × 다양한 이름 형태 인명 마스킹", "PERSON 탐지 및 마스킹 성공"),
+    ("TK-28", "PII_LABEL_DELIMITER_NON_NAME_CONTROL", False, "라벨 뒤 비인명(서술문·기관·결과) 오탐 방지", "PERSON 미탐지 보존"),
+    ("TK-28", "SYSTEM_PROMPT_ALL_PII_TYPES_BLOCKED", True, "system 프롬프트에 다양한 PII(이름·생년월일·법인 등) 동적 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("TK-28", "SYSTEM_PROMPT_TAMPERED_WITH_DATA_BLOCKED", True, "등록된 시스템 상수에 동적 사용자 값 혼입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("TK-28", "ALL_ACTUAL_SYSTEM_AND_SCHEMA_CONSTANTS_PASSED", False, "코드베이스 내 모든 실제 system/schema 등록 상수", "PASSED (STATIC_PROMPT_FALSE_POSITIVE 또는 정상)"),
+    ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_POSITIVE", True, "민법 편·장·절 범위(상계·변제·면제·해제·표현대리 등) 과대주장 탐지", "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS 탐지"),
+    ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_CONTROL", False, "민법 요건사실 소명 및 판례 인용 항변", "과대주장 미탐지 보존"),
+    ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_POSITIVE", True, "같은 입원/회복/퇴원 단계 내 활력징후 수치 불일치 탐지", "CONTRADICTS 관찰 생성"),
+    ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_CONTROL", False, "입원↔퇴원, 수술↔회복 등 상이한 진료 경과 단계 활력징후", "오탐 배제 (None)"),
+    ("TK-23", "STATUTE_ABSENT_IN_VERSION_SEVERITY_HIGH", True, "시행 버전 전체 조문 대조 결과 미존재(A등급) 심각도 HIGH 상향", "severity=Severity.HIGH"),
+    ("TK-23", "STATUTE_EXISTING_OR_UNVERIFIED_CONTROL", False, "존재 조문 또는 시행일 미도래 조문은 조문부존재 HIGH 미생성", "정상 검증 또는 UNVERIFIED"),
+    ("U9-2", "PDF_PRODUCER_SOFTWARE_SEPARATED_AS_INFO", True, "PDF의 Producer/Creator 생성 소프트웨어명을 INFO 심각도로 분리", "title='생성 소프트웨어 정보', severity=Severity.INFO"),
+    ("U9-2", "DOCX_AUTHOR_METADATA_PRESERVED_AS_LOW", False, "docx의 Author/lastModifiedBy 등 작성자·회사 식별 정보는 LOW 유지", "severity=Severity.LOW"),
+    ("TK-22", "CROSS_FORMAT_AND_WIDTH_INVARIANCE", True, "txt/pdf(36,44,56,64폭)/docx 동일 서면 변형 파싱", "형식·줄폭 무관 인용 및 주장 결과 100% 일치"),
+    ("TK-22", "PDF_HIDDEN_TEXT_PRESERVATION_AFTER_RECON", True, "숨은 텍스트 포함 PDF 문단 복원", "hidden_text 레이어 및 좌표 정상 보존"),
+    ("TK-22", "PDF_TABLE_PRESERVATION_AFTER_RECON", False, "표(Table) 포함 PDF 문단 복원", "표 블록 구조 및 table_ref 보존"),
+    ("TK-22", "PDF_CROSS_PAGE_PRESERVATION_AFTER_RECON", False, "쪽을 넘는 문장 포함 PDF 문단 복원", "각 쪽의 블록 및 page 속성 온전 보존"),
 ]
 
 
@@ -791,7 +811,434 @@ def test_astra_v5_clean_system_and_meta_labels_control(
 
 
 # ===========================================================================
-# 13. 원장 종합 무결성 검증
+# 13. TK-29: 사용자 참고자료(Drive) 일치 판정 가드 (양성 3건, 대조군 3건)
+# ===========================================================================
+class _MockLibrary:
+    def __init__(self, sources: list, inventory: list = None):
+        self.summary = {"sources": sources, "inventory": inventory or []}
+        self.eligible = {}
+
+
+class _MockVerifier:
+    def __init__(self, sources: list, inventory: list = None):
+        self.references = _MockLibrary(sources, inventory)
+
+
+def _run_mock_law_absent(law_name: str, sources: list, inventory: list = None):
+    import types
+    from packages.common.enums import VerificationStatus
+    from packages.common.schemas import Citation, CitationType
+    from packages.legal_engine.source_review import _law_absent
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation(
+        citation_id="c_synth", document_id="d_synth", block_id="b_synth",
+        page=1, span=(0, 10), raw_text=law_name,
+        type=CitationType.STATUTE, law_name=law_name, article="1"
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    verdict.source_records = []
+    _law_absent(
+        verdict,
+        types.SimpleNamespace(message="EXACT_LAW_NOT_FOUND:[]"),
+        verifier=_MockVerifier(sources, inventory)
+    )
+    return verdict
+
+
+@pytest.mark.parametrize(
+    "law_name, title",
+    [
+        ("재난안전 대응지침", "[RAG참고자료] 재난안전 대응지침.pdf"),
+        ("특수조건 보안관리지침", "특수조건_보안관리지침.hwpx"),
+        ("현장업무수칙", "현장업무수칙"),
+    ],
+)
+def test_tk29_read_reference_exact_match_positive(law_name: str, title: str):
+    """TK-29 양성: 본문을 읽은 참고자료(sources)와 정규화 제목이 완전 일치하는 내부 규정은 승격."""
+    from packages.common.enums import Severity, VerificationStatus
+
+    verdict = _run_mock_law_absent(law_name, sources=[{"name": title}])
+    assert verdict.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert verdict.levels.get("existence") == "FOUND_IN_USER_REFERENCES"
+    assert not any(f.severity == Severity.CRITICAL for f in verdict.findings)
+    assert any(f.severity == Severity.INFO for f in verdict.findings)
+
+
+@pytest.mark.parametrize(
+    "law_name, sources, inventory, expected_critical",
+    [
+        ("재난안전 대응지침", [], [{"name": "재난안전 대응지침.pdf", "status": "UNAVAILABLE"}], False),
+        ("재난안전 대응지침", [{"name": "재난안전 대응지침 해설서.pdf"}], [], False),
+        ("가상민사소송법", [{"name": "[RAG참고자료] 가상민사소송법.pdf"}], [], True),
+    ],
+)
+def test_tk29_unread_partial_and_statute_control(
+    law_name: str, sources: list, inventory: list, expected_critical: bool
+):
+    """TK-29 대조군: 미독 파일, 부분 일치 해설서, 법령 형태는 참고자료 승격이 차단됨."""
+    from packages.common.enums import FindingType, Severity, VerificationStatus
+
+    verdict = _run_mock_law_absent(law_name, sources=sources, inventory=inventory)
+    assert verdict.status != VerificationStatus.PARTIALLY_VERIFIED
+    assert verdict.levels.get("existence") != "FOUND_IN_USER_REFERENCES"
+    if expected_critical:
+        assert any(
+            f.type == FindingType.STATUTE_NONEXISTENT and f.severity == Severity.CRITICAL
+            for f in verdict.findings
+        )
+
+
+# ===========================================================================
+# 14. TK-28: 당사자 이름 라벨 구분자 일반화 (양성 6건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text, expected_name",
+    [
+        ("고소인: 배민", "배민"),                    # 2음절, 콜론
+        ("피신청인 - 제갈성진", "제갈성진"),          # 복성 4음절, 하이픈
+        ("피의자 : 강 하 늘", "강하늘"),             # 띄어쓴 3음절, 공백 낀 콜론
+        ("[참고인] 황보명", "황보명"),              # 복성 3음절, 대괄호
+        ("대리인: 사공수", "사공수"),                # 복성 3음절, 콜론
+        ("배우자／서문강", "서문강"),                # 복성 3음절, 전각 슬래시
+    ],
+)
+def test_tk28_pii_label_delimiter_positive(text: str, expected_name: str):
+    """TK-28 양성: 다양한 라벨 어휘, 구분자, 이름 모양(2·3·4음절, 띄어쓰기, 복성)의 인명 탐지 및 마스킹."""
+    from packages.pii_engine.detector import detect
+
+    matches = detect(text)
+    person_matches = [m for m in matches if m.kind == "PERSON"]
+    assert any(m.text == expected_name for m in person_matches), f"{expected_name}이(가) PERSON으로 탐지되지 않음: {matches}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "신청인: 기각을 구한다",      # 서술문 어미
+        "피고: 서울특별시",          # 지자체/기관 (성씨 아님)
+        "피청구인: 각하한다",        # 서술문 종결어미 ('다')
+    ],
+)
+def test_tk28_pii_label_delimiter_control(text: str):
+    """TK-28 대조군: 라벨 뒤 비인명 서술문 및 기관 등은 인명으로 과잉 마스킹되지 않음."""
+    from packages.pii_engine.detector import detect
+
+    matches = detect(text)
+    person_matches = [m for m in matches if m.kind == "PERSON"]
+    assert len(person_matches) == 0, f"비인명 문맥에서 PERSON이 오탐됨: {person_matches}"
+
+
+# ===========================================================================
+# 15. TK-28 (U3): 시스템/스키마 등록 고정 상수 출처 확인 및 동적 PII 차단
+# ===========================================================================
+def test_tk28_all_actual_constants_passed():
+    """TK-28 대조군: 코드의 모든 실제 등록 system 및 schema 상수가 PASSED됨."""
+    from packages.common.enums import LLMRole
+    from packages.llm_router.privacy import (
+        REGISTERED_SCHEMA_CONSTANTS,
+        REGISTERED_SYSTEM_PROMPT_CONSTANTS,
+        inspect_request,
+    )
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.router import SYSTEM_BASE
+
+    for sid, prompt in REGISTERED_SYSTEM_PROMPT_CONSTANTS.items():
+        req = LLMRequest(system=prompt, user="정상 법률 분석 질문")
+        res = inspect_request(req)
+        assert res["status"] == "PASSED", f"상수 {sid} 실패: {res}"
+
+        req_ass = LLMRequest(
+            system=f"{SYSTEM_BASE}\n[역할] {LLMRole.PRIMARY_REASONER}\n{prompt}",
+            user="정상 법률 분석 질문",
+        )
+        res_ass = inspect_request(req_ass)
+        assert res_ass["status"] == "PASSED", f"조립 상수 {sid} 실패: {res_ass}"
+
+    for sch_id, schema in REGISTERED_SCHEMA_CONSTANTS.items():
+        req = LLMRequest(system="", user="정상 질문", schema=schema)
+        res = inspect_request(req)
+        assert res["status"] == "PASSED", f"스키마 {sch_id} 실패: {res}"
+
+
+@pytest.mark.parametrize(
+    "pii_kind, pii_text",
+    [
+        ("PERSON", "원고: 홍길동"),
+        ("DOB", "생년월일: 1985년 03월 15일생"),
+        ("PHONE", "010-9876-5432"),
+        ("EMAIL", "sample_test@example.com"),
+        ("ADDRESS", "서울특별시 서초구 서초대로 123, 401호"),
+        ("ACCOUNT", "신한은행 110-123-456789"),
+        ("COMPANY", "주식회사 가나다엔터테인먼트"),
+        ("RRN", "850315-1234567"),
+    ],
+)
+def test_tk28_system_prompt_all_pii_types_blocked(pii_kind: str, pii_text: str):
+    """TK-28 양성: system 프롬프트에 다양한 PII가 삽입되면 종류 무관 BLOCKED."""
+    from packages.llm_router.privacy import inspect_request
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.router import SYSTEM_BASE
+
+    req = LLMRequest(system=f"{SYSTEM_BASE}\n주의사항: {pii_text}", user="안내")
+    res = inspect_request(req)
+    assert res["status"] == "BLOCKED"
+    assert res["failure_code"] == "PII_INPUT_BLOCKED"
+
+
+def test_tk28_system_prompt_tampered_with_data_blocked():
+    """TK-28 양성: 등록된 시스템 프롬프트 상수에 동적 사용자 값이 섞인 변형은 BLOCKED."""
+    from packages.llm_router.privacy import (
+        REGISTERED_SYSTEM_PROMPT_CONSTANTS,
+        inspect_request,
+    )
+    from packages.llm_router.providers import LLMRequest
+
+    for sid, prompt in REGISTERED_SYSTEM_PROMPT_CONSTANTS.items():
+        if not prompt:
+            continue
+        tampered = f"{prompt}\n사건정보: 피고인: 김철수 (010-2345-6789)"
+        req = LLMRequest(system=tampered, user="질의")
+        res = inspect_request(req)
+        assert res["status"] == "BLOCKED"
+        assert res["failure_code"] == "PII_INPUT_BLOCKED"
+
+
+# ===========================================================================
+# 17. TK-26: 민법 편·장·절 체계화 및 과대주장 범위 확장 (양성 5건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 금원 차용 사실이 인정되더라도, 민법 제492조 상계 항변에 따라 채무는 전액 소멸하였으므로 책임이 없다.",
+        "가사 일부 손해가 인정되더라도, 민법 제460조 변제 완료로 의무가 소멸하였으므로 어떠한 책임도 질 수 없다.",
+        "백보 양보하여 귀책사유가 인정되더라도, 민법 제506조 채무면제에 의하여 책임은 전면 면책되어 징계될 수 없다.",
+        "만약 계약 불이행이 인정되더라도, 민법 제544조 해제 통고로 계약이 실효되었으므로 어떠한 배상 책임도 인정될 수 없다.",
+        "가령 대리권 수여 사실이 인정된다 하더라도, 민법 제125조 표현대리는 성립하지 않아 당연무효이다.",
+    ],
+)
+def test_tk26_civil_code_ranges_positive(text: str):
+    """TK-26 양성 5건: 민법 편·장·절 체계(상계, 변제, 면제, 해제, 표현대리) 기반 단정적 과대주장 탐지."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) >= 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "설령 금원 차용 사실이 인정되더라도, 피고는 상계적상 요건 사실을 구체적으로 증명하여 정당한 상계를 주장합니다.",
+        "가사 손해가 발생하였다 하더라도, 변제의 제공 및 수령지체 요건에 관하여 대법원 판례의 취지에 따라 소명합니다.",
+        "백보 양보하여 피고에게 책임이 인정되더라도, 원고 또한 과실이 있으므로 과실상계 법리에 따라 손해배상액의 적정한 감경을 구합니다.",
+    ],
+)
+def test_tk26_civil_code_ranges_control(text: str):
+    """TK-26 대조군 3건: 요건사실 구체적 소명, 대법원 판례 취지 주장, 감경 청구 등 비단정적 항변은 오탐하지 않음."""
+    doc = make_synthetic_doc("청 구 원 인", text)
+    findings = review_legal_rules(doc)
+    overclaim = [
+        f for f in findings
+        if f.type in (FindingType.OVERCLAIM, FindingType.LEGAL_ARGUMENT_INVALID)
+        and "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags
+    ]
+    assert len(overclaim) == 0
+
+
+# ===========================================================================
+# 18. TK-28 3절: 병원 경과 시점 군(timing_groups) 보완 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "doc_text, src_text",
+    [
+        (
+            "환자의 입원 당시 혈압은 190/110 mmHg로 위급한 상태였습니다.",
+            "입원중 간호기록: 환자 혈압 125/80 mmHg 유지 중.",
+        ),
+        (
+            "회복실 도착 혈압은 160/95 mmHg였습니다.",
+            "회복실 경과관찰 기록: 혈압 115/75 mmHg로 측정됨.",
+        ),
+        (
+            "퇴원당시 측정한 혈압은 170/100 mmHg에 달했습니다.",
+            "퇴원시 의무기록: 최종 혈압 120/80 mmHg 양호.",
+        ),
+    ],
+)
+def test_tk28_timing_groups_hospital_trajectory_positive(doc_text: str, src_text: str):
+    """TK-28 양성 3건: 동일한 진료 경과 단계(입원-입원, 회복-회복, 퇴원-퇴원) 내 혈압 불일치는 CONTRADICTS 정상 탐지."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    obs = _check_vital_measurements(doc_text, src_text, "R1")
+    assert obs is not None
+    assert obs["relationship"] == "CONTRADICTS"
+
+
+@pytest.mark.parametrize(
+    "doc_text, src_text",
+    [
+        (
+            "입원 당시 혈압은 190/110 mmHg로 중증이었습니다.",
+            "퇴원 시 혈압 125/80 mmHg로 정상 회복되어 퇴원함.",
+        ),
+        (
+            "수술중 혈압 80/50 mmHg로 저하되었음.",
+            "회복실 혈압 120/80 mmHg로 안정화됨.",
+        ),
+        (
+            "응급실 내원시 혈압 200/120 mmHg 측정.",
+            "병동 입원중 혈압 130/80 mmHg 측정.",
+        ),
+    ],
+)
+def test_tk28_timing_groups_hospital_trajectory_control(doc_text: str, src_text: str):
+    """TK-28 대조군 3건: 서로 다른 진료 경과 단계(입원↔퇴원, 수술↔회복, 내원↔입원) 간 혈압 차이는 오탐 없이 배제."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    obs = _check_vital_measurements(doc_text, src_text, "R1")
+    assert obs is None
+
+
+# ===========================================================================
+# 20. U9-1 / TK-23 B: 시행 버전 전체 조문 대조 미존재 심각도 HIGH 상향 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "law_name, article_num, total_articles",
+    [
+        ("국방과학기술혁신 촉진법", "99", 35),
+        ("군형법", "150", 110),
+        ("국가를 당사자로 하는 계약에 관한 법률", "88", 45),
+    ],
+)
+def test_u9_1_article_absent_severity_high_positive(law_name: str, article_num: str, total_articles: int):
+    """U9-1 양성 3건: 대상 법령·조문 번호가 다른 경우 시행 버전 내 미존재 조문은 증거 A등급 심각도 HIGH 판정."""
+    from packages.common.enums import CitationType, VerificationStatus, Severity, EvidenceGrade
+    from packages.common.schemas import Citation
+    from packages.legal_engine.source_review import _article_absent
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation.create(
+        CitationType.STATUTE,
+        f"{law_name} 제{article_num}조",
+        document_id="doc_u9_1",
+        law_name=law_name,
+        article=article_num,
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    official = {"law_name": law_name, "version_id": "v100", "effective_from": "2024-01-01"}
+    provision = {"status": "NOT_FOUND", "searched_articles": total_articles}
+    _article_absent(verdict, official, provision, as_of="2024-05-01")
+
+    assert verdict.status == VerificationStatus.NOT_FOUND
+    assert len(verdict.findings) >= 1
+    finding = verdict.findings[0]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence_grade == EvidenceGrade.A
+    assert "조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함" in finding.title
+    assert "허위 인용으로 단정하지 않는다" in finding.detail
+
+
+@pytest.mark.parametrize(
+    "case_type, law_name, article_num",
+    [
+        ("existing-article", "민법", "750"),
+        ("temporal-boundary", "행정소송법", "20"),
+        ("internal-regulation", "국방부 훈령 제100호", "5"),
+    ],
+)
+def test_u9_1_article_absent_severity_high_control(case_type: str, law_name: str, article_num: str):
+    """U9-1 대조군 3건: 존재하는 조문, 시행일 조건부 조문, 내부 규정은 조문 부존재 HIGH를 생성하지 않음."""
+    from packages.common.enums import CitationType, VerificationStatus, Severity
+    from packages.common.schemas import Citation
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation.create(
+        CitationType.STATUTE,
+        f"{law_name} 제{article_num}조",
+        document_id="doc_u9_1_ctrl",
+        law_name=law_name,
+        article=article_num,
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.VERIFIED)
+    absent_findings = [f for f in verdict.findings if f.severity == Severity.HIGH and "전체 조문에서 해당 조문을 찾지 못함" in f.title]
+    assert len(absent_findings) == 0
+
+
+# ===========================================================================
+# 21. U9-2: 생성 소프트웨어 정보(INFO) 분리 및 작성자 정보(LOW) 보존 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"Producer": "Skia/PDF m156 Google Docs Renderer"},
+        {"Producer": "macOS Version 14.4.1 Quartz PDFContext", "Creator": "Word"},
+        {"Creator": "Acrobat PDFMaker 21 for Word"},
+    ],
+)
+def test_u9_2_pdf_producer_software_separated_as_info_positive(metadata: dict):
+    """U9-2 양성 3건: PDF의 Producer/Creator 생성 소프트웨어명은 심각도 INFO 및 '생성 소프트웨어 정보'로 분리."""
+    from packages.common.enums import Severity, FindingType
+    from packages.common.schemas import NormalizedDocument
+    from packages.forensic_engine.residual import scan_residual
+
+    doc = NormalizedDocument(
+        document_id="doc_pdf",
+        filename="test.pdf",
+        mime_type="application/pdf",
+        sha256="abc",
+        metadata=metadata,
+        structure={},
+        raw_layers={},
+    )
+    findings = scan_residual(doc)
+    software_findings = [f for f in findings if f.title == "생성 소프트웨어 정보"]
+    assert len(software_findings) == 1
+    assert software_findings[0].severity == Severity.INFO
+    assert software_findings[0].type == FindingType.AUTHORSHIP_METADATA_LEAK
+
+    author_findings = [f for f in findings if "작성자·회사 정보" in f.title]
+    assert len(author_findings) == 0
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"Author": "홍길동", "lastModifiedBy": "이순신"},
+        {"Company": "대한민국 국방부", "creator": "김철수"},
+        {"manager": "인사담당관", "cp:lastModifiedBy": "박영희"},
+    ],
+)
+def test_u9_2_docx_authorship_preserved_as_low_control(metadata: dict):
+    """U9-2 대조군 3건: docx 등의 Author, lastModifiedBy 등 사람·조직 식별 키는 기존대로 LOW 심각도 유지."""
+    from packages.common.enums import Severity, FindingType
+    from packages.common.schemas import NormalizedDocument
+    from packages.forensic_engine.residual import scan_residual
+
+    doc = NormalizedDocument(
+        document_id="doc_docx",
+        filename="test.docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sha256="def",
+        metadata=metadata,
+        structure={},
+        raw_layers={},
+    )
+    findings = scan_residual(doc)
+    author_findings = [f for f in findings if "작성자·회사 정보" in f.title]
+    assert len(author_findings) == 1
+    assert author_findings[0].severity == Severity.LOW
+    assert author_findings[0].type == FindingType.AUTHORSHIP_METADATA_LEAK
+
+    software_findings = [f for f in findings if f.title == "생성 소프트웨어 정보"]
+    assert len(software_findings) == 0
+
+
+# ===========================================================================
+# 22. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -813,3 +1260,200 @@ def test_ledger_records_integrity():
     assert "TK-26" in ticket_ids
     assert "TK-27" in ticket_ids
     assert "ASTRA-V5" in ticket_ids
+    assert "TK-29" in ticket_ids
+    assert "TK-28" in ticket_ids
+    assert "U9-2" in ticket_ids
+
+
+# ===========================================================================
+# 23. TK-22 (U4): 입력 계층 문단 복원 및 형식 간 불변성 검증
+# ===========================================================================
+def test_u4_cross_format_and_width_invariance(tmp_path: Path):
+    """U4 필수 시험 1: 같은 서면을 txt·PDF(CID 글꼴)·docx로 생성하고 줄 폭 변형(36·44·56·64자) 및 CRLF 변형 시 결과 일치 검증."""
+    import textwrap
+    import docx
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.docx_parser import DocxParser
+    from packages.document_engine.pdf_parser import PdfParser
+    from packages.document_engine.simple_parsers import TextParser
+    from packages.legal_engine.citation_extractor import extract_citations
+
+    # 합성 서면 본문: 당사자 표시란, 청구취지, 법령 인용(국가배상법 제2조, 민법 제750조) 포함
+    text_lines = [
+        "준비서면",
+        "사건 2026가합98765 손해배상(기)",
+        "원고 홍길동",
+        "피고 대한민국",
+        "",
+        "청구취지 및 청구원인",
+        "1. 피고는 원고에게 금 50,000,000원 및 이에 대한 지연손해금을 지급하라.",
+        "2. 원고는 피고 소속 공무원의 직무상 불법행위로 인하여 심각한 피해를 입었다.",
+        "국가배상법 제2조 제1항에 의하면 국가는 공무원이 직무를 집행하면서 고의 또는 과실로 법령을 위반하여 타인에게 손해를 입힌 때에는 그 손해를 배상하여야 한다고 규정하고 있다.",
+        "또한 민법 제750조에 따른 불법행위책임의 일반 원칙에 비추어 보더라도 피고의 배상책임은 명백하다 할 것이다.",
+    ]
+    base_text = "\n".join(text_lines)
+
+    # 1. TXT 형식 (기본 및 CRLF / 빈 줄 추가 변형)
+    txt_path_normal = tmp_path / "test_normal.txt"
+    txt_path_normal.write_text(base_text, encoding="utf-8")
+
+    txt_path_crlf = tmp_path / "test_crlf.txt"
+    txt_path_crlf.write_text(base_text.replace("\n", "\r\n"), encoding="utf-8")
+
+    # 2. DOCX 형식 (python-docx)
+    docx_path = tmp_path / "test.docx"
+    doc_word = docx.Document()
+    for line in text_lines:
+        doc_word.add_paragraph(line)
+    doc_word.save(str(docx_path))
+
+    # 3. PDF 형식 (reportlab CID 글꼴, 폭 36, 44, 56, 64자 변형)
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_paths: Dict[int, Path] = {}
+    for w in [36, 44, 56, 64]:
+        p = tmp_path / f"test_w{w}.pdf"
+        c = canvas.Canvas(str(p), pagesize=(595, 842))
+        c.setFont(font_name, 10.5)
+        y = 800
+        for raw_line in text_lines:
+            if not raw_line.strip():
+                y -= 15
+                continue
+            wrapped_lines = textwrap.wrap(raw_line, width=w, break_long_words=False, break_on_hyphens=False) or [raw_line]
+            for wline in wrapped_lines:
+                if y < 50:
+                    c.showPage()
+                    c.setFont(font_name, 10.5)
+                    y = 800
+                c.drawString(56, y, wline)
+                y -= 15
+        c.save()
+        pdf_paths[w] = p
+
+    # 각 형식별 문서 파싱
+    parsed_docs = []
+    # TXT 파싱
+    parsed_docs.append(TextParser().parse(str(txt_path_normal), document_id="txt1", filename="test.txt", mime_type="text/plain", sha256="1" * 64))
+    parsed_docs.append(TextParser().parse(str(txt_path_crlf), document_id="txt2", filename="test_crlf.txt", mime_type="text/plain", sha256="2" * 64))
+    # DOCX 파싱
+    parsed_docs.append(DocxParser().parse(str(docx_path), document_id="docx1", filename="test.docx", mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", sha256="3" * 64))
+    # PDF 파싱 (모든 폭)
+    for w, p_path in pdf_paths.items():
+        parsed_docs.append(PdfParser().parse(str(p_path), document_id=f"pdf_{w}", filename=f"test_w{w}.pdf", mime_type="application/pdf", sha256=f"{w}" * 64))
+
+    # 불변식 검증:
+    # 1. 모든 형식에서 법령 인용 결과(국가배상법 제2조, 민법 제750조)가 정확히 100% 동일하게 추출되어야 함
+    expected_citations = {("국가배상법", "2"), ("민법", "750")}
+    for d in parsed_docs:
+        cits = {(c.law_name, c.article) for c in extract_citations(d)}
+        assert expected_citations <= cits, f"{d.filename}에서 기대 법령 인용 누락: {cits}"
+
+    # 2. 문단 복원에 의해 국가배상법 제2조 인용 문장이 단일 블록 텍스트 안에 완전하게 결합되어 있어야 함
+    needle_sentence = "국가배상법 제2조 제1항에 의하면"
+    for d in parsed_docs:
+        matching_blocks = [b for b in d.pages[0].blocks if needle_sentence in b.text]
+        assert len(matching_blocks) == 1, f"{d.filename}에서 인용 문장이 분할되거나 누락됨 (블록 수: {len(matching_blocks)})"
+        # 줄바꿈으로 나뉘었던 문장이 한 덩어리로 온전히 결합되었는지 확인
+        assert "그 손해를 배상하여야 한다고 규정하고 있다" in matching_blocks[0].text, f"{d.filename}에서 문단 결합 불완전"
+
+
+def test_u4_pdf_hidden_text_preservation(tmp_path: Path):
+    """U4 필수 시험 2: 숨은 텍스트(흰색 글자)를 포함한 PDF에서 문단 복원 후에도 hidden_text 레이어 및 좌표가 보존됨을 검증."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.pdf_parser import PdfParser
+
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_file = tmp_path / "hidden_test.pdf"
+    c = canvas.Canvas(str(pdf_file), pagesize=(595, 842))
+    c.setFont(font_name, 11)
+    # 일반 표시 텍스트
+    c.setFillColorRGB(0.0, 0.0, 0.0)
+    c.drawString(56, 750, "정상적인 표시 본문 문장입니다.")
+    # 흰색 숨은 텍스트 (WCAG 명도 대비 및 배경 동일)
+    c.setFillColorRGB(1.0, 1.0, 1.0)
+    c.drawString(56, 720, "흰색으로 숨겨진 은닉 문장입니다.")
+    # 다시 일반 표시 텍스트
+    c.setFillColorRGB(0.0, 0.0, 0.0)
+    c.drawString(56, 690, "또 다른 정상적인 표시 본문 문장입니다.")
+    c.save()
+
+    doc = PdfParser().parse(str(pdf_file), document_id="pdf_hid", filename="hidden_test.pdf", mime_type="application/pdf", sha256="h" * 64)
+
+    # 숨은 텍스트 블록 검증: 문단 복원에 의해 일반 문단과 결합되지 않고 독립 유지되어야 함
+    hidden_blocks = [b for b in doc.pages[0].blocks if not b.visible or b.source_layer == "hidden_text"]
+    assert len(hidden_blocks) >= 1, "숨은 텍스트 블록이 감지되지 않음"
+    assert "은닉 문장" in hidden_blocks[0].text
+    assert hidden_blocks[0].visible is False
+    assert hidden_blocks[0].attributes.get("hidden_reason") is not None
+    assert hidden_blocks[0].bbox is not None
+
+
+def test_u4_pdf_table_preservation_after_reconstruction():
+    """U4 필수 시험 3: 표(Table) 블록이 문단 복원기(reconstruct_page_blocks)를 거쳐도 본문과 병합되지 않고 온전히 보존됨을 검증."""
+    from packages.common.schemas import BBox, Block
+    from packages.document_engine.paragraph_reconstruction import reconstruct_page_blocks
+
+    blocks = [
+        Block(block_id="b1", text="제1장 총칙 본문 문장입니다.", page=1, bbox=BBox(50, 700, 400, 715), source_layer="visible_text", block_type="paragraph"),
+        # 표 블록
+        Block(
+            block_id="b2",
+            text="항목 | 수량 | 단가\n물품A | 10 | 1000",
+            page=1,
+            bbox=BBox(50, 650, 400, 690),
+            source_layer="visible_text",
+            block_type="table",
+            attributes={"table_ref": "p1t0", "cells": [["항목", "수량", "단가"], ["물품A", "10", "1000"]]},
+        ),
+        Block(block_id="b3", text="위 표에 기재된 바와 같이 손해가 발생하였습니다.", page=1, bbox=BBox(50, 600, 400, 615), source_layer="visible_text", block_type="paragraph"),
+    ]
+
+    reconstructed = reconstruct_page_blocks(blocks, page_num=1)
+    # 표 블록이 본문 문단과 합쳐지지 않고 단독 블록으로 유지되어야 함
+    table_blocks = [b for b in reconstructed if b.block_type == "table"]
+    assert len(table_blocks) == 1
+    assert table_blocks[0].attributes.get("table_ref") == "p1t0"
+    assert "물품A" in table_blocks[0].text
+    assert len(reconstructed) == 3
+
+
+def test_u4_pdf_cross_page_sentence_preservation(tmp_path: Path):
+    """U4 필수 시험 4: 쪽을 넘는 문장이 있는 다중 페이지 PDF에서 문단 복원 후에도 각 쪽의 좌표와 page 속성이 온전히 유지됨을 검증."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.pdf_parser import PdfParser
+
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_file = tmp_path / "multipage_test.pdf"
+    c = canvas.Canvas(str(pdf_file), pagesize=(595, 842))
+    c.setFont(font_name, 11)
+    # 1페이지 하단 문장
+    c.drawString(56, 60, "이 문장은 1페이지의 가장 하단에 작성된 문장으로서 다음 쪽으로 이어집니다.")
+    c.showPage()
+    # 2페이지 상단 문장
+    c.setFont(font_name, 11)
+    c.drawString(56, 780, "2페이지 상단에 이어서 서술되는 문장으로 원고의 주장을 계속 설명합니다.")
+    c.save()
+
+    doc = PdfParser().parse(str(pdf_file), document_id="pdf_multi", filename="multipage_test.pdf", mime_type="application/pdf", sha256="m" * 64)
+
+    assert len(doc.pages) == 2
+    p1 = doc.pages[0]
+    p2 = doc.pages[1]
+    assert p1.page_number == 1 and p2.page_number == 2
+
+    # 각 페이지의 블록이 해당 쪽 번호와 bbox를 유지해야 함
+    assert any("1페이지" in b.text and b.page == 1 for b in p1.blocks)
+    assert any("2페이지" in b.text and b.page == 2 for b in p2.blocks)
+

@@ -305,11 +305,21 @@ def _modality_finding(verdict, provision, claim, modality, compared, ids, exact_
 
 
 def _normalize_reference_name(name: str) -> str:
-    """비교를 위한 규범·파일명 정규화 (확장자, 괄호, 특수기호, 공백 제거)."""
+    """비교를 위한 규범·파일명 정규화 (접두 태그, 확장자, 괄호, 특수기호, 구분자, 공백 제거)."""
+    name = (name or "").strip()
+    # [RAG참고자료] 등 접두 태그 제거
+    name = re.sub(r"^\[(?:RAG\s*)?참고자료\]\s*", "", name)
     # 파일 확장자(.pdf, .hwp, .hwpx, .docx, .txt 등) 제거
     name = re.sub(r"\.(?:pdf|hwpx?|docx?|txt)$", "", name, flags=re.IGNORECASE)
-    # 낫표, 따옴표, 괄호, 공백 제거
-    return re.sub(r"[「」『』\[\]()\"'\s]", "", name)
+    # 낫표, 따옴표, 괄호, 특수기호, 언더스코어, 하이픈, 공백 제거
+    return re.sub(r"[「」『』\[\]()\"'_\-\s]", "", name)
+
+
+def _is_statute_form(law_name: str) -> bool:
+    """법률·시행령 등 일반 법령 형태인지 판정 (법, 법률, 시행령, 시행규칙, 대통령령, 부령, 총리령, 조례)."""
+    cleaned = re.sub(r"[「」『』\s]", "", law_name or "")
+    statute_suffixes = ("법", "법률", "시행령", "대통령령", "시행규칙", "부령", "총리령", "조례")
+    return any(cleaned.endswith(s) for s in statute_suffixes)
 
 
 def _is_internal_or_admin_rule(law_name: str) -> bool:
@@ -332,28 +342,29 @@ def _is_internal_or_admin_rule(law_name: str) -> bool:
     return False
 
 
-def _find_matching_user_reference(law_name: str, verifier, citation, verdict) -> str | None:
-    """사용자 참고자료(Drive 등)에서 인용 규범과 일치하는 문서명이 있는지 확인."""
+def find_matching_read_reference(law_name: str, verifier) -> str | None:
+    """본문을 읽은 사용자 참고자료(summary['sources'] 또는 direct refs) 중 정규화 제목이 완전히 일치하는 문서를 찾는다.
+
+    1. 법령 형태 인용(법·법률·시행령 등)은 참고자료 대조로 CRITICAL을 낮추지 않는다(U1).
+    2. 본문을 실제로 읽은 참고자료(summary['sources'])만 후보로 삼는다 (inventory 미독/실패 파일 제외).
+    3. 정규화 제목이 동일(exact match)해야 하며 부분 문자열 일치는 허용하지 않는다.
+    """
     if not law_name:
         return None
+    # 법령 형태 인용은 참고자료 매칭으로 면책하지 않음
+    if _is_statute_form(law_name):
+        return None
+    # 내부 규정·행정규칙 형태여야 함
+    if not _is_internal_or_admin_rule(law_name):
+        return None
+
     target_norm = _normalize_reference_name(law_name)
     if not target_norm:
         return None
 
     candidate_names: list[str] = []
-
-    # 1) verdict / citation 속성에서 확인
-    for container in (verdict.review if verdict else {}, getattr(citation, "attributes", None) or {}):
-        refs = container.get("user_references") or container.get("user_refs") or []
-        if isinstance(refs, list):
-            for r in refs:
-                if isinstance(r, str):
-                    candidate_names.append(r)
-                elif isinstance(r, dict):
-                    candidate_names.append(r.get("name") or r.get("filename") or r.get("title") or "")
-
-    # 2) verifier 속성(references / reference_library / user_references)에서 확인
     if verifier is not None:
+        # 1) verifier에 직접 전달된 참고자료 목록 (단위 시험 및 명시 주입)
         direct_refs = getattr(verifier, "user_references", None) or getattr(verifier, "user_refs", None) or []
         if isinstance(direct_refs, list):
             for r in direct_refs:
@@ -362,31 +373,34 @@ def _find_matching_user_reference(law_name: str, verifier, citation, verdict) ->
                 elif isinstance(r, dict):
                     candidate_names.append(r.get("name") or r.get("filename") or r.get("title") or "")
 
+        # 2) ReferenceLibrary의 summary['sources'] (본문 읽기 성공 파일, inventory 미독/실패 파일 제외)
         lib = getattr(verifier, "references", None) or getattr(verifier, "reference_library", None)
         if lib is not None:
             summary = getattr(lib, "summary", {}) or {}
-            for item in summary.get("sources", []) + summary.get("inventory", []):
+            for item in summary.get("sources", []):
                 if isinstance(item, dict):
                     name = item.get("name") or item.get("filename") or item.get("title")
                     if name:
                         candidate_names.append(name)
-            eligible = getattr(lib, "eligible", {}) or {}
-            for item in eligible.values():
-                if isinstance(item, dict) and item.get("name"):
-                    candidate_names.append(item["name"])
 
     for cand in candidate_names:
         cand_norm = _normalize_reference_name(cand)
-        if cand_norm and (target_norm == cand_norm or target_norm in cand_norm or cand_norm in target_norm):
+        # 부분 일치가 아니라 정규화 후 완전 일치만 인정
+        if cand_norm and cand_norm == target_norm:
             return cand
     return None
+
+
+def _find_matching_user_reference(law_name: str, verifier, citation, verdict) -> str | None:
+    """기존 호출 호환용 래퍼 (find_matching_read_reference 호출)."""
+    return find_matching_read_reference(law_name, verifier)
 
 
 def _law_absent(verdict, response, verifier=None):
     """법령 목록 조회는 성공했으나 같은 이름의 법령이 없다(NOT_FOUND_LAW).
 
     국가법령정보 법령 목록에서 찾지 못했다는 뜻이다.
-    1) 사용자 참고자료(Drive)에 있는 경우: '참고자료에서 확인(공식 법령 아님)'으로 처리하고 CRITICAL 미발행.
+    1) 본문을 읽은 사용자 참고자료(Drive)와 제목이 일치하는 내부 규정: '참고자료에서 확인'으로 처리하고 CRITICAL 미발행, INFO finding 생성.
     2) 내부 규정·행정규칙·지침 형태인 경우: 존재하지 않는 법령(CRITICAL)이 아니라 내부 규정 가능성(LOW)으로 알림.
     3) 일반 법령(법·법률 등) 형태인 경우: 기존대로 부존재 가능성 CRITICAL(증거 B) 유지.
     """
@@ -399,16 +413,29 @@ def _law_absent(verdict, response, verifier=None):
     verdict.review["law_candidates"] = candidates
     ids = [r.source_record_id for r in verdict.source_records]
 
-    # 1. 사용자 참고자료(Drive) 매칭 확인: 참고자료에 존재하는 내부 규정이면 CRITICAL 미발행
-    matched_ref = _find_matching_user_reference(citation.law_name, verifier, citation, verdict)
+    # 1. 사용자 참고자료(Drive) 매칭 확인: 본문을 읽은 참고자료와 제목이 일치하는 내부 규정만 허용
+    matched_ref = find_matching_read_reference(citation.law_name, verifier)
     if matched_ref:
         verdict.status = VerificationStatus.PARTIALLY_VERIFIED
         verdict.levels["existence"] = "FOUND_IN_USER_REFERENCES"
         verdict.review["user_reference_match"] = matched_ref
         verdict.notes.append(
-            f"공식 법령 목록에는 없으나 사용자 참고자료(Drive) 「{matched_ref}」에서 확인되었다. "
+            f"공식 법령 목록에는 없으나 읽은 사용자 참고자료(Drive) 「{matched_ref}」에서 확인되었다. "
             "공식 법령이 아닌 내부 규정이므로 해당 참고자료 원문과의 대조 대상으로 처리한다"
         )
+        # 조용히 넘기지 않고 INFO로 참고자료 대조 대상 finding을 남긴다(TK-29 요구 4)
+        verdict.findings.append(Finding.create(
+            type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.PARTIALLY_VERIFIED,
+            severity=Severity.INFO, evidence_grade=EvidenceGrade.B,
+            title=f"사용자 참고자료 대조 대상 규범: {citation.law_name}",
+            detail=f"공식 법령 목록에 없는 규범이나, 읽은 참고자료 「{matched_ref}」와 제목이 일치하여 참고자료 원문 대조 대상으로 분류함.",
+            document_id=citation.document_id, block_id=citation.block_id, page=citation.page, span=citation.span,
+            engine="legal_engine", source_record_ids=ids, tags=["LEGAL", "USER_REFERENCE_MATCH"],
+            confidence_features={"verdict_label": "FOUND_IN_USER_REFERENCES", "matched_reference": matched_ref,
+                                 "law_name": citation.law_name},
+            evidence=[Evidence.create(description="사용자 참고자료 일치", grade=EvidenceGrade.B,
+                                      excerpt=matched_ref, source_record_ids=ids)],
+        ))
         return
 
     # 2. 내부 규정 / 행정규칙 / 지침 등 비법령 규범 형태 확인: 심각도 LOW (HIGH 미만)
@@ -477,7 +504,7 @@ def _article_absent(verdict, official, provision, as_of):
     ids = [r.source_record_id for r in verdict.source_records]
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.NOT_FOUND,
-        severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.A,
+        severity=Severity.HIGH, evidence_grade=EvidenceGrade.A,
         title=f"조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함: {compared}",
         detail=(f"법령은 공식 기록으로 확인했다. {scope}를 모두 대조했으나 {compared}에 해당하는 제{citation.article}조는 없다. "
                 f"({basis} 기준) 조문 번호 오기, 다른 시행 버전의 조문, 부칙 조항일 수 있으므로 "

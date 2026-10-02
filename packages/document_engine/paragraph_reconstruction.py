@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
@@ -22,26 +23,44 @@ ENUMERATOR_RE = re.compile(
 # 당사자 표시란 및 사건 표제부 등 줄 단위 유지가 필수적인 패턴 목록
 STANDALONE_LINE_PATTERNS = [
     # 소송 서면 제목 (준비서면, 소장, 답변서 등)
-    re.compile(r"^[ \t]*(?:준[ \t]*비[ \t]*서[ \t]*면|소[ \t]*장|답[ \t]*변[ \t]*서|항[ \t]*소[ \t]*장|상[ \t]*고[ \t]*장|변[ \t]*호[ \t]*인[ \t]*의[ \t]*견[ \t]*서|의[ \t]*견[ \t]*서|탄[ \t]*원[ \t]*서|고[ \t]*소[ \t]*장|신[ \t]*청[ \t]*서)[ \t]*$"),
+    re.compile(r"^\s*(?:준\s*비\s*서\s*면|소\s*장|답\s*변\s*서|항\s*소\s*장|상\s*고\s*장|변\s*호\s*인\s*의\s*견\s*서|의\s*견\s*서|탄\s*원\s*서|고\s*소\s*장|신\s*청\s*서)\s*$"),
     # 사건 번호 라벨 ("사 건 2026가합...", "사건: ...")
-    re.compile(r"^[ \t]*사[ \t]*건[ \t:]+(?:\d{4}[가-힣]+\d+|\d{2,4}\s*[가-힣]+)"),
+    re.compile(r"^\s*사\s*건[\s:]+(?:\d{4}[가-힣]+\d+|\d{2,4}\s*[가-힣]+|[가-힣○△□*]+지방법원|\d{4}구합)"),
     # 소송 당사자 역할 라벨 ("원 고", "피 고", "피고인" 등)
-    re.compile(r"^[ \t]*(?:원[ \t]*고|피[ \t]*고(?:[ \t]*인)?|피[ \t]*의[ \t]*자|신[ \t]*청[ \t]*인|피[ \t]*신[ \t]*청[ \t]*인|채[ \t]*권[ \t]*자|채[ \t]*무[ \t]*자|망\b|소[ \t]*외\b)[ \t]+"),
+    re.compile(r"^\s*(?:원\s*고|피\s*고(?:[\s]*인)?|피\s*의\s*자|신\s*청\s*인|피\s*신\s*청\s*인|채\s*권\s*자|채\s*무\s*자|망\b|소\s*외\b)(?:\s+|(?=[0-9가-힣]))"),
     # 소송대리인, 대표자, 담당변호사 등 라벨
-    re.compile(r"^[ \t]*(?:소[ \t]*송[ \t]*대[ \t]*리[ \t]*인|대[ \t]*리[ \t]*인|담[ \t]*당[ \t]*변[ \t]*호[ \t]*사|변[ \t]*호[ \t]*인|법[ \t]*률[ \t]*상[ \t]*대[ \t]*표[ \t]*자|소[ \t]*송[ \t]*수[ \t]*행[ \t]*자|대[ \t]*표[ \t]*이[ \t]*사|대[ \t]*표[ \t]*자)[ \t]+"),
+    re.compile(r"^\s*(?:소\s*송\s*대\s*리\s*인|대\s*리\s*인|담\s*당\s*변\s*호\s*사|변\s*호\s*인|법\s*률\s*상\s*대\s*표\s*자|소\s*송\s*수\s*행\s*자|대\s*표\s*이\s*사|대\s*표\s*자)(?:\s+|(?=[0-9가-힣]))"),
     # 당사자 인적사항 라벨 (주소, 연락처, 이메일, 계좌번호 등)
-    re.compile(r"^[ \t]*(?:주[ \t]*소|등[ \t]*록[ \t]*기[ \t]*준[ \t]*지|송[ \t]*달[ \t]*장[ \t]*소|연[ \t]*락[ \t]*처|전[ \t]*화|이[ \t]*메[ \t]*일|수[ \t]*령[ \t]*계[ \t]*좌|운[ \t]*전[ \t]*면[ \t]*허[ \t]*번[ \t]*호|군[ \t]*번|주[ \t]*민[ \t]*등[ \t]*록[ \t]*번[ \t]*호|생[ \t]*년[ \t]*월[ \t]*일)[ \t]*[:：]?[ \t]+"),
+    re.compile(r"^\s*(?:주\s*소|등\s*록\s*기\s*준\s*지|송\s*달\s*장\s*소|연\s*락\s*처|전\s*화|이\s*메\s*일|수\s*령\s*계\s*좌|운\s*전\s*면\s*허\s*번\s*호|군\s*번|주\s*민\s*등\s*록\s*번\s*호|생\s*년\s*월\s*일|성\s*명|소\s*속(?:[·ㆍ・]?\s*계\s*급)?|진\s*술\s*인)\s*[:：]?\s*"),
     # 괄호로 시작하는 당사자 신상 정보 줄 ("(예비역 중사...", "(군번: ...")
-    re.compile(r"^[ \t]*\([ \t]*(?:예비역|군번|생년월일|주민등록번호|연락처|주소)"),
-    # 법원 제출처 ("...법원 ... 귀중")
-    re.compile(r"[가-힣\s\(\)]+법원(?:\s+제\s*\d+\s*[가-힣]+부(?:\([가-힣]+\))?)?\s*귀[ \t]*중[ \t]*$"),
+    re.compile(r"^\s*\(\s*(?:예비역|군번|생년월일|주민등록번호|연락처|주소)"),
+    # 단독 날짜 줄 ("2026. 9. 5.", "[날짜]" 등)
+    re.compile(r"^\s*(?:(?:19|20)\d{2}\s*[.\-년]\s*\d{1,2}\s*[.\-월]\s*\d{1,2}\s*[.일]?|\[\s*날\s*짜\s*\])\s*$"),
+    # 서명 / 날인 / 귀중 / 진술인 줄
+    re.compile(r"^\s*(?:원\s*고|피\s*고|진\s*술\s*인|신\s*청\s*인)?\s*(?:소\s*송\s*대\s*리\s*인|대\s*리\s*인|변\s*호\s*사|담\s*당\s*변\s*호\s*사)?\s*[가-힣\s○△□*]+\s*(?:\([ \t]*(?:인|서\s*명|날\s*인|서\s*명\s*생\s*략)[ \t]*\)|귀[\s]*중)\s*$"),
+    re.compile(r"[가-힣\s\(\)]+법원(?:\s+제\s*\d+\s*[가-힣]+부(?:\([가-힣]+\))?)?\s*귀\s*중\s*$"),
+    re.compile(r"^\s*첨\s*부\s*[:：]"),
+    # 호증 / 증거 목록 줄
+    re.compile(r"^\s*(?:[갑을병정]\s*제\s*\d+|증\s*제\s*\d+|\d{1,2}\s*[.)]\s*[갑을병정]\s*제\s*\d+|[-*•·]\s*[갑을병정]\s*제\s*\d+)"),
+    re.compile(r"^\s*※\s*(?:원\s*고|피\s*고|이\s*초안|본\s*서면)"),
+    re.compile(r"^\s*(?:증\s*거\s*설\s*명\s*서|입\s*증\s*방\s*법|첨\s*부\s*서\s*류|증\s*거\s*목\s*록|소\s*명\s*방\s*법)\s*$"),
+    re.compile(r"^\s*호\s*증\s+서\s*증\s*명"),
+    re.compile(r"^\s*(?:진\s*술\s*서|사\s*실\s*확\s*인\s*서|확\s*인\s*서)\s*$"),
+    # 마크다운 헤더 / 볼드 목차 / 대괄호 플레이스홀더
+    re.compile(r"^\s*#{1,6}\s+"),
+    re.compile(r"^\s*\*\*[^*]+\*\*\s*$"),
+    re.compile(r"^\s*\[[^\]]+\]\s*$"),
+    # AI 어시스턴트 첫인사 줄
+    re.compile(r"^\s*(?:물론입니다!|네,\s*알겠습니다|요청하신\s*내용을\s*바탕으로).*?(?:작성해\s*드리겠습니다|드리겠습니다|바랍니다)[.!]?\s*$"),
+    # 가상 문서 표기 바닥글
+    re.compile(r"^\s*(?:HO-\d+|TC-\d+|검증\s*프로그램|홀드아웃용|가상\s*문서).*$"),
     # "다 음" 구분 표제
-    re.compile(r"^[ \t]*다[ \t]+음[ \t]*$"),
+    re.compile(r"^\s*다\s+음\s*$"),
 ]
 
 # 단독 도로명/지번 주소 줄 패턴 (시/도 및 시/군/구로 시작하여 행정구역 주소로만 끝나는 줄)
 STANDALONE_ADDRESS_RE = re.compile(
-    r"^[ \t]*(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|강원도|경기도|제주도|[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도))\s*)?[가-힣]{1,8}(?:시|군|구)\s+[가-힣0-9\s,·\-(?:로|길|동|리|호|층|번지)]+$"
+    r"^\s*(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|충청북도|충청남도|전라북도|전라남도|경상북도|경상남도|강원도|경기도|제주도|[가-힣]{1,6}(?:특별시|광역시|특별자치시|도|특별자치도))\s*)?[가-힣]{1,8}(?:시|군|구)\s+[가-힣0-9\s,·\-(?:로|길|동|리|호|층|번지)]+$"
 )
 
 # 짝 괄호 및 구조적 인젝션 구분자 쌍
@@ -63,13 +82,19 @@ DELIMITER_PAIRS = [
 MID_WORD_STARTS = frozenset({
     "은", "는", "을", "를", "의", "에", "에게", "에게서", "에서", "에서는", "에는", "에도", "으로", "으로서", "으로써",
     "으로는", "로서", "로써", "와", "과", "께서", "한테", "부터", "까지", "라고", "이라고", "여", "며", "으며",
-    "는데", "었다", "였다", "였고", "었고", "하여", "하였다"
+    "는데", "었다", "였다", "였고", "었고", "하여", "하였다", "니다", "습니다", "임", "임을", "이며", "이고",
+    "이라", "이라는", "이란", "므로", "으므로", "이나", "거나", "는지", "은지", "던", "었던", "았던"
 })
+
+
+def _norm_s(text: str) -> str:
+    """줄바꿈 검사용 공백 및 유니코드 정규화."""
+    return unicodedata.normalize("NFKC", (text or "").replace("\xa0", " ")).strip()
 
 
 def is_standalone_line(text: str) -> bool:
     """당사자 표시란, 표제부 등 독립된 줄 단위 유지가 필수적인 영역인지 판정."""
-    s = text.strip()
+    s = _norm_s(text)
     if not s:
         return False
     for pat in STANDALONE_LINE_PATTERNS:
@@ -82,26 +107,40 @@ def is_standalone_line(text: str) -> bool:
 
 def is_short_heading(text: str) -> bool:
     """단독 목차 제목 줄인지 판정 (예: '1. 사건의 실체적 경위', '가. 피고의 ...')."""
-    s = text.strip()
+    s = _norm_s(text)
     if not s or len(s) > 50:
         return False
+    if re.match(r"^#{1,6}\s+", s):
+        return True
+    if re.match(r"^\*\*[^*]+\*\*$", s):
+        return True
     if not ENUMERATOR_RE.match(s):
         return False
     # 서술형 종결어미로 끝나는 완전한 문장은 제목이 아니라 본문 문장으로 판정
     if re.search(r"(?:다|음|함|습니다|입니다|시오|지요)\s*[.!?]?$", s):
+        return False
+    # 목차형 어구인지 확인
+    if re.search(r"(?:개요|경위|배경|경과|취지|원인|이유|법리|판례|손해배상|결론|판단|주장|당부|관하여|대하여|살피건대|기초사실|인적사항)\s*$", s):
+        return True
+    # 문장 성분(격조사)이 3개 이상 결합된 복합 절은 제목이 아니라 문장으로 판정
+    if len(re.findall(r"(?:이|가|을|를|은|는|에|의)\s", s)) >= 3:
         return False
     return True
 
 
 def get_unclosed_delimiter(text: str) -> Optional[str]:
     """줄이 열림 기호로 시작하지만 닫히지 않은 경우 닫힘 기호를 반환."""
-    s = text.strip()
+    s = _norm_s(text)
+    # 마크다운 헤더(^#{1,6}\s)는 짝 구분자가 아님
+    if re.match(r"^#{1,6}\s", s):
+        return None
     for opener, closer in DELIMITER_PAIRS:
         if s.startswith(opener):
             content = s[len(opener):]
             if closer not in content:
                 return closer
     return None
+
 
 
 def join_lines(prev: str, nxt: str) -> str:
@@ -201,10 +240,12 @@ def reconstruct_paragraphs_from_text(raw_text: str, page_num: int = 1) -> List[B
             continue
 
         # 새 번호 목록으로 시작하는 본문 줄
-        if ENUMERATOR_RE.match(line):
+        norm_l = _norm_s(line)
+        if ENUMERATOR_RE.match(norm_l):
             flush_current()
             curr_lines.append(line)
             continue
+
 
         # 일반 본문 줄 누적
         curr_lines.append(line)
@@ -283,6 +324,7 @@ def reconstruct_page_blocks(
             or block.block_type in ("table", "table_line", "running_head", "header", "footer", "comment")
             or block.attributes.get("hidden_reason")
             or block.attributes.get("table_ref")
+            or block.attributes.get("segments")
         ):
             flush_group()
             reconstructed.append(block)
@@ -324,21 +366,23 @@ def reconstruct_page_blocks(
             reconstructed.append(block)
             continue
 
-        # 세로 간격(Vertical gap) 검사: 이전 줄과의 거리가 너무 멀면 문단 경계로 취급
+        # 세로 간격(Vertical gap) 검사: 이전 줄과의 거리가 멀거나 역방향이면 문단 경계로 취급
         if curr_group and curr_group[-1].bbox and block.bbox:
             prev_bbox = curr_group[-1].bbox
             font_size = float(curr_group[-1].attributes.get("size", 10.0) or 10.0)
             gap = block.bbox.y0 - prev_bbox.y1
-            if gap > font_size * 2.0:
+            if gap > font_size * 1.5 or gap < -font_size * 0.5:
                 flush_group()
                 curr_group.append(block)
                 continue
 
         # 새 번호 목록으로 시작하는 본문 줄
-        if ENUMERATOR_RE.match(text):
+        norm_t = _norm_s(text)
+        if ENUMERATOR_RE.match(norm_t):
             flush_group()
             curr_group.append(block)
             continue
+
 
         # 일반 본문 줄 결합
         curr_group.append(block)
