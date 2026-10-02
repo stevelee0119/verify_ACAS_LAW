@@ -39,7 +39,7 @@
 | [TK-32](TK-32_civil_cluster_false_positive_and_names.md) | 오탐 + 설정 정확성 | 민법 군집 확장으로 요건을 제시한 정상 항변을 과대주장으로 표시, 설정의 장 이름 오류(사무관리·부당이득·불법행위) | `test_round5_regressions.py` | 열림 |
 | [TK-33](TK-33_evaluation_marker_and_report_accuracy.md) | 절차·하드코딩 | 문단 복원기에 평가 자료 표식 분기(`HO-\d+\|TC-\d+\|홀드아웃용…`), 완료 보고의 비교 기준·성공 단계만 적은 CI 결과·"10건 전수 해소" 오기 | `check_hardcoding_diff.py`의 `eval_marker` | 열림 |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · 구현→평가 요청은 [requests/](requests/README.md)
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
 **기능 개선 요청(결함 티켓과 별도):** [FR-01 검토 화면 중복 해소·참고자료(RAG) 활용 — 타당성 검토](FR-01_review_screen_and_reference_integration.md) · [F1 라운드 작업 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md)(5차 검증 뒤 착수)
 
@@ -69,13 +69,13 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | TK-12 미러 시험 자료 | 평가 측이 공식 원문으로 구성(확인 못 한 항목은 "확인 못 함") | 평가 측 작업 대기 |
 | TK-23 B 조문 부존재(증거 A등급) 심각도 | HIGH | 5차 지시서 U9-1 |
 | TK-09 모델 의견 승격 | 기본 꺼짐 유지 | 변경 없음 |
-| 기준선 상향 | 5차 검증 뒤 | 평가 측이 실측으로 사용자 승인 후 |
+| 기준선 상향(2026-10-03 갱신) | **회귀 해소 뒤 81.7 이상으로 상향**(5차 실측 dev 81.2는 회귀 상태라 올리지 않음) | 평가 측이 실측으로 사용자 승인 후 |
 | 동일 시행일 복수 버전 | 두 버전 병기·대조 | 6차 |
-| 6차 범위 | 요청 16(병기·모델 응답 안정화)만, TK-24는 그 뒤 | 6차 지시서 |
+| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만**, 요청 16(병기·모델 응답 안정화)·F1·TK-24는 그 검증 뒤 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md) |
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
 | `main` 병합 | 5차 검증 뒤 PR(사용자 요청 시에만 PR 생성) | 사용자 |
-| 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · 5차 검증 뒤 순차 · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
+| 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · **회귀 보완(6차) 검증 뒤 순차** · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
 | 프로그램 버전 | 성능 기준으로만 상향(정수 급격·첫째 자리 일부·둘째 자리 미세), 커밋마다 올리지 않음 | [VERSION_POLICY](../scorecards/VERSION_POLICY.md), `scripts/check_version_policy.py` |
 
 ## 아직 사용자가 정할 것

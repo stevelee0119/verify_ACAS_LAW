@@ -22,6 +22,6 @@
 4. 마스킹 결과·전송 전 검사가 같은 탐지기를 쓰므로, 탐지 하나가 둘을 동시에 뚫지 않게 **전송 전 검사는 마스킹과 독립된 확인**(라벨 문맥·형식 신호)을 한 번 더 둔다는 안도 검토해 요청서에 의견을 적는다(채택은 평가 측 승인).
 
 ## 수용 기준
-- `python -m pytest tests/acceptance/test_round5_regressions.py -k name_is_fully -rxX`: TK-30 14건·TK-28 3건 XPASS(평가 측이 표시를 지운다). `test_pii_label_variants.py`·`test_regression_gate_tools.py` 유지.
+- `python -m pytest tests/acceptance/test_round5_regressions.py -k "name_is_fully or ordinary_sentences" -rxX`: TK-30 15건(이름 14 + 안내문 1)·TK-28 4건(이름 3 + `피고인 신문 절차가 진행되었다.` 1) XPASS(평가 측이 표시를 지운다). `test_pii_label_variants.py`·`test_regression_gate_tools.py` 유지.
 - 평가 측 행렬에서 **4차 성공 조합의 회귀 0**, 전체 통과 수가 5차(3,864) 이상. 정상 문장 20건의 PERSON 오탐이 4차 수준(1건) 이하.
 - 구현 측 새 시험: 이름 끝 글자·공백·복성·라벨 칸 수를 바꾼 양성 10건 이상, 정상 문장 대조군 10건 이상. 같은 이름 사전을 시험에 쓰지 않는다.
