@@ -108,6 +108,8 @@ LEDGER_RECORDS = [
     ("TK-28", "ALL_ACTUAL_SYSTEM_AND_SCHEMA_CONSTANTS_PASSED", False, "코드베이스 내 모든 실제 system/schema 등록 상수", "PASSED (STATIC_PROMPT_FALSE_POSITIVE 또는 정상)"),
     ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_POSITIVE", True, "민법 편·장·절 범위(상계·변제·면제·해제·표현대리 등) 과대주장 탐지", "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS 탐지"),
     ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_CONTROL", False, "민법 요건사실 소명 및 판례 인용 항변", "과대주장 미탐지 보존"),
+    ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_POSITIVE", True, "같은 입원/회복/퇴원 단계 내 활력징후 수치 불일치 탐지", "CONTRADICTS 관찰 생성"),
+    ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_CONTROL", False, "입원↔퇴원, 수술↔회복 등 상이한 진료 경과 단계 활력징후", "오탐 배제 (None)"),
 ]
 
 
@@ -1040,7 +1042,61 @@ def test_tk26_civil_code_ranges_control(text: str):
 
 
 # ===========================================================================
-# 18. 원장 종합 무결성 검증
+# 18. TK-28 3절: 병원 경과 시점 군(timing_groups) 보완 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "doc_text, src_text",
+    [
+        (
+            "환자의 입원 당시 혈압은 190/110 mmHg로 위급한 상태였습니다.",
+            "입원중 간호기록: 환자 혈압 125/80 mmHg 유지 중.",
+        ),
+        (
+            "회복실 도착 혈압은 160/95 mmHg였습니다.",
+            "회복실 경과관찰 기록: 혈압 115/75 mmHg로 측정됨.",
+        ),
+        (
+            "퇴원당시 측정한 혈압은 170/100 mmHg에 달했습니다.",
+            "퇴원시 의무기록: 최종 혈압 120/80 mmHg 양호.",
+        ),
+    ],
+)
+def test_tk28_timing_groups_hospital_trajectory_positive(doc_text: str, src_text: str):
+    """TK-28 양성 3건: 동일한 진료 경과 단계(입원-입원, 회복-회복, 퇴원-퇴원) 내 혈압 불일치는 CONTRADICTS 정상 탐지."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    obs = _check_vital_measurements(doc_text, src_text, "R1")
+    assert obs is not None
+    assert obs["relationship"] == "CONTRADICTS"
+
+
+@pytest.mark.parametrize(
+    "doc_text, src_text",
+    [
+        (
+            "입원 당시 혈압은 190/110 mmHg로 중증이었습니다.",
+            "퇴원 시 혈압 125/80 mmHg로 정상 회복되어 퇴원함.",
+        ),
+        (
+            "수술중 혈압 80/50 mmHg로 저하되었음.",
+            "회복실 혈압 120/80 mmHg로 안정화됨.",
+        ),
+        (
+            "응급실 내원시 혈압 200/120 mmHg 측정.",
+            "병동 입원중 혈압 130/80 mmHg 측정.",
+        ),
+    ],
+)
+def test_tk28_timing_groups_hospital_trajectory_control(doc_text: str, src_text: str):
+    """TK-28 대조군 3건: 서로 다른 진료 경과 단계(입원↔퇴원, 수술↔회복, 내원↔입원) 간 혈압 차이는 오탐 없이 배제."""
+    from packages.rag_engine.exhibit_facts import _check_vital_measurements
+
+    obs = _check_vital_measurements(doc_text, src_text, "R1")
+    assert obs is None
+
+
+# ===========================================================================
+# 19. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
