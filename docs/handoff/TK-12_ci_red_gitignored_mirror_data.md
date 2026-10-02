@@ -55,3 +55,6 @@
   1. 저장소 Settings → Branches → `main` 보호 규칙 편집 → "Require status checks to pass before merging"에서 `테스트 (SQLite + PostgreSQL/pgvector + Redis)` 검색해 추가(최근 실행 기록이 있어 목록에 나온다). 다른 항목(최신 상태 유지 끔 등)은 그대로 둔다.
   2. 관리자 토큰이 있는 곳에서: `echo '["테스트 (SQLite + PostgreSQL/pgvector + Redis)"]' | gh api -X POST repos/stevelee0119/verify_ACAS_LAW/branches/main/protection/required_status_checks/contexts --input -` (기존 필수 확인을 유지하고 이 항목만 더한다).
 - 유의: `CI`는 `main`·`claude/**`·`codex/**` 브랜치 푸시와 PR, 수동 실행에서만 돈다. 평가 브랜치 `Steve_ACASiaLAW`나 구현 브랜치 푸시에서는 돌지 않으므로, 필수 확인이 걸린 `main`으로 병합하려면 PR을 열어 `CI`가 PR에서 실행되어야 한다(사용자가 PR을 요청할 때). Docker OCR readiness는 이 승인에 포함되지 않았다.
+
+### 반영 확인(2026-10-03)
+사용자가 웹 설정으로 추가했다고 알려 왔고, 평가 세션이 `gh api repos/stevelee0119/verify_ACAS_LAW/branches/main`을 읽어 확인했다: `protected: true`, 필수 확인 contexts = [`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`], 적용 수준 `non_admins`(변경 없음). **확인하지 못한 것:** 강제 푸시·삭제 금지, PR 필수·최신 유지 끔 등 나머지 보호 옵션은 이 세션에 관리 권한이 없어(`GET .../protection` 403) 읽지 못했다. 위 "사용자 조치 대기" 문단은 이 확인으로 완료되었다.

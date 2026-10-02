@@ -81,5 +81,5 @@ python scripts/scorecard.py && python scripts/score_gate.py
 
 ## 아직 사용자가 정할 것
 - 버전 등급 임계값(VERSION_POLICY 5절, 평가 측 제안·잠정)의 확정 또는 조정, 정수 상향 승인(해당 판정이 생길 때).
-- **CI를 `main`의 필수 확인에 추가**: 사용자 승인(2026-10-03) 완료. 평가 세션의 GitHub 연동에 저장소 관리 권한이 없어(HTTP 403) 설정은 **사용자 조치 대기**(방법은 TK-12 문서 하단). 추가할 이름은 job 이름 `테스트 (SQLite + PostgreSQL/pgvector + Redis)`. Docker OCR readiness 추가 여부(연속 초록 확인 뒤)는 별도 결정.
+- **CI를 `main`의 필수 확인에 추가: 완료·확인됨(2026-10-03).** 사용자가 설정했고 평가 측이 `GET branches/main`으로 필수 확인 2개(`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`)를 읽어 확인했다(적용 수준 `non_admins` 유지). Docker OCR readiness 추가 여부(연속 초록 확인 뒤)는 별도 결정.
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
