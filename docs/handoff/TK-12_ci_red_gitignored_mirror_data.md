@@ -47,3 +47,11 @@
 
 ## CI 초록 확인(2026-10-02, `workflow_dispatch`)
 [`CI` run 263](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37074643039)(브랜치 `Steve_ACASiaLAW`, 커밋 f82e679): job `Docker OCR readiness` **success**, job `테스트 (SQLite + PostgreSQL/pgvector + Redis)` **success**(단계별: SQLite + 인프로세스 Worker 6분 36초 success, PostgreSQL/pgvector + Celery 브로커 6분 7초 success, 나머지 단계 모두 success). 이 실행 뒤 커밋(437a5d0)은 문서 변경뿐이다. **이 티켓은 해소로 닫는다.** `CI`를 `main` 필수 확인에 추가하는 것은 사용자 승인 사항이며 아직 하지 않았다.
+
+## `CI`를 `main` 필수 확인에 추가 — 사용자 승인(2026-10-03), 설정은 사용자 조치 대기
+- 승인: 사용자가 `CI`를 `main` 필수 확인에 추가하라고 승인했다. 평가 세션이 `gh api`로 `main` 보호 설정을 읽고 쓰려 했으나 **HTTP 403**(`Resource not accessible by integration`)이라 바꾸지 못했다(이 세션의 GitHub 연동에 저장소 관리 권한이 없다). 설정을 바꾸지 않았다.
+- 읽은 현재 값(`GET branches/main`, 2026-10-02): 보호 켜짐, 필수 확인 `점수 하락 게이트`만, 적용 수준 `non_admins`(관리자는 예외).
+- 사용자 조치(관리자 권한 필요), 둘 중 하나:
+  1. 저장소 Settings → Branches → `main` 보호 규칙 편집 → "Require status checks to pass before merging"에서 `테스트 (SQLite + PostgreSQL/pgvector + Redis)` 검색해 추가(최근 실행 기록이 있어 목록에 나온다). 다른 항목(최신 상태 유지 끔 등)은 그대로 둔다.
+  2. 관리자 토큰이 있는 곳에서: `echo '["테스트 (SQLite + PostgreSQL/pgvector + Redis)"]' | gh api -X POST repos/stevelee0119/verify_ACAS_LAW/branches/main/protection/required_status_checks/contexts --input -` (기존 필수 확인을 유지하고 이 항목만 더한다).
+- 유의: `CI`는 `main`·`claude/**`·`codex/**` 브랜치 푸시와 PR, 수동 실행에서만 돈다. 평가 브랜치 `Steve_ACASiaLAW`나 구현 브랜치 푸시에서는 돌지 않으므로, 필수 확인이 걸린 `main`으로 병합하려면 PR을 열어 `CI`가 PR에서 실행되어야 한다(사용자가 PR을 요청할 때). Docker OCR readiness는 이 승인에 포함되지 않았다.
