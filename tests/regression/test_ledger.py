@@ -98,6 +98,9 @@ LEDGER_RECORDS = [
     ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_PHONE_BLOCKED", True, "system 프롬프트에 합성 전화번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("ASTRA-V5", "SYSTEM_PROMPT_DYNAMIC_RRN_BLOCKED", True, "system 프롬프트에 합성 주민번호 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
     ("ASTRA-V5", "STATIC_PROMPT_CLEAN_CONTROL", False, "고정 시스템 프롬프트 및 메타 지시문", "PASSED"),
+    ("TK-29", "READ_REFERENCE_EXACT_MATCH", True, "본문 읽은 참고자료와 정규화 제목 완전 일치", "PARTIALLY_VERIFIED 및 INFO 생성"),
+    ("TK-29", "UNREAD_OR_PARTIAL_MATCH_CONTROL", False, "미독 파일 또는 부분 일치 해설서", "승격 차단 (LOW/CRITICAL 유지)"),
+    ("TK-29", "STATUTE_FORM_REFERENCE_CONTROL", False, "법령 형태 인용(법·시행령 등)", "참고자료 일치 무관 CRITICAL 유지"),
 ]
 
 
@@ -791,7 +794,86 @@ def test_astra_v5_clean_system_and_meta_labels_control(
 
 
 # ===========================================================================
-# 13. 원장 종합 무결성 검증
+# 13. TK-29: 사용자 참고자료(Drive) 일치 판정 가드 (양성 3건, 대조군 3건)
+# ===========================================================================
+class _MockLibrary:
+    def __init__(self, sources: list, inventory: list = None):
+        self.summary = {"sources": sources, "inventory": inventory or []}
+        self.eligible = {}
+
+
+class _MockVerifier:
+    def __init__(self, sources: list, inventory: list = None):
+        self.references = _MockLibrary(sources, inventory)
+
+
+def _run_mock_law_absent(law_name: str, sources: list, inventory: list = None):
+    import types
+    from packages.common.enums import VerificationStatus
+    from packages.common.schemas import Citation, CitationType
+    from packages.legal_engine.source_review import _law_absent
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation(
+        citation_id="c_synth", document_id="d_synth", block_id="b_synth",
+        page=1, span=(0, 10), raw_text=law_name,
+        type=CitationType.STATUTE, law_name=law_name, article="1"
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    verdict.source_records = []
+    _law_absent(
+        verdict,
+        types.SimpleNamespace(message="EXACT_LAW_NOT_FOUND:[]"),
+        verifier=_MockVerifier(sources, inventory)
+    )
+    return verdict
+
+
+@pytest.mark.parametrize(
+    "law_name, title",
+    [
+        ("재난안전 대응지침", "[RAG참고자료] 재난안전 대응지침.pdf"),
+        ("특수조건 보안관리지침", "특수조건_보안관리지침.hwpx"),
+        ("현장업무수칙", "현장업무수칙"),
+    ],
+)
+def test_tk29_read_reference_exact_match_positive(law_name: str, title: str):
+    """TK-29 양성: 본문을 읽은 참고자료(sources)와 정규화 제목이 완전 일치하는 내부 규정은 승격."""
+    from packages.common.enums import Severity, VerificationStatus
+
+    verdict = _run_mock_law_absent(law_name, sources=[{"name": title}])
+    assert verdict.status == VerificationStatus.PARTIALLY_VERIFIED
+    assert verdict.levels.get("existence") == "FOUND_IN_USER_REFERENCES"
+    assert not any(f.severity == Severity.CRITICAL for f in verdict.findings)
+    assert any(f.severity == Severity.INFO for f in verdict.findings)
+
+
+@pytest.mark.parametrize(
+    "law_name, sources, inventory, expected_critical",
+    [
+        ("재난안전 대응지침", [], [{"name": "재난안전 대응지침.pdf", "status": "UNAVAILABLE"}], False),
+        ("재난안전 대응지침", [{"name": "재난안전 대응지침 해설서.pdf"}], [], False),
+        ("가상민사소송법", [{"name": "[RAG참고자료] 가상민사소송법.pdf"}], [], True),
+    ],
+)
+def test_tk29_unread_partial_and_statute_control(
+    law_name: str, sources: list, inventory: list, expected_critical: bool
+):
+    """TK-29 대조군: 미독 파일, 부분 일치 해설서, 법령 형태는 참고자료 승격이 차단됨."""
+    from packages.common.enums import FindingType, Severity, VerificationStatus
+
+    verdict = _run_mock_law_absent(law_name, sources=sources, inventory=inventory)
+    assert verdict.status != VerificationStatus.PARTIALLY_VERIFIED
+    assert verdict.levels.get("existence") != "FOUND_IN_USER_REFERENCES"
+    if expected_critical:
+        assert any(
+            f.type == FindingType.STATUTE_NONEXISTENT and f.severity == Severity.CRITICAL
+            for f in verdict.findings
+        )
+
+
+# ===========================================================================
+# 14. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -813,3 +895,4 @@ def test_ledger_records_integrity():
     assert "TK-26" in ticket_ids
     assert "TK-27" in ticket_ids
     assert "ASTRA-V5" in ticket_ids
+    assert "TK-29" in ticket_ids
