@@ -37,6 +37,8 @@
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
+**독립 감사(Astra, 읽기 전용) 의뢰서:** [4차](PROMPT_FOR_ASTRA_AUDIT_ROUND4.md) · [5차](PROMPT_FOR_ASTRA_AUDIT_ROUND5.md)
+
 ## 측정 명령
 ```
 python scripts/regression_gate.py --base HEAD~1                   # 기준 커밋 대비 항목 단위 회귀(푸시 전에 항상). --pytest를 주면 전체 시험의 새 실패까지
