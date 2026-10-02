@@ -2,7 +2,7 @@
   "name": "case9_state_compensation",
   "input": "tests/fixtures/case9_state_compensation_brief.docx",
   "text_input": "tests/fixtures/probes/case9_state_compensation.txt",
-  "description": "2026가합61942 손해배상(국) 준비서면 정답지 7대 영역 중 오프라인으로 잴 수 있는 항목(AI 작성 판별·공식 DB 대조·Drive 대조 제외). 입력은 사용자가 보낸 docx 원본이다(사용자의 온라인 실행은 같은 서면의 PDF였다. PDF 파일은 받지 못함). 구현 에이전트가 처음 보는 상태로 main 9933548(3차 구현 뒤)에서 첫 점수를 잼. 서면 속 판례·조문·규정은 시험용 합성이며 실재 법령·판례를 인용한다는 취지가 아니다.",
+  "description": "2026가합61942 손해배상(국) 준비서면 정답지 7대 영역 중 오프라인으로 잴 수 있는 항목(AI 작성 판별·공식 DB 대조·Drive 대조 제외). 입력은 사용자가 보낸 docx 원본이다. 사용자의 온라인 실행에 쓴 PDF 원본은 tests/fixtures/case9_state_compensation_google_docs.pdf이며 `probe_document.py --input`으로 같은 항목을 잰다(2026-10-02 수령). 구현 에이전트가 처음 보는 상태로 main 9933548(3차 구현 뒤)에서 첫 점수를 잼. 서면 속 판례·조문·규정은 시험용 합성이며 실재 법령·판례를 인용한다는 취지가 아니다.",
   "checks": [
     {
       "id": "TEXT-1",

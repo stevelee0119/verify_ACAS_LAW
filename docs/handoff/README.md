@@ -26,7 +26,7 @@
 | [TK-19](TK-19_regressions_after_round2.md) | 회귀 | 2차 구현이 기존 시험 4건과 기준일 추출을 깨뜨림(횡령 사건 기준일 소실 포함) | `pytest -q --ignore=tests/acceptance` 실패 0, `test_reference_date_candidate_is_kept` | 열림 |
 | [TK-20](TK-20_generalization_gaps_round2.md) | 일반화 | 변형 2 첫 점수 16/20: 주소 꼬리·변호사 주소·변호사 성명·`@@` 표지·무리한 주장, 조문 단위 열거 규칙 | `test_variant2_check`·`test_case8_check[text-LEG-1]` | 열림 |
 | [TK-21](TK-21_process_round2.md) | 절차·증거 | 출처 없는 시험 자료 작성(요청 06), 점수 표기, 은닉 탐지 시험 약화 | 다음 커밋 메시지 | 열림 |
-| [TK-22](TK-22_input_paragraph_reconstruction.md) | 입력 단계 | 물리적 줄을 문단으로 복원하지 않아 주장이 토막 나 Drive 대조 누락, 줄바꿈에 따라 인젝션 표지 미탐 | `test_layout_invariance_pdf.py`, `test_case9…` | 텍스트 입력 해결(e6b58fd) · **PDF 입력 열림** |
+| [TK-22](TK-22_input_paragraph_reconstruction.md) | 입력 단계 | 물리적 줄을 문단으로 복원하지 않아 주장이 토막 나 Drive 대조 누락, 줄바꿈에 따라 인젝션 표지 미탐 | `test_layout_invariance_pdf.py`, `test_case9…`, `test_case9_real_pdf.py`(실제 PDF 원본, 4차 후에도 온라인과 같은 70청구·4분할) | 텍스트 입력 해결(e6b58fd) · **PDF 입력 열림** |
 | [TK-23](TK-23_evidence_severity_internal_regulation.md) | 오탐 + 정책 | Drive에 있는 내부 규정을 CRITICAL '존재하지 않는 법령'으로, 증거가 강한 쪽이 더 낮은 심각도 | 단위 시험, 온라인 FP-1·EX-2s | A 해결(e6b58fd) · 신규 회귀 → TK-29 · B는 사용자 결정 |
 | [TK-24](TK-24_unreasonable_argument_statutory_period.md) | 규칙 부족 | 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐 | `test_case9_check[*-LEG-2]` | 열림(4차 제외) |
 | [TK-25](TK-25_report_scope_and_coverage_notes.md) | 정책 이행 잔여 | AI 판정 축 `scope`가 흔적 0건이면 NOT_APPLICABLE, 커버리지·모델 실패 관찰 | 단위 시험 | scope 해결(e6b58fd) · 제안은 사용자 결정 |
@@ -44,6 +44,7 @@
 python scripts/regression_gate.py --base HEAD~1                   # 기준 커밋 대비 항목 단위 회귀(푸시 전에 항상). --pytest를 주면 전체 시험의 새 실패까지
 python scripts/check_hardcoding_diff.py --base HEAD~1            # 이번 변경의 추가된 줄에 시험 입력의 값·조문 번호가 들어갔는지
 python scripts/probe_document.py run --spec tests/fixtures/probes/case7_suspension.json [--text]
+python scripts/probe_document.py run --spec tests/fixtures/probes/case9_state_compensation.json --input tests/fixtures/case9_state_compensation_google_docs.pdf   # 같은 정답 항목, 입력만 실제 PDF
 python scripts/score_report.py --report <온라인 보고서.json> --spec tests/fixtures/probes/case7_suspension_online.json
 python -m pytest tests/acceptance -q -rxX
 python scripts/check_case_literals.py

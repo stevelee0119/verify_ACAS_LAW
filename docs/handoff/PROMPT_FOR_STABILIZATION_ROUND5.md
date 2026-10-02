@@ -41,7 +41,7 @@ TK-23 B(가공 조문 심각도, 요청 14), 요청 16의 모델 응답 안정�
 
 ### U0. 시작 점검
 - `Steve_ACASiaLAW`(e4378f7 이후)를 받아 시작한다. `git config core.autocrlf input`. 강제 푸시 금지.
-- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/NN_round5_baseline.md`에 붙인다. 기대 기준선: 전체 시험 실패 4건(TK-12 2·사업자번호 정책 1·환경 1), `tests/acceptance` xfail 23건(서면9 LEG-2 2, 이름 라벨 13, 참고자료 3, 민법 법리 5) + `test_layout_invariance_pdf.py`의 KNOWN_OPEN 10건.
+- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/NN_round5_baseline.md`에 붙인다. 기대 기준선: 전체 시험 실패 4건(TK-12 2·사업자번호 정책 1·환경 1), `tests/acceptance` xfail 27건(서면9 LEG-2 3[docx·텍스트·실제 PDF], 서면9 실제 PDF 청구 분할·법령명·청구 수 3, 이름 라벨 13, 참고자료 3, 민법 법리 5, 모두 strict) + `test_layout_invariance_pdf.py`의 KNOWN_OPEN 10건.
 - `tests/regression/test_ledger.py`에 아래 묶음마다 **고친 결함의 재현 입력 + 대조군**을 추가한다(입력은 구현 측이 새로 짓는다. 평가 측 시험의 입력을 복사하지 않는다).
 
 ### U1. TK-29 참고자료(Drive) 일치 판정 — 가장 작고 가장 위험하다 ← 첫째
@@ -67,12 +67,13 @@ TK-23 B(가공 조문 심각도, 요청 14), 요청 16의 모델 응답 안정�
 **수용:** 모든 PII 종류(PERSON·DOB·DRIVER_LICENSE·MILITARY_ID·COMPANY·PHONE·EMAIL·ADDRESS·ACCOUNT…)를 system에 넣은 요청이 `BLOCKED`, **코드의 모든 실제 system·schema 상수가 `PASSED`**(정상 안내문 오탐 대조를 상수 전체에 대해 자동으로 도는 시험), 동적 값을 섞은 변형(상수 + 문서 값)이 `BLOCKED`. 실제 모델 호출은 하지 않는다(요청 조립만 검사).
 
 ### U4. TK-22 입력 계층 문단 복원을 PDF·docx에도 적용하고 소비자별 땜질을 정리 ← 가장 큰 작업
-**증거(평가 측 측정):** 4차 S2는 `reconstruct_paragraphs_from_text`를 `TextParser`에만 연결했고 PDF용 `reconstruct_page_blocks`는 호출자가 없다. 개발 서면 6종을 reportlab 내장 CID 글꼴 PDF로 줄 폭만 바꿔 만든 24개 조합 **모두에서 실패 항목이 4차 전후 같다**(`test_layout_invariance_pdf.py` KNOWN_OPEN 10건: 인젝션 표지 INJ-1이 줄 폭 40·48자에서, 인용 CIT-6이 폭 40자에서 등). 비공개 서면 3도 PDF는 4차 전후 17·17·16·15(원본·64·48·40자). 서면9에서 Drive 대조가 빠진 원인(규정 인용 문장이 PDF 줄 단위 블록 3토막으로 쪼개져 주장 70개 중 1개만 연결)은 **PDF 입력이라 해결되지 않았다.** 소비자별 줄 결합(`citation_extractor._join_hard_wrapped_citations`·`legal_rules`·`temporal_review`의 길이 보존 언래핑)도 그대로 남아 있다.
+**증거(평가 측 측정):** 4차 S2는 `reconstruct_paragraphs_from_text`를 `TextParser`에만 연결했고 PDF용 `reconstruct_page_blocks`는 호출자가 없다. 개발 서면 6종을 reportlab 내장 CID 글꼴 PDF로 줄 폭만 바꿔 만든 24개 조합 **모두에서 실패 항목이 4차 전후 같다**(`test_layout_invariance_pdf.py` KNOWN_OPEN 10건: 인젝션 표지 INJ-1이 줄 폭 40·48자에서, 인용 CIT-6이 폭 40자에서 등). 비공개 서면 3도 PDF는 4차 전후 17·17·16·15(원본·64·48·40자). 서면9에서 Drive 대조가 빠진 원인(규정 인용 문장이 PDF 줄 단위 블록 3토막으로 쪼개져 주장 70개 중 1개만 연결)은 **PDF 입력이라 해결되지 않았다.** 사용자가 온라인 실행에 쓴 **실제 PDF 원본**(`tests/fixtures/case9_state_compensation_google_docs.pdf`, SHA-256 `f79abba4…`)으로 재측정한 결과 9933548과 4차 제품 코드가 **청구 문장 텍스트까지 같다**: 청구 70개(docx는 40개)·검증 대상 17개, 제22조 제4항 인용 문장이 4청구로 분할(앞 3개 DOCUMENT_META·검증 대상 아님, docx는 LEGAL_RULE 1개), 인용 법령명이 `육군 야외 기동훈련안전통제 및 사고조사 규정`(띄어쓰기 소실, docx는 `기동훈련 안전통제`). 정답 항목 27/28은 PDF도 같으므로 **이 점수는 PDF가 건강하다는 증거가 아니다**(probe가 청구 분할을 재지 않는다). 청구 분할·법령명은 `tests/acceptance/test_case9_real_pdf.py`가 잰다(PDF 3건 strict xfail). 소비자별 줄 결합(`citation_extractor._join_hard_wrapped_citations`·`legal_rules`·`temporal_review`의 길이 보존 언래핑)도 그대로 남아 있다.
 **개선:**
 1. `PdfParser`(와 docx·hwp 파서)가 블록을 만들 때 같은 복원 규칙을 적용한다. 블록의 `text`는 문단, 물리적 줄(`lines`)과 좌표(`bbox`)·쪽·읽기 순서는 속성으로 **보존**한다. 줄 단위가 의미인 영역(당사자 표시란·표·번호 목록·서명란·머리표)은 줄을 유지한다. 줄바꿈 자리의 한글 낱말 사이 공백은 유지한다.
 2. **병합하기 전의 줄 단위 정보에 의존하는 기능은 깨지면 안 된다**: 숨은 텍스트·레이어 불일치·렌더 모드 탐지(`pdf_parser`의 forensic 경로), finding의 `span`/`bbox`/`page` 근거 표시, OCR 입력, 표 추출. 복원은 이 탐지가 끝난 뒤 또는 원본 줄을 보존한 채로 한다. 문단 블록에서 원래 줄·좌표로 돌아가는 대응을 속성으로 둔다.
 3. 복원이 한 곳에서 되면 소비자별 언래핑 3곳을 **지운다**(남기면 이유와 함께 요청서에 적는다). 지운 뒤에도 기존 시험이 모두 통과해야 한다.
-**수용:** `tests/acceptance/test_layout_invariance_pdf.py`의 `KNOWN_OPEN` 10건 해소(풀린 목록을 `requests/`에 알림. 평가 측이 표시를 지운다), 텍스트 입력 시험·서면6~9·변형 1·2의 primary·text 점수 유지, 당사자 표시란 개인정보 시험 유지. **구현 측 새 시험(필수):** 같은 새 서면을 **txt·PDF(reportlab CID 글꼴)·docx(python-docx)** 세 형식으로 만들어 줄 폭 36·44·56·64자와 CRLF·빈 줄 변형까지 **결과가 모두 같음**을 보이는 형식 간 불변 시험, 숨은 텍스트 PDF·표가 있는 PDF·쪽을 넘는 문장이 있는 PDF 각 1건(복원 뒤에도 탐지·좌표·표가 유지됨). 사용자 온라인 재실행에서 서면9 `claim_coverage.linked_claims`가 늘고 제22조 모순이 잡히는지는 사용자가 확인한다(실제 Google Docs PDF 원본이 필요).
+**띄어쓰기 소실의 위치(평가 측 진단, 해법은 정하지 않는다):** `packages/document_engine/reading_text.py::join_separator`는 꽉 찬 줄의 한글–한글 줄바꿈을 `""`로 잇는다(글자 단위 줄바꿈 가정). 어절 단위로 줄을 바꾸는 쪽은 `_word_wrap_pages`가 알아보고 공백으로 잇는데 이 서면 3쪽은 그렇게 분류되지 않았다(짧게 넘어간 줄 증거 부족). 단 "애매하면 항상 공백"으로 고치면 글자 단위 줄바꿈 서면(`(대`/`법원` → `(대법원`, 0.8.x 회귀 TC-06)이 되살아나므로 **두 서면을 모두** 통과해야 한다. 경계에서 어느 쪽인지의 증거를 쪽이 아니라 더 넓게(문서 전체) 모으는 등의 설계는 구현 측이 정하고, 두 경우를 고정하는 시험을 `tests/regression/`에 둔다.
+**수용:** `tests/acceptance/test_case9_real_pdf.py`의 PDF strict xfail 3건 해소(제22조 문장 단일 청구·인용 법령명이 docx와 같음·청구 수 20% 이내. 풀린 목록은 `requests/`로 알린다), `tests/acceptance/test_layout_invariance_pdf.py`의 `KNOWN_OPEN` 10건 해소(풀린 목록을 `requests/`에 알림. 평가 측이 표시를 지운다), 텍스트 입력 시험·서면6~9·변형 1·2의 primary·text 점수 유지, 당사자 표시란 개인정보 시험 유지. **구현 측 새 시험(필수):** 같은 새 서면을 **txt·PDF(reportlab CID 글꼴)·docx(python-docx)** 세 형식으로 만들어 줄 폭 36·44·56·64자와 CRLF·빈 줄 변형까지 **결과가 모두 같음**을 보이는 형식 간 불변 시험, 숨은 텍스트 PDF·표가 있는 PDF·쪽을 넘는 문장이 있는 PDF 각 1건(복원 뒤에도 탐지·좌표·표가 유지됨). 사용자 온라인 재실행에서 서면9 `claim_coverage.linked_claims`가 늘고 제22조 모순이 잡히는지는 사용자가 확인한다(실제 Google Docs PDF 원본이 필요).
 
 ### U5. TK-26 민법 군집을 큐레이션 목록이 아니라 체계로 닫는다
 **증거:** 4차 S1은 헌법 제10~39조(제2장 전체)·제119조, 형법 제20~24조를 **체계로 닫았다**(좋다). 그러나 민법 항목은 12개 조문(2·103·104·137·201·202·203·390·734·741·746·750)을 고른 목록이다. 이 밖의 면책·소멸·효력 부정 법리 — 상계(제492조)·변제(제460조)·면제(제506조)·해제(제544조)·표현대리(제125조) — 로 쓴 **같은 구조의 주장 5건을 모두 놓친다**(`test_generalization_guards.py::test_unseen_doctrine_overclaim[setoff·performance·release·rescission·apparent-agency]`). 목록의 203·734·741은 평가 측 시험·티켓에 나온 번호다(티켓이 예시로 적은 것이므로 위반은 아니나, 목록이 시험에 나온 번호의 부분집합이면 일반화로 인정하지 않는다).
@@ -132,7 +133,7 @@ python scripts/check_case_literals.py                                # 3. 사건
 python scripts/scorecard.py && python scripts/score_gate.py          # 4. 기준 79.9/77.3 이상, 오탐 0 (환경을 함께 적는다)
 python -m pytest -q tests/regression                                 # 5. 회귀 원장
 python -m pytest -q --ignore=tests/acceptance                        # 전체 시험: 실패는 TK-12 2·사업자번호 1·환경 1 외 0, 커밋마다 새 실패 0
-python -m pytest tests/acceptance -q -rfxX                           # 현재 xfail 23건 + KNOWN_OPEN 10건. XPASS(strict) 실패는 requests로 알림
+python -m pytest tests/acceptance -q -rfxX                           # 현재 xfail 27건(서면9 실제 PDF 4건 포함) + KNOWN_OPEN 10건. XPASS(strict) 실패는 requests로 알림
 python scripts/probe_document.py run --spec tests/fixtures/probes/<spec>.json [--text]   # 서면6 20/20·7 25/25·8 22/22·9 27/28·변형1 24/24·변형2 21/21 유지
 ```
 `check_hardcoding_diff.py`의 **강한 신호**는 평가 측 승인 전까지 실패로 본다. `regression_gate.py`가 **종료 코드 2**를 내면 측정하지 못한 것이므로 원인을 해결한다.
@@ -145,7 +146,7 @@ python scripts/probe_document.py run --spec tests/fixtures/probes/<spec>.json [-
 
 ## 6. 사용자 결정·조치 대기 (구현 에이전트가 정하지 않는다)
 - TK-23 B(가공 조문 심각도, 평가 측 권장 HIGH), 사업자등록번호 마스킹 여부, 미러 시험 자료(TK-12), 요청 16(모델 응답 안정화·시행일 버전 선택), TK-09 켜기, 기준선 상향, TK-24 착수, `main` 병합 시점.
-- **사용자 조치:** (1) `main` 보호 규칙의 필수 상태 확인 지정은 **U8로 구현 측에 맡겼다**(권한이 없으면 사용자가 직접). Docker OCR readiness를 필수에 넣을지·그 밖의 보호 옵션은 사용자가 정한다. (2) 서면9 온라인 실행에 쓴 **PDF 원본** 제공(U4의 PDF 입력을 실제 파일로 재측정). (3) 서면9 온라인 재실행(PDF)으로 Drive 대조 복구 확인.
+- **사용자 조치:** (1) `main` 보호 규칙의 필수 상태 확인 지정은 **U8로 구현 측에 맡겼다**(권한이 없으면 사용자가 직접). Docker OCR readiness를 필수에 넣을지·그 밖의 보호 옵션은 사용자가 정한다. (2) ~~서면9 PDF 원본 제공~~ 완료: `tests/fixtures/case9_state_compensation_google_docs.pdf`로 평가 측이 재측정했다(U4 증거 참조). (3) 서면9 온라인 재실행(PDF)으로 Drive 대조 복구 확인.
 
 ## 7. 완료의 정의
 - 회귀 게이트(기준 = 4차 통합 e4378f7) 회귀 0·종료 코드 0, 하드코딩 변경분 점검 강한 신호 0(승인된 것 제외), **새 rule_id 0**, 리터럴 부채 증가 0.

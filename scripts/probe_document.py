@@ -4,6 +4,7 @@
 고친 뒤의 점수는 일반화 근거가 아니다. 첫 점수의 추이가 '처음 보는 문서에서도 나아지는가'에 대한 답이다.
 
     python scripts/probe_document.py run    --spec tests/fixtures/probes/case6_military_secret.json
+    python scripts/probe_document.py run    --spec ... --input <문서>     # 명세의 input 대신 같은 서면의 다른 형식(PDF 원본 등)을 넣는다
     python scripts/probe_document.py run    --spec ... --text            # PDF 파서를 거치지 않는 텍스트 입력(원문 텍스트를 spec.text_input에서 읽음)
     python scripts/probe_document.py record --spec ... --note "서면6 수신 직후"      # docs/scorecards/first_touch_log.jsonl에 한 줄 추가
     python scripts/probe_document.py record --spec ... --sha aa93276 --note "수정 전 상태로 소급 측정"
@@ -157,8 +158,9 @@ def evaluate(spec: Dict[str, Any], obs: Dict[str, Any]) -> List[Dict[str, Any]]:
     return rows
 
 
-def run_in_tree(spec: Dict[str, Any], tree: Path, *, text_input: bool, spec_dir: Path) -> Dict[str, Any]:
-    source = spec["text_input"] if text_input else spec["input"]
+def run_in_tree(spec: Dict[str, Any], tree: Path, *, text_input: bool, spec_dir: Path,
+                input_override: Optional[str] = None) -> Dict[str, Any]:
+    source = spec["text_input"] if text_input else (input_override or spec["input"])
     document = (spec_dir / source).resolve() if not Path(source).is_absolute() else Path(source)
     suffix = document.suffix.lower()
     mime = {".txt": "text/plain",
@@ -180,17 +182,17 @@ def git(*args: str, cwd: Path = ROOT) -> str:
         return ""
 
 
-def measure(spec_path: Path, *, text_input: bool, sha: Optional[str]) -> Dict[str, Any]:
+def measure(spec_path: Path, *, text_input: bool, sha: Optional[str], input_override: Optional[str] = None) -> Dict[str, Any]:
     """현재 트리 또는 `sha` 커밋의 코드로 점검한다(과거 커밋은 임시 작업 폴더에서 하위 프로세스로 실행)."""
     spec = load_spec(spec_path)
     if not sha:
-        return run_in_tree(spec, ROOT, text_input=text_input, spec_dir=ROOT)
+        return run_in_tree(spec, ROOT, text_input=text_input, spec_dir=ROOT, input_override=input_override)
     tree = Path(tempfile.mkdtemp(prefix="probe_tree_"))
     shutil.rmtree(tree)
     subprocess.run(["git", "worktree", "add", "--detach", "-q", str(tree), sha], cwd=ROOT, check=True)
     try:
         cmd = [sys.executable, str(Path(__file__).resolve()), "run", "--spec", str(spec_path.resolve()), "--tree", str(tree),
-               "--json"] + (["--text"] if text_input else [])
+               "--json"] + (["--text"] if text_input else []) + (["--input", input_override] if input_override else [])
         proc = subprocess.run(cmd, cwd=tree, capture_output=True, text=True, timeout=900,
                               env={**os.environ, "PYTHONPATH": str(tree), "PROBE_DOC_ROOT": str(ROOT)})
         if proc.returncode != 0:
@@ -214,6 +216,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("command", choices=["run", "record"])
     parser.add_argument("--spec", required=True)
     parser.add_argument("--text", action="store_true", help="텍스트 입력(PDF 파서를 거치지 않음)")
+    parser.add_argument("--input", dest="input_override",
+                        help="명세의 input 대신 쓸 문서(같은 정답 항목으로 다른 입력 방식을 잰다. 예: 같은 서면의 PDF 원본)")
     parser.add_argument("--sha", help="record: 이 커밋의 코드로 소급 측정")
     parser.add_argument("--note", default="")
     parser.add_argument("--log", default=str(LOG))
@@ -226,15 +230,16 @@ def main(argv: Optional[List[str]] = None) -> int:
         if args.command == "run" and args.tree:
             # 과거 커밋의 작업 폴더에서 실행된 하위 프로세스. 문서는 현재 저장소의 것을 쓴다.
             doc_root = Path(os.environ.get("PROBE_DOC_ROOT", ROOT))
-            result = run_in_tree(load_spec(spec_path), Path(args.tree), text_input=args.text, spec_dir=doc_root)
+            result = run_in_tree(load_spec(spec_path), Path(args.tree), text_input=args.text, spec_dir=doc_root,
+                                 input_override=args.input_override)
         elif args.command == "run":
-            result = measure(spec_path, text_input=args.text, sha=None)
+            result = measure(spec_path, text_input=args.text, sha=None, input_override=args.input_override)
         else:
             if not args.sha and not args.allow_dirty and git("status", "--porcelain", "--", *PRODUCT_PATHS):
                 print("제품 코드(packages/ apps/ workers/ config/)에 미커밋 변경이 있다. 첫 점수는 고치기 전 코드로 잰다. "
                       "이미 고친 뒤라면 --sha <고치기 전 커밋>으로 소급 측정하거나 --allow-dirty를 준다.", file=sys.stderr)
                 return 2
-            result = measure(spec_path, text_input=args.text, sha=args.sha)
+            result = measure(spec_path, text_input=args.text, sha=args.sha, input_override=args.input_override)
     except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         print(f"점검하지 못했다: {exc}", file=sys.stderr)
         return 2
