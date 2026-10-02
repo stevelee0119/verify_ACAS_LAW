@@ -105,25 +105,41 @@
 
 ## 5. U8 `main` 브랜치 보호 설정 점검 결과
 
-- **완료 여부**: **권한 없음 (GitHub Free Private Repository 제약)**
-- **확인 결과**:
-  - `gh api repos/stevelee0119/verify_ACAS_LAW/branches/main/protection` 실행 시:
-    ```json
-    {"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}
-    ```
-  - `gh api repos/stevelee0119/verify_ACAS_LAW/rulesets` 실행 시:
-    ```json
-    {"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}
-    ```
-  - GitHub 비공개(private) 무료 개인 저장소에서는 Branch Protection 및 Ruleset 설정 API가 GitHub Pro 이상 구독 또는 공개(public) 저장소 전환 시에만 지원됩니다.
-- **사용자 조치 안내**:
-  - 사용자가 추후 저장소를 Public으로 전환하거나 GitHub Pro로 업그레이드할 경우, GitHub UI 화면에서 아래와 같이 설정하실 수 있습니다:
-    1. 저장소 Settings → Branches (또는 Rules) → `main`
-    2. **Require status checks to pass before merging**: 체크
-    3. 필수 확인 항목에 **`점수 하락 게이트`** (잡 이름)만 지정 (`CI` 및 `Docker OCR readiness`는 제외)
-    4. **Do not allow force pushes** (강제 푸시 금지): 체크
-    5. **Do not allow deletions** (브랜치 삭제 금지): 체크
-    6. "Require a pull request before merging"은 켜지 않음 유지.
+- **완료 여부**: **지정함 (설정 완료 및 API 검증 확인)**
+- **조치 배경**: 저장소가 Public으로 조정됨에 따라 GitHub Branch Protection API 활성화됨 (`404 Branch not protected` 확인 후 `PUT` API로 설정 적용).
+- **지정 내용 및 검증 결과 (`GET /repos/stevelee0119/verify_ACAS_LAW/branches/main/protection`)**:
+  ```json
+  {
+    "url": "https://api.github.com/repos/stevelee0119/verify_ACAS_LAW/branches/main/protection",
+    "required_status_checks": {
+      "strict": false,
+      "contexts": [
+        "점수 하락 게이트"
+      ],
+      "checks": [
+        {
+          "context": "점수 하락 게이트",
+          "app_id": 15368
+        }
+      ]
+    },
+    "enforce_admins": {
+      "enabled": false
+    },
+    "allow_force_pushes": {
+      "enabled": false
+    },
+    "allow_deletions": {
+      "enabled": false
+    }
+  }
+  ```
+- **지시서 U8 확정 범위 준수 점검**:
+  1. 필수 상태 확인: **`점수 하락 게이트`** 잡만 지정 (`checks: [{"context": "점수 하락 게이트", "app_id": 15368}]`) — **지정 완료**
+  2. `CI` 및 `Docker OCR readiness`: 지정하지 않음 — **준수**
+  3. 강제 푸시 금지 (`allow_force_pushes: false`) — **활성화 완료**
+  4. 브랜치 삭제 금지 (`allow_deletions: false`) — **활성화 완료**
+  5. PR 필수·관리자 포함 적용: 켜지 않음 유지 (`required_pull_request_reviews: null`, `enforce_admins: false`) — **준수**
 
 ---
 
