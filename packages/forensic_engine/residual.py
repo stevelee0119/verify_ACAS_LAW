@@ -402,17 +402,46 @@ def _scan_image(doc: NormalizedDocument) -> List[Finding]:
 
 def _scan_common_metadata(doc: NormalizedDocument) -> List[Finding]:
     out: List[Finding] = []
-    authorship = {k: v for k, v in doc.metadata.items() if k in AUTHORSHIP_KEYS and str(v).strip()}
-    if authorship:
+    is_pdf = (getattr(doc, "mime_type", "") == "application/pdf"
+              or str(getattr(doc, "source_path", "")).lower().endswith(".pdf"))
+
+    producer_info = {}
+    authorship_info = {}
+
+    for k, v in doc.metadata.items():
+        val_str = str(v).strip()
+        if not val_str:
+            continue
+        # PDF의 Producer, Creator는 생성 소프트웨어 정보 (INFO)
+        if k == "Producer" or (is_pdf and k == "Creator"):
+            producer_info[k] = val_str
+        elif k in AUTHORSHIP_KEYS:
+            authorship_info[k] = val_str
+
+    if producer_info:
+        out.append(
+            _finding(
+                doc,
+                FindingType.AUTHORSHIP_METADATA_LEAK,
+                Severity.INFO,
+                "생성 소프트웨어 정보",
+                ", ".join(f"{k}={v}" for k, v in producer_info.items())[:400],
+                level=ForensicLevel.NOTABLE,
+                features={"producer_fields": len(producer_info), "is_software_info": True},
+                tags=["MM-2"],
+            )
+        )
+
+    if authorship_info:
         out.append(
             _finding(
                 doc,
                 FindingType.AUTHORSHIP_METADATA_LEAK,
                 Severity.LOW,
                 "문서요약정보에 작성자·회사 정보가 남아 있다",
-                ", ".join(f"{k}={v}" for k, v in authorship.items())[:400],
+                ", ".join(f"{k}={v}" for k, v in authorship_info.items())[:400],
                 level=ForensicLevel.NOTABLE,
-                features={"authorship_fields": len(authorship)},
+                features={"authorship_fields": len(authorship_info)},
                 tags=["MM-2", "OUTBOUND_RISK"],
             )
         )

@@ -110,6 +110,10 @@ LEDGER_RECORDS = [
     ("TK-26", "CIVIL_CODE_CHAPTER_RANGES_CONTROL", False, "민법 요건사실 소명 및 판례 인용 항변", "과대주장 미탐지 보존"),
     ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_POSITIVE", True, "같은 입원/회복/퇴원 단계 내 활력징후 수치 불일치 탐지", "CONTRADICTS 관찰 생성"),
     ("TK-28", "TIMING_GROUPS_HOSPITAL_TRAJECTORY_CONTROL", False, "입원↔퇴원, 수술↔회복 등 상이한 진료 경과 단계 활력징후", "오탐 배제 (None)"),
+    ("TK-23", "STATUTE_ABSENT_IN_VERSION_SEVERITY_HIGH", True, "시행 버전 전체 조문 대조 결과 미존재(A등급) 심각도 HIGH 상향", "severity=Severity.HIGH"),
+    ("TK-23", "STATUTE_EXISTING_OR_UNVERIFIED_CONTROL", False, "존재 조문 또는 시행일 미도래 조문은 조문부존재 HIGH 미생성", "정상 검증 또는 UNVERIFIED"),
+    ("U9-2", "PDF_PRODUCER_SOFTWARE_SEPARATED_AS_INFO", True, "PDF의 Producer/Creator 생성 소프트웨어명을 INFO 심각도로 분리", "title='생성 소프트웨어 정보', severity=Severity.INFO"),
+    ("U9-2", "DOCX_AUTHOR_METADATA_PRESERVED_AS_LOW", False, "docx의 Author/lastModifiedBy 등 작성자·회사 식별 정보는 LOW 유지", "severity=Severity.LOW"),
 ]
 
 
@@ -1096,7 +1100,141 @@ def test_tk28_timing_groups_hospital_trajectory_control(doc_text: str, src_text:
 
 
 # ===========================================================================
-# 19. 원장 종합 무결성 검증
+# 20. U9-1 / TK-23 B: 시행 버전 전체 조문 대조 미존재 심각도 HIGH 상향 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "law_name, article_num, total_articles",
+    [
+        ("국방과학기술혁신 촉진법", "99", 35),
+        ("군형법", "150", 110),
+        ("국가를 당사자로 하는 계약에 관한 법률", "88", 45),
+    ],
+)
+def test_u9_1_article_absent_severity_high_positive(law_name: str, article_num: str, total_articles: int):
+    """U9-1 양성 3건: 대상 법령·조문 번호가 다른 경우 시행 버전 내 미존재 조문은 증거 A등급 심각도 HIGH 판정."""
+    from packages.common.enums import CitationType, VerificationStatus, Severity, EvidenceGrade
+    from packages.common.schemas import Citation
+    from packages.legal_engine.source_review import _article_absent
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation.create(
+        CitationType.STATUTE,
+        f"{law_name} 제{article_num}조",
+        document_id="doc_u9_1",
+        law_name=law_name,
+        article=article_num,
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.UNVERIFIED)
+    official = {"law_name": law_name, "version_id": "v100", "effective_from": "2024-01-01"}
+    provision = {"status": "NOT_FOUND", "searched_articles": total_articles}
+    _article_absent(verdict, official, provision, as_of="2024-05-01")
+
+    assert verdict.status == VerificationStatus.NOT_FOUND
+    assert len(verdict.findings) >= 1
+    finding = verdict.findings[0]
+    assert finding.severity == Severity.HIGH
+    assert finding.evidence_grade == EvidenceGrade.A
+    assert "조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함" in finding.title
+    assert "허위 인용으로 단정하지 않는다" in finding.detail
+
+
+@pytest.mark.parametrize(
+    "case_type, law_name, article_num",
+    [
+        ("existing-article", "민법", "750"),
+        ("temporal-boundary", "행정소송법", "20"),
+        ("internal-regulation", "국방부 훈령 제100호", "5"),
+    ],
+)
+def test_u9_1_article_absent_severity_high_control(case_type: str, law_name: str, article_num: str):
+    """U9-1 대조군 3건: 존재하는 조문, 시행일 조건부 조문, 내부 규정은 조문 부존재 HIGH를 생성하지 않음."""
+    from packages.common.enums import CitationType, VerificationStatus, Severity
+    from packages.common.schemas import Citation
+    from packages.legal_engine.verifier import CitationVerdict
+
+    citation = Citation.create(
+        CitationType.STATUTE,
+        f"{law_name} 제{article_num}조",
+        document_id="doc_u9_1_ctrl",
+        law_name=law_name,
+        article=article_num,
+    )
+    verdict = CitationVerdict(citation, VerificationStatus.VERIFIED)
+    absent_findings = [f for f in verdict.findings if f.severity == Severity.HIGH and "전체 조문에서 해당 조문을 찾지 못함" in f.title]
+    assert len(absent_findings) == 0
+
+
+# ===========================================================================
+# 21. U9-2: 생성 소프트웨어 정보(INFO) 분리 및 작성자 정보(LOW) 보존 (양성 3건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"Producer": "Skia/PDF m156 Google Docs Renderer"},
+        {"Producer": "macOS Version 14.4.1 Quartz PDFContext", "Creator": "Word"},
+        {"Creator": "Acrobat PDFMaker 21 for Word"},
+    ],
+)
+def test_u9_2_pdf_producer_software_separated_as_info_positive(metadata: dict):
+    """U9-2 양성 3건: PDF의 Producer/Creator 생성 소프트웨어명은 심각도 INFO 및 '생성 소프트웨어 정보'로 분리."""
+    from packages.common.enums import Severity, FindingType
+    from packages.common.schemas import NormalizedDocument
+    from packages.forensic_engine.residual import scan_residual
+
+    doc = NormalizedDocument(
+        document_id="doc_pdf",
+        filename="test.pdf",
+        mime_type="application/pdf",
+        sha256="abc",
+        metadata=metadata,
+        structure={},
+        raw_layers={},
+    )
+    findings = scan_residual(doc)
+    software_findings = [f for f in findings if f.title == "생성 소프트웨어 정보"]
+    assert len(software_findings) == 1
+    assert software_findings[0].severity == Severity.INFO
+    assert software_findings[0].type == FindingType.AUTHORSHIP_METADATA_LEAK
+
+    author_findings = [f for f in findings if "작성자·회사 정보" in f.title]
+    assert len(author_findings) == 0
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        {"Author": "홍길동", "lastModifiedBy": "이순신"},
+        {"Company": "대한민국 국방부", "creator": "김철수"},
+        {"manager": "인사담당관", "cp:lastModifiedBy": "박영희"},
+    ],
+)
+def test_u9_2_docx_authorship_preserved_as_low_control(metadata: dict):
+    """U9-2 대조군 3건: docx 등의 Author, lastModifiedBy 등 사람·조직 식별 키는 기존대로 LOW 심각도 유지."""
+    from packages.common.enums import Severity, FindingType
+    from packages.common.schemas import NormalizedDocument
+    from packages.forensic_engine.residual import scan_residual
+
+    doc = NormalizedDocument(
+        document_id="doc_docx",
+        filename="test.docx",
+        mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        sha256="def",
+        metadata=metadata,
+        structure={},
+        raw_layers={},
+    )
+    findings = scan_residual(doc)
+    author_findings = [f for f in findings if "작성자·회사 정보" in f.title]
+    assert len(author_findings) == 1
+    assert author_findings[0].severity == Severity.LOW
+    assert author_findings[0].type == FindingType.AUTHORSHIP_METADATA_LEAK
+
+    software_findings = [f for f in findings if f.title == "생성 소프트웨어 정보"]
+    assert len(software_findings) == 0
+
+
+# ===========================================================================
+# 22. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -1120,3 +1258,4 @@ def test_ledger_records_integrity():
     assert "ASTRA-V5" in ticket_ids
     assert "TK-29" in ticket_ids
     assert "TK-28" in ticket_ids
+    assert "U9-2" in ticket_ids

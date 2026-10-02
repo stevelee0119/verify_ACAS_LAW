@@ -504,7 +504,7 @@ def _article_absent(verdict, official, provision, as_of):
     ids = [r.source_record_id for r in verdict.source_records]
     verdict.findings.append(Finding.create(
         type=FindingType.LAW_CITATION_ERROR, status=VerificationStatus.NOT_FOUND,
-        severity=Severity.MEDIUM, evidence_grade=EvidenceGrade.A,
+        severity=Severity.HIGH, evidence_grade=EvidenceGrade.A,
         title=f"조회한 시행 버전의 전체 조문에서 해당 조문을 찾지 못함: {compared}",
         detail=(f"법령은 공식 기록으로 확인했다. {scope}를 모두 대조했으나 {compared}에 해당하는 제{citation.article}조는 없다. "
                 f"({basis} 기준) 조문 번호 오기, 다른 시행 버전의 조문, 부칙 조항일 수 있으므로 "
