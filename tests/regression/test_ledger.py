@@ -103,6 +103,9 @@ LEDGER_RECORDS = [
     ("TK-29", "STATUTE_FORM_REFERENCE_CONTROL", False, "법령 형태 인용(법·시행령 등)", "참고자료 일치 무관 CRITICAL 유지"),
     ("TK-28", "PII_LABEL_DELIMITER_GENERALIZATION_POSITIVE", True, "당사자·직책 라벨 × 구분자 × 다양한 이름 형태 인명 마스킹", "PERSON 탐지 및 마스킹 성공"),
     ("TK-28", "PII_LABEL_DELIMITER_NON_NAME_CONTROL", False, "라벨 뒤 비인명(서술문·기관·결과) 오탐 방지", "PERSON 미탐지 보존"),
+    ("TK-28", "SYSTEM_PROMPT_ALL_PII_TYPES_BLOCKED", True, "system 프롬프트에 다양한 PII(이름·생년월일·법인 등) 동적 삽입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("TK-28", "SYSTEM_PROMPT_TAMPERED_WITH_DATA_BLOCKED", True, "등록된 시스템 상수에 동적 사용자 값 혼입", "BLOCKED (PII_INPUT_BLOCKED)"),
+    ("TK-28", "ALL_ACTUAL_SYSTEM_AND_SCHEMA_CONSTANTS_PASSED", False, "코드베이스 내 모든 실제 system/schema 등록 상수", "PASSED (STATIC_PROMPT_FALSE_POSITIVE 또는 정상)"),
 ]
 
 
@@ -915,7 +918,82 @@ def test_tk28_pii_label_delimiter_control(text: str):
 
 
 # ===========================================================================
-# 15. 원장 종합 무결성 검증
+# 15. TK-28 (U3): 시스템/스키마 등록 고정 상수 출처 확인 및 동적 PII 차단
+# ===========================================================================
+def test_tk28_all_actual_constants_passed():
+    """TK-28 대조군: 코드의 모든 실제 등록 system 및 schema 상수가 PASSED됨."""
+    from packages.common.enums import LLMRole
+    from packages.llm_router.privacy import (
+        REGISTERED_SCHEMA_CONSTANTS,
+        REGISTERED_SYSTEM_PROMPT_CONSTANTS,
+        inspect_request,
+    )
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.router import SYSTEM_BASE
+
+    for sid, prompt in REGISTERED_SYSTEM_PROMPT_CONSTANTS.items():
+        req = LLMRequest(system=prompt, user="정상 법률 분석 질문")
+        res = inspect_request(req)
+        assert res["status"] == "PASSED", f"상수 {sid} 실패: {res}"
+
+        req_ass = LLMRequest(
+            system=f"{SYSTEM_BASE}\n[역할] {LLMRole.PRIMARY_REASONER}\n{prompt}",
+            user="정상 법률 분석 질문",
+        )
+        res_ass = inspect_request(req_ass)
+        assert res_ass["status"] == "PASSED", f"조립 상수 {sid} 실패: {res_ass}"
+
+    for sch_id, schema in REGISTERED_SCHEMA_CONSTANTS.items():
+        req = LLMRequest(system="", user="정상 질문", schema=schema)
+        res = inspect_request(req)
+        assert res["status"] == "PASSED", f"스키마 {sch_id} 실패: {res}"
+
+
+@pytest.mark.parametrize(
+    "pii_kind, pii_text",
+    [
+        ("PERSON", "원고: 홍길동"),
+        ("DOB", "생년월일: 1985년 03월 15일생"),
+        ("PHONE", "010-9876-5432"),
+        ("EMAIL", "sample_test@example.com"),
+        ("ADDRESS", "서울특별시 서초구 서초대로 123, 401호"),
+        ("ACCOUNT", "신한은행 110-123-456789"),
+        ("COMPANY", "주식회사 가나다엔터테인먼트"),
+        ("RRN", "850315-1234567"),
+    ],
+)
+def test_tk28_system_prompt_all_pii_types_blocked(pii_kind: str, pii_text: str):
+    """TK-28 양성: system 프롬프트에 다양한 PII가 삽입되면 종류 무관 BLOCKED."""
+    from packages.llm_router.privacy import inspect_request
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.router import SYSTEM_BASE
+
+    req = LLMRequest(system=f"{SYSTEM_BASE}\n주의사항: {pii_text}", user="안내")
+    res = inspect_request(req)
+    assert res["status"] == "BLOCKED"
+    assert res["failure_code"] == "PII_INPUT_BLOCKED"
+
+
+def test_tk28_system_prompt_tampered_with_data_blocked():
+    """TK-28 양성: 등록된 시스템 프롬프트 상수에 동적 사용자 값이 섞인 변형은 BLOCKED."""
+    from packages.llm_router.privacy import (
+        REGISTERED_SYSTEM_PROMPT_CONSTANTS,
+        inspect_request,
+    )
+    from packages.llm_router.providers import LLMRequest
+
+    for sid, prompt in REGISTERED_SYSTEM_PROMPT_CONSTANTS.items():
+        if not prompt:
+            continue
+        tampered = f"{prompt}\n사건정보: 피고인: 김철수 (010-2345-6789)"
+        req = LLMRequest(system=tampered, user="질의")
+        res = inspect_request(req)
+        assert res["status"] == "BLOCKED"
+        assert res["failure_code"] == "PII_INPUT_BLOCKED"
+
+
+# ===========================================================================
+# 16. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
