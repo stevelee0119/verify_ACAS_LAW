@@ -101,6 +101,8 @@ LEDGER_RECORDS = [
     ("TK-29", "READ_REFERENCE_EXACT_MATCH", True, "본문 읽은 참고자료와 정규화 제목 완전 일치", "PARTIALLY_VERIFIED 및 INFO 생성"),
     ("TK-29", "UNREAD_OR_PARTIAL_MATCH_CONTROL", False, "미독 파일 또는 부분 일치 해설서", "승격 차단 (LOW/CRITICAL 유지)"),
     ("TK-29", "STATUTE_FORM_REFERENCE_CONTROL", False, "법령 형태 인용(법·시행령 등)", "참고자료 일치 무관 CRITICAL 유지"),
+    ("TK-28", "PII_LABEL_DELIMITER_GENERALIZATION_POSITIVE", True, "당사자·직책 라벨 × 구분자 × 다양한 이름 형태 인명 마스킹", "PERSON 탐지 및 마스킹 성공"),
+    ("TK-28", "PII_LABEL_DELIMITER_NON_NAME_CONTROL", False, "라벨 뒤 비인명(서술문·기관·결과) 오탐 방지", "PERSON 미탐지 보존"),
 ]
 
 
@@ -873,7 +875,47 @@ def test_tk29_unread_partial_and_statute_control(
 
 
 # ===========================================================================
-# 14. 원장 종합 무결성 검증
+# 14. TK-28: 당사자 이름 라벨 구분자 일반화 (양성 6건, 대조군 3건)
+# ===========================================================================
+@pytest.mark.parametrize(
+    "text, expected_name",
+    [
+        ("고소인: 배민", "배민"),                    # 2음절, 콜론
+        ("피신청인 - 제갈성진", "제갈성진"),          # 복성 4음절, 하이픈
+        ("피의자 : 강 하 늘", "강하늘"),             # 띄어쓴 3음절, 공백 낀 콜론
+        ("[참고인] 황보명", "황보명"),              # 복성 3음절, 대괄호
+        ("대리인: 사공수", "사공수"),                # 복성 3음절, 콜론
+        ("배우자／서문강", "서문강"),                # 복성 3음절, 전각 슬래시
+    ],
+)
+def test_tk28_pii_label_delimiter_positive(text: str, expected_name: str):
+    """TK-28 양성: 다양한 라벨 어휘, 구분자, 이름 모양(2·3·4음절, 띄어쓰기, 복성)의 인명 탐지 및 마스킹."""
+    from packages.pii_engine.detector import detect
+
+    matches = detect(text)
+    person_matches = [m for m in matches if m.kind == "PERSON"]
+    assert any(m.text == expected_name for m in person_matches), f"{expected_name}이(가) PERSON으로 탐지되지 않음: {matches}"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "신청인: 기각을 구한다",      # 서술문 어미
+        "피고: 서울특별시",          # 지자체/기관 (성씨 아님)
+        "피청구인: 각하한다",        # 서술문 종결어미 ('다')
+    ],
+)
+def test_tk28_pii_label_delimiter_control(text: str):
+    """TK-28 대조군: 라벨 뒤 비인명 서술문 및 기관 등은 인명으로 과잉 마스킹되지 않음."""
+    from packages.pii_engine.detector import detect
+
+    matches = detect(text)
+    person_matches = [m for m in matches if m.kind == "PERSON"]
+    assert len(person_matches) == 0, f"비인명 문맥에서 PERSON이 오탐됨: {person_matches}"
+
+
+# ===========================================================================
+# 15. 원장 종합 무결성 검증
 # ===========================================================================
 def test_ledger_records_integrity():
     """회귀 원장에 등록된 모든 티켓 레코드의 필수 규격 및 건수 점검."""
@@ -896,3 +938,4 @@ def test_ledger_records_integrity():
     assert "TK-27" in ticket_ids
     assert "ASTRA-V5" in ticket_ids
     assert "TK-29" in ticket_ids
+    assert "TK-28" in ticket_ids
