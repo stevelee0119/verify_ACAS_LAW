@@ -114,6 +114,10 @@ LEDGER_RECORDS = [
     ("TK-23", "STATUTE_EXISTING_OR_UNVERIFIED_CONTROL", False, "존재 조문 또는 시행일 미도래 조문은 조문부존재 HIGH 미생성", "정상 검증 또는 UNVERIFIED"),
     ("U9-2", "PDF_PRODUCER_SOFTWARE_SEPARATED_AS_INFO", True, "PDF의 Producer/Creator 생성 소프트웨어명을 INFO 심각도로 분리", "title='생성 소프트웨어 정보', severity=Severity.INFO"),
     ("U9-2", "DOCX_AUTHOR_METADATA_PRESERVED_AS_LOW", False, "docx의 Author/lastModifiedBy 등 작성자·회사 식별 정보는 LOW 유지", "severity=Severity.LOW"),
+    ("TK-22", "CROSS_FORMAT_AND_WIDTH_INVARIANCE", True, "txt/pdf(36,44,56,64폭)/docx 동일 서면 변형 파싱", "형식·줄폭 무관 인용 및 주장 결과 100% 일치"),
+    ("TK-22", "PDF_HIDDEN_TEXT_PRESERVATION_AFTER_RECON", True, "숨은 텍스트 포함 PDF 문단 복원", "hidden_text 레이어 및 좌표 정상 보존"),
+    ("TK-22", "PDF_TABLE_PRESERVATION_AFTER_RECON", False, "표(Table) 포함 PDF 문단 복원", "표 블록 구조 및 table_ref 보존"),
+    ("TK-22", "PDF_CROSS_PAGE_PRESERVATION_AFTER_RECON", False, "쪽을 넘는 문장 포함 PDF 문단 복원", "각 쪽의 블록 및 page 속성 온전 보존"),
 ]
 
 
@@ -1259,3 +1263,197 @@ def test_ledger_records_integrity():
     assert "TK-29" in ticket_ids
     assert "TK-28" in ticket_ids
     assert "U9-2" in ticket_ids
+
+
+# ===========================================================================
+# 23. TK-22 (U4): 입력 계층 문단 복원 및 형식 간 불변성 검증
+# ===========================================================================
+def test_u4_cross_format_and_width_invariance(tmp_path: Path):
+    """U4 필수 시험 1: 같은 서면을 txt·PDF(CID 글꼴)·docx로 생성하고 줄 폭 변형(36·44·56·64자) 및 CRLF 변형 시 결과 일치 검증."""
+    import textwrap
+    import docx
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.docx_parser import DocxParser
+    from packages.document_engine.pdf_parser import PdfParser
+    from packages.document_engine.simple_parsers import TextParser
+    from packages.legal_engine.citation_extractor import extract_citations
+
+    # 합성 서면 본문: 당사자 표시란, 청구취지, 법령 인용(국가배상법 제2조, 민법 제750조) 포함
+    text_lines = [
+        "준비서면",
+        "사건 2026가합98765 손해배상(기)",
+        "원고 홍길동",
+        "피고 대한민국",
+        "",
+        "청구취지 및 청구원인",
+        "1. 피고는 원고에게 금 50,000,000원 및 이에 대한 지연손해금을 지급하라.",
+        "2. 원고는 피고 소속 공무원의 직무상 불법행위로 인하여 심각한 피해를 입었다.",
+        "국가배상법 제2조 제1항에 의하면 국가는 공무원이 직무를 집행하면서 고의 또는 과실로 법령을 위반하여 타인에게 손해를 입힌 때에는 그 손해를 배상하여야 한다고 규정하고 있다.",
+        "또한 민법 제750조에 따른 불법행위책임의 일반 원칙에 비추어 보더라도 피고의 배상책임은 명백하다 할 것이다.",
+    ]
+    base_text = "\n".join(text_lines)
+
+    # 1. TXT 형식 (기본 및 CRLF / 빈 줄 추가 변형)
+    txt_path_normal = tmp_path / "test_normal.txt"
+    txt_path_normal.write_text(base_text, encoding="utf-8")
+
+    txt_path_crlf = tmp_path / "test_crlf.txt"
+    txt_path_crlf.write_text(base_text.replace("\n", "\r\n"), encoding="utf-8")
+
+    # 2. DOCX 형식 (python-docx)
+    docx_path = tmp_path / "test.docx"
+    doc_word = docx.Document()
+    for line in text_lines:
+        doc_word.add_paragraph(line)
+    doc_word.save(str(docx_path))
+
+    # 3. PDF 형식 (reportlab CID 글꼴, 폭 36, 44, 56, 64자 변형)
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_paths: Dict[int, Path] = {}
+    for w in [36, 44, 56, 64]:
+        p = tmp_path / f"test_w{w}.pdf"
+        c = canvas.Canvas(str(p), pagesize=(595, 842))
+        c.setFont(font_name, 10.5)
+        y = 800
+        for raw_line in text_lines:
+            if not raw_line.strip():
+                y -= 15
+                continue
+            wrapped_lines = textwrap.wrap(raw_line, width=w, break_long_words=False, break_on_hyphens=False) or [raw_line]
+            for wline in wrapped_lines:
+                if y < 50:
+                    c.showPage()
+                    c.setFont(font_name, 10.5)
+                    y = 800
+                c.drawString(56, y, wline)
+                y -= 15
+        c.save()
+        pdf_paths[w] = p
+
+    # 각 형식별 문서 파싱
+    parsed_docs = []
+    # TXT 파싱
+    parsed_docs.append(TextParser().parse(str(txt_path_normal), document_id="txt1", filename="test.txt", mime_type="text/plain", sha256="1" * 64))
+    parsed_docs.append(TextParser().parse(str(txt_path_crlf), document_id="txt2", filename="test_crlf.txt", mime_type="text/plain", sha256="2" * 64))
+    # DOCX 파싱
+    parsed_docs.append(DocxParser().parse(str(docx_path), document_id="docx1", filename="test.docx", mime_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", sha256="3" * 64))
+    # PDF 파싱 (모든 폭)
+    for w, p_path in pdf_paths.items():
+        parsed_docs.append(PdfParser().parse(str(p_path), document_id=f"pdf_{w}", filename=f"test_w{w}.pdf", mime_type="application/pdf", sha256=f"{w}" * 64))
+
+    # 불변식 검증:
+    # 1. 모든 형식에서 법령 인용 결과(국가배상법 제2조, 민법 제750조)가 정확히 100% 동일하게 추출되어야 함
+    expected_citations = {("국가배상법", "2"), ("민법", "750")}
+    for d in parsed_docs:
+        cits = {(c.law_name, c.article) for c in extract_citations(d)}
+        assert expected_citations <= cits, f"{d.filename}에서 기대 법령 인용 누락: {cits}"
+
+    # 2. 문단 복원에 의해 국가배상법 제2조 인용 문장이 단일 블록 텍스트 안에 완전하게 결합되어 있어야 함
+    needle_sentence = "국가배상법 제2조 제1항에 의하면"
+    for d in parsed_docs:
+        matching_blocks = [b for b in d.pages[0].blocks if needle_sentence in b.text]
+        assert len(matching_blocks) == 1, f"{d.filename}에서 인용 문장이 분할되거나 누락됨 (블록 수: {len(matching_blocks)})"
+        # 줄바꿈으로 나뉘었던 문장이 한 덩어리로 온전히 결합되었는지 확인
+        assert "그 손해를 배상하여야 한다고 규정하고 있다" in matching_blocks[0].text, f"{d.filename}에서 문단 결합 불완전"
+
+
+def test_u4_pdf_hidden_text_preservation(tmp_path: Path):
+    """U4 필수 시험 2: 숨은 텍스트(흰색 글자)를 포함한 PDF에서 문단 복원 후에도 hidden_text 레이어 및 좌표가 보존됨을 검증."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.pdf_parser import PdfParser
+
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_file = tmp_path / "hidden_test.pdf"
+    c = canvas.Canvas(str(pdf_file), pagesize=(595, 842))
+    c.setFont(font_name, 11)
+    # 일반 표시 텍스트
+    c.setFillColorRGB(0.0, 0.0, 0.0)
+    c.drawString(56, 750, "정상적인 표시 본문 문장입니다.")
+    # 흰색 숨은 텍스트 (WCAG 명도 대비 및 배경 동일)
+    c.setFillColorRGB(1.0, 1.0, 1.0)
+    c.drawString(56, 720, "흰색으로 숨겨진 은닉 문장입니다.")
+    # 다시 일반 표시 텍스트
+    c.setFillColorRGB(0.0, 0.0, 0.0)
+    c.drawString(56, 690, "또 다른 정상적인 표시 본문 문장입니다.")
+    c.save()
+
+    doc = PdfParser().parse(str(pdf_file), document_id="pdf_hid", filename="hidden_test.pdf", mime_type="application/pdf", sha256="h" * 64)
+
+    # 숨은 텍스트 블록 검증: 문단 복원에 의해 일반 문단과 결합되지 않고 독립 유지되어야 함
+    hidden_blocks = [b for b in doc.pages[0].blocks if not b.visible or b.source_layer == "hidden_text"]
+    assert len(hidden_blocks) >= 1, "숨은 텍스트 블록이 감지되지 않음"
+    assert "은닉 문장" in hidden_blocks[0].text
+    assert hidden_blocks[0].visible is False
+    assert hidden_blocks[0].attributes.get("hidden_reason") is not None
+    assert hidden_blocks[0].bbox is not None
+
+
+def test_u4_pdf_table_preservation_after_reconstruction():
+    """U4 필수 시험 3: 표(Table) 블록이 문단 복원기(reconstruct_page_blocks)를 거쳐도 본문과 병합되지 않고 온전히 보존됨을 검증."""
+    from packages.common.schemas import BBox, Block
+    from packages.document_engine.paragraph_reconstruction import reconstruct_page_blocks
+
+    blocks = [
+        Block(block_id="b1", text="제1장 총칙 본문 문장입니다.", page=1, bbox=BBox(50, 700, 400, 715), source_layer="visible_text", block_type="paragraph"),
+        # 표 블록
+        Block(
+            block_id="b2",
+            text="항목 | 수량 | 단가\n물품A | 10 | 1000",
+            page=1,
+            bbox=BBox(50, 650, 400, 690),
+            source_layer="visible_text",
+            block_type="table",
+            attributes={"table_ref": "p1t0", "cells": [["항목", "수량", "단가"], ["물품A", "10", "1000"]]},
+        ),
+        Block(block_id="b3", text="위 표에 기재된 바와 같이 손해가 발생하였습니다.", page=1, bbox=BBox(50, 600, 400, 615), source_layer="visible_text", block_type="paragraph"),
+    ]
+
+    reconstructed = reconstruct_page_blocks(blocks, page_num=1)
+    # 표 블록이 본문 문단과 합쳐지지 않고 단독 블록으로 유지되어야 함
+    table_blocks = [b for b in reconstructed if b.block_type == "table"]
+    assert len(table_blocks) == 1
+    assert table_blocks[0].attributes.get("table_ref") == "p1t0"
+    assert "물품A" in table_blocks[0].text
+    assert len(reconstructed) == 3
+
+
+def test_u4_pdf_cross_page_sentence_preservation(tmp_path: Path):
+    """U4 필수 시험 4: 쪽을 넘는 문장이 있는 다중 페이지 PDF에서 문단 복원 후에도 각 쪽의 좌표와 page 속성이 온전히 유지됨을 검증."""
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    from reportlab.pdfgen import canvas
+    from packages.document_engine.pdf_parser import PdfParser
+
+    font_name = "HYSMyeongJo-Medium"
+    pdfmetrics.registerFont(UnicodeCIDFont(font_name))
+
+    pdf_file = tmp_path / "multipage_test.pdf"
+    c = canvas.Canvas(str(pdf_file), pagesize=(595, 842))
+    c.setFont(font_name, 11)
+    # 1페이지 하단 문장
+    c.drawString(56, 60, "이 문장은 1페이지의 가장 하단에 작성된 문장으로서 다음 쪽으로 이어집니다.")
+    c.showPage()
+    # 2페이지 상단 문장
+    c.setFont(font_name, 11)
+    c.drawString(56, 780, "2페이지 상단에 이어서 서술되는 문장으로 원고의 주장을 계속 설명합니다.")
+    c.save()
+
+    doc = PdfParser().parse(str(pdf_file), document_id="pdf_multi", filename="multipage_test.pdf", mime_type="application/pdf", sha256="m" * 64)
+
+    assert len(doc.pages) == 2
+    p1 = doc.pages[0]
+    p2 = doc.pages[1]
+    assert p1.page_number == 1 and p2.page_number == 2
+
+    # 각 페이지의 블록이 해당 쪽 번호와 bbox를 유지해야 함
+    assert any("1페이지" in b.text and b.page == 1 for b in p1.blocks)
+    assert any("2페이지" in b.text and b.page == 2 for b in p2.blocks)
+

@@ -278,4 +278,14 @@ class DocxParser(DocumentParser):
         doc.raw_layers["hidden_text"] = "\n".join(hidden_parts)
         doc.raw_layers["xml"] = "\n".join(xml_layer_parts)
         doc.raw_layers["metadata_text"] = "\n".join(f"{k}: {v}" for k, v in doc.metadata.items())
+
+        # 블록 문단 복원 (TK-22): 구조 신호 기반 일관된 블록 구조 유지
+        from .paragraph_reconstruction import reconstruct_page_blocks
+        for p in doc.pages:
+            p.blocks = reconstruct_page_blocks(
+                p.blocks,
+                page_num=p.page_number,
+                page_width=p.width,
+                page_height=p.height,
+            )
         return doc
