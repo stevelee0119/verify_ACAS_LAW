@@ -58,3 +58,6 @@
 
 ### 반영 확인(2026-10-03)
 사용자가 웹 설정으로 추가했다고 알려 왔고, 평가 세션이 `gh api repos/stevelee0119/verify_ACAS_LAW/branches/main`을 읽어 확인했다: `protected: true`, 필수 확인 contexts = [`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`], 적용 수준 `non_admins`(변경 없음). **확인하지 못한 것:** 강제 푸시·삭제 금지, PR 필수·최신 유지 끔 등 나머지 보호 옵션은 이 세션에 관리 권한이 없어(`GET .../protection` 403) 읽지 못했다. 위 "사용자 조치 대기" 문단은 이 확인으로 완료되었다.
+
+### 관리자 포함 적용 켬 — 반영 확인(2026-10-03)
+사용자가 `Do not allow bypassing the above settings`를 켰다고 알려 왔고, 평가 세션이 `gh api repos/stevelee0119/verify_ACAS_LAW/branches/main`을 읽어 확인했다: 필수 확인 contexts = [`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`] 유지, 적용 수준 **`non_admins` → `everyone`**. 의미: 주인 계정(구현·평가 에이전트가 푸시에 쓰는 계정)도 두 필수 확인이 초록이 아닌 커밋을 `main`에 올리거나 병합할 수 없다. **확인하지 못한 것:** 강제 푸시·삭제 금지, PR 필수 끔·최신 유지 끔 등 나머지 옵션은 이 세션에 관리 권한이 없어(403) 읽지 못했다. 되돌리려면 같은 체크를 해제한다.
