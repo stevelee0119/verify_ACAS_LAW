@@ -32,7 +32,7 @@
 5. 평가 자료의 이름·사건번호·문구·표식(`TC-nn`, `HO-nn`, 시험 바닥글 문구)을 코드·설정·정규식에 넣지 않는다(5차 3절 + 아래 R2).
 
 ### 0.3 이번 라운드에서 하지 않는 것 (사용자 결정 반영, 2026-10-03)
-요청 16(동일 시행일 복수 버전 병기·모델 응답 안정화), **기능 라운드 F1**(화면 중복 해소·참고자료 부합성), TK-24(소멸시효 배제 주장 탐지, 새 규칙), TK-09 켜기, **기준선 상향**(회귀 해소 뒤 평가 측이 81.7 이상으로 사용자 승인 후), `main` 병합(검증 뒤 PR), 버전 상향(판정서가 있을 때만, 열린 신규 회귀 0이 전제). 이 모두는 이번 라운드가 끝나고 평가 측 검증을 통과한 뒤에 순서대로 지시한다.
+요청 16(동일 시행일 복수 버전 병기·모델 응답 안정화), **기능 라운드 F1**(화면 중복 해소·참고자료 부합성), TK-24(소멸시효 배제 주장 탐지, 새 규칙), **TK-34(행위시법 검토의 목 단위 신설·이동 — 새 탐지)**, TK-09 켜기, **기준선 상향**(회귀 해소 뒤 평가 측이 81.7 이상으로 사용자 승인 후), `main` 병합(검증 뒤 PR), 버전 상향(판정서가 있을 때만, 열린 신규 회귀 0이 전제). 이 모두는 이번 라운드가 끝나고 평가 측 검증을 통과한 뒤에 순서대로 지시한다.
 
 ---
 
@@ -40,7 +40,7 @@
 
 ### R0. 시작 점검
 - `Steve_ACASiaLAW`를 받아 시작한다. `git config core.autocrlf input`. 강제 푸시 금지.
-- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/20_round6_baseline.md`에 붙인다. **기대 기준선(평가 측 측정):** 고정 dev 81.2 / holdout 79.2, probe 12종 278/280, 전체 시험 실패 3건(TK-12 2·OCR 날짜 환경 1), `tests/acceptance`의 미해결은 **strict xfail 25건**(서면9 LEG-2 3건[docx·텍스트·실제 PDF] + `test_round5_regressions.py` 22건[TK-30 15·TK-28 4·TK-31 2·TK-32 1])과 `test_layout_invariance_pdf.py`의 KNOWN_OPEN 1건(case8 폭 40 INJ-1). 달라지면 사유를 적는다.
+- 4절 명령을 모두 돌려 출력을 `docs/handoff/requests/20_round6_baseline.md`에 붙인다. **기대 기준선(평가 측 측정):** 고정 dev 81.2 / holdout 79.2, probe 12종 278/280, 전체 시험 실패 1건 기대(2026-10-03 전체 재실행 확정 전 — 이전 측정 3건에서 TK-12 2건 해소; OCR 날짜 환경 1건 `test_v5_ocr_dates::test_rotated_scan_page_impossible_date_is_found` — TK-12 시험 2건은 2026-10-03에 해소되어 통과한다), `tests/acceptance`의 미해결은 **strict xfail 26건**(서면9 LEG-2 3건[docx·텍스트·실제 PDF] + `test_round5_regressions.py` 22건[TK-30 15·TK-28 4·TK-31 2·TK-32 1] + **TK-34 1건**[`test_prepared_brief_mirror_official.py::test_new_data_ka_cited_for_2020_act_is_flagged` — **이번 라운드 범위 밖**, 아래 0.3. 이 xfail이 XPASS가 되면 새 탐지를 넣은 것이므로 requests로 알리고 범위 위반으로 본다])과 `test_layout_invariance_pdf.py`의 KNOWN_OPEN 1건(case8 폭 40 INJ-1). 달라지면 사유를 적는다.
 - `tests/regression/test_ledger.py`에 묶음마다 **고친 결함의 재현 입력 + 대조군**을 추가한다(입력은 구현 측이 새로 짓는다. 평가 측 시험 입력을 복사하지 않는다).
 
 ### R1. TK-30 이름 마스킹 회귀 — 개인정보 노출 위험이라 첫째
@@ -87,7 +87,7 @@ python scripts/check_case_literals.py                                # 3. 사건
 python scripts/scorecard.py && python scripts/score_gate.py          # 4. dev 81.2 이상(최종 81.7 이상), holdout 79.2 이상, 오탐 0 (환경 함께 기재)
 python scripts/check_version_policy.py --base HEAD~1                 # 5. 작업 커밋은 버전 불변
 python -m pytest -q tests/regression                                 # 6. 회귀 원장
-python -m pytest -q --ignore=tests/acceptance                        # 7. 전체 시험: 알려진 실패(TK-12 2·환경 1) 외 새 실패 0, 커밋마다
+python -m pytest -q --ignore=tests/acceptance                        # 7. 전체 시험: 알려진 실패(환경 1) 외 새 실패 0, 커밋마다
 python -m pytest tests/acceptance -q -rfxX                           # 현재 미해결은 strict xfail. XPASS(strict) 실패는 requests로 알림(평가 측이 표시를 지운다)
 python scripts/probe_document.py run --spec tests/fixtures/probes/<spec>.json [--text]   # 서면6~9·변형 1·2 점수 유지(서면6 20/20·7 25/25·8 22/22·9 27/28·변형1 24/24·변형2 21/21)
 ```
@@ -100,7 +100,7 @@ python scripts/probe_document.py run --spec tests/fixtures/probes/<spec>.json [-
 4. 커밋 해시(`Agent: implementer`), 버전 상태("변경 없음")
 
 ## 6. 사용자 결정(확정)과 남은 조치
-- 확정: 사업자등록번호 마스킹, TK-23 B HIGH(5차 반영), TK-09 꺼짐, `main` 보호는 점수 하락 게이트만(CI는 TK-12 자료·초록 확인 뒤), 생성 소프트웨어명 INFO(5차 반영), 프로그램 버전은 성능 기준(판정서), **다음 라운드 범위 = 회귀 보완(이 라운드)만, 요청 16·F1은 그 뒤**, **기준선은 회귀 해소 뒤 81.7 이상으로 상향**. 구현 측이 정할 것은 없다. 표에 없는 결정이 필요해지면 `requests/`로 올린다.
+- 확정: 사업자등록번호 마스킹, TK-23 B HIGH(5차 반영), TK-09 꺼짐, `main` 보호는 점수 하락 게이트만(CI는 TK-12 해소(2026-10-03) 뒤 초록을 확인하면 사용자에게 추가 여부를 묻는다), 생성 소프트웨어명 INFO(5차 반영), 프로그램 버전은 성능 기준(판정서), **다음 라운드 범위 = 회귀 보완(이 라운드)만, 요청 16·F1은 그 뒤**, **기준선은 회귀 해소 뒤 81.7 이상으로 상향**. 구현 측이 정할 것은 없다. 표에 없는 결정이 필요해지면 `requests/`로 올린다.
 - 남은 사용자 조치: 서면9 같은 PDF의 온라인 재실행(Drive 대조 복구 확인), 버전 등급 임계값 확정, CI를 `main` 필수 확인에 추가할 시점.
 
 ## 7. 완료의 정의

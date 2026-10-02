@@ -4,15 +4,19 @@
 (출처·한계는 같은 폴더의 SOURCES.md). 이 파일은 그 자료가 변조되거나 시험에 맞추어 고쳐지는 것을 막고,
 공식 자료로 확인되는 범위의 행위시법 판단(제14조의2 제6항 3배→5배)을 고정한다.
 
-- 공식 자료로 확인되지 않은 것(판례 2018도15313)은 넣지 않는다. `cases.json`이 생기면 항목마다 공식 링크가 있어야 한다.
-- 공식 원문상 2020. 5. 12.에 카목(성과 도용)이 이미 있었으므로, 원 시험의 "카목 부존재" 전제는 이 자료로 성립하지 않는다.
-  그 사실을 `test_article2_ka_in_force_on_2020_05_12_is_performance_misappropriation`이 고정한다(사용자 결정 전까지 원 시험은 실패로 남는다).
+- 사용자 결정(2026-10-03): 공식 데이터베이스에서 확인되지 않은 2018도15313을 확인된 판례(대법원 2020다268807 판결)로 바꾼다.
+  확인되지 않은 사건번호는 미러에 넣지 않는다(아래 시험이 막는다).
+- 공식 원문상 2020. 5. 12.에 카목(성과 도용)이 이미 있었으므로 원 시험의 "카목 부존재" 기대는 거두었다.
+  신설된 카목(데이터 부정사용)을 2020년 행위에 인용하는 경우의 검출은 현재 엔진이 못 한다(조 단위 버전만 비교).
+  이는 `test_new_data_ka_cited_for_2020_act_is_flagged`가 strict xfail로 고정한다(TK-34, 6차 이후 라운드).
 """
 from __future__ import annotations
 
 import json
 from datetime import date, timedelta
 from pathlib import Path
+
+import pytest
 
 from packages.common.enums import Severity, VerificationStatus
 from packages.common.schemas import Citation, CitationType
@@ -80,14 +84,19 @@ def test_article_14_2_paragraph_6_multiplier_by_version():
         assert present in paragraph and absent not in paragraph, version["effective_from"]
 
 
-def test_cases_file_if_present_has_only_officially_linked_real_cases():
-    cases_file = ROOT / "cases.json"
+def test_cases_are_officially_linked_and_unverified_numbers_are_absent():
     mirror = _mirror()
+    # 공식 데이터베이스에서 확인되지 않은 사건번호(2018도15313)와 가상 사건(2023다284109)은 들어 있으면 안 된다.
+    assert mirror.find_case("2018도15313") is None, "공식 확인되지 않은 2018도15313이 미러에 들어 있다"
     assert mirror.find_case("2023다284109") is None, "가상 사건 2023다284109가 미러에 들어 있다"
-    if not cases_file.exists():
-        return  # 2018도15313은 공식 확인 전이라 넣지 않았다(SOURCES.md)
-    for case in json.loads(cases_file.read_text(encoding="utf-8")):
-        assert str(case.get("detail_link", "")).startswith("https://www.law.go.kr/"), case.get("case_number")
+    cases = json.loads((ROOT / "cases.json").read_text(encoding="utf-8"))
+    assert [c["case_number"] for c in cases] == ["2020다268807"]
+    for case in cases:
+        assert case["detail_link"].startswith("https://www.law.go.kr/LSW/precInfoP.do?precSeq="), case["case_number"]
+        assert case["court"] == "대법원" and case["decision_date"] == "2022-10-14" and case["case_kind"] == "판결"
+        assert "(카)목" in case["holding"] and "제2조 제1호" in case["reference_provisions"]
+    found = mirror.find_case("2020다268807")
+    assert found is not None and "2020다268807" in found["case_number"]
 
 
 def test_punitive_multiplier_retroactivity_with_official_versions():
@@ -113,13 +122,56 @@ def test_punitive_multiplier_retroactivity_with_official_versions():
     assert new_act.status == VerificationStatus.VERIFIED and "RETROACTIVE_APPLICATION_ERROR" not in new_act.tags
 
 
+def _article2_ka_clause(text: str) -> str:
+    start = text.index("\n카. ")
+    nxt = text.find("\n타. ", start)
+    end = nxt if nxt > 0 else text.index("\n2. ", start)
+    return text[start:end]
+
+
 def test_article2_ka_in_force_on_2020_05_12_is_performance_misappropriation():
     """공식 원문: 2020. 5. 12.에 시행 중인 제2조 제1호 카목은 성과 도용이고 데이터 부정사용이 아니다."""
     covering = [v for v in _mirror().all_versions(LAW, "2")
                 if v["effective_from"] <= ACTION_DATE and (v["effective_to"] is None or ACTION_DATE <= v["effective_to"])]
     assert len(covering) == 1
-    text = covering[0]["text"]
-    start = text.index("\n카. ")
-    clause = text[start:text.index("\n2. ", start)]
+    clause = _article2_ka_clause(covering[0]["text"])
     assert "타인의 상당한 투자나 노력으로 만들어진 성과" in clause
     assert "데이터" not in clause
+
+
+def test_article2_current_ka_is_data_misuse_and_performance_misappropriation_moved_to_pa():
+    """공식 원문(현행): 카목은 데이터 부정사용, 성과 도용은 파목(2021. 12. 7. 개정 법률 제18548호)."""
+    current = [v for v in _mirror().all_versions(LAW, "2") if v["effective_to"] is None]
+    assert len(current) == 1
+    text = current[0]["text"]
+    assert "데이터" in _article2_ka_clause(text)
+    assert "\n파. 그 밖에 타인의 상당한 투자나 노력으로 만들어진 성과" in text
+
+
+def test_performance_misappropriation_cited_as_ka_for_2020_act_is_not_flagged():
+    """성과 도용 문언을 카목으로 인용한 서면을 2020. 5. 12. 행위에 적용하는 것은 행위시법에 맞다 — 오류로 표시하면 오탐."""
+    claim = "타인의 상당한 투자나 노력으로 만들어진 성과를 무단으로 사용하여 이익을 침해"
+    citation = Citation(
+        citation_id="c3", document_id="doc1", block_id="b3", page=1, span=(0, 30),
+        raw_text="부정경쟁방지법 제2조 제1호 카목", type=CitationType.STATUTE, law_name="부정경쟁방지법",
+        article="2", item="1", attributes={"claim_text": claim})
+    finding = review_temporal_application(
+        citation, _mirror().all_versions(LAW, "2"), {"date": ACTION_DATE, "basis": "FACT_DATE"})
+    assert finding is None or (finding.severity != Severity.HIGH and "RETROACTIVE_APPLICATION_ERROR" not in finding.tags)
+
+
+@pytest.mark.xfail(strict=True, reason="TK-34: 목 단위 신설·이동 시점 검토 미구현 — 엔진은 조 단위 버전만 비교한다(6차 이후 라운드)")
+def test_new_data_ka_cited_for_2020_act_is_flagged():
+    """신설된 카목(데이터 부정사용, 2022. 4. 20. 시행)을 2020. 5. 12. 행위에 인용하면 소급 적용 오류다.
+
+    claim_text는 평가 측이 공식 원문(현행 카목)을 요약해 지은 것이며 준비서면·정답지의 문구가 아니다.
+    """
+    claim = "전자적 방법으로 상당량 축적ㆍ관리되는 데이터를 접근권한 없이 부정하게 취득하여 사용하는 행위에 해당한다"
+    citation = Citation(
+        citation_id="c3", document_id="doc1", block_id="b3", page=1, span=(0, 30),
+        raw_text="부정경쟁방지법 제2조 제1호 카목", type=CitationType.STATUTE, law_name="부정경쟁방지법",
+        article="2", item="1", attributes={"claim_text": claim})
+    finding = review_temporal_application(
+        citation, _mirror().all_versions(LAW, "2"), {"date": ACTION_DATE, "basis": "FACT_DATE"})
+    assert finding is not None
+    assert finding.severity == Severity.HIGH and "RETROACTIVE_APPLICATION_ERROR" in finding.tags
