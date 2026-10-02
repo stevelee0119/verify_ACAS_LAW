@@ -43,7 +43,7 @@
 
 **기능 개선 요청(결함 티켓과 별도):** [FR-01 검토 화면 중복 해소·참고자료(RAG) 활용 — 타당성 검토](FR-01_review_screen_and_reference_integration.md) · [F1 라운드 작업 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md)(5차 검증 뒤 착수)
 
-**독립 감사(Astra, 읽기 전용) 의뢰서:** [4차](PROMPT_FOR_ASTRA_AUDIT_ROUND4.md) · [5차](PROMPT_FOR_ASTRA_AUDIT_ROUND5.md)(기능 라운드 F1 포함 여부 점검 V13·사용자 결정 이행 V14 포함)
+**독립 감사(Astra, 읽기 전용) 의뢰서:** [4차](PROMPT_FOR_ASTRA_AUDIT_ROUND4.md) · [5차](PROMPT_FOR_ASTRA_AUDIT_ROUND5.md)(기능 라운드 F1 포함 여부 점검 V13·사용자 결정 이행 V14 포함) · [6차](PROMPT_FOR_ASTRA_AUDIT_ROUND6.md)(5차 회귀 보완 점검: 이름 행렬 회귀 0·글자/어절 줄바꿈 양방향 불변·정상 항변 오탐·보고 정확성 V15·TK-12 자료 독립 확인 V16, F1은 범위 밖이라 기본 "미포함")
 
 ## 측정 명령
 ```
