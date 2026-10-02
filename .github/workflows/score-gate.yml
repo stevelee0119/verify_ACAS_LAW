@@ -69,6 +69,13 @@ jobs:
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
           python scripts/check_hardcoding_diff.py --base "$BASE" | tee -a artifacts-summary.txt
 
+      # 버전은 커밋이 아니라 평가 측이 잰 성능으로만 올린다(docs/scorecards/VERSION_POLICY.md). 판정서 없는 상향은 실패.
+      - name: 버전 정책 점검
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
+          python scripts/check_version_policy.py --base "$BASE" | tee -a artifacts-summary.txt
+
       - name: 요약 게시
         if: always()
         run: |

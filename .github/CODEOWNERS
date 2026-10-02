@@ -8,6 +8,7 @@
 /scripts/probe_document.py            @stevelee0119
 /scripts/score_report.py             @stevelee0119
 /scripts/check_case_literals.py       @stevelee0119
+/scripts/check_version_policy.py      @stevelee0119
 /scripts/review_feedback_report.py    @stevelee0119
 /docs/scorecards/                     @stevelee0119
 /.github/workflows/score-gate.yml     @stevelee0119

@@ -13,7 +13,7 @@
 
 ### 보호 경로(구현 에이전트는 수정하지 않는다. `.github/CODEOWNERS`가 사용자 검토를 요구한다)
 - `tests/acceptance/**`, `tests/fixtures/**`
-- `scripts/eval_testset.py`, `scripts/scorecard.py`, `scripts/score_gate.py`, `scripts/probe_document.py`, `scripts/score_report.py`, `scripts/check_case_literals.py`, `scripts/review_feedback_report.py`
+- `scripts/eval_testset.py`, `scripts/scorecard.py`, `scripts/score_gate.py`, `scripts/probe_document.py`, `scripts/score_report.py`, `scripts/check_case_literals.py`, `scripts/check_version_policy.py`, `scripts/review_feedback_report.py`
 - `docs/scorecards/**`, `.github/workflows/score-gate.yml`
 - `docs/AGENT_ROLES.md`, `AGENTS.md`, `CLAUDE.md`, `.github/CODEOWNERS`
 
@@ -37,6 +37,7 @@
 - 점수를 확인한 문서는 개발용으로 옮기고, 새 문서로 봉인 세트를 교체한다. 같은 문서를 두 번 시험 삼지 않는다.
 
 ## 5. 커밋·병합 규칙
+- **버전은 성능 기준으로만 올린다**(사용자 지시 2026-10-02). 구현 커밋은 프로그램 버전을 바꾸지 않는다. 평가 에이전트가 같은 조건에서 잰 성능으로 상향 자리(정수 급격·소수점 첫째 자리 일부·둘째 자리 미세)를 판정서(`docs/scorecards/version_verdicts.json`)로 정하고, 구현 에이전트는 판정서대로 버전 커밋 1개만 만든다. 자세한 기준·절차: `docs/scorecards/VERSION_POLICY.md`, 점검: `scripts/check_version_policy.py`.
 - 커밋 메시지 끝에 `Agent: implementer` 또는 `Agent: evaluator`를 적는다. 구현 커밋에는 게이트 출력의 점수 변화를 함께 적는다.
 - 기준선(`docs/scorecards/baseline.json`)은 낮추지 않는다. 낮춰야 하면 사유를 티켓으로 남기고 사용자가 승인한다.
 - GitHub 설정(사용자가 직접): 기본 브랜치 보호 규칙에서 `score-gate`·`CI` 상태 확인 필수, Code Owners 검토 필수를 켠다. 이 저장소의 워크플로 파일만으로는 병합을 막지 못한다.
