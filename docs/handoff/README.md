@@ -16,7 +16,7 @@
 | [TK-09](TK-09_llm_role_redesign.md) | 설계(명세만) | 모델 의견을 판정에 쓰는 구조 | 온라인 채점 도구로 확인 | 승인 전 구현됨 → TK-14 |
 | [TK-10](TK-10_local_mirror_invented_fields.md) | 증거 계층 | 로컬 미러 자동 보강이 시행일을 지어내고 가지조문을 뭉갬 | 미러 시험(가지조문·항·시행일 null) | 해결(cf7c739) |
 | [TK-11](TK-11_ai_verdict_majority_vote.md) | 정책 변경 | AI 작성 판정을 만장일치가 아니라 다수결로 | `tests/acceptance/test_ai_majority_rule.py` | 해결(cf7c739) · 후속 TK-18 |
-| [TK-12](TK-12_ci_red_gitignored_mirror_data.md) | 시험 설계 | main CI 실패: 두 시험이 .gitignore된 미러 데이터에 의존 | CI `pytest -q` 통과 | 열림(요청 06 미반영, TK-21) |
+| [TK-12](TK-12_ci_red_gitignored_mirror_data.md) | 시험 설계 | main CI 실패: 두 시험이 .gitignore된 미러 데이터에 의존 | CI `pytest -q` 통과 | 부분 해소(2026-10-02): 제14조의2 연혁 자료·시험 반영, **2018도15313 확인 못 함·카목 전제 불일치로 원 시험 2건 미통과** — 사용자 결정 대기 |
 | [TK-13](TK-13_generalization_gaps_round1.md) | 일반화 | 인젝션 표지·처분시법 표현·무리한 주장 주제 — 변형과 서면8에서 재발 | `test_variant_generalization.py`·`test_case8_delay_penalty.py` | 해결(de243cc, 개발 자료 기준) · 미공개 변형 2에서 4건 재발 → TK-20 |
 | [TK-14](TK-14_tk09_unapproved_and_logic_defects.md) | 절차·논리 | TK-09를 승인 없이 구현, 날짜 재계산이 항상 참, 인용문 일치만으로 HIGH 승격 | 재현 3건 대조군 | 해결(de243cc): 기본 꺼짐·MEDIUM·재현 5건 · 켤지는 사용자 결정 |
 | [TK-15](TK-15_broken_tests_after_round1.md) | 회귀 시험 | 1차 구현이 깨뜨린 기존 시험, 은닉 ZWSP 탐지 약화 | `pytest -q` 실패 0 | 복구(6a3c848) 뒤 재발 → TK-19 |
@@ -66,7 +66,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 항목 | 결정 | 처리 |
 |---|---|---|
 | 사업자등록번호 | 마스킹 원칙 | `test_sec01` 기대를 평가 측이 마스킹으로 갱신 |
-| TK-12 미러 시험 자료 | 평가 측이 공식 원문으로 구성(확인 못 한 항목은 "확인 못 함") | 평가 측 작업 대기 |
+| TK-12 미러 시험 자료 | 평가 측이 공식 원문으로 구성(확인 못 한 항목은 "확인 못 함") | 구성 완료(일부) — 2018도15313·카목 전제는 사용자 결정 필요([TK-12](TK-12_ci_red_gitignored_mirror_data.md) 하단) |
 | TK-23 B 조문 부존재(증거 A등급) 심각도 | HIGH | 5차 지시서 U9-1 |
 | TK-09 모델 의견 승격 | 기본 꺼짐 유지 | 변경 없음 |
 | 기준선 상향(2026-10-03 갱신) | **회귀 해소 뒤 81.7 이상으로 상향**(5차 실측 dev 81.2는 회귀 상태라 올리지 않음) | 평가 측이 실측으로 사용자 승인 후 |
