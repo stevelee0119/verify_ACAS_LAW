@@ -71,6 +71,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
 | `main` 병합 | 5차 검증 뒤 PR(사용자 요청 시에만 PR 생성) | 사용자 |
+| 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · 5차 검증 뒤 순차 · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
 | 프로그램 버전 | 성능 기준으로만 상향(정수 급격·첫째 자리 일부·둘째 자리 미세), 커밋마다 올리지 않음 | [VERSION_POLICY](../scorecards/VERSION_POLICY.md), `scripts/check_version_policy.py` |
 
 ## 아직 사용자가 정할 것
