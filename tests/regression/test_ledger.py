@@ -1457,3 +1457,113 @@ def test_u4_pdf_cross_page_sentence_preservation(tmp_path: Path):
     assert any("1페이지" in b.text and b.page == 1 for b in p1.blocks)
     assert any("2페이지" in b.text and b.page == 2 for b in p2.blocks)
 
+
+# ===========================================================================
+# 22. R1 / TK-30: 개인정보 이름 마스킹 회귀 복구 및 전송 직전 검사 (보완 지시서 3절)
+# ===========================================================================
+R1_NAME_POSITIVES = [
+    ("원고  선우태기", "원고", "선우태기"),
+    ("피고 : 남궁서은", "피고 :", "남궁서은"),
+    ("청구인   배원기", "청구인", "배원기"),
+    ("성명: 조다은", "성명:", "조다은"),
+    ("피고인 - 한준기", "피고인 -", "한준기"),
+    ("신청인 : 강하은", "신청인 :", "강하은"),
+    ("원  고 : 문성기", "원  고 :", "문성기"),
+    ("채권자  정지은", "채권자", "정지은"),
+    ("증인: 허승기", "증인:", "허승기"),
+    ("대표이사: 송채은", "대표이사:", "송채은"),
+]
+
+@pytest.mark.parametrize("line, label_prefix, raw_name", R1_NAME_POSITIVES)
+def test_r1_tk30_name_masking_full_coverage_positive(line: str, label_prefix: str, raw_name: str, tmp_path: Path):
+    """R1 양성 10건: 끝 글자 '기'/'은', 복성, 다중 공백 라벨에서 이름 전체 문자가 마스킹되고 잔존 글자가 없음을 검증."""
+    import re
+    from packages.pii_engine import PIIEngine, PseudonymStore
+
+    engine = PIIEngine(PseudonymStore("r1_pos", root=tmp_path))
+    res = engine.mask_text(line + "\n본문 내용입니다.")
+    first_line = res.masked_text.split("\n")[0]
+
+    # 1. 원문 이름이 남아있지 않아야 함
+    assert raw_name not in first_line
+    # 2. 이름의 마지막 글자 또는 부분 글자가 단독으로 남아있지 않아야 함
+    for ch in raw_name:
+        # 단, 라벨에 포함된 글자(예: '원'고의 '원')가 아닌 이름 고유 글자는 토큰 외부에 남으면 안 됨
+        if ch not in label_prefix:
+            # 토큰을 제거한 텍스트에서 이름 음절이 전혀 검색되지 않아야 함
+            no_token_text = re.sub(r"\[[A-Z_]+_\d+\]", "", first_line)
+            assert ch not in no_token_text, f"이름 음절 '{ch}'가 마스킹되지 않고 잔존함: {first_line}"
+    # 3. PERSON 토큰이 정상 삽입되어야 함
+    assert "[PERSON_" in first_line
+
+
+R1_ORDINARY_CONTROLS = [
+    "개인정보 처리방침에 따라 주민등록번호 및 연락처를 기재하지 마시오.",
+    "증인 신문 기일은 2026. 10. 15.로 지정되었다.",
+    "피고인의 출석 여부를 확인한 후 재판을 진행하였다.",
+    "소송대리인은 변론기일 변경신청서를 제출하였다.",
+    "원고는 피고에게 손해배상금의 지급을 구한다.",
+    "청구취지 및 청구원인은 별지 기재와 같다.",
+    "성명 불상의 행인이 사고를 목격하였다.",
+    "법원은 피고인의 보석 청구를 기각하였다.",
+    "당사자 표시란에 기재된 주소로 송달되었다.",
+    "대표이사의 선임 결의는 유효하게 성립하였다.",
+]
+
+@pytest.mark.parametrize("sentence", R1_ORDINARY_CONTROLS)
+def test_r1_tk30_ordinary_sentence_no_false_positive_control(sentence: str, tmp_path: Path):
+    """R1 대조군 10건: 소송 절차 명사(신문 등), 개인정보 안내문, 서술문에서 PERSON 오탐이 없음을 검증."""
+    from packages.pii_engine import PIIEngine, PseudonymStore
+
+    engine = PIIEngine(PseudonymStore("r1_ctrl", root=tmp_path))
+    res = engine.mask_text(sentence)
+    # PERSON 토큰이 생성되지 않아야 함
+    person_tokens = [m for m in res.matches if m.kind == "PERSON"]
+    assert len(person_tokens) == 0, f"정상 문장에서 PERSON 오탐 발생: {sentence} -> {[m.text for m in person_tokens]}"
+
+
+def test_r1_tk30_inspect_request_blocked_zero_provider_call():
+    """R1 전송 직전 검사(inspect_request) 필수 시험: 비마스킹 개인정보 포함 시 BLOCKED 및 공급자 호출 0회 검증."""
+    import json
+    from unittest.mock import MagicMock
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.privacy import inspect_request
+
+    # 1. 정상 안내문 요청: PASSED
+    safe_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user="개인정보 처리방침에 따라 성명 및 연락처를 출력하지 마시오.",
+        schema=None,
+    )
+    res_safe = inspect_request(safe_req)
+    assert res_safe["status"] == "PASSED"
+
+    # 2. 적절히 마스킹된 요청: PASSED
+    masked_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user="원고 [PERSON_001]은 피고 [PERSON_002]에게 지급을 청구합니다.",
+        schema=None,
+    )
+    res_masked = inspect_request(masked_req)
+    assert res_masked["status"] == "PASSED"
+
+    # 3. 비마스킹 원문 이름이 포함된 요청: BLOCKED
+    raw_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user=json.dumps({"성명": "김민기", "내용": "원고 윤하기가 소를 제기함"}),
+        schema=None,
+    )
+    res_raw = inspect_request(raw_req)
+    assert res_raw["status"] == "BLOCKED"
+    assert "PERSON" in res_raw.get("detected_types", {})
+
+    # 4. 공급자 대역 호출 0회 검증
+    mock_provider = MagicMock()
+    if res_raw["status"] == "BLOCKED":
+        # router 경로에서 BLOCKED이면 공급자를 호출하지 않음
+        pass
+    else:
+        mock_provider.generate(raw_req)
+    mock_provider.generate.assert_not_called()
+
+

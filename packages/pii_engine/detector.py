@@ -175,10 +175,9 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
         return False
     if not all("\uac00" <= ch <= "\ud7a3" for ch in clean):
         return False
-    if clean.endswith(("다", "음", "임", "됨", "기")):
-        return False
-    # 조사가 이름 끝에 결합된 형태 배제 (을, 를, 에게, 으로, 라고, 에서)
-    if clean.endswith(("을", "를", "에게", "으로", "라고", "에서")):
+    # 서술문 종결 또는 조사 분리는 끝 글자 단일 배제가 아니라 문맥 및 구조로 판단한다 (TK-30).
+    # 2글자 이상의 명백한 복합 격조사 배제
+    if clean.endswith(("에게", "으로", "라고", "에서")):
         return False
     
     # 성씨 확인
@@ -194,10 +193,10 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
     if clean.startswith(("선임", "해임", "취임", "선출", "지명", "추천", "임명")):
         return False
 
-    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문, 침해/행사
-    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용)", after_text):
+    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문, 침해/행사, 절차/기일/지시문
+    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용|절차|기일|조서|진행)", after_text):
         return False
-    if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다)", after_text):
+    if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다|출력하지|기재하지|마시오|하지\s*마|금지)", after_text):
         return False
 
     return True
@@ -217,11 +216,16 @@ REPRESENTATIVE_NAME_STOPWORDS = {
     "대행", "회의", "의결", "정관", "규정", "조례", "이사회", "총회", "위원회", "선임서",
     "인사", "명령", "발령", "공고", "보고", "안건", "통지", "공지", "일정", "변경", "취소",
 }
-PARTY_HEADER_STOPWORDS = {"대한민국", "국가", "검사", "미상", "불상", "무죄", "유죄",
-                          "기각", "각하", "인용", "취하",
-                          # 서면 제목("변 호 인  의 견 서")
-                          "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
-                          "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"}
+PARTY_HEADER_STOPWORDS = {
+    "대한민국", "국가", "검사", "미상", "불상", "무죄", "유죄",
+    "기각", "각하", "인용", "취하",
+    # 소송 절차 및 서식 항목 명사 (인명 오탐 방지 TK-30)
+    "신문", "신문절차", "신문기일", "변론기일", "조서",
+    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일", "이메일", "개인정보", "인적사항",
+    # 서면 제목("변 호 인  의 견 서")
+    "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
+    "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"
+}
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
     r"\s*(?:장교|간부|병사|병력|부대|복무|당국|사법|검찰|수사|형법|인사|기밀|시설|부사관|병원|조직|내부|전산|보안|의무)")
@@ -307,6 +311,9 @@ LEGAL_MILITARY_STOPWORDS = {
     "계좌", "통장", "명의", "소유", "주소", "은행", "청구", "주장", "답안", "답안과", "소송", "서면", "기록", "답변",
     # 공정·물품·계약·보안 관련 비인명 명사 (PERSON 오탐 원천 방지)
     "보안", "인수", "완제품", "안전", "위생", "반입", "정산", "확인", "시스템",
+    # 소송 절차 및 서식/개인정보 항목 명사 (인명 오탐 방지 TK-30)
+    "신문", "신문절차", "신문기일", "변론기일", "조서",
+    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일", "이메일", "개인정보", "인적사항",
 }
 # 의료/질병 및 투약/처방 민감정보 탐지:
 # '암기용', '암산' 등의 일반 단어가 '암'으로 오탐되지 않도록 단어 경계(?![가-힣])를 두고,
@@ -513,19 +520,26 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         if _covered_by_span(guard_spans, start, end):
             continue
 
-        # 이름 끝에 조사가 결합된 형태(예: '홍길동은', '박영훈은')인 경우 조사를 분리하여 성명만 추출
-        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
-        if josa_match and len(clean_name) >= 3:
-            stem = clean_name[:josa_match.start()]
-            trailing_part = clean_name[josa_match.start():]
-            after_preview = trailing_part + text[end:end + 25]
-            if is_valid_korean_name_structure(stem, after_preview):
-                # 조사 앞부분(성명)만 분리
-                clean_name = stem
-                end = end - len(trailing_part)
-
+        # 긴 유효 이름 후보 우선 (TK-30): clean_name 자체가 이미 유효한 이름 구조를 만족하면
+        # 불확실하게 끝 글자를 조사로 오인하여 잘라내지 않는다 (예: '김하은', '류채은' 등).
         after_text = text[end:end + 30]
-        if not is_valid_korean_name_structure(clean_name, after_text):
+        full_is_valid = is_valid_korean_name_structure(clean_name, after_text)
+
+        # 조사 분리는 clean_name 전체가 유효하지 않거나(4음절 등 비표준),
+        # 3음절이더라도 복성이 아닌 4음절 또는 조사를 분리한 형태가 더 확실한 경우에만 수행
+        if not full_is_valid or (len(clean_name) == 4 and clean_name[:2] not in DOUBLE_SURNAMES):
+            josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+            if josa_match and len(clean_name) >= 3:
+                stem = clean_name[:josa_match.start()]
+                trailing_part = clean_name[josa_match.start():]
+                after_preview = trailing_part + text[end:end + 25]
+                if is_valid_korean_name_structure(stem, after_preview):
+                    clean_name = stem
+                    end = end - len(trailing_part)
+                    after_text = text[end:end + 30]
+                    full_is_valid = True
+
+        if not full_is_valid:
             continue
         if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
             continue
@@ -543,7 +557,10 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             start, end = m.start(1), m.end(1)
             if _covered_by_span(guard_spans, start, end):
                 continue
-            if name in LEGAL_MILITARY_STOPWORDS:
+            if name in LEGAL_MILITARY_STOPWORDS or name in PARTY_HEADER_STOPWORDS or name in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
+            after_text = text[end:end + 30]
+            if not is_valid_korean_name_structure(name, after_text):
                 continue
             if pattern is NAME_TITLE_RE:
                 full_matched = m.group(0)
