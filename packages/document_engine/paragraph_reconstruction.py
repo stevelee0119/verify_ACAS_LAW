@@ -277,18 +277,7 @@ def reconstruct_page_blocks(
     curr_group: List[Block] = []
     active_closer: Optional[str] = None
 
-    # 쪽 내 오른쪽 경계(right edge) 및 글자 단위 줄바꿈 특성 분석 (TK-31)
-    x1_values = [round(b.bbox.x1, 1) for b in blocks if b.bbox is not None]
-    right_edge = 0.0
-    is_char_wrap_page = False
-    if x1_values:
-        repeated = [v for v in set(x1_values) if x1_values.count(v) >= 2]
-        right_edge = max(repeated) if repeated else max(x1_values)
-        if page_width > 0:
-            right_edge = max(right_edge, 0.75 * page_width)
-        # 오른쪽 경계 근처(4pt 이내)에 끝나는 꽉 찬 줄이 2줄 이상이면 글자 단위 줄바꿈 쪽으로 판정
-        full_line_count = sum(1 for v in x1_values if abs(v - right_edge) <= 4.0)
-        is_char_wrap_page = full_line_count >= 2
+    # 쪽 내 오른쪽 경계(right edge) 분석은 이제 문단별(flush_group 내부)로 수행합니다.
 
     def flush_group() -> None:
         nonlocal curr_group, active_closer
@@ -300,7 +289,19 @@ def reconstruct_page_blocks(
             active_closer = None
             return
 
-        # 여러 줄 블록을 결합 (구조 신호 반영)
+        # 문단 내부 줄들의 레이아웃 신호 분석 (TK-41, TK-44: 쪽 전체가 아닌 해당 문단 내부 줄들에서만 도출)
+        group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
+        right_edge = 0.0
+        if group_x1:
+            repeated = [v for v in set(group_x1) if group_x1.count(v) >= 2]
+            right_edge = max(repeated) if repeated else max(group_x1)
+            if page_width > 0:
+                right_edge = max(right_edge, 0.75 * page_width)
+
+        group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
+        group_char_wrap = group_full_count >= 2
+
+        # 여러 줄 블록을 결합 (해당 문단의 구조 신호 반영)
         combined_text = curr_group[0].text
         for i in range(len(curr_group) - 1):
             prev_b = curr_group[i]
@@ -312,7 +313,7 @@ def reconstruct_page_blocks(
                 combined_text,
                 next_b.text,
                 prev_full=prev_full,
-                char_wrap_context=is_char_wrap_page,
+                char_wrap_context=group_char_wrap,
             )
 
         # 외접 bounding box 계산

@@ -327,8 +327,8 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                             between = clause_no_concl[:is_neg_match.start()]
                             clean_between = re.sub(r"\s+", "", between)
                             # 요건이 부정 서술어의 직접 대상인지 문법적으로 판별 (TK-45)
-                            # 허용: 조사(을,를,이,가,은,는,도,지), 존재 구문(한적이, 한사실이 등)
-                            if re.fullmatch(r"([을를이가은는도지])?(한적이|한사실이|한바가|한일이|함이|한바)?", clean_between):
+                            # 허용: 부정 부사, 조사(을,를,이,가,은,는,도,지), 존재 구문(한적이, 한사실이 등)
+                            if re.fullmatch(r"([을를이가은는도지])?(?:전혀|일체|도통|조금도|결코|다시|아직)?(한적이|한사실이|한바가|한일이|함이|한바)?", clean_between):
                                 is_neg = True
                         # 매칭 직전(15자)에 '전혀', '일체' 등 부정 부사가 결합된 경우
                         before_span = unit[max(0, rm.start() - 15):rm.start()]

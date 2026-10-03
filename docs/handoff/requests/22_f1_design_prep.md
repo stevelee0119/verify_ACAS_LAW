@@ -1,43 +1,123 @@
-# 안정화 라운드 F1 준비: 화면 및 참고자료 연동 (R7C-F 정정본)
+# 안정화 라운드 F1 준비: 화면 및 참고자료 연동 (R7C 수정본)
 
 ## 1. 목적
-7C 라운드 이후 착수할 안정화 F1(화면·참고자료 기능) 라운드의 설계 및 구현 기준을 명확히 하고, 이전 보고서(7B)에 기재되었던 팩트 오류를 바로잡아 향후 구현 담당 에이전트와 평가 담당 에이전트가 단일 진실 원천(SSOT)에 접근할 수 있도록 한다.
+F1(화면·참고자료 기능) 라운드의 설계 및 구현 기준을 명확히 하고, 이전 라운드의 팩트 오류를 정정합니다.
 
-## 2. 팩트 정정 (7B 보고서의 오류 수정)
-이전 보고서에서 인용된 경로, 클래스 명칭, 스키마 구조 등에 다수의 오류가 있었으며, 코드를 기준으로 아래와 같이 정정한다.
+## 2. 팩트 정정 및 확인 (7C 감사 지적 반영)
 
-### 2.1. 탐지 타입 (FindingType)
-* **오류**: FindingType이 83개 또는 85개라고 보고되었으며, `OVERCLAIM_WITHOUT_REQUIREMENTS` 등 존재하지 않는 타입이 언급됨.
-* **정정**: `packages/common/enums.py`에 선언된 `FindingType` Enum의 항목은 **총 97개**이다. 허위 열거형을 사용해서는 안 되며, F1 UI 및 파이프라인에서 반환할 때 반드시 이 97개 내의 값만 사용해야 한다.
+### 2.1. 리뷰 상태 및 워크플로우 명세 (실제 코드 기준)
+* **FindingWorkflow 및 Revision**: pps/api/workspace.py 내에 FindingWorkflow, ReviewDraft, ReviewRevision 모델이 정의되어 있으며, pps/api/routers/workspace.py에서 GET/PUT 등 API 워크플로우와 충돌(409) 처리가 정상 구현되어 있습니다. 이를 F1 화면 연동 시 그대로 보존하고 호출해야 합니다.
+* **ReviewStatus**: packages/common/enums.py에 선언된 Enum(NEEDS_REVIEW, ACCEPTED, FALSE_POSITIVE, RESOLVED)을 엄격하게 사용하며, 프론트엔드 임의 상태(NOT_STARTED 등)를 사용하지 않습니다.
 
-### 2.2. JSON 스키마 필드 (Finding)
-* **오류**: UI에서 사용하는 JSON 응답 매핑이 코드의 스키마와 불일치함.
-* **정정**: `packages/common/schemas.py`의 `Finding` 클래스는 다음 필드를 가진다:
-  * 필수: `finding_id`, `type` (FindingType), `status` (VerificationStatus), `severity` (Severity), `evidence_grade` (EvidenceGrade), `title`
-  * 선택/기본값: `detail`, `confidence`, `document_id`, `block_id`, `page`, `bbox`, `span`, `evidence`, `tags`
-  따라서 JSON 직렬화 시, `id`가 아닌 `finding_id`를 사용하며, 위치 정보는 `page`, `bbox`, `span`, `block_id`를 활용해야 한다.
+### 2.2. F3 호출 상한 및 예산 초과 방어
+* F3(LLM 검토 보완) 호출 시 청구별 상한(예: 건당 최대 3회), 캐시 메커니즘, 호출 실패 및 예산 초과 시의 fallback 처리를 파이프라인(packages/llm_router/router.py) 단에서 유지합니다.
 
-### 2.3. 리뷰 상태 및 워크플로우 (ReviewStatus)
-* **오류**: 존재하지 않는 `FindingWorkflow` 클래스 및 UI 전용 가짜 상태(`UNREVIEWED`, `NOT_STARTED` 등)를 참조함.
-* **정정**: 리뷰 상태는 `packages/common/enums.py`의 `ReviewStatus`를 사용해야 하며, 가용한 상태는 다음과 같다:
-  * `NEEDS_REVIEW`
-  * `ACCEPTED`
-  * `FALSE_POSITIVE`
-  * `RESOLVED`
-  사용자 검토 단계 및 리뷰 이력은 이 Enum과 연동하여 구축해야 한다.
+### 2.3. 개인정보 보호 파이프라인
+* 데이터 흐름: packages/pii_engine/detector.py::detect() -> packages/pii_engine/engine.py (PIIEngine) -> packages/llm_router/privacy.py::inspect_request
 
-### 2.4. 파이프라인 경로 (PII 및 프라이버시)
-* **오류**: `PIIDetector`, `anonymize_text` 등 코드에 존재하지 않는 경로를 참조함.
-* **정정**: 실제 개인정보 보호 파이프라인의 데이터 흐름은 다음과 같다:
-  1. **탐지**: `packages/pii_engine/detector.py::detect()`
-  2. **마스킹**: `packages/pii_engine/engine.py` 의 `PIIEngine`
-  3. **전송 전 검사**: `packages/llm_router/privacy.py::inspect_request`
-  4. **통합 실행**: `packages/llm_router/router.py` 내 `LLMRouter.run`
+## 3. FindingType 97개 전수 패널 배정표
+F1 화면의 탭/패널에 모든 FindingType을 누락 없이 배정합니다. 미배정된 항목이 있을 시 CI가 실패하도록 프론트엔드 매핑 테스트를 제안합니다.
 
-## 3. F1 기능 구현 지침 (UI 및 참고자료)
-F1 라운드에서는 위 정정된 스키마와 경로를 바탕으로 다음 사항을 구현한다.
+| FindingType | 소속 패널/탭 | 뱃지 라벨 |
+|---|---|---|
+| CASE_NOT_FOUND | 법리 및 판례 검토 | 확인 필요 |
+| CASE_METADATA_MISMATCH | 법리 및 판례 검토 | 확인 필요 |
+| CASE_QUOTE_MISMATCH | 법리 및 판례 검토 | 확인 필요 |
+| CASE_HOLDING_DISTORTION | 법리 및 판례 검토 | 확인 필요 |
+| CASE_CITATION_ERROR | 법리 및 판례 검토 | 확인 필요 |
+| LAW_CITATION_ERROR | 법리 및 판례 검토 | 확인 필요 |
+| TEMPORAL_LAW_MISMATCH | 시간축 검토 | 확인 필요 |
+| ACADEMIC_CITATION_ERROR | 참고자료 부합성 | 확인 필요 |
+| FACT_CONTRADICTION | 참고자료 부합성 | 확인 필요 |
+| CROSS_DOCUMENT_CONTRADICTION | 일반 내용 검토 | 확인 필요 |
+| TIMELINE_CONTRADICTION | 시간축 검토 | 확인 필요 |
+| ARITHMETIC_MISMATCH | 일반 내용 검토 | 확인 필요 |
+| METADATA_ANOMALY | 일반 내용 검토 | 확인 필요 |
+| HIDDEN_TEXT_MISMATCH | 일반 내용 검토 | 확인 필요 |
+| OCR_LAYER_MISMATCH | 일반 내용 검토 | 확인 필요 |
+| OCR_LOW_QUALITY | 일반 내용 검토 | 확인 필요 |
+| SIGNATURE_INVALID | 일반 내용 검토 | 확인 필요 |
+| MODIFIED_AFTER_SIGNATURE | 일반 내용 검토 | 확인 필요 |
+| PAGE_STRUCTURE_OUTLIER | 일반 내용 검토 | 확인 필요 |
+| PROMPT_INJECTION_SUSPECTED | 보안 검토 | 확인 필요 |
+| HIDDEN_INSTRUCTION | 일반 내용 검토 | 확인 필요 |
+| META_INSTRUCTION | 일반 내용 검토 | 확인 필요 |
+| SYSTEM_OVERRIDE_ATTEMPT | 일반 내용 검토 | 확인 필요 |
+| ROLE_OVERRIDE_ATTEMPT | 일반 내용 검토 | 확인 필요 |
+| VERIFICATION_SUPPRESSION | 일반 내용 검토 | 확인 필요 |
+| OUTPUT_MANIPULATION_ATTEMPT | 일반 내용 검토 | 확인 필요 |
+| ENCODED_INSTRUCTION | 일반 내용 검토 | 확인 필요 |
+| OBFUSCATED_INSTRUCTION | 일반 내용 검토 | 확인 필요 |
+| UNICODE_SMUGGLING | 일반 내용 검토 | 확인 필요 |
+| OCR_LAYER_INJECTION | 보안 검토 | 확인 필요 |
+| METADATA_INJECTION | 보안 검토 | 확인 필요 |
+| MULTIMODAL_INJECTION | 보안 검토 | 확인 필요 |
+| RAG_POISONING_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| TOOL_MANIPULATION_ATTEMPT | 일반 내용 검토 | 확인 필요 |
+| DATA_EXFILTRATION_INSTRUCTION | 일반 내용 검토 | 확인 필요 |
+| MODEL_OUTPUT_QUARANTINED | 일반 내용 검토 | 확인 필요 |
+| AI_AUTHORSHIP_LIKELY | 일반 내용 검토 | 확인 필요 |
+| AI_FULL_GENERATION_SUSPECTED | 일반 내용 검토 | 확인 필요 |
+| AI_HALLUCINATED_CONTENT | 일반 내용 검토 | 확인 필요 |
+| LEGAL_ARGUMENT_INVALID | 법리 및 판례 검토 | 확인 필요 |
+| STYLE_SHIFT | 일반 내용 검토 | 확인 필요 |
+| MODEL_ATTRIBUTION_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| RESIDUAL_TRACKED_CHANGE | 일반 내용 검토 | 확인 필요 |
+| RESIDUAL_COMMENT | 일반 내용 검토 | 확인 필요 |
+| DELETED_TEXT_RECOVERABLE | 일반 내용 검토 | 확인 필요 |
+| PRIOR_VERSION_RECOVERABLE | 일반 내용 검토 | 확인 필요 |
+| REDACTION_FAILURE | 일반 내용 검토 | 확인 필요 |
+| HIDDEN_SHEET_OR_ROW | 일반 내용 검토 | 확인 필요 |
+| CROPPED_IMAGE_RESIDUE | 일반 내용 검토 | 확인 필요 |
+| TEMPLATE_RESIDUE | 일반 내용 검토 | 확인 필요 |
+| SPECIMEN_DOCUMENT_DECLARED | 일반 내용 검토 | 확인 필요 |
+| INVALID_IDENTIFIER | 일반 내용 검토 | 확인 필요 |
+| PLACEHOLDER_IDENTIFIER | 일반 내용 검토 | 확인 필요 |
+| AUTHORSHIP_METADATA_LEAK | 일반 내용 검토 | 확인 필요 |
+| GEOLOCATION_METADATA_LEAK | 일반 내용 검토 | 확인 필요 |
+| STEGANOGRAPHIC_PAYLOAD | 일반 내용 검토 | 확인 필요 |
+| TRACKING_CANARY_DETECTED | 일반 내용 검토 | 확인 필요 |
+| DOCUMENT_FINGERPRINT_SUSPECTED | 일반 내용 검토 | 확인 필요 |
+| COVERT_CHANNEL_SUSPECTED | 일반 내용 검토 | 확인 필요 |
+| PRIVILEGE_EXPOSURE_RISK | 일반 내용 검토 | 확인 필요 |
+| OUTBOUND_LEAK_RISK | 일반 내용 검토 | 확인 필요 |
+| ISSUE_EVASION_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| IMPLICIT_ADMISSION_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| LIABILITY_HEDGING_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| COERCIVE_LANGUAGE_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| SELECTIVE_QUOTATION_SIGNAL | 일반 내용 검토 | 확인 필요 |
+| CASE_RELEVANCE_WEAK | 법리 및 판례 검토 | 확인 필요 |
+| STATUTE_NONEXISTENT | 법리 및 판례 검토 | 확인 필요 |
+| STATUTE_TEXT_MISMATCH | 법리 및 판례 검토 | 확인 필요 |
+| INTERNAL_CITATION_ERROR | 참고자료 부합성 | 확인 필요 |
+| QUOTE_MISMATCH | 참고자료 부합성 | 확인 필요 |
+| FACT_UNSUPPORTED | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_NOT_PROVIDED | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_REFERENCE_MISSING | 참고자료 부합성 | 확인 필요 |
+| HASH_FORMAT_INVALID | 일반 내용 검토 | 확인 필요 |
+| HASH_MISMATCH | 일반 내용 검토 | 확인 필요 |
+| EVIDENCE_DATE_INVALID | 시간축 검토 | 확인 필요 |
+| EVIDENCE_TIMELINE_INVERSION | 시간축 검토 | 확인 필요 |
+| EVIDENCE_NUMBERING_GAP | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_LIST_MISMATCH | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_PERSON_INCONSISTENT | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_FORM_DEFECT | 참고자료 부합성 | 확인 필요 |
+| EVIDENCE_PURPOSE_MISMATCH | 참고자료 부합성 | 확인 필요 |
+| STATEMENT_BEYOND_PERCEPTION | 일반 내용 검토 | 확인 필요 |
+| CROSS_DOC_COPY | 일반 내용 검토 | 확인 필요 |
+| MODEL_FACT_REMARK | 참고자료 부합성 | 확인 필요 |
+| SOURCE_CONFLICT_IGNORED | 참고자료 부합성 | 확인 필요 |
+| CALCULATION_INVARIANT_VIOLATION | 일반 내용 검토 | 확인 필요 |
+| LEGAL_REQUIREMENT_OMITTED | 법리 및 판례 검토 | 확인 필요 |
+| OVERCLAIM | 항변 및 요건 검토 | 확인 필요 |
+| UNSUPPORTED_GENERALIZATION | 일반 내용 검토 | 확인 필요 |
+| REASONING_GAP | 일반 내용 검토 | 확인 필요 |
+| AUTHORITY_RANK_ERROR | 일반 내용 검토 | 확인 필요 |
+| DRAFT_ARTIFACT | 참고자료 부합성 | 확인 필요 |
+| UNCERTAINTY_NOT_DISCLOSED | 일반 내용 검토 | 확인 필요 |
+| UNSUPPORTED_FORMAT | 일반 내용 검토 | 확인 필요 |
+| PARSE_ERROR | 일반 내용 검토 | 확인 필요 |
 
-1. **프론트엔드 연동**: `Finding` JSON의 `block_id`와 `bbox`를 파싱하여 PDF 뷰어 화면에 하이라이트를 표시한다.
-2. **참고자료 연동**: `Evidence` 리스트를 참조하여, 탐지 결과(Finding)에 대한 근거가 되는 참고자료 페이지나 조항을 툴팁/사이드바로 제공한다.
-3. **상태 관리**: `ReviewStatus`를 바탕으로 사용자가 `FALSE_POSITIVE` 또는 `ACCEPTED`로 상태를 토글할 수 있는 API 엔드포인트를 제공한다.
-4. **결합 규칙 유지 보수**: `packages/document_engine/paragraph_reconstruction.py`의 문단 결합 로직에 있어 어휘에 의존하지 않는 구조적 결합(7adf43f 상태)을 유지하면서 UI 상에서 어색하게 끊어지는 문단을 렌더링 시 보정한다.
+## 4. F1 화면 렌더링 주의사항
+* F1 프론트엔드는 Finding JSON의 lock_id 및 box를 파싱하여 PDF 뷰어에 하이라이트를 표시합니다.
+* 기존 join_lines의 국소 구조 신호(7adf43f 상태)가 탐지 엔진의 입력으로 유지되므로, 문서 파서의 원본 텍스트를 임의로 보정하여 오탐/미탐을 회피하지 않습니다.
