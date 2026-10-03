@@ -242,6 +242,98 @@ def _is_negated_expression(rule: Dict[str, Any], unit: str, match: re.Match) -> 
     return False
 
 
+# Grammatical boundaries keep quotative -다고/-라고 together and do not
+# mistake party nouns ending in -고 for connective endings.
+_PAST_STEM_FINALS = "".join(chr(n) for n in range(0xAC00, 0xD7A4)
+                          if (n - 0xAC00) % 28 == 20)  # Korean past-tense final ssang-siot.
+_ADNOMINAL_FINALS = "".join(chr(n) for n in range(0xAC00, 0xD7A4)
+                          if (n - 0xAC00) % 28 == 4)  # Adnominal final nieun.
+_REQUIREMENT_CLAUSE_END_RE = re.compile(
+    r"[,;.!?\n]|(?:으므로|므로|기에|음에도|는데도|더라도|더니|던데|다가|"
+    r"느라고|느라|아서|어서|으나|지만|는데|"
+    rf"[{_PAST_STEM_FINALS}](?:고|자|으며)|"
+    r"(?:하|되|있|없|않)(?:고|으며|자)|으며|면서|하여|되어|"
+    r"(?:을|를)\s+(?:[가-힣]+(?:히|게)\s+)*[가-힣]+자|"
+    rf"[{_ADNOMINAL_FINALS}]\s*(?:뒤|후|다음))"
+    r"(?=\s|[,;.!?]|$)"
+)
+# Count negating morphemes, not their overlapping auxiliary phrases:
+# e.g. -없지 않- contains two negations, while -지 아니하- contains one.
+_REQUIREMENT_NEGATION_RE = re.compile(
+    r"않(?:았|으|음|다|고|아|는|은|을|습|지|기)|못(?:하|했|해|한)|"
+    r"아니(?:하|었|다|라|며|고|므로|어서)|아닌|아닙|아님|아닐|"
+    r"없(?:었|으|음|다|고|어|는|을|습|지|이)|"
+    r"(?<![가-힣])(?:안|못)\s+(?=[가-힣])"
+)
+_REQUIREMENT_NEGATIVE_MODIFIER_RE = re.compile(
+    r"(?:없(?:는|었던)|않(?:은|는|았던)|못(?:한|하는|했던)|아닌|"
+    r"전무(?:한|했던)|불가(?:능)?(?:한|했던))\s*$"
+)
+_REQUIREMENT_EXISTENCE_RE = re.compile(r"있(?:었|으|음|다|고|어|는|을|습|지)|존재하")
+_REQUIREMENT_ADJUNCT_RE = re.compile(
+    r"^\s*(?:에\s*(?:따라|의하여|관하여|대하여)|"
+    r"(?:의\s*)?(?:직후|직전|이후|이전|후|전|뒤)"
+    r"(?:에|부터|까지|에도)?)(?:\s|$)"
+)
+_REQUIREMENT_BARE_SUFFIX_RE = re.compile(r"[\s이가은는을를도만의,;.!?]*")
+
+
+def _defense_requirement_state(
+    unit: str, requirements: List[str], limited_conclusions: List[str],
+    polarities: Dict[str, str],
+) -> tuple[bool, bool, bool]:
+    """Read claimed fulfilment, denial and uncertainty within requirement clauses.
+
+    This checks what the writer asserts, not whether the legal defense actually
+    succeeds. Config metadata distinguishes facts required to exist from
+    disqualifying facts required to be absent. Bare mentions and nested
+    negations do not establish fulfilment, even beside another positive fact.
+    """
+    boundaries = [m.end() for m in _REQUIREMENT_CLAUSE_END_RE.finditer(unit)]
+    boundaries.append(len(unit))
+    conclusions = [
+        m.span() for pat in limited_conclusions for m in re.finditer(pat, unit)
+    ]
+    positive = denied = uncertain = False
+    for pattern in requirements:
+        for match in re.finditer(pattern, unit):
+            end = next((end for end in boundaries if end >= match.end()), len(unit))
+            # Reuse the configured conclusion spans, not a second word list.
+            later_conclusions = [
+                start for start, _ in conclusions if match.end() <= start < end
+            ]
+            if later_conclusions:
+                end = min(later_conclusions)
+            if any(start <= match.start() < stop for start, stop in conclusions):
+                continue
+            after = unit[match.end():end]
+            if _REQUIREMENT_ADJUNCT_RE.match(after):
+                continue
+            if _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(unit[:match.start()]):
+                uncertain = True
+                continue
+            negations = list(_REQUIREMENT_NEGATION_RE.finditer(after))
+            requires_absence = polarities.get(pattern) == "absent"
+            if len(negations) == 1:
+                if requires_absence:
+                    positive = True
+                else:
+                    denied = True
+            elif len(negations) > 1:
+                uncertain = True
+            elif requires_absence:
+                if _REQUIREMENT_EXISTENCE_RE.search(after):
+                    denied = True
+                else:
+                    uncertain = True
+            elif (_REQUIREMENT_BARE_SUFFIX_RE.fullmatch(after)
+                  and not _REQUIREMENT_CLAUSE_END_RE.search(match.group())):
+                uncertain = True
+            else:
+                positive = True
+    return positive, denied, uncertain
+
+
 def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
     table = load_rules()
     sources = table.get("sources") or {}
@@ -304,41 +396,9 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                 req_list = signals.get("stated_requirements", [])
                 lim_list = signals.get("limited_conclusions", [])
 
-                has_positive_req = False
-                has_denied_req = False
-
-                for req_pat in req_list:
-                    for rm in re.finditer(req_pat, unit):
-                        # 매칭 직후를 같은 절(clause)로 한정하고 결론절(책임/지급 의무)은 제외하여 구조적으로 요건 부정을 판별
-                        after_span = unit[rm.end():]
-                        clause_match = re.search(r"(?:[,.\n]|(?:고|며|지만|으나|면|는데)\s)", after_span)
-                        clause = after_span[:clause_match.end()] if clause_match else after_span
-                        
-                        clause_no_concl = re.sub(r"(?:책임|지급\s*의무|채무|손해배상).*?(?:없|않|아니|면|부담).*", "", clause)
-                        
-                        is_neg_match = re.search(
-                            r"(?:하지\s*(?:않|못|아니)|되지\s*(?:않|못|아니)|도달하지|도래하지|"
-                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|"
-                            r"없(?:었)?(?:으나|음|으며|다|고)|없음에도|부존재|미충족|흠결|결여)",
-                            clause_no_concl
-                        )
-                        is_neg = False
-                        if is_neg_match:
-                            between = clause_no_concl[:is_neg_match.start()]
-                            clean_between = re.sub(r"\s+", "", between)
-                            # 요건이 부정 서술어의 직접 대상인지 문법적으로 판별 (TK-45)
-                            # 허용: 부정 부사, 조사(을,를,이,가,은,는,도,지), 존재 구문(한적이, 한사실이 등)
-                            if re.fullmatch(r"([을를이가은는도지])?(?:전혀|일체|도통|조금도|결코|다시|아직)?(한적이|한사실이|한바가|한일이|함이|한바)?", clean_between):
-                                is_neg = True
-                        # 매칭 직전(15자)에 '전혀', '일체' 등 부정 부사가 결합된 경우
-                        before_span = unit[max(0, rm.start() - 15):rm.start()]
-                        if re.search(r"(?:전혀|일체|전무)", before_span):
-                            is_neg = True
-
-                        if is_neg:
-                            has_denied_req = True
-                        else:
-                            has_positive_req = True
+                has_positive_req, has_denied_req, uncertain_req = _defense_requirement_state(
+                    unit, req_list, lim_list, signals.get("requirement_polarities", {})
+                )
 
                 lim_pats = "|".join(lim_list)
                 has_lim = bool(lim_pats and re.search(lim_pats, unit))
@@ -351,7 +411,8 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                 ))
 
                 # 1. 요건이 긍정적으로 소명되고, 결론이 해당 채무로 한정되며, 타 책임으로 확장되지 않은 정상 항변: 경고 제외
-                if has_positive_req and not has_denied_req and has_lim and not is_extended:
+                if (has_positive_req and not has_denied_req and not uncertain_req
+                        and has_lim and not is_extended):
                     continue
 
                 # 2. 요건을 부정·미충족으로 자인하였거나 타 책임으로 확장한 경우: 과대주장 경고 유지 (원 규칙)
@@ -359,7 +420,7 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                     pass
 
                 # 3. 결론은 한정되었으나 요건 소명이 부족한 경우: "요건 확인 요청"으로 완화
-                elif has_lim and not has_positive_req:
+                elif has_lim and (not has_positive_req or uncertain_req):
                     mod_rule = dict(rule)
                     mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
                     mod_rule["explanation"] = (

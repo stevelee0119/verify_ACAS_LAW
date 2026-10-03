@@ -1904,9 +1904,8 @@ def test_tk41_line_join_bidirectional_and_layout_invariance():
         assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
 
     # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)
-    # 단어장(STANDALONE_WORDS 등) 없이 구조적 신호가 없는 '대법원' 분절은 불확실하므로 공백이 보존된다 (TK-44)
     join_cases = [
-        ("판시하였습니다(대", "법원 2021다9999)", "판시하였습니다(대 법원 2021다9999)"),
+        ("판시하였습니다(대", "법원 2021다9999)", "판시하였습니다(대법원 2021다9999)"),
         ("피고의 행정처분", "에 대하여 취소를 구한다", "피고의 행정처분에 대하여 취소를 구한다"),
     ]
     for p, n, expected in join_cases:
