@@ -19,7 +19,8 @@
 | 22 XPASS 승격(일반 시험 43건, 6차 코드에서 통과) | **완료**(`7adf43f`) |
 | 6차 회귀 보호 시험 `tests/acceptance/test_round6_regressions.py`(strict xfail 40 + 보존 대조) | **완료**(`7adf43f`) |
 | **시작 SHA** | **`7adf43f`**(이후 docs 전용 커밋은 시작 상태에 영향이 없다. 구현 측은 이 SHA 또는 그 뒤 docs 전용 커밋에서 시작) |
-**시작 상태의 알려진 실패:** 전체 시험(`--ignore=tests/acceptance`)은 CI(Linux·OCR)에서 **R6-04 1건**(`test_legal_military_terms_not_masked_as_person`)이 실패한다(6차 회귀). 로컬에서 `pytesseract`가 없으면 OCR 환경 시험이 추가로 실패하며 이는 제품 회귀가 아니다(환경과 함께 기록). `점수 게이트`·`CI`는 이 시작 상태에서 **의도적으로 빨갛다**(R6-04와 회귀 게이트). 새 strict xfail 51건(6차 회귀 40 + 보안 11)은 실패 상태로 고정되어 있다.
+
+**시작 상태(평가 측이 CI로 확인, 병합 커밋 `0a40289`):** `CI`의 테스트 job(Linux·OCR)은 전체 시험(`--ignore=tests/acceptance`)에서 **R6-04 1건**(`test_legal_military_terms_not_masked_as_person`)만 실패하고 그 밖의 실패는 없다(Docker OCR readiness 성공, [CI run 37093734438](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37093734438)). `점수 게이트`는 이 시작 상태에서 **성공**이다(회귀 보호 시험이 strict xfail 51건으로 실패 상태가 고정되어 있어 수용 시험이 통과하고, 회귀 게이트·하드코딩·버전 단계도 통과). 즉 **R6-04가 닫히기 전에는 `CI`가 빨갛고**, R1이 끝나면 초록이 되어야 한다. 로컬에서 `pytesseract`가 없으면 OCR 환경 시험이 추가로 실패하며 이는 제품 회귀가 아니다(환경과 함께 기록).
 
 ### 0.2 6차 결과(평가 측·독립 감사 일치, 같은 조건·같은 입력)
 | 항목 | 시작 96019c3 | 최종 01070f6 | 7차에서 |
@@ -34,6 +35,7 @@
 | `join_lines` 어절 경계 공백(평가 측 10쌍) | 6 | **4**(`(이 사건)` 3건 삭제) | **TK-41** |
 | 같은 문단의 쪽 배치 의존 | 없음 | **있음**(꽉 찬 줄 2줄 이상) | **TK-41** |
 | 기존 시험 `test_legal_military_terms_not_masked_as_person` | PASS | **FAIL** | **TK-39** |
+
 **판정:** 6차 **완료 승인 불가**, 기준선·0.9.14 보류. 공통 원인은 5차와 같다: (a) 한 방향 기본값, (b) 오탐을 줄이려 낱말 예외를 추가하고 그 예외가 다른 정상 입력의 누락을 만듦, (c) 고정 입력 통과를 일반화로 보고.
 
 ### 0.3 이번 라운드의 보고 규칙 (6차 0.2에 더해, 감사 지적 반영)
@@ -55,7 +57,7 @@ F1~F4 구현 코드, 요청 16, TK-34(행위시법 목 단위 검토), TK-24(소
 
 ### R0. 시작 점검
 - `Steve_ACASiaLAW`를 받아 시작한다(0.1의 시작 SHA `7adf43f` 확인). `git config core.autocrlf input`. 강제 푸시 금지.
-- 6차 지시서 4절의 명령 전부 + 아래 4절 명령을 돌려 출력을 `docs/handoff/requests/21_round7_baseline.md`에 붙인다. **알려진 시작 상태:** 0.1의 '시작 상태의 알려진 실패'를 따른다(전체 시험 R6-04 1건, 수용 시험은 22건 승격 후 일반 통과, 새 strict xfail 51건 고정).
+- 6차 지시서 4절의 명령 전부 + 아래 4절 명령을 돌려 출력을 `docs/handoff/requests/21_round7_baseline.md`에 붙인다. **알려진 시작 상태:** 0.1의 '시작 상태'를 따른다(`CI` 전체 시험 R6-04 1건 실패, `점수 게이트` 성공, 수용 시험은 22건 승격 후 일반 통과, 새 strict xfail 51건 고정).
 - `tests/regression/test_ledger.py`에 묶음마다 **3종 세트**를 추가한다(R5).
 
 ### R1. TK-39 이름 마스킹·전송 경계 회귀 (P1, 첫째)
