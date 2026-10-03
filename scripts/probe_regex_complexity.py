@@ -3,13 +3,15 @@
 목적: CodeQL "Inefficient regular expression"(지수 ReDoS) 경고의 후보를 코드에서 직접 찾고,
 다항(주로 이차) 증가 정규식을 별도로 센다. 제품 코드를 고치지 않는다.
 
-방법: `packages/ apps/ workers/ scripts/`의 `re.*(상수 문자열, ...)` 호출에서 패턴을 뽑아, 정해진 반복 입력 묶음으로 시간을 잰다.
-- 지수 의심: 길이 16→24에서 시간이 20배 넘게 늘고 24자에서 0.2초 이상.
+방법: `packages/ apps/ workers/ scripts/`의 `re.*(상수 문자열 또는 바이트열, ...)` 호출에서 패턴을 뽑아, 정해진 반복 입력 묶음과
+패턴 자신의 대안 목록(`(?:원정|원|정)`처럼 글자 그대로의 대안)으로 만든 반복 입력으로 시간을 잰다.
+- 지수 의심: 반복 횟수를 2,4,…,24로 늘리다가 24회 안에 한 번의 시험이 0.3초에 이르는 경우(반복 단위가 짧아 입력은 수십~백여 자다).
 - 다항 증가: 길이 4000→8000에서 8000자 시간이 0.5초 이상.
-한계: 입력 묶음은 유한하다(숫자·공백·한글·영문·구분자 반복). 묶음에 없는 병적 입력은 놓칠 수 있으므로
-"지수 증가 없음"은 이 묶음에 대한 결과일 뿐 정규식 안전의 증명이 아니다. 호출 경로의 입력 정규화·길이 제한은 재지 않는다.
+한계: 입력 묶음은 유한하다(숫자·공백·한글·영문·구분자 반복과 대안 반복). 묶음에 없는 병적 입력은 놓칠 수 있으므로
+"지수 증가 없음"은 이 묶음에 대한 결과일 뿐 정규식 안전의 증명이 아니다(실제로 첫 판은 바이트열 정규식을 건너뛰고 대안 반복이 없어
+CodeQL이 가리킨 두 곳을 놓쳤다). f-문자열로 조립한 정규식은 읽지 못한다. 호출 경로의 입력 정규화·길이 제한은 재지 않는다.
 
-사용: python scripts/probe_regex_complexity.py            (몇 분 걸린다)
+사용: python scripts/probe_regex_complexity.py            (약 1분 20초)
 """
 from __future__ import annotations
 
@@ -29,6 +31,26 @@ FAMILIES = [
     lambda n: "가 " * n + "x", lambda n: "a-" * n + "!", lambda n: "1." * n + "x", lambda n: "제1조" * n + "x",
     lambda n: "갑 제1호증" * n + "x",
 ]
+
+
+ALT_GROUP = re.compile(r"\((?:\?:)?((?:[^()|\\\[\]{}*+?.^$]+\|)+[^()|\\\[\]{}*+?.^$]+)\)")
+
+
+def alternation_pumps(pattern: "str | bytes") -> list:
+    """`(?:a|b|c)+` 같은 글자 그대로의 대안 묶음에서 반복 입력 생성기를 만든다. 바이트열 패턴이면 바이트열을 낸다."""
+    is_bytes = isinstance(pattern, bytes)
+    text = pattern.decode("latin-1") if is_bytes else pattern
+    pumps = []
+    for match in ALT_GROUP.finditer(text):
+        alts = match.group(1).split("|")
+        plain, spaced = "".join(alts), "".join(f"1 {alt}  " for alt in alts)
+        for unit in (plain, spaced):
+            pumps.append((lambda n, unit=unit: (unit * n + "X").encode("utf-8")) if is_bytes
+                         else (lambda n, unit=unit: unit * n + "X"))
+    return pumps
+
+
+LADDER = (2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24)
 
 
 class _Timeout(Exception):
@@ -52,7 +74,7 @@ def _flags(node: ast.Call) -> int:
     return flags
 
 
-def literals() -> list[tuple[str, int, str, int]]:
+def literals() -> list[tuple[str, int, "str | bytes", int]]:
     found = []
     for directory in SCAN_DIRS:
         for path in sorted((ROOT / directory).rglob("*.py")):
@@ -63,12 +85,12 @@ def literals() -> list[tuple[str, int, str, int]]:
             for node in ast.walk(tree):
                 if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr in RE_FUNCS
                         and isinstance(node.func.value, ast.Name) and node.func.value.id == "re" and node.args
-                        and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)):
+                        and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, (str, bytes))):
                     found.append((str(path.relative_to(ROOT)), node.lineno, node.args[0].value, _flags(node)))
     return found
 
 
-def timed(rx: re.Pattern, text: str, limit: float) -> float:
+def timed(rx: re.Pattern, text: "str | bytes", limit: float) -> float:
     signal.setitimer(signal.ITIMER_REAL, limit)
     start = time.perf_counter()
     try:
@@ -80,6 +102,19 @@ def timed(rx: re.Pattern, text: str, limit: float) -> float:
         signal.setitimer(signal.ITIMER_REAL, 0)
 
 
+def exponential_hit(rx: re.Pattern, pattern: "str | bytes"):
+    """반복 횟수를 늘리다 24회 안에 0.3초에 이르는 입력이 있으면 (입력묶음, 반복 횟수, 시간)을, 없으면 None을 돌려준다."""
+    base = [(i, f) if not isinstance(pattern, bytes) else (i, (lambda n, f=f: f(n).encode("utf-8")))
+            for i, f in enumerate(FAMILIES)]
+    extra = [(f"대안{i}", f) for i, f in enumerate(alternation_pumps(pattern))]
+    for index, family in base + extra:
+        for repeats in LADDER:
+            elapsed = timed(rx, family(repeats), 1.0)
+            if elapsed >= 0.3:
+                return index, repeats, elapsed
+    return None
+
+
 def main() -> int:
     signal.signal(signal.SIGALRM, _on_alarm)
     patterns = literals()
@@ -89,24 +124,19 @@ def main() -> int:
             rx = re.compile(pattern, flags)
         except re.error:
             continue
-        hit = None
-        for index, family in enumerate(FAMILIES):
-            small, large = timed(rx, family(16), 1.0), timed(rx, family(24), 1.0)
-            if large >= 0.2 and large > 20 * max(small, 1e-4):
-                hit = (index, small, large)
-                break
+        hit = exponential_hit(rx, pattern)
         if hit:
             exponential.append((path, line, pattern, hit))
             continue
-        for index, family in enumerate(FAMILIES):
+        for index, family in base:
             half, full = timed(rx, family(4000), 3.0), timed(rx, family(8000), 3.0)
             if full >= 0.5:
                 polynomial.append((path, line, pattern, (index, half, full)))
                 break
     print(f"정규식 리터럴 {len(patterns)}개 점검(입력 묶음 {len(FAMILIES)}종)")
     print(f"지수 증가 의심: {len(exponential)}건")
-    for path, line, pattern, (index, small, large) in exponential:
-        print(f"  {path}:{line} 입력묶음={index} n16={small:.4f}s n24={large:.3f}s {pattern[:90]!r}")
+    for path, line, pattern, (index, repeats, elapsed) in exponential:
+        print(f"  {path}:{line} 입력묶음={index} 반복 {repeats}회에서 {elapsed:.3f}s {pattern[:90]!r}")
     print(f"다항 증가(8000자에서 0.5초 이상): {len(polynomial)}건")
     for path, line, pattern, (index, half, full) in sorted(polynomial, key=lambda row: -row[3][2]):
         print(f"  {path}:{line} 입력묶음={index} n4000={half:.3f}s n8000={full:.3f}s {pattern[:90]!r}")

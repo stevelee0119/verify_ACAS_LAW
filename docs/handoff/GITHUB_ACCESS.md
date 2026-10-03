@@ -49,23 +49,30 @@ Claude 연동에 승인된 권한: **읽기** — administration, commit statuse
 |---|---|---|
 | Dependabot vulnerabilities | **No open alerts** | 의존성 그래프가 읽는 매니페스트(pip)와 GitHub 권고 DB 기준으로 열린 경고가 없다는 뜻이다. 매니페스트에 없는 패키지, Docker 베이스 이미지의 OS 패키지는 이 신호가 다루지 않을 수 있다(범위는 확인하지 못함). 시점 값이며 평가 측이 직접 읽은 것이 아니다 |
 | Dependabot malware alerts | **disabled** | 꺼짐으로 기록. 켤지는 선택이며 지원 범위는 확인하지 못했다 |
-| 코드 스캔(CodeQL) 열린 경고 | **38건**(high 17: URL 부분 문자열 검사 불완전·평문 로깅·비효율 정규식·경로 표현식에 통제되지 않은 데이터·DOM 텍스트의 HTML 재해석 / medium 21: 예외를 통한 정보 노출·prototype 오염 대입·워크플로 permissions 없음) | 종류만 받았고 **종류별 건수와 파일·줄은 받지 못했다.** 분류는 6절 |
+| 코드 스캔(CodeQL) 열린 경고 | **38건**(high 17: URL 부분 문자열 검사 불완전·평문 로깅·비효율 정규식·경로 표현식에 통제되지 않은 데이터·DOM 텍스트의 HTML 재해석 / medium 21: 예외를 통한 정보 노출·prototype 오염 대입·워크플로 permissions 없음) | 규칙별 건수·파일·줄은 6절의 읽기 전용 워크플로로 직접 수집해 **합계가 일치함을 확인**했다. 분류는 6절 |
 | 비밀 스캔 열린 경고 | **0건** | 비밀 스캔(켜짐)·푸시 보호(켜짐) 기준 열린 경고가 없다는 뜻. 과거에 해소된 경고, 스캔 패턴 밖의 비밀(임의 형식 비밀번호 등)은 이 신호가 말해 주지 않는다 |
 
-## 6. 코드 스캔 경고 38건 분류(평가 측 코드 읽기, 2026-10-03)
-**한계(먼저):** 평가 측은 경고 목록을 읽지 못해(연동에 Code scanning alerts 권한 없음) 경고의 파일·줄·종류별 건수를 모른다. 아래는 보고된 **규칙 이름**에 해당할 만한 코드를 저장소에서 직접 찾은 것이다. 찾은 지점이 실제 경고와 같은지, 경고 건수와 맞는지는 **확정하지 못했다.** `tests/`·`scripts/`·`docs/`의 일부는 점검 범위 밖이다. 제품 코드는 수정하지 않았다.
+## 6. 코드 스캔 경고 38건 분류(경고 위치 수집 뒤, 2026-10-03)
+**수집 방법:** 평가 세션의 연동에는 Code scanning alerts 읽기 권한이 없어, 읽기 전용 워크플로 [`보안 경고 내보내기`](../../.github/workflows/security-export.yml)(`security-events: read`)가 `GITHUB_TOKEN`으로 경고를 읽도록 했다. 아티팩트는 평가 세션의 `gh`가 다른 호스트로의 리다이렉트를 막아 내려받지 못해, 수동 실행에서 `show_locations`를 켜 위치를 실행 로그로 받았다(실행 `37084391114`, `main` 기준). **합계 38건(high 17·medium 21)이 사용자 보고와 일치**하고 규칙별 건수는 아래와 같다. 경고의 줄 번호는 **`main`(`9933548`) 기준**이며 현재 브랜치와 `residual.py`·`pdf_parser.py`가 다르다(제품 코드 19개 파일이 `main`보다 앞섬). 아래 "현재 브랜치" 표기는 그 차이를 뜻한다.
 
-| 규칙(심각도, 보고된 합계) | 평가 측이 찾은 후보 | 판단 | 조치 |
-|---|---|---|---|
-| 워크플로 permissions 없음 (medium) | 작업(job) 6개: `ci.yml` 2(`test`·`docker-ocr`), `live-source-check.yml`·`official-sources.yml`·`run-verification.yml`·`score-gate.yml` 각 1. 이 워크플로들은 checkout·아티팩트 업로드만 하고 `git push`·PR·이슈 쓰기가 없다 | **실제 개선점**(기본 토큰 권한이 저장소 설정에 따라 넓어질 수 있음). 작업 단위 6개라 21건 중 6건에 해당할 가능성이 높다 | **제안(사용자 승인 대기):** 다섯 파일 최상단에 `permissions:\n  contents: read` 추가. 필수 확인(`ci.yml` test·`score-gate`)에 영향이 없는지 변경 후 실행으로 확인 |
-| 경로 표현식에 통제되지 않은 데이터 (high) | `packages/common/storage.py:92-96` 접두 문자열 비교(형제 디렉터리 `storage2` 통과를 재현). `apps/api/routers/viewer.py:203-204`의 임시 파일명은 업로드 시 `_safe_filename`이 구분자를 제거해 완화됨 | **결함 확인(방어 심층), 현재 호출 경로의 악용은 확인하지 못함** | [TK-35](TK-35_storage_path_prefix_check.md) |
-| 예외를 통한 정보 노출 (medium) | `access.py:369`, `calculations.py:101,164`, `jobs.py:67,80`, `verification.py:78,127` — 예외 문구를 응답에 실음(7곳). 구성 정보(환경변수 이름)를 싣는 것은 `access.py:369`뿐 | **일부 실제**(구성 정보), 나머지는 고정·입력 오류 문구 | [TK-36](TK-36_exception_text_in_responses.md) |
-| prototype 오염 대입 (medium) | `apps/web/static/admin.js:83,93` — `tabs[next]` 검증이 `__proto__`를 통과해 검색 입력이 `Object.prototype`에 대입함(논리 재현) | **결함 확인(낮음~중간)**, 영향은 확인하지 못함 | [TK-37](TK-37_client_key_validation_prototype.md) |
-| 비효율 정규식 (high) | Python 863개 점검: **지수 증가 0건**, 이차 이상 33건(`scripts/probe_regex_complexity.py`). JS 후보: `calculation-workbench.js:15`(이차 증가) | 경고가 가리키는 정규식 **미특정**. 다항 증가는 견고성 사항 | [TK-38](TK-38_regex_polynomial_growth.md) |
-| URL 부분 문자열 검사 불완전 (high) | `packages/forensic_engine/residual.py:100` — `"schemas.openxmlformats.org" in xml_lower` 등. 보안 경계가 아니라 Office 보일러플레이트 XML 분류. `local_mirror.py:34-43`은 호스트가 아닌 조각 포함 검사이며 로컬 미러 등록용 | **오탐 후보**(보안 검사가 아님). `local_mirror`의 "공식" 판정이 호스트를 확인하지 않는 점은 정확성 사항이며 보안 경계는 아님 | 사용자가 GitHub에서 경고별로 "오탐" 처리 여부를 정한다(아래 결정 사항). 위치를 못 읽어 개별 처리는 하지 않음 |
-| 평문 로깅 (high) | `apps/api/identity.py:629` — 관리자 부트스트랩 CLI가 1일 토큰을 **한 번 출력**(운영자가 터미널에서 받는 것이 이 명령의 목적). `scripts/check_hardcoding_diff.py:248-254`는 코드 낱말(`item['token']`)을 출력할 뿐 비밀이 아님 | **의도된 동작/오탐 후보.** 운영 메모: 이 명령은 컨테이너 로그가 수집되는 환경에서 실행하면 토큰이 로그에 남을 수 있다 | 사용자가 경고별 "수정 안 함" 또는 "오탐"과 사유를 정한다. 운영 절차(로그 수집 밖 실행) 문서화는 구현 측 몫 |
-| DOM 텍스트의 HTML 재해석 (high) | 앱 JS·`index.html`에서 `innerHTML`·`insertAdjacentHTML`·`document.write`·`DOMParser`·`srcdoc`·`eval`을 **찾지 못함**. 벤더 `lucide.min.js`의 `outerHTML`은 `console.warn` 문자열 안에서만 쓰임(대입 아님) | **원인 미특정.** 이 규칙은 경고 위치가 필요하다 | 경고 파일·줄을 받으면 재분류 |
+| 규칙(심각도) | 건수 | 위치(`main` 기준) | 판단 | 조치 |
+|---|---|---|---|---|
+| 워크플로 permissions 없음 (medium) | 6 | `ci.yml:15,86`, `live-source-check.yml:28`, `official-sources.yml:12`, `run-verification.yml:50`, `score-gate.yml:18` | **실제 개선점 — 조치 완료**(7절). `main`에 반영되고 CodeQL이 다시 돌아야 경고가 닫힌다 | 완료(`a5e89ae`) |
+| 프로토타입 오염 대입 (medium) | 13 | `admin.js` 83×2·93×2·104×2·194·208×4·241×2 | **결함 확인** — 전부 `pref.* = …`(`pref = preferences[tab]`)이며 `tab`이 URL 해시에서 온다(`#admin/__proto__` 통과를 논리 재현) | [TK-37](TK-37_client_key_validation_prototype.md) |
+| 경로 표현식 (high) | 10 | `storage.py:93,102,105,106,108,127`(6) · `storage.py:68,77`·`project_purge.py:67,68`(4) | 앞 6건은 `_abs` 접두 문자열 비교(형제 디렉터리 통과 재현, **결함 확인**). 뒤 4건은 `PROJECT_ID_RE`(허용 문자 `[A-Za-z0-9_-]`)가 이미 막고 있어 **영향 없음**이나 `match`+`$`는 끝 줄바꿈을 허용하므로 `fullmatch`가 맞다 | [TK-35](TK-35_storage_path_prefix_check.md) |
+| 비효율 정규식 (high) | 2 | `pdf_parser.py:1297`(`main`; 현재 브랜치 1309-1311 `SINGLE_GLYPH_SHOW_RE`) · `korean_amount.py:65` | **`pdf_parser`는 실제 지수 증가 + 업로드 PDF로 도달 가능**(위치 지정 14회 105바이트 창이 20초 초과로 중단). `korean_amount`는 정규식 자체는 지수지만 호출부가 한글 금액 글자만 넘겨(`원`·`정` 불포함) **현재 도달 불가** | [TK-38](TK-38_regex_polynomial_growth.md) — **우선순위 높음** |
+| 예외를 통한 정보 노출 (medium) | 2 | `access.py:369` · `main.py:264` | `access.py:369`: 키 설정 오류 문구(환경변수 이름)를 503 본문에 실음 — **구성 정보 노출**. `main.py:264`: **관리자 전용** 진단 응답에 `capabilities.py:125-127`의 `클래스명: 예외 문구`가 실림 — 낮음 | [TK-36](TK-36_exception_text_in_responses.md) |
+| DOM 텍스트의 HTML 재해석 (high) | 1 | `admin.js:108` | `location.href = "/api/admin/users/export.csv?year=" + year + …` — 고정 접두어라 스킴을 바꿀 수 없다(**오탐 성격**). `year`는 `<input type=month>` 값이며 숫자 검증이 없어 `Number(year)`로 줄이는 것이 맞다(경미) | TK-37에 함께 기록 |
+| URL 부분 문자열 검사 불완전 (high) | 2 | `residual.py:100`(2건, 같은 줄) | Office 보일러플레이트 XML 분류용 `"schemas.openxmlformats.org" in xml_lower`. **보안 검사가 아님 → 오탐** | 사용자가 GitHub에서 "오탐" 처리(아래 결정 사항) |
+| 평문 로깅 (high) | 1 | `identity.py:629` | 관리자 부트스트랩 CLI가 1일 토큰을 한 번 출력 — 이 명령의 목적. **의도된 동작 후보.** 운영 메모: 컨테이너 로그 수집 환경에서 실행하면 토큰이 로그에 남는다 | 사용자가 "수정 안 함" 처리 + 운영 절차 문서화는 구현 측 |
+| 평문 저장 (high) | 1 | `routers/identity.py:92` | 세션 쿠키 설정(`HttpOnly`·`SameSite=lax`·`Secure`는 HTTPS 또는 신뢰 프록시 `X-Forwarded-Proto: https`일 때, `access.py:234-240`). 쿠키가 세션 비밀을 담는 것은 설계. **의도된 동작 후보.** 운영 메모: HTTP로 배포하면 `Secure`가 붙지 않으므로 TLS 종단 뒤에서는 `LV_TRUSTED_PROXY_IPS` 설정이 필요 | 사용자가 "수정 안 함" 처리 |
 
-합계: 위 표로 건수에 맞출 수 있는 것은 워크플로 6건뿐이다(작업 단위가 6개인 근거). 나머지는 후보일 뿐 38건 전부를 설명했다고 주장하지 않는다.
+**의존성 취약점(pip-audit, 2026-10-03):** `requirements-test.txt`를 해석해 **82개 패키지에서 취약점 0개**(종료 코드 0, 같은 날 두 번 실행). Dependabot "No open alerts"와 일치한다. 도구는 PyPI 권고 DB 기준이며 Docker 베이스 이미지·OS 패키지는 보지 않는다.
 
-**경고 위치를 받는 방법(사용자 승인 필요):** (B) 읽기 전용 점검 워크플로를 평가 측이 추가한다 — `GITHUB_TOKEN`에 `security-events: read`를 주어 코드 스캔 경고(규칙·파일·줄·심각도)를 아티팩트로 내보내고, 제가 Actions 읽기로 가져온다. Dependabot 경고는 `GITHUB_TOKEN`으로 읽을 수 없어 `pip-audit` 단계를 둔다. 새 워크플로 파일 추가이므로 승인 후에만 만든다. (A') 대안: 사용자가 Security → Code scanning에서 규칙별 건수와 각 경고의 파일·줄을 알려 준다(38건이면 표 한 장 분량).
+## 7. 조치 기록(사용자 결정 2026-10-03 '추천대로')
+| 조치 | 결과 |
+|---|---|
+| 워크플로 5개에 `permissions: contents: read` 추가 | `a5e89ae`. 적용 뒤 `점수 게이트` 실행 **성공**(`37083839425`). 같은 커밋에서 `CI`를 수동 실행한 결과 **두 작업 모두 성공**(`37083845753`: `테스트 (SQLite + PostgreSQL/pgvector + Redis)`·`Docker OCR readiness`). `live-source-check`·`official-sources`·`run-verification`은 비밀·외부 호출을 쓰고 커밋 표식이나 수동 실행으로만 돌기 때문에 **실행으로 확인하지 않았다**(`actionlint` 정적 검사만 통과) |
+| 읽기 전용 점검 워크플로 `보안 경고 내보내기` 추가 | 게이트 아님·필수 확인 아님. 토큰 권한 `contents: read`+`security-events: read`. 수동 실행·주 1회·파일 변경 시 동작 |
+| 정규식 복잡도 측정 도구 보강 | `scripts/probe_regex_complexity.py`가 첫 판에서 바이트열 정규식을 건너뛰고 대안 반복 입력이 없어 CodeQL이 가리킨 두 곳을 놓쳤다. 두 가지를 보강했다(TK-38에 수치) |
+| GitHub 경고 처리(오탐/수정 안 함) | **사용자 몫** — 오탐 후보 4건(`residual.py:100`×2, `identity.py:629`, `routers/identity.py:92`)을 위 사유와 함께 GitHub Security → Code scanning에서 처리 |

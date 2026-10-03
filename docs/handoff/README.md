@@ -39,10 +39,10 @@
 | [TK-32](TK-32_civil_cluster_false_positive_and_names.md) | 오탐 + 설정 정확성 | 민법 군집 확장으로 요건을 제시한 정상 항변을 과대주장으로 표시, 설정의 장 이름 오류(사무관리·부당이득·불법행위) | `test_round5_regressions.py` | 열림 |
 | [TK-33](TK-33_evaluation_marker_and_report_accuracy.md) | 절차·하드코딩 | 문단 복원기에 평가 자료 표식 분기(`HO-\d+\|TC-\d+\|홀드아웃용…`), 완료 보고의 비교 기준·성공 단계만 적은 CI 결과·"10건 전수 해소" 오기 | `check_hardcoding_diff.py`의 `eval_marker` | 열림 |
 | [TK-34](TK-34_item_level_temporal_review.md) | 탐지 공백(새 탐지) | 행위시법 검토가 조 단위 버전만 비교해 목 단위 신설·이동(제2조 제1호 카목: 성과 도용→데이터 부정사용)을 못 봄. **6차 범위 밖** | strict xfail XPASS + 오탐 대조 유지 | 열림(6차 검증 뒤 착수, 시험 고정됨) |
-| [TK-35](TK-35_storage_path_prefix_check.md) | 보안(방어 심층) | `LocalObjectStorage._abs`가 경로를 접두 문자열로 비교해 형제 디렉터리(`storage2`)를 통과시킴(재현). 현재 호출 경로의 악용은 확인하지 못함. CodeQL 경로 경고 후보. **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(사용자 결정 대기) |
-| [TK-36](TK-36_exception_text_in_responses.md) | 보안(정보 노출) | 키 설정 오류 예외 문구(환경변수 이름 포함)가 인증 미들웨어 응답에 그대로 실림 외 6곳의 `str(exc)`. CodeQL 예외 노출 경고 후보. **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(사용자 결정 대기) |
-| [TK-37](TK-37_client_key_validation_prototype.md) | 보안(클라이언트) | 관리자 화면 `tabs[next]` 검증이 `__proto__`를 통과해 검색 입력이 `Object.prototype`에 대입(논리 재현). CodeQL prototype 경고 후보. **6차 범위 밖** | 착수 시 브라우저 시험 | 열림(사용자 결정 대기) |
-| [TK-38](TK-38_regex_polynomial_growth.md) | 견고성 | 정규식 863개 중 지수 증가 0건, 이차 이상 33건(`scripts/probe_regex_complexity.py`). 호출부 도달 가능성 미확인. **6차 범위 밖** | 착수 시 시간 예산 시험 | 열림(사용자 결정 대기) |
+| [TK-35](TK-35_storage_path_prefix_check.md) | 보안(방어 심층) | CodeQL 경로 경고 10건: `_abs`가 경로를 접두 문자열로 비교해 형제 디렉터리(`storage2`)를 통과시킴(6건, 재현·현재 호출 경로 악용은 확인 못 함) + 허용 문자 검사가 막는 4건(`match`+`$`는 끝 줄바꿈 허용 → `fullmatch`). **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
+| [TK-36](TK-36_exception_text_in_responses.md) | 보안(정보 노출) | CodeQL 2건: `access.py:369`가 키 설정 오류 문구(환경변수 이름)를 503 본문에 실음, `main.py:264`는 관리자 전용 진단. **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
+| [TK-37](TK-37_client_key_validation_prototype.md) | 보안(클라이언트) | CodeQL 14건(prototype 13 + DOM 1): 관리자 화면 `tabs[next]` 검증이 `#admin/__proto__`를 통과해 `pref.*` 대입이 `Object.prototype`을 오염(논리 재현). **6차 범위 밖** | 착수 시 브라우저 시험 | 열림(6차 직후 보안 보강) |
+| [TK-38](TK-38_regex_polynomial_growth.md) | 보안·견고성(**우선순위 높음**) | CodeQL `py/redos` 2건: **`pdf_parser.py` `SINGLE_GLYPH_SHOW_RE`가 지수 증가 — 조작된 PDF의 105바이트가 처리를 20초 이상 멈춤(재현)**, `korean_amount.py:65`는 지수지만 현재 호출 경로로 도달 불가 + 이차 증가 정규식 다수. **6차 범위 밖** | 착수 시 strict xfail(n=14·18·24가 1초 안에 끝날 것) | 열림(앞당길지 사용자 결정 대기) |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md)
 
@@ -86,12 +86,12 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · **회귀 보완(6차) 검증 뒤 순차** · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
 | 프로그램 버전 | 성능 기준으로만 상향(정수 급격·첫째 자리 일부·둘째 자리 미세), 커밋마다 올리지 않음 | [VERSION_POLICY](../scorecards/VERSION_POLICY.md), `scripts/check_version_policy.py` |
 | 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
-| Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가**(2026-10-03 현재 1회: CI run 263) | 평가 측이 `CI` 실행마다 이 job 결과를 세어 3회째에 사용자에게 요청 |
+| Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가**(2026-10-03 현재 **2회**: CI run 263, 수동 실행 37083845753) | 평가 측이 `CI` 실행마다 이 job 결과를 세어 3회째에 사용자에게 요청 |
 | 준비서면 534210 문제지(2026-10-03) | 문제지 없음 — **카목 단계는 현재 정정 상태 유지**(문제지가 생기면 그때 대조) | [TK-12](TK-12_ci_red_gitignored_mirror_data.md), [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 6차 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
-| 코드 스캔 경고 분류(2026-10-03) | 38건 중 6건(워크플로 permissions 없음)만 건수에 맞춤. 실제 결함 3종(TK-35·36·37)과 견고성 1종(TK-38)은 티켓화, URL 부분 문자열·평문 로깅은 오탐/의도 후보, DOM 재해석은 원인 미특정 | [GITHUB_ACCESS 6절](GITHUB_ACCESS.md) |
-| 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 |
+| 코드 스캔 경고 분류(2026-10-03) | 읽기 전용 워크플로로 **38건 전부의 위치를 수집해 합계 일치 확인**. 실제 결함 TK-35·36·37·38 티켓화, 워크플로 permissions 6건은 조치 완료, 오탐/의도 후보 4건(URL 부분 문자열 2·평문 로깅 1·세션 쿠키 1)은 사용자가 GitHub에서 처리 | [GITHUB_ACCESS 6절](GITHUB_ACCESS.md) |
+| 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`·`b28582a`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 — **단 경고 위치 수집 뒤 TK-38이 조작 PDF로 처리를 멈출 수 있는 실제 위험으로 확인되어 앞당길지 별도 결정을 받는다** |
 
 ## 아직 사용자가 정할 것
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
@@ -99,3 +99,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **CI를 `main`의 필수 확인에 추가: 완료·확인됨(2026-10-03).** 사용자가 설정했고 평가 측이 `GET branches/main`으로 필수 확인 2개(`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`)를 읽어 확인했다(적용 수준 `non_admins` 유지). Docker OCR readiness 추가 여부(연속 초록 확인 뒤)는 별도 결정.
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
 - 보안 점검 후속: 결정 완료(2026-10-03 '추천대로') — 위 결정 표 참조. 남은 사용자 조치는 **GitHub 경고 처리**(URL 부분 문자열·평문 로깅의 오탐/수정 안 함)뿐이며, 경고 위치를 확인한 뒤 사용자가 GitHub에서 한다.
+- **TK-38 A(PDF 정규식 지수 증가)를 6차 직후 보안 보강보다 앞당길지:** 위 ④ 결정 이후에 확인된 사실이다(조작된 PDF 한 건이 워커를 멈출 수 있음). 추천: **보안 보강 라운드 첫 항목으로 두되, 6차 구현이 `pdf_parser.py`를 건드리는 중이라면 6차 검증 뒤에 처리**(같은 파일 충돌 방지). 앞당기려면 6차와 별도 작은 지시서가 필요하다.
