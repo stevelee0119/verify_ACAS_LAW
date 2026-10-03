@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: ["main", "claude/**", "codex/**"]
+    # 모든 브랜치의 푸시에서 전체 시험을 돈다(6차 독립 감사: 구현 브랜치 푸시에는 `점수 게이트`만 돌아 기존 시험의 새 실패가 가려졌다).
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
 

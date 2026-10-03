@@ -12,7 +12,9 @@
 """
 from __future__ import annotations
 
+import importlib.util
 import json
+import shutil
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -24,6 +26,10 @@ from packages.legal_engine.temporal_review import paragraph_text, review_tempora
 from packages.source_adapters.local_mirror import LocalLegalMirror
 
 ROOT = Path(__file__).resolve().parents[1] / "fixtures" / "prepared_brief_mirror"
+_PIN_SPEC = importlib.util.spec_from_file_location(
+    "pin_mirror_integrity", Path(__file__).resolve().parents[2] / "scripts" / "pin_mirror_integrity.py")
+pin = importlib.util.module_from_spec(_PIN_SPEC)
+_PIN_SPEC.loader.exec_module(pin)
 LAW = "부정경쟁방지 및 영업비밀보호에 관한 법률"
 ACTION_DATE = "2020-05-12"
 REQUIRED = ("law_name", "article", "text", "effective_from", "effective_to", "promulgation_date",
@@ -175,3 +181,38 @@ def test_new_data_ka_cited_for_2020_act_is_flagged():
         citation, _mirror().all_versions(LAW, "2"), {"date": ACTION_DATE, "basis": "FACT_DATE"})
     assert finding is not None
     assert finding.severity == Severity.HIGH and "RETROACTIVE_APPLICATION_ERROR" in finding.tags
+
+
+# --------------------------------------------------------------------------- 자료 무결성(6차 독립 감사 반영) ---
+def test_fixture_entries_match_the_pinned_integrity_hashes():
+    """항목 전체(판시 본문·공식 링크 번호·조문 본문 포함)가 `integrity.json` 기록과 같다. 정당한 사유로 고칠 때는
+    `scripts/pin_mirror_integrity.py`로 기록을 다시 만들고 SOURCES.md에 사유·출처를 적는다(둘 다 보호 경로)."""
+    assert pin.problems(ROOT) == []
+
+
+def _mutate_case(root: Path, field: str, value: str) -> None:
+    path = root / "cases.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    rows[0][field] = value if field != "holding" else rows[0][field] + value
+    path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+
+
+def _mutate_law_body(root: Path) -> None:
+    path = root / "laws.json"
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    rows[0]["text"] = rows[0]["text"] + "\n⑲ 변조로 덧붙인 무관한 문장이다."
+    path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+
+
+@pytest.mark.parametrize("label, mutate", [
+    ("판시 본문 변조", lambda root: _mutate_case(root, "holding", " 변조된 문장")),
+    ("공식 링크 문서 번호 변조", lambda root: _mutate_case(root, "detail_link", "https://www.law.go.kr/LSW/precInfoP.do?precSeq=1")),
+    ("조문 본문에 무관한 문장 덧붙임", _mutate_law_body),
+])
+def test_integrity_check_catches_tampering(tmp_path, label, mutate):
+    """무결성 검사 자체의 점검: 6차 감사에서 기존 시험이 놓친 세 가지 변조를 이 검사가 잡는다."""
+    copy = tmp_path / "mirror"
+    shutil.copytree(ROOT, copy)
+    assert pin.problems(copy) == []
+    mutate(copy)
+    assert pin.problems(copy), f"{label}을(를) 잡지 못했다"

@@ -38,7 +38,8 @@ def _probe():
 
 
 probe = _probe()
-TOKEN = re.compile(r"\[[A-Z_]+_\d+\]")
+TOKEN = re.compile(r"\[[A-Z_]+_\d+\]")              # 모든 종류의 가림 토큰
+PERSON_TOKEN = re.compile(r"\[PERSON_\d+\]")        # 이름 자리에는 PERSON 토큰만 인정한다(6차 감사 지적: 전화번호 토큰이 이름 자리에 있어도 통과했다)
 OPEN30 = pytest.mark.xfail(strict=True, reason="TK-30: 4차(e6b58fd)에서 마스킹되던 이름이 5차에서 남거나 마지막 글자가 남음(c223f7b)")
 OPEN28 = pytest.mark.xfail(strict=True, reason="TK-28: 4차(e6b58fd)에도 같은 미탐·부분 마스킹(기존 미해결, 평가 측 비공개 변형 4에서 확인 c223f7b)")
 OPEN31 = pytest.mark.xfail(strict=True, reason="TK-31: 5차 문단 복원이 어절 중간에 공백을 넣어 판례 메타데이터를 잃음(c223f7b)")
@@ -51,8 +52,8 @@ def _engine():
 
 
 def _clean(text: str) -> str:
-    """토큰은 T로, 공백과 구분 기호는 지운다."""
-    return re.sub(r"[\s:：/\-]", "", TOKEN.sub("T", text))
+    """PERSON 토큰은 T로, 다른 종류의 토큰은 X로 바꾸고 공백과 구분 기호는 지운다(이름 자리에 다른 종류 토큰이 있으면 기대와 달라진다)."""
+    return re.sub(r"[\s:：/\-]", "", TOKEN.sub("X", PERSON_TOKEN.sub("T", text)))
 
 
 def fully_masked(label_format: str, name: str) -> bool:
@@ -85,7 +86,7 @@ def test_name_is_fully_masked_with_no_remaining_characters(name, label_format):
 
 
 def _person_flagged(text: str) -> bool:
-    return bool(TOKEN.search(_engine().mask_text(text).masked_text))
+    return bool(PERSON_TOKEN.search(_engine().mask_text(text).masked_text))
 
 
 @pytest.mark.parametrize("text", [
@@ -151,3 +152,23 @@ def _flagged(text: str) -> bool:
     pytest.param(t, id=i, marks=[OPEN32] if o else []) for i, t, o in NORMAL_DEFENSES])
 def test_defense_with_stated_requirements_and_a_limited_conclusion_is_not_flagged(text):
     assert _flagged(text) is False
+
+
+# ----------------------------------------------------------------------------- 평가 도구 자체 점검(6차 감사 반영) ---
+class _StubEngine:
+    def __init__(self, masked_text: str):
+        self._masked = masked_text
+
+    def mask_text(self, _line: str):
+        return type("Masked", (), {"masked_text": self._masked})()
+
+
+@pytest.mark.parametrize("masked, expected", [
+    ("성명: [PERSON_001]\n다음과 같이 주장한다.", True),        # 이름 전체가 PERSON 토큰
+    ("성명: [PHONE_001]\n다음과 같이 주장한다.", False),        # 이름 자리에 다른 종류 토큰: 이름이 가려진 것이 아니다
+    ("성명: [PERSON_001]기\n다음과 같이 주장한다.", False),     # 마지막 글자가 남음
+    ("성명: 김민기\n다음과 같이 주장한다.", False),             # 마스킹되지 않음
+])
+def test_fully_masked_oracle_only_accepts_a_person_token_in_the_name_slot(monkeypatch, masked, expected):
+    monkeypatch.setattr(sys.modules[__name__], "_engine", lambda: _StubEngine(masked))
+    assert fully_masked("성명: {n}", "김민기") is expected
