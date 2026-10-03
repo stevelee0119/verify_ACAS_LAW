@@ -5,6 +5,7 @@
 /scripts/eval_testset.py              @stevelee0119
 /scripts/scorecard.py                 @stevelee0119
 /scripts/score_gate.py                @stevelee0119
+/scripts/verify_all.py                @stevelee0119
 /scripts/probe_document.py            @stevelee0119
 /scripts/score_report.py             @stevelee0119
 /scripts/check_case_literals.py       @stevelee0119
