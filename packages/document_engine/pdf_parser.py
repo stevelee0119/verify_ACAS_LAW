@@ -1306,8 +1306,9 @@ def _pdf_literal(body: bytes) -> str:
     return data.decode("latin-1", "ignore")
 
 
+# 보안(TK-38 A): 위치 지정 연산자 반복의 공백 중첩 한정자를 선형화하여 ReDoS 방지
 SINGLE_GLYPH_SHOW_RE = re.compile(
-    rb"^\s*(?:/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf\s*)?(?:[-\d.\s]+(?:Tm|Td|TD)\s*)*"
+    rb"^\s*(?:/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf\s*)?(?:[-\d.]+(?:\s+[-\d.]+)*\s+(?:Tm|Td|TD)\s*)*"
     rb"(?:<(?P<hex>[0-9A-Fa-f]{2,4})>|\((?P<lit>(?:\\.|[^\\)]))\))\s*Tj\s*EMC")
 FONT_SET_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf")
 GLYPH_SHOW_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf|<(?P<hex>[0-9A-Fa-f]{2,4})>\s*Tj")

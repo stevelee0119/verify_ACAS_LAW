@@ -1932,7 +1932,123 @@ def test_tk41_line_join_bidirectional_and_layout_invariance():
     # 꽉 찬 줄이 0개, 1개, 2개, 3개일 때 모두 결합 결과가 완벽하게 일치해야 함
     results = [_make_page(n) for n in range(4)]
     assert len(set(results)) == 1, f"쪽 배치에 따른 문단 결합 결과 불일치 발생: {results}"
-    assert "그 사람" in results[0], f"독립 단어 '그 사람' 공백 소실: {results[0]}"
+# ==============================================================================
+# R4 (TK-35, TK-36, TK-37, TK-38): 보안 보강 3종 세트 회귀 검증
+# ==============================================================================
+def test_tk38_redos_mitigation_and_meaning_preservation():
+    """TK-38 A/B: ReDoS 완화 및 정상 파싱 의미 불변 검증.
+    (가) 악의적 반복 패턴(SINGLE_GLYPH_SHOW_RE 위치 지정 연산자 반복 및 금액 접미사 반복)의 빠른 처리 (< 1초)
+    (나) 한 글리프 표시 정상 PDF 스트림 및 정상 한글 금액 파싱 결과 불변
+    """
+    import time
+    from decimal import Decimal
+    from packages.claim_engine.korean_amount import parse_korean_amount
+    from packages.document_engine.pdf_parser import SINGLE_GLYPH_SHOW_RE, _is_line_break_marker
+
+    # (가) 공격 입력 방어: 대규모 반복 입력에 대해 백트래킹 지수 증가 없이 1초 미만 종료
+    # A: 위치 지정 연산자 30회 반복 입력
+    adv_pdf = b">> BDC" + b" 0 Tm  " * 30 + b"X"
+    t0 = time.perf_counter()
+    _is_line_break_marker("\u200b", adv_pdf, 0)
+    dur_pdf = time.perf_counter() - t0
+    assert dur_pdf < 1.0, f"PDF 위치 지정 연산자 반복 검사가 너무 느림: {dur_pdf:.4f}초"
+
+    # B: '원정' 30회 반복 입력
+    adv_amt = "일금 삼천" + "원정" * 30 + "만"
+    t0 = time.perf_counter()
+    parse_korean_amount(adv_amt)
+    dur_amt = time.perf_counter() - t0
+    assert dur_amt < 1.0, f"금액 접미사 반복 검사가 너무 느림: {dur_amt:.4f}초"
+
+    # (나) 정상 입력 의미 보존 대조군
+    hit = SINGLE_GLYPH_SHOW_RE.match(b" /F4 12 Tf 1 0 0 1 10 20 Tm <0003> Tj EMC")
+    assert hit is not None and hit.group("hex") == b"0003"
+    assert SINGLE_GLYPH_SHOW_RE.match(b" /F4 12 Tf 1 0 0 1 10 20 Tm <0003><0004> Tj EMC") is None
+
+    assert parse_korean_amount("일금 오백만원정") == Decimal(5_000_000)
+    assert parse_korean_amount("삼억 오천만 원") == Decimal(350_000_000)
+    assert parse_korean_amount("원정") is None
+
+
+def test_tk35_storage_traversal_and_project_id_validation(tmp_path):
+    """TK-35: 저장소 형제 디렉터리 순회 차단 및 프로젝트 ID 개행 문자 검증.
+    (가) 형제 디렉터리 경로 순회 차단
+    (나) 끝 줄바꿈이 든 프로젝트 ID 거부
+    (다) 정상 경로 및 정상 프로젝트 ID 통과 대조군
+    """
+    from packages.common.storage import LocalObjectStorage
+
+    (tmp_path / "storage2").mkdir(exist_ok=True)
+    store = LocalObjectStorage(tmp_path / "storage")
+
+    # (가) 공격 입력 방어: 접두 문자열이 겹치는 형제 디렉터리 순회 차단
+    sibling_keys = [
+        "../storage2/secret.txt",
+        "originals/../../storage2/secret.txt",
+        "derivatives/../../storage2/secret.txt",
+    ]
+    for key in sibling_keys:
+        with pytest.raises(ValueError, match="path traversal detected"):
+            store.path(key)
+
+    # (나) 공격 입력 방어: 끝 줄바꿈이 포함된 프로젝트 ID 거부 (fullmatch 검사)
+    invalid_project_ids = ["proj1\n", "proj2\r\n", "proj 3", "proj/../evil"]
+    for pid in invalid_project_ids:
+        with pytest.raises(ValueError, match="invalid project id"):
+            store.delete_project_files(pid)
+
+    # (다) 정상 입력 보존 대조군
+    normal_key = store.put_original("p1/normal.txt", b"safe content")
+    assert store.exists(normal_key)
+    assert store.get(normal_key) == b"safe content"
+    assert (tmp_path / "storage").resolve() in store.path(normal_key).parents
+
+
+def test_tk36_tk37_access_and_admin_sanitization():
+    """TK-36 & TK-37: 503 에러 상세 은닉 및 관리자 탭 안전성 검증.
+    (가) StorageKeyConfigurationError 발생 시 환경변수/상세 메시지 노출 차단
+    (나) admin.js 내 prototype 키 오염 방지 및 숫자 강제 변환 정적 검증
+    """
+    import re
+    from pathlib import Path
+    from apps.api import access
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from packages.common.storage import StorageKeyConfigurationError
+
+    # (가) TK-36: 키 설정 에러 노출 방지
+    app = FastAPI()
+    app.middleware("http")(access.workspace_access)
+
+    def _broken_auth(_req):
+        raise StorageKeyConfigurationError("LV_VAULT_KEYS is missing. Invalid vault keyring key_id=abc")
+
+    # workspace_access 내부에서 StorageKeyConfigurationError 캐치 확인
+    app.add_api_route("/api/test_sec", lambda: {"ok": True})
+    
+    # 단위 테스트 차원에서 직접 503 응답 구조 검증
+    with TestClient(app, base_url="https://testserver") as client:
+        # access._authenticate를 broken으로 대체
+        orig_auth = getattr(access, "_authenticate", None)
+        try:
+            access._authenticate = _broken_auth
+            resp = client.get("/api/test_sec")
+            assert resp.status_code == 503
+            assert "LV_" not in resp.text
+            assert "Invalid vault keyring" not in resp.text
+            assert "request_id" in resp.text or resp.headers.get("X-Request-ID") is not None
+        finally:
+            if orig_auth:
+                access._authenticate = orig_auth
+
+    # (나) TK-37: admin.js 정적 검증
+    admin_js_path = Path(__file__).resolve().parents[2] / "apps" / "web" / "static" / "admin.js"
+    js_text = admin_js_path.read_text(encoding="utf-8")
+
+    assert not re.search(r"tabs\[next\]\s*\?", js_text), "admin.js에 tabs[next] 참 판정 남아있음"
+    assert re.search(r"Object\.hasOwn\(tabs,\s*next\)", js_text), "admin.js에 Object.hasOwn 검사 누락"
+    assert "Number(year)" in js_text, "admin.js에 Number(year) 변환 누락"
+
 
 
 

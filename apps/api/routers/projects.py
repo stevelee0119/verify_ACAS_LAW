@@ -248,7 +248,8 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
             session.rollback()
             if not is_retryable(exc):
                 raise
-            logger.warning("project_purge_retry project=%s attempt=%s error=%s",
+            # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
+            logger.warning("project_purge_retry project=%r attempt=%s error=%s",
                            project_id, attempt + 1, error_label(exc))
             if attempt + 1 == PURGE_ATTEMPTS:
                 raise HTTPException(409, {
