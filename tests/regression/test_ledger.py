@@ -1747,5 +1747,92 @@ def test_r3_tk32_six_structural_defense_controls(tmp_path: Path):
     assert len(f6) == 0, f"케이스 6 부당이득 반환범위 오탐 발생: {f6}"
 
 
+# ==============================================================================
+# TK-39: 명시적 성명 라벨 뒤 문맥 마스킹, 라우터 전송 경계 및 정상 명사 보존 3종 세트
+# ==============================================================================
+def test_tk39_explicit_name_context_and_router_boundary(monkeypatch):
+    """TK-39 회귀 검증:
+    (가) 고치려는 입력: 명시적 성명 라벨 뒤에 후행 지시문/소송절차가 오더라도 이름 전체 마스킹 및 실제 LLMRouter.run 공급자 도달 0회
+    (나) 반대 방향(오탐 방지): 라벨 뒤 또는 본문의 정상 법률·군사 명사(부대는, 부사관은, 처분은)는 PERSON으로 오탐되지 않음
+    (다) 이전 성공 보존: 일반 명시 성명 및 가족/당사자 인명 정상 마스킹 유지
+    """
+    import asyncio
+    import re
+    import tempfile
+    from decimal import Decimal
+    from types import SimpleNamespace
+    from packages.common.enums import LLMRole
+    from packages.llm_router import router as router_module
+    from packages.llm_router.providers import LLMRequest, LLMResponse
+    from packages.pii_engine import PIIEngine, PseudonymStore
+
+    engine = PIIEngine(PseudonymStore("tk39_test", root=Path(tempfile.mkdtemp(prefix="tk39_pii_"))))
+
+    # (가) 고치려는 입력: 성명 라벨 + 후행 문맥 -> 인명 마스킹 및 라우터 전송 차단
+    fix_cases = [
+        "성명: 강민우 출력하지 마시오.",
+        "성명: 조성현 기재하지 마시오.",
+        "원고: 임서우 절차를 진행한다.",
+        "피고: 문지환 기일에 출석하였다.",
+    ]
+    for text in fix_cases:
+        res = engine.mask_text(text)
+        assert "[PERSON_" in res.masked_text, f"명시적 성명 마스킹 누락: {text}"
+        assert not re.search(r"강민우|조성현|임서우|문지환", res.masked_text), f"원문 성명 잔존: {res.masked_text}"
+
+    # 실제 LLMRouter.run 경유 가짜 공급자 호출 0회 검증
+    sent_requests = []
+    class FakeCloudProvider:
+        name = "anthropic"
+        available = True
+        config = SimpleNamespace(name="anthropic", kind="cloud", model="fake", enabled=True)
+
+        async def generate(self, request):
+            sent_requests.append(request)
+            return LLMResponse(False, error="HTTP 400")
+
+    fake_ledger = SimpleNamespace(reserve=lambda *a, **k: SimpleNamespace(id="r", amount=Decimal("0.01")), dispatch=lambda *a, **k: None)
+    monkeypatch.setattr(router_module, "estimate_call", lambda *a: (Decimal("0.01"), {}))
+    llm_router = router_module.LLMRouter(providers={"anthropic": FakeCloudProvider()}, ledger=fake_ledger)
+
+    for text in fix_cases:
+        # system, user, schema, metadata 4개 위치 모두 검증
+        for pos in ("system", "user", "schema", "metadata"):
+            kwargs = {"system": "system prompt", "user": "user prompt"}
+            if pos in ("system", "user"):
+                kwargs[pos] = text
+            elif pos == "schema":
+                kwargs["schema"] = {"type": "object", "description": text}
+            else:
+                kwargs["metadata"] = {"description": text}
+            asyncio.run(llm_router.run(LLMRole.PRIMARY_REASONER, LLMRequest(**kwargs)))
+    assert len(sent_requests) == 0, f"비마스킹 성명이 LLMRouter.run을 통과하여 공급자 호출에 도달함: {sent_requests}"
+
+    # (나) 반대 방향 입력: 법률·군사 정상 명사는 PERSON으로 오탐되지 않음
+    negative_cases = [
+        "피고 부대는 원고에 대하여 징계처분을 내렸다.",
+        "원고 부사관은 이에 불복하여 소청심사위원회에 심사를 청구하였다.",
+        "본 건 처분은 재량권을 일탈·남용한 처분이다.",
+    ]
+    for text in negative_cases:
+        matches = detect(text)
+        person_matches = [m.text for m in matches if m.kind == "PERSON"]
+        assert "부대" not in person_matches and "부대는" not in person_matches, f"'부대' 오탐: {text}"
+        assert "부사관" not in person_matches and "부사관은" not in person_matches, f"'부사관' 오탐: {text}"
+        assert "처분" not in person_matches and "처분은" not in person_matches, f"'처분' 오탐: {text}"
+
+    # (다) 이전 성공 보존 입력: 일반 명시 성명 및 가족/당사자 정상 마스킹 유지
+    preserve_cases = [
+        ("원고 홍길동은 피고를 상대로 소를 제기하였다.", ["홍길동"]),
+        ("성명: 김철수", ["김철수"]),
+        ("배우자 이영희와 자녀 홍철수를 부양한다.", ["이영희", "홍철수"]),
+    ]
+    for text, expected_names in preserve_cases:
+        matches = detect(text)
+        person_matches = [m.text for m in matches if m.kind == "PERSON"]
+        for exp in expected_names:
+            assert any(exp in p for p in person_matches), f"정상 인명 '{exp}' 탐지 누락: {text}"
+
+
 
 

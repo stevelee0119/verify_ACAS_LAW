@@ -161,14 +161,15 @@ LABELLED_PARTY_PERSON_RE = re.compile(
     rf"(?=[ \t\r\n)）\]］,.;:]|$)"
 )
 
-def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
-    """이름 후보의 구조적 유효성을 판단한다 (TK-28).
+def is_valid_korean_name_structure(raw_name: str, after_text: str = "", is_explicit_label: bool = False) -> bool:
+    """이름 후보의 구조적 유효성을 판단한다 (TK-28, TK-39).
     
     특정 낱말 목록에 의존하지 않고 이름 후보의 구조(음절 수, 성씨 체계, 문장 서술 여부)로 판단한다.
     1. 음절 수: 공백 제외 2~4음절 완성형 한글.
     2. 성씨 체계: 첫 2음절(복성) 또는 1음절(단성)이 한국 성씨 체계에 부합.
-    3. 문장 서술형 종결 어미 배제 ('~다', '~음', '~임', '~됨', '~기').
-    4. 후행 서술문 맥락 배제 ('판결을 구한다', '기재와 같다' 등).
+    3. 문장 서술형 종결 어미 배제 ('~다', '~음', '~임', '~됨', '~기') 및 복합 격조사 배제.
+    4. 명시적 라벨(is_explicit_label=True) 직후 후보는 후행 일반 문맥(지시문·소송문)으로 제외하지 않는다 (TK-39).
+       문맥 기반 제외는 라벨 없는 암묵 후보(is_explicit_label=False)에만 적용한다.
     """
     clean = re.sub(r"\s+", "", raw_name)
     if len(clean) < 2 or len(clean) > 4:
@@ -193,11 +194,14 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "") -> bool:
     if clean.startswith(("선임", "해임", "취임", "선출", "지명", "추천", "임명")):
         return False
 
-    # 후행 서술문 맥락 배제: 직책 뒤 선임/해임 안건 또는 소송 서술문, 침해/행사, 절차/기일/지시문
-    if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용|절차|기일|조서|진행)", after_text):
-        return False
-    if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다|출력하지|기재하지|마시오|하지\s*마|금지)", after_text):
-        return False
+    # 후행 서술문 맥락 배제 (TK-39):
+    # 명시적 라벨 직후 후보는 후행 문맥으로 제외하지 않는다 (성명: {이름} 출력하지 마시오 등).
+    # 문맥 기반 제외는 라벨이 없는 암묵 후보에만 적용한다.
+    if not is_explicit_label:
+        if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용|절차|기일|조서|진행)", after_text):
+            return False
+        if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다|출력하지|기재하지|마시오|하지\s*마|금지)", after_text):
+            return False
 
     return True
 
@@ -512,7 +516,7 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             continue
         matches.append(PIIMatch("BUSINESS_REGISTRATION", m.group(1), start, end, block_id, page, 1.0, "사업자등록번호 라벨 문맥"))
 
-    # 라벨 문맥 인명(PERSON) 통합 탐지: 당사자/직책/성명/변호사 라벨 × 공통 구분자 (TK-28)
+    # 라벨 문맥 인명(PERSON) 통합 탐지: 당사자/직책/성명/변호사 라벨 × 공통 구분자 (TK-28, TK-39)
     for m in LABELLED_PARTY_PERSON_RE.finditer(text):
         raw_name = m.group(1).strip()
         clean_name = re.sub(r"\s+", "", raw_name)
@@ -520,20 +524,27 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         if _covered_by_span(guard_spans, start, end):
             continue
 
-        # 긴 유효 이름 후보 우선 (TK-30): clean_name 자체가 이미 유효한 이름 구조를 만족하면
-        # 불확실하게 끝 글자를 조사로 오인하여 잘라내지 않는다 (예: '김하은', '류채은' 등).
+        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39):
+        # clean_name 자체 또는 조사를 분리한 stem이 법률·군사·서식 불용어인 경우 인명에서 제외한다.
+        # 예: '피고 부대는' -> stem '부대'는 군사 용어이므로 제외
+        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+        if josa_match:
+            stem = clean_name[:josa_match.start()]
+            if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
+
+        # 명시적 라벨 직후 후보는 후행 일반 문맥으로 탈락하지 않는다 (TK-39)
         after_text = text[end:end + 30]
-        full_is_valid = is_valid_korean_name_structure(clean_name, after_text)
+        full_is_valid = is_valid_korean_name_structure(clean_name, after_text, is_explicit_label=True)
 
         # 조사 분리는 clean_name 전체가 유효하지 않거나(4음절 등 비표준),
         # 3음절이더라도 복성이 아닌 4음절 또는 조사를 분리한 형태가 더 확실한 경우에만 수행
         if not full_is_valid or (len(clean_name) == 4 and clean_name[:2] not in DOUBLE_SURNAMES):
-            josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
             if josa_match and len(clean_name) >= 3:
                 stem = clean_name[:josa_match.start()]
                 trailing_part = clean_name[josa_match.start():]
                 after_preview = trailing_part + text[end:end + 25]
-                if is_valid_korean_name_structure(stem, after_preview):
+                if is_valid_korean_name_structure(stem, after_preview, is_explicit_label=True):
                     clean_name = stem
                     end = end - len(trailing_part)
                     after_text = text[end:end + 30]
@@ -557,10 +568,16 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             start, end = m.start(1), m.end(1)
             if _covered_by_span(guard_spans, start, end):
                 continue
+            # 조사 분리 후보 검사 (TK-39)
+            josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", name)
+            if josa_match:
+                stem = name[:josa_match.start()]
+                if stem in LEGAL_MILITARY_STOPWORDS or stem in PARTY_HEADER_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+                    continue
             if name in LEGAL_MILITARY_STOPWORDS or name in PARTY_HEADER_STOPWORDS or name in REPRESENTATIVE_NAME_STOPWORDS:
                 continue
             after_text = text[end:end + 30]
-            if not is_valid_korean_name_structure(name, after_text):
+            if not is_valid_korean_name_structure(name, after_text, is_explicit_label=False):
                 continue
             if pattern is NAME_TITLE_RE:
                 full_matched = m.group(0)
