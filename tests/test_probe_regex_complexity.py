@@ -43,3 +43,29 @@ def test_linear_equivalent_is_not_flagged():
     _arm()
     pattern = r"[ab]+$"
     assert probe.exponential_hit(re.compile(pattern), pattern) is None
+
+
+def test_main_runs_end_to_end_on_synthetic_literals(monkeypatch, capsys):
+    """main()이 지수·선형·바이트열 패턴이 섞인 입력에서 끝까지 돌고 지수 증가만 가려낸다.
+
+    이전 판은 지수 증가가 없는 패턴을 만나면 NameError로 죽었다(`base`가 함수 안 지역 변수). 단위 시험이 exponential_hit만 불러
+    main()을 한 번도 돌리지 않아 가려졌다 — 제품 정규식 점검이 한 번도 끝까지 돌지 못했다.
+    """
+    _arm()
+    synthetic = [
+        ("synthetic/linear.py", 1, r"[ab]+$", 0),
+        ("synthetic/exponential.py", 2, r"(?:ab|a|b)+$", 0),
+        ("synthetic/bytes_linear.py", 3, rb"^\s*(?:[-\d.]+(?:\s+[-\d.]+)*\s+(?:Tm|Td)\s*)*Z", 0),
+        ("synthetic/bytes_exponential.py", 4, rb"^\s*(?:[-\d.\s]+(?:Tm|Td)\s*)*Z", 0),
+    ]
+    monkeypatch.setattr(probe, "literals", lambda: synthetic)
+    assert probe.main() == 0
+    out = capsys.readouterr().out
+    exponential_section = out.split("다항 증가")[0]
+    assert "정규식 리터럴 4개 점검" in out
+    assert "지수 증가 의심: 2건" in exponential_section
+    assert "synthetic/exponential.py:2" in exponential_section
+    assert "synthetic/bytes_exponential.py:4" in exponential_section
+    assert "synthetic/linear.py" not in exponential_section
+    assert "synthetic/bytes_linear.py" not in exponential_section
+    assert "다항 증가(8000자에서 0.5초 이상):" in out

@@ -102,10 +102,15 @@ def timed(rx: re.Pattern, text: "str | bytes", limit: float) -> float:
         signal.setitimer(signal.ITIMER_REAL, 0)
 
 
+def families_for(pattern: "str | bytes") -> list:
+    """고정 입력 묶음을 패턴 종류(문자열·바이트열)에 맞는 입력으로 낸다. 지수·다항 점검이 같이 쓴다."""
+    return [(i, f) if not isinstance(pattern, bytes) else (i, (lambda n, f=f: f(n).encode("utf-8")))
+            for i, f in enumerate(FAMILIES)]
+
+
 def exponential_hit(rx: re.Pattern, pattern: "str | bytes"):
     """반복 횟수를 늘리다 24회 안에 0.3초에 이르는 입력이 있으면 (입력묶음, 반복 횟수, 시간)을, 없으면 None을 돌려준다."""
-    base = [(i, f) if not isinstance(pattern, bytes) else (i, (lambda n, f=f: f(n).encode("utf-8")))
-            for i, f in enumerate(FAMILIES)]
+    base = families_for(pattern)
     extra = [(f"대안{i}", f) for i, f in enumerate(alternation_pumps(pattern))]
     for index, family in base + extra:
         for repeats in LADDER:
@@ -128,7 +133,7 @@ def main() -> int:
         if hit:
             exponential.append((path, line, pattern, hit))
             continue
-        for index, family in base:
+        for index, family in families_for(pattern):
             half, full = timed(rx, family(4000), 3.0), timed(rx, family(8000), 3.0)
             if full >= 0.5:
                 polynomial.append((path, line, pattern, (index, half, full)))
