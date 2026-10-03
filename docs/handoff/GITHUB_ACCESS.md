@@ -75,4 +75,13 @@ Claude 연동에 승인된 권한: **읽기** — administration, commit statuse
 | 워크플로 5개에 `permissions: contents: read` 추가 | `a5e89ae`. 적용 뒤 `점수 게이트` 실행 **성공**(`37083839425`). 같은 커밋에서 `CI`를 수동 실행한 결과 **두 작업 모두 성공**(`37083845753`: `테스트 (SQLite + PostgreSQL/pgvector + Redis)`·`Docker OCR readiness`). `live-source-check`·`official-sources`·`run-verification`은 비밀·외부 호출을 쓰고 커밋 표식이나 수동 실행으로만 돌기 때문에 **실행으로 확인하지 않았다**(`actionlint` 정적 검사만 통과) |
 | 읽기 전용 점검 워크플로 `보안 경고 내보내기` 추가 | 게이트 아님·필수 확인 아님. 토큰 권한 `contents: read`+`security-events: read`. 수동 실행·주 1회·파일 변경 시 동작 |
 | 정규식 복잡도 측정 도구 보강 | `scripts/probe_regex_complexity.py`가 첫 판에서 바이트열 정규식을 건너뛰고 대안 반복 입력이 없어 CodeQL이 가리킨 두 곳을 놓쳤다. 두 가지를 보강했다(TK-38에 수치) |
-| GitHub 경고 처리(오탐/수정 안 함) | **사용자 몫** — 오탐 후보 4건(`residual.py:100`×2, `identity.py:629`, `routers/identity.py:92`)을 위 사유와 함께 GitHub Security → Code scanning에서 처리 |
+| GitHub 경고 처리(오탐/수정 안 함) | **사용자 몫** — 평가 측에는 코드 스캔 경고를 바꿀 권한이 없다(연동 앱에 Code scanning alerts 권한 없음, 점검 워크플로 토큰도 읽기 전용). 아래 4건을 GitHub → Security → Code scanning → 해당 경고 → Dismiss alert에서 처리 |
+
+**붙여 넣기용(경고 번호는 2026-10-03 수집 기준):**
+| 경고 | 위치 | 사유 선택 | 코멘트 |
+|---|---|---|---|
+| #37·#38 | `packages/forensic_engine/residual.py:100` | False positive | Office 보일러플레이트 XML(customXml) 분류에 쓰는 문자열 포함 검사이며 URL 검증·보안 경계가 아니다. |
+| #36 | `apps/api/identity.py:629` | Won't fix | 오프라인 1회성 부트스트랩 CLI가 운영자에게 1일 토큰을 한 번 보여 주는 것이 명령의 목적이다. 운영 절차: 로그 수집 환경 밖(터미널)에서 실행한다. |
+| #35 | `apps/api/routers/identity.py:92` | Won't fix | 세션 쿠키는 `HttpOnly`·`SameSite=lax`이며 `Secure`는 HTTPS 또는 신뢰 프록시(`LV_TRUSTED_PROXY_IPS`)의 `X-Forwarded-Proto: https`일 때 설정된다(`access.py:234-240`). 쿠키가 세션 비밀을 담는 것은 설계다. HTTP로 배포하면 `Secure`가 붙지 않으므로 TLS 종단 뒤에서는 신뢰 프록시를 설정한다. |
+
+이 4건은 코드 결함이 아니라는 평가 측 판단이며, 닫으면 GitHub의 경고 목록에서 사라진다(되돌리려면 경고를 다시 열면 된다). 나머지 경고(워크플로 6건은 `main` 반영 뒤 자동으로 닫힘, TK-35~38에 속한 29건)는 **닫지 않는다.**

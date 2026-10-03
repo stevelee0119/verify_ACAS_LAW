@@ -42,9 +42,9 @@
 | [TK-35](TK-35_storage_path_prefix_check.md) | 보안(방어 심층) | CodeQL 경로 경고 10건: `_abs`가 경로를 접두 문자열로 비교해 형제 디렉터리(`storage2`)를 통과시킴(6건, 재현·현재 호출 경로 악용은 확인 못 함) + 허용 문자 검사가 막는 4건(`match`+`$`는 끝 줄바꿈 허용 → `fullmatch`). **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
 | [TK-36](TK-36_exception_text_in_responses.md) | 보안(정보 노출) | CodeQL 2건: `access.py:369`가 키 설정 오류 문구(환경변수 이름)를 503 본문에 실음, `main.py:264`는 관리자 전용 진단. **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
 | [TK-37](TK-37_client_key_validation_prototype.md) | 보안(클라이언트) | CodeQL 14건(prototype 13 + DOM 1): 관리자 화면 `tabs[next]` 검증이 `#admin/__proto__`를 통과해 `pref.*` 대입이 `Object.prototype`을 오염(논리 재현). **6차 범위 밖** | 착수 시 브라우저 시험 | 열림(6차 직후 보안 보강) |
-| [TK-38](TK-38_regex_polynomial_growth.md) | 보안·견고성(**우선순위 높음**) | CodeQL `py/redos` 2건: **`pdf_parser.py` `SINGLE_GLYPH_SHOW_RE`가 지수 증가 — 조작된 PDF의 105바이트가 처리를 20초 이상 멈춤(재현)**, `korean_amount.py:65`는 지수지만 현재 호출 경로로 도달 불가 + 이차 증가 정규식 다수. **6차 범위 밖** | 착수 시 strict xfail(n=14·18·24가 1초 안에 끝날 것) | 열림(앞당길지 사용자 결정 대기) |
+| [TK-38](TK-38_regex_polynomial_growth.md) | 보안·견고성(**우선순위 높음**) | CodeQL `py/redos` 2건: **`pdf_parser.py` `SINGLE_GLYPH_SHOW_RE`가 지수 증가 — 조작된 PDF의 105바이트가 처리를 20초 이상 멈춤(재현)**, `korean_amount.py:65`는 지수지만 현재 호출 경로로 도달 불가 + 이차 증가 정규식 다수. **6차 범위 밖** | 착수 시 strict xfail(n=14·18·24가 1초 안에 끝날 것) | 열림(보안 보강 라운드 S1, 6차 검증 직후) |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md)
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · [보안 보강](PROMPT_FOR_SECURITY_ROUND.md)(6차 직후 전달)
 
 **기능 개선 요청(결함 티켓과 별도):** [FR-01 검토 화면 중복 해소·참고자료(RAG) 활용 — 타당성 검토](FR-01_review_screen_and_reference_integration.md) · [F1 라운드 작업 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md)(5차 검증 뒤 착수)
 
@@ -78,7 +78,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | TK-09 모델 의견 승격 | 기본 꺼짐 유지 | 변경 없음 |
 | 기준선 상향(2026-10-03 갱신) | **회귀 해소 뒤 81.7 이상으로 상향**(5차 실측 dev 81.2는 회귀 상태라 올리지 않음) | 평가 측이 실측으로 사용자 승인 후 |
 | 동일 시행일 복수 버전 | 두 버전 병기·대조 | 6차 |
-| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만** → 그 검증 뒤 **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 → TK-24 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md) |
+| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만** → 그 검증 뒤 **보안 보강(TK-38 A·B, TK-35~37)** → **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 → TK-24 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md), [보안 보강 지시서](PROMPT_FOR_SECURITY_ROUND.md) |
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
 | `main` 보호 갱신(2026-10-03) | CI 테스트 job을 필수 확인에 추가, **관리자 포함 적용 켬**(`enforcement_level: everyone`). PR 필수·최신 유지 끔, 강제 푸시·삭제 금지 유지 | 사용자가 웹 설정으로 변경. 평가 측이 **API(`GET branches/main/protection`)로 전 항목 직접 확인**, 사용자 스크린샷 3장과 일치 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
@@ -88,10 +88,10 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
 | Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가**(2026-10-03 현재 **2회**: CI run 263, 수동 실행 37083845753) | 평가 측이 `CI` 실행마다 이 job 결과를 세어 3회째에 사용자에게 요청 |
 | 준비서면 534210 문제지(2026-10-03) | 문제지 없음 — **카목 단계는 현재 정정 상태 유지**(문제지가 생기면 그때 대조) | [TK-12](TK-12_ci_red_gitignored_mirror_data.md), [TK-34](TK-34_item_level_temporal_review.md) |
-| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 6차 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
+| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 6차와 보안 보강 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
 | 코드 스캔 경고 분류(2026-10-03) | 읽기 전용 워크플로로 **38건 전부의 위치를 수집해 합계 일치 확인**. 실제 결함 TK-35·36·37·38 티켓화, 워크플로 permissions 6건은 조치 완료, 오탐/의도 후보 4건(URL 부분 문자열 2·평문 로깅 1·세션 쿠키 1)은 사용자가 GitHub에서 처리 | [GITHUB_ACCESS 6절](GITHUB_ACCESS.md) |
-| 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`·`b28582a`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 — **단 경고 위치 수집 뒤 TK-38이 조작 PDF로 처리를 멈출 수 있는 실제 위험으로 확인되어 앞당길지 별도 결정을 받는다** |
+| 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`·`b28582a`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 — TK-38이 조작 PDF로 처리를 멈출 수 있는 실제 위험으로 확인됐으나 사용자가 '추천대로'로 **앞당기지 않고 보안 보강 첫 항목(S1)으로 두기로 결정**(같은 날) |
 
 ## 아직 사용자가 정할 것
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
@@ -99,4 +99,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **CI를 `main`의 필수 확인에 추가: 완료·확인됨(2026-10-03).** 사용자가 설정했고 평가 측이 `GET branches/main`으로 필수 확인 2개(`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`)를 읽어 확인했다(적용 수준 `non_admins` 유지). Docker OCR readiness 추가 여부(연속 초록 확인 뒤)는 별도 결정.
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
 - 보안 점검 후속: 결정 완료(2026-10-03 '추천대로') — 위 결정 표 참조. 남은 사용자 조치는 **GitHub 경고 처리**(URL 부분 문자열·평문 로깅의 오탐/수정 안 함)뿐이며, 경고 위치를 확인한 뒤 사용자가 GitHub에서 한다.
-- **TK-38 A(PDF 정규식 지수 증가)를 6차 직후 보안 보강보다 앞당길지:** 위 ④ 결정 이후에 확인된 사실이다(조작된 PDF 한 건이 워커를 멈출 수 있음). 추천: **보안 보강 라운드 첫 항목으로 두되, 6차 구현이 `pdf_parser.py`를 건드리는 중이라면 6차 검증 뒤에 처리**(같은 파일 충돌 방지). 앞당기려면 6차와 별도 작은 지시서가 필요하다.
+- TK-38 A(PDF 정규식 지수 증가): **결정 완료(2026-10-03 '추천대로') — 앞당기지 않고 보안 보강 라운드의 첫 항목(S1)으로 둔다.** 6차 범위(TK-30~33)는 `paragraph_reconstruction.py`·이름 마스킹·법리 군집이라 `pdf_parser.py`를 직접 지정하지 않으나, R2의 'PDF 폭 40 INJ-1' 항목이 같은 파일을 건드릴 수 있어 충돌을 피하려고 6차 검증 뒤로 둔다. **그 사이 조작된 PDF 위험은 남아 있다**(코드 변경 없이 줄일 방법은 확인하지 못함). 지시서: [PROMPT_FOR_SECURITY_ROUND.md](PROMPT_FOR_SECURITY_ROUND.md)(6차 검증 직후 전달, 전달 전 평가 측이 strict xfail을 먼저 고정).
