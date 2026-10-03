@@ -8,8 +8,11 @@
   python scripts/export_security_alerts.py --repo OWNER/REPO --out-dir out      (환경변수 GITHUB_TOKEN 필요)
   python scripts/export_security_alerts.py --from-file alerts.json --out-dir out (저장된 응답으로 요약만 다시 만들기)
 
+  python scripts/export_security_alerts.py --print-locations out/code_scanning_alerts.json  (저장된 요약의 위치를 한 줄씩 출력)
+
 산출: `<out-dir>/code_scanning_alerts.json`(규칙별 묶음과 위치 전체), `<out-dir>/summary.md`(규칙별 건수만).
-요약에는 파일 경로를 싣지 않는다(공개 저장소의 실행 요약은 누구나 볼 수 있으므로 위치는 아티팩트에만 둔다).
+요약에는 파일 경로를 싣지 않는다(위치는 아티팩트에 둔다). 아티팩트는 평가 세션의 도구로 내려받을 수 없는 경우가 있어,
+워크플로를 수동 실행하며 `show_locations`를 켠 경우에만 `--print-locations`로 로그에 위치를 남긴다.
 """
 from __future__ import annotations
 
@@ -96,12 +99,28 @@ def markdown(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def location_lines(summary: dict[str, Any]) -> list[str]:
+    """규칙별 위치를 `규칙 | 파일:줄 | #경고번호` 한 줄씩으로 펼친다."""
+    lines = []
+    for group in summary["rules"]:
+        for loc in group["locations"]:
+            where = f"{loc['path']}:{loc['start_line']}" if loc["start_line"] else str(loc["path"])
+            lines.append(f"{group['rule_id']} | {where} | #{loc['alert_number']}")
+    return lines
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--print-locations", metavar="SUMMARY_JSON",
+                        help="저장된 code_scanning_alerts.json의 위치를 한 줄씩 출력하고 끝낸다(네트워크 없음)")
     parser.add_argument("--repo", help="OWNER/REPO (기본: 환경변수 GITHUB_REPOSITORY)")
     parser.add_argument("--out-dir", default="out")
     parser.add_argument("--from-file", help="이미 저장한 경고 응답(JSON 배열)으로 요약만 만든다")
     args = parser.parse_args()
+    if args.print_locations:
+        saved = json.loads(Path(args.print_locations).read_text(encoding="utf-8"))
+        print("\n".join(location_lines(saved)))
+        return 0
     if args.from_file:
         alerts = json.loads(Path(args.from_file).read_text(encoding="utf-8"))
     else:

@@ -64,3 +64,14 @@ def test_cli_from_file_writes_json_and_summary(tmp_path, monkeypatch, capsys):
     assert tool.main() == 0
     written = json.loads((tmp_path / "out" / "code_scanning_alerts.json").read_text(encoding="utf-8"))
     assert written["total"] == 5 and (tmp_path / "out" / "summary.md").exists()
+
+
+def test_location_lines_and_print_option(tmp_path, monkeypatch, capsys):
+    summary = tool.summarise(SAMPLE)
+    lines = tool.location_lines(summary)
+    assert lines[0] == "rule/a | a.py:5 | #4" and len(lines) == 5
+    saved = tmp_path / "s.json"
+    saved.write_text(json.dumps(summary), encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["export", "--print-locations", str(saved)])
+    assert tool.main() == 0
+    assert "rule/b | b.py:9 | #1" in capsys.readouterr().out

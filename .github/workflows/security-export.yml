@@ -3,10 +3,15 @@ name: 보안 경고 내보내기
 # 평가 에이전트용 읽기 전용 측정 워크플로다. 게이트가 아니며 필수 확인에 넣지 않는다. 설정을 바꾸지 않는다.
 # - 코드 스캔(CodeQL) 열린 경고를 규칙·파일·줄 단위로 아티팩트에 남긴다(평가 세션의 연동에는 Code scanning alerts 읽기 권한이 없다).
 # - Python 의존성 취약점을 pip-audit로 직접 점검한다(Dependabot 경고는 GITHUB_TOKEN으로 읽을 수 없다).
-# 실행 요약에는 규칙별 건수만 싣고 파일 경로는 아티팩트에만 둔다(공개 저장소의 실행 요약은 누구나 볼 수 있다).
+# 실행 요약에는 규칙별 건수만 싣고 파일 경로는 아티팩트에 둔다. 수동 실행에서 show_locations를 켠 경우에만 로그에도 남긴다.
 # 이 파일이 바뀐 푸시, 수동 실행, 주 1회 예약 실행에서 돈다.
 on:
   workflow_dispatch:
+    inputs:
+      show_locations:
+        description: "경고의 파일·줄을 실행 로그에 출력한다(아티팩트를 내려받을 수 없을 때만 켠다)"
+        type: boolean
+        default: false
   schedule:
     - cron: "17 3 * * 1"
   push:
@@ -44,6 +49,10 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           python scripts/export_security_alerts.py --out-dir out | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: 경고 위치 출력(수동 실행에서 show_locations를 켠 경우만, 로그에만 남김)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.show_locations }}
+        run: python scripts/export_security_alerts.py --print-locations out/code_scanning_alerts.json
 
       # pip-audit는 취약점이 있으면 종료 코드 1을 낸다. 이 잡은 측정이므로 결과를 파일로 남기고 단계는 통과시킨다.
       - name: Python 의존성 취약점 점검(pip-audit)
