@@ -8,6 +8,7 @@ const adminUI = (() => {
     FAILED:"전송 실패", UNAVAILABLE:"설정 확인 필요", UNKNOWN:"접수 여부 불명", CANCELLED:"발송 취소"};
   let identity = null, root, navigation, panel, toolbar, rows, pager, feedback, summary, detail;
   let active = false, tab = "users", epoch = 0, data = [], usersById = new Map(), smtp = null;
+  let ready = false, initialized = false, previousHash = "";
   // 보안(TK-37): prototype 오염 방지를 위해 preferences를 null prototype 객체로 생성
   const preferences = Object.assign(Object.create(null), Object.fromEntries(Object.keys(tabs).map(key => [key, {
     query:"", status:"", role:"", page:1, size:20, period:new Date().toISOString().slice(0, 7),
