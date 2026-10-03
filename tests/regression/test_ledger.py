@@ -1676,4 +1676,76 @@ def test_r2_tk31_google_docs_pdf_19_patterns():
         assert actual == expected, f"패턴 {idx} 실패: '{p}' + '{n}' (prev_full={pf}) -> 실제 '{actual}', 기대 '{expected}'"
 
 
+# ===========================================================================
+# 29. R3 (TK-32): 법리 오탐 보완 및 6대 구조 대조군 회귀 시험
+# ===========================================================================
+
+def test_r3_tk32_six_structural_defense_controls(tmp_path: Path):
+    """R3 시험: 보완 지시서 5.2절 6대 법리 구조 대조군 검증."""
+    from scripts import probe_document as probe
+    from packages.common.enums import FindingType
+
+    root = Path(".").resolve()
+    head = "원고가 부대 예산 350만 원을 사적 회식비로 사용한 사실은 다투지 않는다.\n"
+
+    # (1) 요건 구체 제시 + 한정 결론 -> 경고 없음 (정상 항변 오탐 방지)
+    c1 = (
+        "설령 원고 주장이 인정되더라도, 피고가 채권자의 수령거절 후 유효하게 변제공탁을 하여 "
+        "민법 제487조에 따라 이 사건 채무가 소멸하였으므로 피고는 이 사건 채무에 관한 책임을 질 수 없다."
+    )
+    p1 = tmp_path / "c1.txt"
+    p1.write_text(head + c1 + "\n", encoding="utf-8")
+    f1 = [f for f in probe.observe(root, p1, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f1) == 0, f"케이스 1 오탐 발생: {f1}"
+
+    # (2) 요건 누락 + 한정 결론 -> 요건 보완 안내 / 요건 확인 요청
+    c2 = (
+        "설령 원고 주장이 인정되더라도, 민법 제487조에 따라 피고는 이 사건 채무에 관한 책임을 질 수 없다."
+    )
+    p2 = tmp_path / "c2.txt"
+    p2.write_text(head + c2 + "\n", encoding="utf-8")
+    f2 = [f for f in probe.observe(root, p2, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f2) == 1, f"케이스 2 요건 확인 요청 미발생: {f2}"
+    assert "요건 확인 요청" in str(f2[0]), f"케이스 2에 '요건 확인 요청' 표현 누락: {f2[0]}"
+
+    # (3) 요건 구체 제시 + 무제한 결론 -> 과대주장 경고
+    c3 = (
+        "설령 원고 주장이 인정되더라도, 피고가 수령거절 후 변제공탁을 하였으므로 피고에 대한 행정처분은 당연무효이다."
+    )
+    p3 = tmp_path / "c3.txt"
+    p3.write_text(head + c3 + "\n", encoding="utf-8")
+    f3 = [f for f in probe.observe(root, p3, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f3) == 1, f"케이스 3 과대주장 미발생: {f3}"
+
+    # (4) 요건 누락 + 무제한 결론 -> 과대주장 경고
+    c4 = (
+        "설령 원고 주장이 인정되더라도, 헌법상 기본권 및 비례의 원칙에 위배되어 당연무효이다."
+    )
+    p4 = tmp_path / "c4.txt"
+    p4.write_text(head + c4 + "\n", encoding="utf-8")
+    f4 = [f for f in probe.observe(root, p4, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f4) >= 1, f"케이스 4 과대주장 미발생: {f4}"
+
+    # (5) 소멸시효 기산점/중단 요건 제시 -> 경고 없음
+    c5 = (
+        "설령 위 사실이 인정되더라도, 소멸시효 기산점으로부터 민법 제766조의 시효 기간이 경과하였고 "
+        "시효 중단 사유가 없으므로 그 청구권은 시효로 소멸하였다고 다툰다."
+    )
+    p5 = tmp_path / "c5.txt"
+    p5.write_text(head + c5 + "\n", encoding="utf-8")
+    f5 = [f for f in probe.observe(root, p5, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f5) == 0, f"케이스 5 소멸시효 오탐 발생: {f5}"
+
+    # (6) 부당이득 반환 범위 한정 -> 경고 없음
+    c6 = (
+        "설령 피고에게 법률상 원인 없는 이득이 인정되더라도, 피고는 선의의 수익자로서 받은 이익이 현존한 한도에서만 "
+        "반환 의무를 부담하므로, 현존 이익을 초과하는 범위에 관하여는 더 이상 책임을 질 수 없다."
+    )
+    p6 = tmp_path / "c6.txt"
+    p6.write_text(head + c6 + "\n", encoding="utf-8")
+    f6 = [f for f in probe.observe(root, p6, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f6) == 0, f"케이스 6 부당이득 반환범위 오탐 발생: {f6}"
+
+
+
 
