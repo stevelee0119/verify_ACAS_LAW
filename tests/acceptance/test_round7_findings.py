@@ -203,3 +203,42 @@ def test_name_after_a_person_reference_label_outside_the_old_vocabulary_is_fully
             covered.update(range(match.start, match.end))
     start = text.index(name)
     assert all(index in covered for index in range(start, start + len(name))), f"이름이 전부 가려지지 않았다: {text!r}"
+
+
+# ---------------------------------------------------------------------------
+# R7-07 명시 성명의 끝 음절이 조사처럼 보이고 앞 두 음절이 일반 불용어일 때 이름이 통째로 제외되지 않는다
+# (회귀: 7차 R1이 후보 전체를 평가하기 전에 조사를 떼어 stem 불용어 검사를 한다 — 독립 감사 Astra A7-01, 공개 재현 `성명: 임용은`)
+# 이름은 모두 합성이며 실제 사람을 가리키지 않는다. 한 이름만 예외로 풀 수 없도록 서로 다른 stem·끝 음절 6개를 둔다.
+# ---------------------------------------------------------------------------
+STEM_LIKE_NAMES = ["임용은", "정산이", "조사도", "신청은", "공지이", "심사가"]
+
+
+@pytest.mark.parametrize("name", STEM_LIKE_NAMES)
+def test_explicit_name_is_kept_when_its_leading_syllables_look_like_a_common_noun(name):
+    text = f"성명: {name}"
+    covered = set()
+    from packages.pii_engine.detector import detect
+    for match in detect(text):
+        if "PERSON" in str(getattr(match, "type", None) or getattr(match, "pii_type", None) or getattr(match, "kind", None)).upper():
+            covered.update(range(match.start, match.end))
+    start = text.index(name)
+    assert all(index in covered for index in range(start, start + len(name))), f"명시 성명이 제외된다: {text!r}"
+
+
+# ---------------------------------------------------------------------------
+# R7-08 (미해결, strict xfail) 요건을 '~한 적/사실이 없으나'로 부정한 한정 결론도 경고가 유지된다
+# (독립 감사 A7-02 공개 재현 2건 + 평가 측 새 문장 2건. 시작·4da3910 모두 경고 0. TK-45)
+# ---------------------------------------------------------------------------
+DENIED_WITH_NEGATIVE_EXISTENTIAL = [
+    "설령 대여 사실이 인정되더라도, 원고에게 전액을 지급한 적이 없으나 민법 제460조에 따라 이 사건 채무에 관한 책임을 질 수 없다.",
+    "설령 차용 사실이 인정되더라도, 변제공탁을 한 사실이 없으나 민법 제487조에 따라 해당 채무에 관한 책임을 질 수 없다.",
+    "가사 금전 수수가 인정되더라도, 상계의 의사표시를 한 사실이 없으나 이 사건 채무에 관한 책임을 질 수 없다.",
+    "만약 대여 사실이 인정되더라도, 변제기가 도래한 적이 없으나 본건 채무에 관한 책임을 질 수 없다.",
+]
+
+
+@pytest.mark.xfail(strict=True, reason="TK-45: '없으나'·'한 적/사실이 없으나' 형태의 요건 부정은 부정 표지 낱말 목록 밖이라 경고가 사라진다(독립 감사 A7-02)")
+@pytest.mark.parametrize("index", range(len(DENIED_WITH_NEGATIVE_EXISTENTIAL)))
+def test_requirement_denied_by_a_negative_existential_keeps_the_overclaim_warning(index):
+    text = DENIED_WITH_NEGATIVE_EXISTENTIAL[index]
+    assert _overclaim_warned(text), f"요건 부정 문장의 과대주장 경고가 없다: {text}"
