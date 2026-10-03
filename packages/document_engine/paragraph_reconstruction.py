@@ -52,8 +52,6 @@ STANDALONE_LINE_PATTERNS = [
     re.compile(r"^\s*\[[^\]]+\]\s*$"),
     # AI 어시스턴트 첫인사 줄
     re.compile(r"^\s*(?:물론입니다!|네,\s*알겠습니다|요청하신\s*내용을\s*바탕으로).*?(?:작성해\s*드리겠습니다|드리겠습니다|바랍니다)[.!]?\s*$"),
-    # 가상 문서 표기 바닥글
-    re.compile(r"^\s*(?:HO-\d+|TC-\d+|검증\s*프로그램|홀드아웃용|가상\s*문서).*$"),
     # "다 음" 구분 표제
     re.compile(r"^\s*다\s+음\s*$"),
 ]
@@ -143,10 +141,10 @@ def get_unclosed_delimiter(text: str) -> Optional[str]:
 
 
 
-def join_lines(prev: str, nxt: str) -> str:
-    """두 줄의 텍스트를 올바른 공백 보존 규칙으로 결합한다."""
-    p = prev.rstrip()
-    n = nxt.lstrip()
+def join_lines(prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False) -> str:
+    """두 줄의 텍스트를 올바른 공백 보존 규칙 및 구조 신호에 기반하여 결합한다 (TK-31)."""
+    p = unicodedata.normalize("NFKC", prev or "").rstrip()
+    n = unicodedata.normalize("NFKC", nxt or "").lstrip()
     if not p:
         return n
     if not n:
@@ -158,10 +156,24 @@ def join_lines(prev: str, nxt: str) -> str:
         return p + n
     if first in ")]}」』”’>》〉】,.;:!?%·":
         return p + n
-    # 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임
-    first_word = n.split(" ", 1)[0].rstrip(".,;:)]」』”’'\"")
+
+    # 1. 괄호/따옴표 바로 뒤에 1~2음절만 걸치고 줄바꿈된 경우 (예: '판시하였습니다(대' + '법원') -> 공백 없이 연결
+    if re.search(r"[\(\[\{“\"'‘「『<《〈【][가-힣]{1,2}$", p) and re.match(r"[가-힣]", first):
+        return p + n
+
+    # 2. 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임 (예: '징계권자' + '에게', '대하' + '여')
+    words = n.split()
+    first_word = words[0].rstrip(".,;:)]」』”’'\"") if words else ""
     if re.match(r"[가-힣]", last) and first_word in MID_WORD_STARTS:
         return p + n
+
+    # 3. 꽉 찬 줄(prev_full) 또는 글자 단위 줄바꿈 쪽에서 앞 줄 끝이 1음절 한글 단어로 끊긴 경우
+    # (예: '어떠한 처' + '분을', '하기 위' + '해서는') -> 어절 중간 분절이므로 공백 없이 연결
+    words_p = p.split()
+    last_word = words_p[-1] if words_p else ""
+    if (prev_full or char_wrap_context) and len(last_word) == 1 and re.match(r"[가-힣]", last) and re.match(r"[가-힣]", first):
+        return p + n
+
     # 일반적인 단어 경계 줄바꿈: 한글 낱말 사이 공백 1개 유지
     return p + " " + n
 
@@ -265,6 +277,19 @@ def reconstruct_page_blocks(
     curr_group: List[Block] = []
     active_closer: Optional[str] = None
 
+    # 쪽 내 오른쪽 경계(right edge) 및 글자 단위 줄바꿈 특성 분석 (TK-31)
+    x1_values = [round(b.bbox.x1, 1) for b in blocks if b.bbox is not None]
+    right_edge = 0.0
+    is_char_wrap_page = False
+    if x1_values:
+        repeated = [v for v in set(x1_values) if x1_values.count(v) >= 2]
+        right_edge = max(repeated) if repeated else max(x1_values)
+        if page_width > 0:
+            right_edge = max(right_edge, 0.75 * page_width)
+        # 오른쪽 경계 근처(4pt 이내)에 끝나는 꽉 찬 줄이 2줄 이상이면 글자 단위 줄바꿈 쪽으로 판정
+        full_line_count = sum(1 for v in x1_values if abs(v - right_edge) <= 4.0)
+        is_char_wrap_page = full_line_count >= 2
+
     def flush_group() -> None:
         nonlocal curr_group, active_closer
         if not curr_group:
@@ -275,10 +300,20 @@ def reconstruct_page_blocks(
             active_closer = None
             return
 
-        # 여러 줄 블록을 결합
+        # 여러 줄 블록을 결합 (구조 신호 반영)
         combined_text = curr_group[0].text
-        for b in curr_group[1:]:
-            combined_text = join_lines(combined_text, b.text)
+        for i in range(len(curr_group) - 1):
+            prev_b = curr_group[i]
+            next_b = curr_group[i + 1]
+            prev_full = False
+            if prev_b.bbox is not None and right_edge > 0:
+                prev_full = (right_edge - prev_b.bbox.x1) <= 4.0
+            combined_text = join_lines(
+                combined_text,
+                next_b.text,
+                prev_full=prev_full,
+                char_wrap_context=is_char_wrap_page,
+            )
 
         # 외접 bounding box 계산
         bboxes = [b.bbox for b in curr_group if b.bbox is not None]

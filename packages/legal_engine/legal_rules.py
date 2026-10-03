@@ -297,6 +297,37 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             # 법이 정한 예외를 근거로 든 문장은 규칙이 겨냥한 무리한 주장이 아니다(추가지시 G4 오탐 방지).
             if rule.get("unless") and re.search(rule["unless"], unit):
                 continue
+
+            # TK-32 및 보완 지시서 5.1절: 요건이 구체적으로 제시되고 해당 채무로 한정된 결론을 과대주장으로 경고하지 않음
+            if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
+                signals = load_defense_groups().get("structural_signals", {})
+                req_list = signals.get("stated_requirements", [])
+                lim_list = signals.get("limited_conclusions", [])
+                req_pats = "|".join(req_list)
+                lim_pats = "|".join(lim_list)
+
+                has_req = bool(req_pats and re.search(req_pats, unit))
+                has_lim = bool(lim_pats and re.search(lim_pats, unit))
+
+                # 1. 요건이 구체적으로 제시되고 결론이 해당 채무/범위로 한정된 정상 항변: 경고 제외 (오탐 방지)
+                if has_req and has_lim and not re.search(r"당연(?:히)?\s*무효|전면\s*면책|전액\s*면제", unit):
+                    continue
+
+                # 2. 결론은 한정되었으나 요건 제시가 부족한 경우: 근거 부족 시 요건 확인 요청 표현으로 분기
+                if has_lim and not has_req:
+                    mod_rule = dict(rule)
+                    mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
+                    mod_rule["explanation"] = (
+                        "항변의 결론이 해당 채무로 한정되어 있으나 법정 요건에 관한 구체적 근거 또는 소명이 부족하므로, "
+                        "관련 요건의 충족 여부를 확인해야 합니다."
+                    )
+                    key = (rule["rule_id"], unit[:80])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(_finding(doc, mod_rule, unit, sources))
+                    continue
+
             key = (rule["rule_id"], unit[:80])
             if key in seen:
                 continue

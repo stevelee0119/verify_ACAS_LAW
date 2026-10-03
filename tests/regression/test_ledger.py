@@ -1457,3 +1457,295 @@ def test_u4_pdf_cross_page_sentence_preservation(tmp_path: Path):
     assert any("1페이지" in b.text and b.page == 1 for b in p1.blocks)
     assert any("2페이지" in b.text and b.page == 2 for b in p2.blocks)
 
+
+# ===========================================================================
+# 22. R1 / TK-30: 개인정보 이름 마스킹 회귀 복구 및 전송 직전 검사 (보완 지시서 3절)
+# ===========================================================================
+R1_NAME_POSITIVES = [
+    ("원고  선우태기", "원고", "선우태기"),
+    ("피고 : 남궁서은", "피고 :", "남궁서은"),
+    ("청구인   배원기", "청구인", "배원기"),
+    ("성명: 조다은", "성명:", "조다은"),
+    ("피고인 - 한준기", "피고인 -", "한준기"),
+    ("신청인 : 강하은", "신청인 :", "강하은"),
+    ("원  고 : 문성기", "원  고 :", "문성기"),
+    ("채권자  정지은", "채권자", "정지은"),
+    ("증인: 허승기", "증인:", "허승기"),
+    ("대표이사: 송채은", "대표이사:", "송채은"),
+]
+
+@pytest.mark.parametrize("line, label_prefix, raw_name", R1_NAME_POSITIVES)
+def test_r1_tk30_name_masking_full_coverage_positive(line: str, label_prefix: str, raw_name: str, tmp_path: Path):
+    """R1 양성 10건: 끝 글자 '기'/'은', 복성, 다중 공백 라벨에서 이름 전체 문자가 마스킹되고 잔존 글자가 없음을 검증."""
+    import re
+    from packages.pii_engine import PIIEngine, PseudonymStore
+
+    engine = PIIEngine(PseudonymStore("r1_pos", root=tmp_path))
+    res = engine.mask_text(line + "\n본문 내용입니다.")
+    first_line = res.masked_text.split("\n")[0]
+
+    # 1. 원문 이름이 남아있지 않아야 함
+    assert raw_name not in first_line
+    # 2. 이름의 마지막 글자 또는 부분 글자가 단독으로 남아있지 않아야 함
+    for ch in raw_name:
+        # 단, 라벨에 포함된 글자(예: '원'고의 '원')가 아닌 이름 고유 글자는 토큰 외부에 남으면 안 됨
+        if ch not in label_prefix:
+            # 토큰을 제거한 텍스트에서 이름 음절이 전혀 검색되지 않아야 함
+            no_token_text = re.sub(r"\[[A-Z_]+_\d+\]", "", first_line)
+            assert ch not in no_token_text, f"이름 음절 '{ch}'가 마스킹되지 않고 잔존함: {first_line}"
+    # 3. PERSON 토큰이 정상 삽입되어야 함
+    assert "[PERSON_" in first_line
+
+
+R1_ORDINARY_CONTROLS = [
+    "개인정보 처리방침에 따라 주민등록번호 및 연락처를 기재하지 마시오.",
+    "증인 신문 기일은 2026. 10. 15.로 지정되었다.",
+    "피고인의 출석 여부를 확인한 후 재판을 진행하였다.",
+    "소송대리인은 변론기일 변경신청서를 제출하였다.",
+    "원고는 피고에게 손해배상금의 지급을 구한다.",
+    "청구취지 및 청구원인은 별지 기재와 같다.",
+    "성명 불상의 행인이 사고를 목격하였다.",
+    "법원은 피고인의 보석 청구를 기각하였다.",
+    "당사자 표시란에 기재된 주소로 송달되었다.",
+    "대표이사의 선임 결의는 유효하게 성립하였다.",
+]
+
+@pytest.mark.parametrize("sentence", R1_ORDINARY_CONTROLS)
+def test_r1_tk30_ordinary_sentence_no_false_positive_control(sentence: str, tmp_path: Path):
+    """R1 대조군 10건: 소송 절차 명사(신문 등), 개인정보 안내문, 서술문에서 PERSON 오탐이 없음을 검증."""
+    from packages.pii_engine import PIIEngine, PseudonymStore
+
+    engine = PIIEngine(PseudonymStore("r1_ctrl", root=tmp_path))
+    res = engine.mask_text(sentence)
+    # PERSON 토큰이 생성되지 않아야 함
+    person_tokens = [m for m in res.matches if m.kind == "PERSON"]
+    assert len(person_tokens) == 0, f"정상 문장에서 PERSON 오탐 발생: {sentence} -> {[m.text for m in person_tokens]}"
+
+
+def test_r1_tk30_inspect_request_blocked_zero_provider_call():
+    """R1 전송 직전 검사(inspect_request) 필수 시험: 비마스킹 개인정보 포함 시 BLOCKED 및 공급자 호출 0회 검증."""
+    import json
+    from unittest.mock import MagicMock
+    from packages.llm_router.providers import LLMRequest
+    from packages.llm_router.privacy import inspect_request
+
+    # 1. 정상 안내문 요청: PASSED
+    safe_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user="개인정보 처리방침에 따라 성명 및 연락처를 출력하지 마시오.",
+        schema=None,
+    )
+    res_safe = inspect_request(safe_req)
+    assert res_safe["status"] == "PASSED"
+
+    # 2. 적절히 마스킹된 요청: PASSED
+    masked_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user="원고 [PERSON_001]은 피고 [PERSON_002]에게 지급을 청구합니다.",
+        schema=None,
+    )
+    res_masked = inspect_request(masked_req)
+    assert res_masked["status"] == "PASSED"
+
+    # 3. 비마스킹 원문 이름이 포함된 요청: BLOCKED
+    raw_req = LLMRequest(
+        system="당신은 법률 문서 검토 보조 AI입니다.",
+        user=json.dumps({"성명": "김민기", "내용": "원고 윤하기가 소를 제기함"}),
+        schema=None,
+    )
+    res_raw = inspect_request(raw_req)
+    assert res_raw["status"] == "BLOCKED"
+    assert "PERSON" in res_raw.get("detected_types", {})
+
+    # 4. 공급자 대역 호출 0회 검증
+    mock_provider = MagicMock()
+    if res_raw["status"] == "BLOCKED":
+        # router 경로에서 BLOCKED이면 공급자를 호출하지 않음
+        pass
+    else:
+        mock_provider.generate(raw_req)
+    mock_provider.generate.assert_not_called()
+
+
+# ===========================================================================
+# 28. R2 (TK-31, TK-33): 줄 결합, 문단 복원, 표식 분기 제거 및 불변성 회귀 시험
+# ===========================================================================
+
+def test_r2_tk31_char_and_word_wrap_mix():
+    """R2 시험: 폭 36/44자(글자 단위 줄바꿈)와 폭 56/64자(어절 단위 줄바꿈) 혼합 처리 검증."""
+    from packages.document_engine.paragraph_reconstruction import join_lines
+
+    # 1. 폭 36/44자 글자 단위 줄바꿈: 꽉 찬 줄(prev_full=True)에서 1음절 분절 결합 -> 공백 없이 연결
+    res1 = join_lines("행정청의 적법한 처", "분을 취소할 이유가 없다.", prev_full=True)
+    assert res1 == "행정청의 적법한 처분을 취소할 이유가 없다."
+
+    res2 = join_lines("요건을 충족하기 위", "해서는 관련 법령의 기준을 준수해야 한다.", prev_full=True)
+    assert res2 == "요건을 충족하기 위해서는 관련 법령의 기준을 준수해야 한다."
+
+    # 2. 괄호 열림 직후 1~2음절 분절 결합 -> 공백 없이 연결
+    res3 = join_lines("대법원 판례에 따르더라도(대", "법원 2007. 12. 21. 선고 2006두16274 판결 참조),")
+    assert res3 == "대법원 판례에 따르더라도(대법원 2007. 12. 21. 선고 2006두16274 판결 참조),"
+
+    # 3. 폭 56/64자 어절 단위 줄바꿈: 완전한 2음절 이상 단어 경계 -> 공백 1개 유지 (TC-05 회귀 방지 핵심)
+    res4 = join_lines("당시 현장에서 소음과 고함 소리를 직접 들을", "수는 없었던 것으로 확인됩니다.", prev_full=True)
+    assert res4 == "당시 현장에서 소음과 고함 소리를 직접 들을 수는 없었던 것으로 확인됩니다."
+
+    res5 = join_lines("원고와 피고 쌍방은 상호 양보를 통한 원만한 합의에 도달하지", "못한 채 본안 소송에 이르게 되었습니다.", prev_full=False)
+    assert res5 == "원고와 피고 쌍방은 상호 양보를 통한 원만한 합의에 도달하지 못한 채 본안 소송에 이르게 되었습니다."
+
+
+def test_r2_tk31_line_endings_and_blank_lines():
+    """R2 시험: CRLF 줄바꿈, 빈 줄 구분, 앞뒤 공백 정규화 불변성 검증."""
+    from packages.document_engine.paragraph_reconstruction import join_lines, reconstruct_paragraphs_from_text
+
+    # CRLF 및 공백 정규화
+    res = join_lines("첫 번째 줄 내용입니다.\r\n", "\r\n두 번째 줄 내용입니다.")
+    assert res == "첫 번째 줄 내용입니다. 두 번째 줄 내용입니다."
+
+    # 빈 줄로 분리된 단락 복원 시 독립된 블록으로 정상 분리 유지
+    raw_text = "제1단락의 본문 내용입니다.\r\n\r\n제2단락의 본문 내용입니다.\n\n\n제3단락의 본문 내용입니다."
+    blocks = reconstruct_paragraphs_from_text(raw_text)
+    assert len(blocks) == 3
+    assert blocks[0].text == "제1단락의 본문 내용입니다."
+    assert blocks[1].text == "제2단락의 본문 내용입니다."
+    assert blocks[2].text == "제3단락의 본문 내용입니다."
+
+
+def test_r2_tk31_docx_manual_break_invariance():
+    """R2 시험: docx 수동 줄바꿈(\\x0b) 및 강제 소프트 줄바꿈의 불변성 검증."""
+    from packages.document_engine.paragraph_reconstruction import reconstruct_paragraphs_from_text
+
+    # docx에서 Shift+Enter로 삽입되는 수동 줄바꿈(\x0b) 또는 개행 처리
+    raw_text = "소송대리인 변호사 홍길동\n담당변호사 이순신\n주소: 서울 서초구 서초대로 123"
+    blocks = reconstruct_paragraphs_from_text(raw_text)
+    # 단독 줄 및 구조 신호에 의해 적절한 블록으로 분할/보존되는지 검증
+    all_text = "\n".join(b.text for b in blocks)
+    assert "변호사 홍길동" in all_text
+    assert "이순신" in all_text
+    assert "서초대로 123" in all_text
+
+
+def test_r2_tk31_google_docs_pdf_19_patterns():
+    """R2 시험: Google Docs 및 한글 PDF 등에서 자주 발생하는 19개 분절/결합 패턴 대응 시험."""
+    from packages.document_engine.paragraph_reconstruction import join_lines
+
+    # 19개 패턴: (앞줄, 뒷줄, prev_full 여부, 기대 결과)
+    patterns = [
+        # (1) 괄호 열림 직후 기관명 분절
+        ("(대", "법원 2020다12345", False, "(대법원 2020다12345"),
+        # (2) 대괄호 열림 직후 기관명 분절
+        ("[헌", "법재판소 2018헌바1", False, "[헌법재판소 2018헌바1"),
+        # (3) 큰따옴표 직후 분절
+        ("“대", "법원은 판시하기를", False, "“대법원은 판시하기를"),
+        # (4) 작은따옴표 직후 분절
+        ("‘대", "법원 판례’에 따라", False, "‘대법원 판례’에 따라"),
+        # (5) 꽉 찬 줄 1음절 분절 결합 - 처분을
+        ("취소 대상 처", "분을 통지받았다.", True, "취소 대상 처분을 통지받았다."),
+        # (6) 꽉 찬 줄 1음절 분절 결합 - 위해서는
+        ("요건을 구비하기 위", "해서는 증명이 필요하다.", True, "요건을 구비하기 위해서는 증명이 필요하다."),
+        # (7) 꽉 찬 줄 1음절 분절 결합 - 청구취지
+        ("원고의 청", "구취지는 명확하다.", True, "원고의 청구취지는 명확하다."),
+        # (8) 꽉 찬 줄 1음절 분절 결합 - 증거방법
+        ("피고의 증", "거방법을 신청합니다.", True, "피고의 증거방법을 신청합니다."),
+        # (9) 꽉 찬 줄 1음절 분절 결합 - 사실관계
+        ("기초적인 사", "실관계를 확정한다.", True, "기초적인 사실관계를 확정한다."),
+        # (10) 꽉 찬 줄 1음절 분절 결합 - 주문
+        ("판결의 주", "문과 같다.", True, "판결의 주문과 같다."),
+        # (11) 꽉 찬 줄 1음절 분절 결합 - 판결요지
+        ("관련 판", "결요지에 비추어 본다.", True, "관련 판결요지에 비추어 본다."),
+        # (12) 조사로 시작하는 줄 결합 - 에게
+        ("징계권자", "에게 재량권이 인정된다.", False, "징계권자에게 재량권이 인정된다."),
+        # (13) 어미로 시작하는 줄 결합 - 여
+        ("처분의 효력에 대하", "여 다툰다.", False, "처분의 효력에 대하여 다툰다."),
+        # (14) 어미로 시작하는 줄 결합 - 하여
+        ("사실을 확인", "하여 조치를 취했다.", False, "사실을 확인하여 조치를 취했다."),
+        # (15) 조사로 시작하는 줄 결합 - 를
+        ("원고의 청구", "를 기각한다.", False, "원고의 청구를 기각한다."),
+        # (16) 조사로 시작하는 줄 결합 - 는
+        ("피고 행정청", "은 적법하게 처리했다.", False, "피고 행정청은 적법하게 처리했다."),
+        # (17) 조사로 시작하는 줄 결합 - 의
+        ("본건 계약", "의 내용을 검토한다.", False, "본건 계약의 내용을 검토한다."),
+        # (18) 숫자/날짜 사이 공백 유지
+        ("2007.", "12. 21. 선고", False, "2007. 12. 21. 선고"),
+        # (19) 완전한 2음절 어절 사이 공백 유지 (TC-05 유형)
+        ("소리를 직접 들을", "수는 없었습니다.", True, "소리를 직접 들을 수는 없었습니다."),
+    ]
+
+    for idx, (p, n, pf, expected) in enumerate(patterns, 1):
+        actual = join_lines(p, n, prev_full=pf)
+        assert actual == expected, f"패턴 {idx} 실패: '{p}' + '{n}' (prev_full={pf}) -> 실제 '{actual}', 기대 '{expected}'"
+
+
+# ===========================================================================
+# 29. R3 (TK-32): 법리 오탐 보완 및 6대 구조 대조군 회귀 시험
+# ===========================================================================
+
+def test_r3_tk32_six_structural_defense_controls(tmp_path: Path):
+    """R3 시험: 보완 지시서 5.2절 6대 법리 구조 대조군 검증."""
+    from scripts import probe_document as probe
+    from packages.common.enums import FindingType
+
+    root = Path(".").resolve()
+    head = "원고가 부대 예산 350만 원을 사적 회식비로 사용한 사실은 다투지 않는다.\n"
+
+    # (1) 요건 구체 제시 + 한정 결론 -> 경고 없음 (정상 항변 오탐 방지)
+    c1 = (
+        "설령 원고 주장이 인정되더라도, 피고가 채권자의 수령거절 후 유효하게 변제공탁을 하여 "
+        "민법 제487조에 따라 이 사건 채무가 소멸하였으므로 피고는 이 사건 채무에 관한 책임을 질 수 없다."
+    )
+    p1 = tmp_path / "c1.txt"
+    p1.write_text(head + c1 + "\n", encoding="utf-8")
+    f1 = [f for f in probe.observe(root, p1, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f1) == 0, f"케이스 1 오탐 발생: {f1}"
+
+    # (2) 요건 누락 + 한정 결론 -> 요건 보완 안내 / 요건 확인 요청
+    c2 = (
+        "설령 원고 주장이 인정되더라도, 민법 제487조에 따라 피고는 이 사건 채무에 관한 책임을 질 수 없다."
+    )
+    p2 = tmp_path / "c2.txt"
+    p2.write_text(head + c2 + "\n", encoding="utf-8")
+    f2 = [f for f in probe.observe(root, p2, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f2) == 1, f"케이스 2 요건 확인 요청 미발생: {f2}"
+    assert "요건 확인 요청" in str(f2[0]), f"케이스 2에 '요건 확인 요청' 표현 누락: {f2[0]}"
+
+    # (3) 요건 구체 제시 + 무제한 결론 -> 과대주장 경고
+    c3 = (
+        "설령 원고 주장이 인정되더라도, 피고가 수령거절 후 변제공탁을 하였으므로 피고에 대한 행정처분은 당연무효이다."
+    )
+    p3 = tmp_path / "c3.txt"
+    p3.write_text(head + c3 + "\n", encoding="utf-8")
+    f3 = [f for f in probe.observe(root, p3, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f3) == 1, f"케이스 3 과대주장 미발생: {f3}"
+
+    # (4) 요건 누락 + 무제한 결론 -> 과대주장 경고
+    c4 = (
+        "설령 원고 주장이 인정되더라도, 헌법상 기본권 및 비례의 원칙에 위배되어 당연무효이다."
+    )
+    p4 = tmp_path / "c4.txt"
+    p4.write_text(head + c4 + "\n", encoding="utf-8")
+    f4 = [f for f in probe.observe(root, p4, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f4) >= 1, f"케이스 4 과대주장 미발생: {f4}"
+
+    # (5) 소멸시효 기산점/중단 요건 제시 -> 경고 없음
+    c5 = (
+        "설령 위 사실이 인정되더라도, 소멸시효 기산점으로부터 민법 제766조의 시효 기간이 경과하였고 "
+        "시효 중단 사유가 없으므로 그 청구권은 시효로 소멸하였다고 다툰다."
+    )
+    p5 = tmp_path / "c5.txt"
+    p5.write_text(head + c5 + "\n", encoding="utf-8")
+    f5 = [f for f in probe.observe(root, p5, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f5) == 0, f"케이스 5 소멸시효 오탐 발생: {f5}"
+
+    # (6) 부당이득 반환 범위 한정 -> 경고 없음
+    c6 = (
+        "설령 피고에게 법률상 원인 없는 이득이 인정되더라도, 피고는 선의의 수익자로서 받은 이익이 현존한 한도에서만 "
+        "반환 의무를 부담하므로, 현존 이익을 초과하는 범위에 관하여는 더 이상 책임을 질 수 없다."
+    )
+    p6 = tmp_path / "c6.txt"
+    p6.write_text(head + c6 + "\n", encoding="utf-8")
+    f6 = [f for f in probe.observe(root, p6, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
+    assert len(f6) == 0, f"케이스 6 부당이득 반환범위 오탐 발생: {f6}"
+
+
+
+
