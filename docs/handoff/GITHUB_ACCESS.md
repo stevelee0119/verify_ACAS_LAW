@@ -36,3 +36,10 @@
 권한 근거(GitHub 문서): 경고 조회에는 fine-grained 토큰·앱 권한 **"Dependabot alerts" (read)**([문서](https://docs.github.com/en/rest/dependabot/alerts)), **"Code scanning alerts" (read)**([문서](https://docs.github.com/en/rest/code-scanning/code-scanning))가 필요하다.
 
 **대기 중인 사용자 조치(둘 중 하나):** (a) GitHub → Settings → Applications → Installed GitHub Apps → Claude → Configure에서 위 두 권한이 목록에 있는지, 승인 대기 요청이 있는지 확인해 승인(앱이 해당 권한을 제공하는지는 확인하지 못함). (b) 불가하면 Security 탭의 경고 건수·심각도를 알려 주기(제가 대신 읽지 못하는 동안의 대안). (c) 선택: 이 저장소 한정 읽기 전용 fine-grained 토큰(Dependabot alerts·Code scanning alerts: read)을 세션 환경 설정에 저장.
+
+## 4. 승인된 앱 권한 목록 대조(사용자 제공, 2026-10-03)
+Claude 연동에 승인된 권한: **읽기** — administration, commit statuses, merge queues, metadata. **읽기·쓰기** — actions, checks, code, discussions, issues, pull requests, repository hooks, workflows.
+- **403의 원인 확정:** 이 목록에 **Dependabot alerts·Code scanning alerts(·Secret scanning alerts)가 없다.** 앱 정의에 없는 권한이라 사용자가 승인할 수 있는 항목이 아니다(앱 제공자가 앱 권한을 바꿔야 한다). 따라서 3절의 조치 (a)는 성립하지 않는다.
+- **이미 승인된 권한과 실제 동작이 일치:** administration 읽기 → `main` 보호 조회 가능, actions·workflows 쓰기 → 수동 실행 가능, code 쓰기 → 푸시 가능.
+- **방어선 메모:** 앱에 `code`·`workflows`·`repository hooks` 쓰기가 있으므로 병합 방어선(필수 확인 2개 + 관리자 포함 적용 + 강제 푸시·삭제 금지)이 앱 토큰에도 적용되는 것이 중요하다. 이 세션에서는 `hooks` 경로를 프록시가 막는다.
+- **대체 경로:** (A) 사용자가 Security 탭의 경고 건수·심각도를 알려 준다. (B) 평가 측이 읽기 전용 점검 워크플로를 `.github/workflows/`에 추가한다 — 코드 스캔은 워크플로의 `GITHUB_TOKEN`에 `security-events: read`를 주어 경고를 아티팩트로 내보내면 제가 Actions 읽기로 가져올 수 있다(Dependabot 경고는 `GITHUB_TOKEN`으로 읽을 수 없으므로 `pip-audit`로 의존성 취약점을 직접 점검하는 단계를 둔다). (C) 읽기 전용 fine-grained 토큰을 세션 환경에 저장(이 환경에서 통하는지는 시험 필요). **(B)는 새 워크플로 파일을 추가하는 변경이라 사용자 승인 후에만 만든다.**
