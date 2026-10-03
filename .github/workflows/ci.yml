@@ -6,6 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 토큰 권한은 저장소 읽기로 제한한다(기본 권한이 저장소 설정에 따라 넓어지는 것을 막는다).
+# 이 워크플로는 체크아웃·아티팩트 업로드만 하고 푸시·PR·이슈 쓰기를 하지 않는다.
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
