@@ -242,3 +242,87 @@ DENIED_WITH_NEGATIVE_EXISTENTIAL = [
 def test_requirement_denied_by_a_negative_existential_keeps_the_overclaim_warning(index):
     text = DENIED_WITH_NEGATIVE_EXISTENTIAL[index]
     assert _overclaim_warned(text), f"요건 부정 문장의 과대주장 경고가 없다: {text}"
+
+
+# ---------------------------------------------------------------------------
+# R7-09 성명·이름 라벨 뒤에 이름이 아닌 말이 와도 PII 탐지기가 예외로 끝나지 않는다
+# (회귀: 7차 보완 9506481이 `josa_match`를 `if not is_name_label:` 안에서만 만들고 뒤에서 무조건 읽어 UnboundLocalError — TK-48, P1)
+# ---------------------------------------------------------------------------
+ORDINARY_PHRASES_AFTER_NAME_LABELS = [
+    "성명 불상의 직원이 현장에 있었다고 주장한다.",
+    "성명 미상의 자가 문서를 작성하였다.",
+    "성명: 불상",
+    "이름: 확인 불가",
+    "원고 성명 불상",
+    "피고 서명자는 불명이다.",
+    "성명 표시 생략",
+    "성명: 가나다라마",
+    # 9506481 독립 감사(Sol B7-01)·평가 측 재현: 후보마다 `josa_match`가 보장되지 않아 첫 후보에서 예외
+    "성명: 가나다",
+    "성명: 김도현은 출석하였다.",
+    "성명 김도현은 출석하였다.",
+    "담당자: 박민수는 기록을 확인했다.",
+    "피청구인: 각하한다",
+    "원고: 청구를 기각한다",
+    "피고: 항변을 철회한다",
+]
+
+
+@pytest.mark.parametrize("text", ORDINARY_PHRASES_AFTER_NAME_LABELS)
+def test_pii_detection_does_not_raise_on_ordinary_text_after_a_name_label(text):
+    from packages.pii_engine.detector import detect
+    detect(text)  # 예외가 나면 실패 — 한 문서의 한 문구가 검증 전체를 멈춘다
+
+
+@pytest.mark.parametrize("text", ["성명: 김도현은 출석하였다.", "성명 김도현은 출석하였다."])
+def test_explicit_name_label_keeps_the_name_and_drops_the_particle(text):
+    # 시작(7adf43f)·4da3910에서 통과한 동작. 9506481은 예외로 멈춘다(TK-48).
+    assert _person_text(text) == ["김도현"], _person_text(text)
+
+
+# ---------------------------------------------------------------------------
+# R7-10 새 라벨(사용자·근로자·보증인·후견인 등) 뒤 일반 명사를 인명으로 가리지 않는다
+# (회귀: 9506481의 라벨 어휘 확대가 `{새 라벨} {일반 명사}`의 36%를 PERSON으로 가린다 — 사용자 승인 조건 '새 라벨 뒤 일반 명사 오탐 0' 위반, TK-43)
+# 시작·4da3910에서는 이 라벨들이 어휘에 없어 PERSON 0이다.
+# ---------------------------------------------------------------------------
+NEW_VOCAB_LABELS = ["사용자", "근로자", "보증인", "후견인", "임차인", "도급인"]
+COMMON_NOUNS_AFTER_LABEL = ["계정은", "서명은", "지시는", "의견은"]
+
+
+@pytest.mark.parametrize("label", NEW_VOCAB_LABELS)
+@pytest.mark.parametrize("noun", COMMON_NOUNS_AFTER_LABEL)
+def test_common_noun_after_an_added_label_is_not_masked_as_a_person(label, noun):
+    text = f"{label} {noun} 이 사건과 무관하다."
+    assert _person_text(text) == [], f"일반 명사가 인명으로 가려진다: {text!r}"
+
+
+# ---------------------------------------------------------------------------
+# R7-11 당사자 라벨 + 콜론 뒤 소송 용어를 인명으로 가리지 않는다
+# (회귀: 9506481은 `is_name_label`에 ':'를 넣어 당사자·직책 라벨까지 '성명 표지'로 완화한다 — Sol B7-01, TK-43)
+# 시작(7adf43f)·4da3910은 모두 PERSON 0이다. (참고: `채무자: 변제를`·`증인: 진술을`은 시작부터 있던 오탐이라 이 시험 대상이 아니다.)
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "text",
+    ["신청인: 기각을 구한다", "피청구인: 각하한다", "원고: 청구를 기각한다", "피고: 항변을 철회한다"],
+)
+def test_colon_after_a_party_label_does_not_relax_to_an_explicit_name(text):
+    assert _person_text(text) == [], f"소송 용어가 인명으로 가려진다: {text!r}"
+
+
+# ---------------------------------------------------------------------------
+# R7-12 당사자 라벨 + 실명 + 인사·절차 후행 문맥에서 이름 전체 마스킹 (TK-43 ↔ TK-39 잔여)
+# 시작(7adf43f)은 새고(`선임 안건`·`해임 건`이 후행 문맥 제외 목록에 있다), 4da3910은 라벨 완화로 막았으나
+# 9506481이 완화를 성명 표지·콜론으로 줄이자 되돌아왔다. TK-43 요구 ①(과마스킹 제거)과 이 시험은 같은 목록을 두고 부딪히므로
+# **R7-02(`{당사자 라벨} 진술 조서는` 오탐 0)와 이 시험을 함께 만족**해야 한다. 입력은 평가 측 비공개 변형과 다른 이름·문맥이다.
+# ---------------------------------------------------------------------------
+LEAK_LABELS = ["원고", "피고", "신청인", "증인", "피해자", "채무자"]
+LEAK_NAMES = ["하준서", "백다온"]
+LEAK_CONTEXTS = ["{L} {n} 선임 안건을 상정한다.", "{L} {n} 해임 건을 의결한다."]
+
+
+@pytest.mark.parametrize("label", LEAK_LABELS)
+@pytest.mark.parametrize("name", LEAK_NAMES)
+@pytest.mark.parametrize("ctx", LEAK_CONTEXTS)
+def test_party_label_real_name_before_an_appointment_phrase_is_fully_masked(label, name, ctx):
+    text = ctx.format(L=label, n=name)
+    assert name in _person_text(text), f"실명이 가려지지 않는다: {text!r} → {_person_text(text)}"

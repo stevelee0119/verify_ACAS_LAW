@@ -1,5 +1,7 @@
 # 7차 보완 작업 지시서 — 7차 독립 측정에서 확인된 회귀·미해결만 고친다 (구현 담당 에이전트)
 
+> **갱신(2026-10-03):** 이 지시서의 후속은 [PROMPT_FOR_STABILIZATION_ROUND7C.md](PROMPT_FOR_STABILIZATION_ROUND7C.md)다. 이 문서의 R7-C ①('완화를 성명 표지에 한정')은 반대 방향(유출) 시험 없이 적은 평가 측 오류여서 7C가 정정한다. 7C는 이 지시서의 0.2 보고 규칙·CI 기준을 이어받는다.
+
 작성: 평가 에이전트(claude-code) 2026-10-03 · 근거: [f1_gate_verdict.md](../scorecards/f1_gate_verdict.md), [HISTORY 12절](../scorecards/HISTORY.md), 티켓 TK-42~45. 아래 전체를 붙여 넣어 쓴다. 7차 지시서(`PROMPT_FOR_STABILIZATION_ROUND7.md`)의 0.3 보고 규칙·3절 설계 원칙·4절 금지 행위·5절 검증 명령은 **그대로 유효**하다.
 
 ## 0. 성격
@@ -33,7 +35,7 @@
 `docs/handoff/requests/24_round7b_completion.md` 하나에: ① 7차 보고서 정정 절(존재하지 않는 경로·식별자, "기존 시험 새 실패 0", "배치 불변성 확립", job 결과 누락) ② R4 요구 보고: 기존 `0o444` 원본의 이행 제안(기동 시 점검·마이그레이션), `record_storage_encryption_error` 값이 관리자 전용 진단에만 보이는지, `admin.js`에서 해시·API 값으로 객체를 조회하는 곳 점검, S1 바꾸기 전후 시간 표 ③ 폭 40 INJ-1 해소 또는 미해결 표기 ④ 7차 보고서의 '완전 방어'(표본 입력 통과를 일반화)와 6차 표현 '전수 보존'·'공급자 0회 보장'의 정정(검증한 입력 집합·경로를 적는다) ⑤ 정규식은 평가 측이 Linux에서 지수 증가 0건을 실측했으나 증명은 아니라는 점을 반영(Windows에서 `probe_regex_complexity.py`는 `SIGALRM`이 없어 못 돈다 — 평가 측 몫).
 
 ### R7-F. TK-47 F1 설계 문서를 현행 모델에서 다시 작성 (P2, 문서만)
-[TK-47](TK-47_f1_design_prep_not_tied_to_current_model.md). `docs/handoff/requests/22_f1_design_prep.md`를 현행 코드에서 출발해 다시 쓴다(코드·DB·API 변경 금지): `FindingType` **97개 전수 목록**과 화면 배정(미배정 시 실패하는 시험 제안), 기존 JSON·화면 필드 대응과 보존 경로, 현행 `FindingWorkflow`(`apps/api/workspace.py`)·`ReviewDraft`·`ReviewRevision`·기존 `/workflow` API를 보존하는 검토 상태 비교안, F3 청구 단위 호출 수·상한·캐시·실패·예산 초과 처리, 참고자료 발췌가 현행 `PIIDetector`·마스킹·`inspect_request`·`LLMRouter.run`을 지나는 정확한 경로, `LOCAL_ONLY` 외부 호출 0 시험 위치. 가공의 타입 이름·새 원문 열람 권한을 쓰지 않는다.
+[TK-47](TK-47_f1_design_prep_not_tied_to_current_model.md). `docs/handoff/requests/22_f1_design_prep.md`를 현행 코드에서 출발해 다시 쓴다(코드·DB·API 변경 금지): `FindingType` **97개 전수 목록**과 화면 배정(미배정 시 실패하는 시험 제안), 기존 JSON·화면 필드 대응과 보존 경로, 현행 `FindingWorkflow`(`apps/api/workspace.py`)·`ReviewDraft`·`ReviewRevision`·기존 `/workflow` API를 보존하는 검토 상태 비교안, F3 청구 단위 호출 수·상한·캐시·실패·예산 초과 처리, 참고자료 발췌가 현행 `packages/pii_engine/detector.py::detect`·`PIIEngine`(`packages/pii_engine/engine.py`) 마스킹·`packages/llm_router/privacy.py::inspect_request`·`LLMRouter.run`을 지나는 정확한 경로(※ 이 지시서 초판의 `PIIDetector`는 평가 측이 잘못 적은 이름이며 코드에 없다 — 7C 지시서에서 정정), `LOCAL_ONLY` 외부 호출 0 시험 위치. 가공의 타입 이름·새 원문 열람 권한을 쓰지 않는다.
 
 ## 2. 수용·완료의 정의
 - `tests/regression` 전부 통과, 브라우저 시험 197건 통과, `test_round7_findings.py` 일반 시험 전부 통과(strict xfail 줄 결합 5건은 구조 판정이 되면, 라벨 어휘 8건은 어휘 확대 뒤 XPASS — requests로 알린다), 51건 XPASS 유지, 새 실패 0(전체 시험·CI 결론으로 증빙).

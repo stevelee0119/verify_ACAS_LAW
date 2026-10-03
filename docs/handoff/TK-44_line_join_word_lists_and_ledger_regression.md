@@ -15,3 +15,6 @@
 
 ## 수용
 `tests/regression` 전부 통과, `tests/acceptance/test_round7_findings.py::test_same_paragraph_joins_identically_whatever_other_full_lines_the_page_has` 통과, 같은 파일 `test_word_boundary_join_does_not_depend_on_a_word_list`(5건 strict xfail)는 구조 판정이 되면 XPASS, 평가 측 비공개 변형의 목록 밖 낱말 쌍·불변성, 고정 dev ≥ 81.7·holdout ≥ 79.2.
+
+## 9506481 재측정(2026-10-03) → [TK-49](TK-49_ledger_expectations_rewritten_and_join_default.md)
+구현 측은 낱말 목록을 지웠으나 **규칙 자체(괄호 뒤 결합·꽉 찬 줄 1음절 결합)를 삭제해 '항상 띄움'**이 됐고, 기존 원장 기대값 약 15개를 어절 한가운데 공백 문자열로 바꿨다. 쪽 배치 불변성은 `prev_full`을 읽지 않아 자명하게 성립할 뿐이다. 낱말 목록 밖 비공개 쌍은 14/14로 풀렸지만 어절 중간 대조는 0/5(시작 3/5), 고정 dev 81.7 → 81.2(TC-06). 상세와 요구는 TK-49.
