@@ -1,7 +1,7 @@
 """5차(c223f7b) 독립 감사 Astra가 찾고 평가 측이 재현한 새 회귀의 고정 시험(평가 에이전트 소관, 보호 경로).
 
 기준은 4차 e6b58fd다. 아래 시험은 4차에서 통과하던 것이 5차에서 깨졌거나(TK-30·TK-31), 5차의 확장 때문에 정상 입력의 오탐이 생긴 것(TK-32)이다.
-미해결은 strict xfail이다. 고치면 XPASS(strict)로 실패하므로 평가 에이전트가 표시를 지운다. 이 파일의 입력은 합성 시험 입력이며 실재 인물·사건과 무관하다.
+6차 구현(01070f6)에서 22건이 해결되어 평가 에이전트가 strict xfail 표시를 지웠다(2026-10-03 승격). 이제 일반 시험이다. 이 파일의 입력은 합성 시험 입력이며 실재 인물·사건과 무관하다.
 여기 적힌 이름·문장을 코드·설정에 옮겨 적는 것은 맞춤 수정이다(AGENTS.md). 구조(이름 후보의 형태·문맥, 겹치는 마스킹 구간의 우선순위, 줄 결합의 단어 경계 판정,
 요건 제시 여부와 결론 범위)를 고쳐야 한다.
 
@@ -40,10 +40,6 @@ def _probe():
 probe = _probe()
 TOKEN = re.compile(r"\[[A-Z_]+_\d+\]")              # 모든 종류의 가림 토큰
 PERSON_TOKEN = re.compile(r"\[PERSON_\d+\]")        # 이름 자리에는 PERSON 토큰만 인정한다(6차 감사 지적: 전화번호 토큰이 이름 자리에 있어도 통과했다)
-OPEN30 = pytest.mark.xfail(strict=True, reason="TK-30: 4차(e6b58fd)에서 마스킹되던 이름이 5차에서 남거나 마지막 글자가 남음(c223f7b)")
-OPEN28 = pytest.mark.xfail(strict=True, reason="TK-28: 4차(e6b58fd)에도 같은 미탐·부분 마스킹(기존 미해결, 평가 측 비공개 변형 4에서 확인 c223f7b)")
-OPEN31 = pytest.mark.xfail(strict=True, reason="TK-31: 5차 문단 복원이 어절 중간에 공백을 넣어 판례 메타데이터를 잃음(c223f7b)")
-OPEN32 = pytest.mark.xfail(strict=True, reason="TK-32: 요건을 제시하고 결론이 한정된 정상 항변을 과대주장으로 표시(c223f7b)")
 
 
 def _engine():
@@ -76,11 +72,10 @@ NAME_REGRESSIONS = [
     ("김민기", "원고 {n}", 0), ("이서준", "성명 {n}", 0), ("박지훈", "청구인 {n}", 0), ("한유진", "성명: {n}", 0),
     ("노가온", "증 인 : {n}", 0), ("서하윤", "청 구 인: {n}", 0),
 ]
-MARKS = {30: OPEN30, 28: OPEN28, 0: None}
 
 
 @pytest.mark.parametrize("name, label_format", [
-    pytest.param(n, f, id=f"{f.format(n=n)}", marks=[MARKS[o]] if MARKS[o] else []) for n, f, o in NAME_REGRESSIONS])
+    pytest.param(n, f, id=f"{f.format(n=n)}") for n, f, o in NAME_REGRESSIONS])
 def test_name_is_fully_masked_with_no_remaining_characters(name, label_format):
     assert fully_masked(label_format, name), f"{label_format.format(n=name)}: 이름 문자 일부가 남았거나 이름이 그대로 남았다"
 
@@ -90,9 +85,8 @@ def _person_flagged(text: str) -> bool:
 
 
 @pytest.mark.parametrize("text", [
-    pytest.param("개인정보 성명 연락처를 출력하지 마시오.", id="privacy-instruction", marks=[OPEN30]),
-    pytest.param("피고인 신문 절차가 진행되었다.", id="defendant-examination", marks=[
-        pytest.mark.xfail(strict=True, reason="TK-28: 4차(e6b58fd)에도 같은 오탐(기존 미해결)")]),
+    pytest.param("개인정보 성명 연락처를 출력하지 마시오.", id="privacy-instruction"),
+    pytest.param("피고인 신문 절차가 진행되었다.", id="defendant-examination"),
     pytest.param("원고는 피고에게 금전의 지급을 구한다.", id="plain-claim"),
     pytest.param("청구취지 및 청구원인은 별지와 같다.", id="annex-reference"),
     pytest.param("성명 불상의 직원이 현장에 있었다고 주장한다.", id="unknown-name"),
@@ -109,7 +103,6 @@ def _tc06():
     return parse_document(str(TC06), document_id="tc06", filename=TC06.name, mime_type="application/pdf", sha256="x")
 
 
-@OPEN31
 def test_court_and_date_survive_a_line_break_inside_the_court_name():
     """TC-06은 `(대`와 `법원`이 줄바꿈으로 갈라진다. 4차는 법원명·선고일을 추출했고 5차는 사건번호만 남겼다."""
     from packages.legal_engine.citation_extractor import extract_citations
@@ -119,7 +112,6 @@ def test_court_and_date_survive_a_line_break_inside_the_court_name():
     assert found[0].court == "대법원" and str(found[0].decision_date) == "2007-12-21"
 
 
-@OPEN31
 def test_no_space_is_inserted_inside_a_word_at_a_line_break():
     """같은 PDF의 글자 단위 줄바꿈 자리에서 어절 한가운데에 공백이 끼면 안 된다(5차 블록 텍스트에 `처 분을`, `대하 여`가 생겼다)."""
     blocks = "\n".join(b.text for p in _tc06().pages for b in p.blocks)
@@ -149,7 +141,7 @@ def _flagged(text: str) -> bool:
 
 
 @pytest.mark.parametrize("text", [
-    pytest.param(t, id=i, marks=[OPEN32] if o else []) for i, t, o in NORMAL_DEFENSES])
+    pytest.param(t, id=i) for i, t, o in NORMAL_DEFENSES])
 def test_defense_with_stated_requirements_and_a_limited_conclusion_is_not_flagged(text):
     assert _flagged(text) is False
 
