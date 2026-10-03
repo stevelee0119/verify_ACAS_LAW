@@ -29,7 +29,7 @@ def _finishes_within(code: str, seconds: float) -> bool:
 
 
 # ------------------------------------------------------------------ TK-38 A: PDF 정규식 지수 증가 ---
-@pytest.mark.xfail(strict=True, reason="TK-38 A: SINGLE_GLYPH_SHOW_RE가 위치 지정 연산자 사이 공백에서 지수 증가 — 조작된 PDF 105바이트가 20초 넘게 처리를 멈춘다(CodeQL py/redos)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 @pytest.mark.parametrize("repeats", [14, 18, 24])
 def test_pdf_zero_width_marker_check_finishes_quickly_on_adversarial_content(repeats):
     code = ("from packages.document_engine.pdf_parser import _is_line_break_marker\n"
@@ -48,7 +48,7 @@ def test_single_glyph_show_pattern_keeps_its_meaning():
 
 
 # ------------------------------------------------------------------ TK-38 B: 금액 정규식 ---
-@pytest.mark.xfail(strict=True, reason="TK-38 B: (?:원정|원|정)+$가 지수 증가('원정'*24 4초 이상). 현재 호출부는 도달하지 않으나 패턴 자체가 위험")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_korean_amount_suffix_strip_is_linear():
     code = ("from packages.claim_engine.korean_amount import parse_korean_amount\n"
             "parse_korean_amount('이억' + '원정' * 26 + '만')\n")
@@ -69,7 +69,7 @@ def _store(tmp_path):
     return LocalObjectStorage(tmp_path / "storage")
 
 
-@pytest.mark.xfail(strict=True, reason="TK-35: _abs가 경로를 접두 문자열로 비교해 형제 디렉터리(storage2)를 막지 못한다(CodeQL py/path-injection)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 @pytest.mark.parametrize("key", ["../storage2/secret.txt", "originals/../../storage2/secret.txt"])
 def test_storage_rejects_a_sibling_directory_sharing_the_root_prefix(tmp_path, key):
     store = _store(tmp_path)
@@ -85,7 +85,7 @@ def test_storage_still_rejects_plain_traversal_and_accepts_normal_keys(tmp_path)
     assert (tmp_path / "storage").resolve() in store.path("originals/p1/a.pdf").parents
 
 
-@pytest.mark.xfail(strict=True, reason="TK-35: PROJECT_ID_RE.match+$가 끝 줄바꿈이 든 프로젝트 ID를 통과시킨다(fullmatch여야 함, py/log-injection 3건과 같은 원인)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_project_id_with_trailing_newline_is_rejected(tmp_path):
     store = _store(tmp_path)
     with pytest.raises(ValueError):
@@ -93,7 +93,7 @@ def test_project_id_with_trailing_newline_is_rejected(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX 파일 권한 시험")
-@pytest.mark.xfail(strict=True, reason="TK-35: 원본을 0o444(모든 사용자 읽기)로 고정한다 — 소유자만 읽는 0o400이어야 한다(CodeQL py/overly-permissive-file)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_stored_original_is_not_readable_by_other_users(tmp_path):
     store = _store(tmp_path)
     key = store.put_original("p1/abc.pdf", b"%PDF-1.4 synthetic")
@@ -110,7 +110,7 @@ def test_stored_original_stays_write_protected(tmp_path):
 
 
 # ------------------------------------------------------------------ TK-36: 예외 문구 응답 ---
-@pytest.mark.xfail(strict=True, reason="TK-36: 키 설정 오류 예외 문구(환경변수 이름 포함)가 503 본문에 그대로 실린다(CodeQL py/stack-trace-exposure)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_storage_key_error_response_does_not_echo_configuration_details(monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
@@ -140,12 +140,12 @@ def test_storage_key_error_response_does_not_echo_configuration_details(monkeypa
 ADMIN_JS = (REPO / "apps" / "web" / "static" / "admin.js").read_text(encoding="utf-8")
 
 
-@pytest.mark.xfail(strict=True, reason="TK-37: 탭 이름을 `tabs[next] ?`(참 판정)로 검증해 #admin/__proto__ 같은 해시가 통과한다(CodeQL js/prototype-polluting-assignment 13건). 정적 점검 — 브라우저 동작 시험은 착수 시 평가 측이 둔다")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_admin_tab_lookup_ignores_prototype_keys():
     assert not re.search(r"tabs\[next\]\s*\?", ADMIN_JS), "객체 리터럴의 참 판정으로 탭 이름을 검증한다"
     assert re.search(r"Object\.hasOwn\(tabs|hasOwnProperty\.call\(tabs|new Map\(", ADMIN_JS), "자기 속성 검사나 Map을 쓰지 않는다"
 
 
-@pytest.mark.xfail(strict=True, reason="TK-37: CSV 내려받기 주소의 year에 숫자 변환이 없다(js/xss-through-dom 경미 하드닝)")
+# 승격(2026-10-03, Round 7 종결): 보안 보강 S1~S5(TK-35~38) — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_admin_csv_download_url_coerces_year_to_a_number():
     assert "Number(year)" in ADMIN_JS

@@ -48,8 +48,8 @@ def _name_fully_masked(template: str, name: str) -> bool:
 
 @pytest.mark.parametrize("name", NAMES)
 @pytest.mark.parametrize("ctx_id, template", [
-    pytest.param(c, t, id=c, marks=[] if c == "plain" else [REGRESSION("R6-01 성명 라벨 뒤 문맥이 이름 탐지를 꺼뜨림(시작 통과)")])
-    for c, t in CONTEXTS])
+    # 승격(2026-10-03, Round 7 종결): R6-01 마스킹 18건 — 61ef12f에서 통과, strict xfail 표시 제거
+    pytest.param(c, t, id=c) for c, t in CONTEXTS])
 def test_explicit_name_is_fully_masked_whatever_follows_it(ctx_id, template, name):
     assert _name_fully_masked(template, name), f"이름 자리가 PERSON 토큰 하나로 바뀌지 않았다: {template.format(n=name)}"
 
@@ -76,8 +76,8 @@ def _router_with_fake_cloud_provider(monkeypatch):
 
 @pytest.mark.parametrize("position", ["system", "user", "schema", "metadata"])
 @pytest.mark.parametrize("ctx_id, template", [
-    pytest.param(c, t, id=c, marks=[] if c == "plain" else [REGRESSION("R6-01 원문 성명이 실제 라우터를 거쳐 공급자 호출까지 도달(시작은 차단)")])
-    for c, t in CONTEXTS if c in ("plain", "no-print", "procedure", "hearing")])
+    # 승격(2026-10-03, Round 7 종결): R6-01 라우터 12건 — 61ef12f에서 통과, strict xfail 표시 제거
+    pytest.param(c, t, id=c) for c, t in CONTEXTS if c in ("plain", "no-print", "procedure", "hearing")])
 def test_unmasked_explicit_name_never_reaches_the_cloud_provider_through_the_router(monkeypatch, ctx_id, template, position):
     from packages.common.enums import LLMRole
     from packages.llm_router.providers import LLMRequest
@@ -125,14 +125,13 @@ LIMITED_NORMAL_DEFENSES = [  # 요건을 구체적으로 제시하고 해당 채
 ]
 
 
-@pytest.mark.parametrize("text", [pytest.param(t, id=f"denied-{i}", marks=[REGRESSION("R6-02 요건 부정 문장의 경고가 사라짐(시작은 경고)")])
-                                   for i, t in enumerate(REQUIREMENT_DENIED)])
+# 승격(2026-10-03, Round 7 종결): R6-02 요건 부정 4건 — 61ef12f에서 통과
+@pytest.mark.parametrize("text", [pytest.param(t, id=f"denied-{i}") for i, t in enumerate(REQUIREMENT_DENIED)])
 def test_denied_requirement_with_a_limited_conclusion_is_still_flagged(text):
     assert _overclaim_warned(text)
 
 
-@pytest.mark.parametrize("text", [pytest.param(t, id=f"extended-{i}", marks=[REGRESSION("R6-02 다른 책임으로 확장한 결론의 경고가 사라짐(시작은 경고)")])
-                                   for i, t in enumerate(SCOPE_EXTENDED)]
+@pytest.mark.parametrize("text", [pytest.param(t, id=f"extended-{i}") for i, t in enumerate(SCOPE_EXTENDED)]  # 승격(2026-10-03): R6-02 확장 2건
                          + [pytest.param(t, id=f"extended-kept-{i}") for i, t in enumerate(SCOPE_EXTENDED_KEPT)])
 def test_conclusion_extended_to_other_liability_is_still_flagged(text):
     assert _overclaim_warned(text)
@@ -179,7 +178,7 @@ def _paragraph_text(extra_full_lines: int) -> str:
     return next(b.text for b in out if "사람에게" in b.text)
 
 
-@pytest.mark.xfail(strict=True, reason="6차 회귀 R6-03: 같은 문단의 결합 결과가 같은 쪽의 다른 문단 배치(꽉 찬 줄 2줄 이상)에 따라 달라진다(시작은 항상 같음)")
+# 승격(2026-10-03, Round 7 종결): R6-03 쪽 배치 불변성 — a1f3d1e의 문단 국소 right_edge로 통과
 def test_same_paragraph_joins_the_same_way_whatever_else_is_on_the_page():
     results = {n: _paragraph_text(n) for n in (0, 1, 2, 3)}
     assert len(set(results.values())) == 1, results

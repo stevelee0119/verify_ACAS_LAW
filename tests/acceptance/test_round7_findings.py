@@ -68,7 +68,7 @@ def test_admin_script_initializes_without_reference_errors():
         f"{failed}")
 
 
-@pytest.mark.xfail(strict=True, reason="TK-37: 시작 7adf43f에서 `#admin/__proto__`가 탭으로 통과한다(동작 시험). 7차 수정 뒤에도 init이 살아 있어야 통과한다 — TK-42")
+# 승격(2026-10-03, Round 7 종결): TK-37 관리자 탭·TK-43 라벨 어휘 확대·TK-45 '없으나' 요건 부정 — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 def test_admin_script_still_rejects_prototype_tab_names_and_keeps_object_prototype_clean():
     result = _run_admin_smoke()
     assert dict(result["out"]).get("open-proto") == "ok"
@@ -195,7 +195,7 @@ NEW_LABEL_FORMATS = ["{label}: {name} 확인 요망", "{label} {name}은 기일�
 NEW_LABEL_NAMES = ["한도현", "서윤재"]
 
 
-@pytest.mark.xfail(strict=True, reason="TK-43: 엔진 라벨 어휘(성명·당사자·직책)에 없는 인명 표지는 이름이 가려지지 않는다 — 어휘 확대 승인됨")
+# 승격(2026-10-03, Round 7 종결): TK-37 관리자 탭·TK-43 라벨 어휘 확대·TK-45 '없으나' 요건 부정 — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 @pytest.mark.parametrize("label", NEW_LABELS)
 @pytest.mark.parametrize("form", range(len(NEW_LABEL_FORMATS)))
 def test_name_after_a_person_reference_label_outside_the_old_vocabulary_is_fully_masked(label, form):
@@ -242,7 +242,7 @@ DENIED_WITH_NEGATIVE_EXISTENTIAL = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="TK-45: '없으나'·'한 적/사실이 없으나' 형태의 요건 부정은 부정 표지 낱말 목록 밖이라 경고가 사라진다(독립 감사 A7-02)")
+# 승격(2026-10-03, Round 7 종결): TK-37 관리자 탭·TK-43 라벨 어휘 확대·TK-45 '없으나' 요건 부정 — 61ef12f에서 통과해 strict xfail 표시를 지웠다
 @pytest.mark.parametrize("index", range(len(DENIED_WITH_NEGATIVE_EXISTENTIAL)))
 def test_requirement_denied_by_a_negative_existential_keeps_the_overclaim_warning(index):
     text = DENIED_WITH_NEGATIVE_EXISTENTIAL[index]
