@@ -85,3 +85,21 @@ Claude 연동에 승인된 권한: **읽기** — administration, commit statuse
 | #35 | `apps/api/routers/identity.py:92` | Won't fix | 세션 쿠키는 `HttpOnly`·`SameSite=lax`이며 `Secure`는 HTTPS 또는 신뢰 프록시(`LV_TRUSTED_PROXY_IPS`)의 `X-Forwarded-Proto: https`일 때 설정된다(`access.py:234-240`). 쿠키가 세션 비밀을 담는 것은 설계다. HTTP로 배포하면 `Secure`가 붙지 않으므로 TLS 종단 뒤에서는 신뢰 프록시를 설정한다. |
 
 이 4건은 코드 결함이 아니라는 평가 측 판단이며, 닫으면 GitHub의 경고 목록에서 사라진다(되돌리려면 경고를 다시 열면 된다). 나머지 경고(워크플로 6건은 `main` 반영 뒤 자동으로 닫힘, TK-35~38에 속한 29건)는 **닫지 않는다.**
+
+## 8. 재수집 — 열린 경고 103건(2026-10-03 03:13, 실행 `37092497026`, `main` `9933548` 그대로)
+사용자가 경고 #39·#40(`js/code-injection`, `tests/frontend_auth.test.cjs:84,244`)을 화면으로 알려 와 같은 방법(6절)으로 다시 수집했다. **`main`의 코드는 바뀌지 않았는데**(마지막 커밋 2026-10-01) 경고가 38건에서 **103건**(critical 2·high 76·medium 25)으로 늘었다. 번호 #1~#38은 그대로이고 **#39~#103이 신규 65건**이다.
+
+**원인 추정(확인 못 함):** 새 경고의 입력(source)이 모두 환경변수·명령줄 인자·파일 읽기 같은 **운영자 쪽 입력**이다. CodeQL 분석 설정이 "로컬 입력"까지 위협으로 보도록 바뀌었거나 쿼리 묶음이 갱신된 것으로 보인다. 설정 화면(Settings → Code security → Code scanning)을 평가 측은 읽지 못했다. 사용자가 그 화면에서 **위협 모델**(원격 입력만 / 원격+로컬) 선택이 바뀌었는지 확인해 주기 바란다.
+
+| 규칙(심각도) | 건수 | 위치 요약 | 판단 | 조치 |
+|---|---|---|---|---|
+| `js/code-injection` (critical) | 2 | `tests/frontend_auth.test.cjs:84,244` — 시험이 저장소의 `apps/web/static/*.js`를 읽어 `vm` 격리 컨텍스트에서 실행 | **오탐**(시험 장치, 외부 입력 없음; 경로는 `path.resolve(__dirname, "..")`로 고정) | 사용자가 "Used in tests" |
+| `py/path-injection` (high) | 신규 58 | ① `scripts/` 39건: 평가·개발 도구가 **명령줄 인자·고정 폴더**로 파일을 연다(배포 대상 아님) ② `tests/` 5건(`live/conftest.py`·`test_report_completion.py`) ③ 제품 코드 14건: `config.py:157`(데이터 폴더 환경변수), `storage.py:21`(해시 계산 내부 인자), `key_provider.py:110-134` 8건(키 파일 경로 환경변수), `drive.py:121`(서비스 계정 파일 환경변수), `extract.py:86,183`(내부 임시 경로), `pdf_report.py:36`(글꼴 경로 환경변수) | **운영자 입력이라 오탐/의도** — 환경변수·명령줄을 조작할 수 있는 사람은 이미 서버·저장소 권한자다. 키 파일은 비공개 권한 검사를 거친다(`key_provider.py`의 "not private" 검사) | 사용자가 "Won't fix"(scripts·제품 설정 경로) / "Used in tests"(tests) |
+| `py/overly-permissive-file` (high) | 1 | `storage.py:108` `os.chmod(p, 0o444)` — 원본을 읽기 전용으로 고정하면서 **모든 사용자에게 읽기 허용** | **실제 개선점**(사건 원본이 같은 서버의 다른 계정에 읽힌다). 불변성은 `0o400`(소유자 읽기 전용)으로도 유지된다 | [TK-35](TK-35_storage_path_prefix_check.md)에 추가 |
+| `py/log-injection` (medium) | 4 | `project_purge.py:62,70`·`routers/projects.py:252`(프로젝트 ID를 로그에 그대로), `worker/runner.py:46`(환경변수 값을 `%r`로 기록) | 앞 3건: 프로젝트 ID 검사가 `match`+`$`라 끝 줄바꿈을 허용해 **로그 줄 위조 여지**(낮음) — TK-35의 `fullmatch`와 같은 원인. `runner.py:46`은 `%r`로 줄바꿈이 이스케이프되고 운영자 입력이라 **오탐** | 앞 3건은 TK-35에 추가, 뒤 1건은 사용자가 "Won't fix" |
+
+**신규 65건 분류:** 코드 변경이 필요한 것 **4건**(`overly-permissive` 1·`log-injection` 3, 모두 TK-35). 오탐/의도 **61건**(`code-injection` 2 + `path-injection` 58 + `log-injection` 1).
+
+**103건 전체 분류:** 조치 완료 6(워크플로) · 티켓 TK-35 14(경로 10 + chmod 1 + 로그 3) · TK-36 2 · TK-37 14(prototype 13 + DOM 1) · TK-38 2 · 오탐/의도 후보 65(기존 4 + 신규 61).
+
+**권고:** 오탐 65건을 건별로 닫기는 번거로우므로 ① 위협 모델 설정이 바뀌었다면 원래대로 되돌려 61건이 사라지는지 먼저 확인하고(재스캔은 `main`에서만 일어난다), ② 남는 것은 GitHub 목록에서 파일 경로(`scripts/`·`tests/`)나 규칙으로 걸러 한꺼번에 선택해 닫을 수 있는지 화면에서 확인해 달라(평가 측은 그 화면 기능을 확인하지 못했다). 평가 측은 경고 상태를 바꿀 수 없다.
