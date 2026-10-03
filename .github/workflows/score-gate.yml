@@ -85,6 +85,14 @@ jobs:
           if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
           python scripts/check_hardcoding_diff.py --base "$BASE" | tee -a artifacts-summary.txt
 
+      # 기존 시험을 지우거나 skip·xfail을 붙여 통과시키는 것을 막는다(7차 보완·7C: 원장 기대값 15개 변경, 시험 6개 삭제). 평가 측 커밋만 있는 범위는 건너뛴다.
+      - name: 시험 삭제·약화 점검
+        if: ${{ !cancelled() }}
+        run: |
+          BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then BASE=HEAD~1; fi
+          python scripts/check_test_edits.py --base "$BASE" | tee -a artifacts-summary.txt
+
       # 버전은 커밋이 아니라 평가 측이 잰 성능으로만 올린다(docs/scorecards/VERSION_POLICY.md). 판정서 없는 상향은 실패.
       - name: 버전 정책 점검
         if: ${{ !cancelled() }}
