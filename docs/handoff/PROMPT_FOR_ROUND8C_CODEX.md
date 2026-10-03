@@ -24,10 +24,13 @@
    ```
    - 보고서에 `python --version`과 `tesseract --version` 첫 줄을 적는다.
    - 설치하지 못한 것은 못 했다고 적는다.
-2. **시작 커밋:** `evaluator/round8-promotion` @ d20cde2
-   - 8B(170c647) 위에 평가 측이 보호 시험 표시를 승격한 커밋이다.
+2. **시작 커밋:** `evaluator/round8-promotion` @ e349fad(정정 2026-10-03, 처음 지시는 d20cde2)
+   - d20cde2는 8B(170c647) 위에 평가 측이 보호 시험 표시를 승격한 커밋이다. e349fad는 그 위에 `Steve_ACASiaLAW`(a04826f)를 병합해 `scripts/verify_all.py`·이 지시서·TK-53을 넣은 것이다. 제품 코드는 d20cde2와 같다.
+   - **정정 사유:** d20cde2에는 `scripts/verify_all.py`가 없어 3절 점검 명령을 실행할 수 없었다(평가 측 지시 오류).
+   - 이미 d20cde2에서 시작했다면 `git fetch origin evaluator/round8-promotion && git merge origin/evaluator/round8-promotion`으로 병합 커밋 하나를 더한다(리베이스·강제 푸시 금지). 충돌은 없다(제품 코드 변경 없음).
+   - 점검 기준(`--base`)과 diff 기준은 그대로 d20cde2다.
    - 이 위에서는 수용 시험에 strict XPASS가 없다. 그래서 너의 커밋도 CI 필수 확인 3개(점수 하락 게이트·테스트·Docker OCR readiness)를 모두 통과할 수 있고, 통과해야 한다.
-3. **작업 브랜치와 푸시:** 저장소 규칙(ruleset)은 `main`에만 걸려 있다(사용자 설정 2026-10-03). 작업 브랜치는 제약 없이 푸시할 수 있다.
+3. **작업 브랜치와 푸시:** 저장소 규칙(ruleset)은 `main`과 `Steve_ACASiaLAW`에 걸려 있다. 작업 브랜치는 제약 없이 푸시할 수 있다.
    - 새 브랜치 `codex/round8c-key-context`를 만들어 푸시한다. 그다음 `Steve_ACASiaLAW` 대상 PR을 연다. 제목은 `8C: TK-53 이름 키 정규화 + 키 문맥 축소`로 한다.
    - 보완 커밋은 같은 브랜치에 이어서 푸시한다. 푸시마다 CI가 돈다.
    - 강제 푸시와 `Steve_ACASiaLAW` 직접 푸시는 하지 않는다. 병합은 평가 측 판정과 사용자 승인 뒤에 한다.
