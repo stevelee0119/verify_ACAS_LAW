@@ -64,3 +64,6 @@
 
 ### 문제지 확인 결과(2026-10-03) — 현 상태 유지
 사용자가 준비서면 2026가합534210의 문제지 원문은 **없다**고 확인하고 **지금 상태로 두기로** 했다. 따라서 카목 단계는 공식 원문 기준 정정(성과 도용 문언의 카목 인용은 오류로 표시하지 않음 + 신설 카목 검출은 TK-34 strict xfail)을 유지하며, 정답지 의도와의 대조는 하지 못한 채 닫는다(**확인 못 함**). 문제지가 나중에 생기면 [TK-34](TK-34_item_level_temporal_review.md)의 시험 입력을 그에 맞춰 다시 본다.
+
+### 스크린샷 대조(2026-10-03, 사용자 제공 `main` 보호 규칙 화면 하단)
+**화면에서 확인됨:** 필수 상태 확인 2개(`점수 하락 게이트`, `테스트 (SQLite + PostgreSQL/pgvector + Redis)`, 둘 다 GitHub Actions) — API 값과 일치. `Do not allow bypassing the above settings` **체크됨**(관리자 포함 적용, API `everyone`과 일치). **체크 안 됨:** `Require conversation resolution before merging`, `Require signed commits`, `Require linear history`, `Require deployments to succeed before merging`, `Lock branch`(결정 목록에 없던 항목이며 모두 꺼짐). **이 캡처에 없어 확인하지 못함:** `Require a pull request before merging`(PR 필수 끔), `Require branches to be up to date before merging`(최신 상태 유지 끔), `Allow force pushes`·`Allow deletions`(둘 다 체크 해제여야 금지 상태). 위쪽(PR 필수·최신 유지)과 맨 아래(강제 푸시·삭제) 화면을 받으면 확인한다.
