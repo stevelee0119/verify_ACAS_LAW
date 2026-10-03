@@ -224,12 +224,36 @@ REPRESENTATIVE_NAME_STOPWORDS = {
 PARTY_HEADER_STOPWORDS = {
     "대한민국", "국가", "검사", "미상", "불상", "무죄", "유죄",
     "기각", "각하", "인용", "취하",
-    # 소송 절차 및 서식 항목 명사 (인명 오탐 방지 TK-30)
-    "신문", "신문절차", "신문기일", "변론기일", "조서",
-    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일", "이메일", "개인정보", "인적사항",
-    # 서면 제목("변 호 인  의 견 서")
-    "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
-    "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"
+    # ── 범주 1: 소송 절차 명사 ──
+    # 출처: 민사소송법·형사소송법·행정소송법 절차 용어
+    "신문", "심문", "진술", "변론", "공판", "기일", "공술", "진술기일",
+    "신문절차", "신문기일", "변론기일", "심문기일", "공판기일",
+    "심리", "결심", "선고", "판결", "결정", "명령", "항고", "준항고",
+    "조서", "공탁", "송달", "통지", "소환", "출석", "불출석",
+    # ── 범주 2: 법원 서식·문서 명사 ──
+    # 출처: 법원 소송서류 양식 및 서면 제목 (예: "변 호 인  의 견 서")
+    "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서",
+    "진술서", "확인서", "탄원서", "항소장", "상고장", "이의서",
+    "반소장", "청구서", "보고서", "통보서", "지시서", "계약서",
+    "서면", "서류", "문서", "기록",
+    # ── 범주 3: 권리·의무·법률 행위 명사 ──
+    # 출처: 민법·상법의 권리·의무·법률 행위 용어
+    "계약", "해지", "해제", "취소", "철회", "변제", "상계", "공제",
+    "양도", "양수", "매매", "임대", "임차", "위임", "수임", "도급",
+    "보증", "담보", "질권", "저당", "유치권", "계정", "정산",
+    "서명", "날인", "기명", "서명날인",
+    # ── 범주 4: 행정·조직 명사 ──
+    # 출처: 법원조직법·행정기관 용어
+    "이사회", "총회", "위원회", "의결", "결의",
+    "선임결의", "해임결의", "소장",
+    # ── 범주 5: 사실관계·증거 명사 ──
+    # 출처: 증거법·사실 인정 관련 법률 용어
+    "사실", "증거", "의견", "지시", "주장", "항변", "반박",
+    "입증", "증명", "소명", "자백", "부인",
+    # ── 범주 6: 신원·신상 정보 항목 명사 ──
+    # 출처: 법원 인적사항란·서식 기재 항목
+    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일",
+    "이메일", "개인정보", "인적사항", "주소", "직업", "직위",
 }
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
@@ -281,6 +305,8 @@ LAWYER_NAME_RE = re.compile(
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
 JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
+# R8-B: 불용어 검사 시 조사 분리에 사용하는 꼬리 조사 정규식 (성능 최적화를 위해 모듈 수준에 정의)
+_JOSA_TAIL_RE = re.compile(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$")
 
 # 한 글자 친족 호칭(부, 모, 처, 자)은 '부대는', '부사관이', '처분은' 등의 일반 법률/군사용어 오탐을 막기 위해
 # 반드시 한자 괄호나 공백이 뒤따르는 독립된 문맥에서만 매칭한다.
@@ -531,12 +557,27 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         full_matched_str = m.group(0)
         is_name_label = any(k in full_matched_str for k in ("성명", "서명자", "명의인", "이름"))
 
-        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46, TK-48):
-        # 명시적 라벨이 아닌 경우에만 clean_name 자체 또는 조사를 분리한 stem이 불용어인지 검사하여 제외한다.
-        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
-        if josa_match and not is_name_label:
-            stem = clean_name[:josa_match.start()]
-            if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46, TK-48, R8-B):
+        # 명시적 라벨이 아닌 경우에만 clean_name 자체 또는 조사를 분리한 stem이 불용어인지 검사.
+        # 정규식이 '계정은 이' 같이 조사+조사를 포함한 4글자를 잡을 수 있으므로
+        # stem에서도 재귀적으로 조사를 분리하여 불용어를 검사한다.
+        # _JOSA_TAIL_RE는 모듈 수준에 정의됨
+        if not is_name_label:
+            candidate = clean_name
+            for _ in range(3):  # 최대 3회 조사 분리 시도
+                jm = _JOSA_TAIL_RE.search(candidate)
+                if not jm:
+                    break
+                stem = candidate[:jm.start()]
+                if not stem:
+                    break
+                if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+                    break  # 불용어 hit → 외부 continue로 이동
+                candidate = stem
+            else:
+                jm = None  # 3회 시도 후에도 불용어 미발견 → 불용어가 아님
+            # 불용어가 발견되었으면 PERSON에서 제외
+            if jm and (stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS):
                 continue
 
         full_is_valid = is_valid_korean_name_structure(clean_name, after_text, is_explicit_label=is_name_label)
@@ -544,9 +585,10 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         # 조사 분리는 clean_name 전체가 유효하지 않거나(4음절 등 비표준),
         # 3음절이더라도 복성이 아닌 4음절 또는 조사를 분리한 형태가 더 확실한 경우에만 수행
         if not full_is_valid or (len(clean_name) == 4 and clean_name[:2] not in DOUBLE_SURNAMES):
-            if josa_match and len(clean_name) >= 3:
-                stem = clean_name[:josa_match.start()]
-                trailing_part = clean_name[josa_match.start():]
+            josa_tail = _JOSA_TAIL_RE.search(clean_name)
+            if josa_tail and len(clean_name) >= 3:
+                stem = clean_name[:josa_tail.start()]
+                trailing_part = clean_name[josa_tail.start():]
                 after_preview = trailing_part + text[end:end + 25]
                 if is_valid_korean_name_structure(stem, after_preview, is_explicit_label=True):
                     clean_name = stem
