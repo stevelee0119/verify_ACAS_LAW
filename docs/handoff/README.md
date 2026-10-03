@@ -89,7 +89,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · **회귀 보완(6차) 검증 뒤 순차** · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
 | 프로그램 버전 | 성능 기준으로만 상향(정수 급격·첫째 자리 일부·둘째 자리 미세), 커밋마다 올리지 않음 | [VERSION_POLICY](../scorecards/VERSION_POLICY.md), `scripts/check_version_policy.py` |
 | 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
-| Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가** — **기준 충족(2026-10-03)**: 이 job은 CI run 263·264·265·267·268에서 연속 성공(265·267은 같은 브랜치의 다음 푸시로 run이 취소됐으나 job은 성공 완료, 266은 job이 취소됨). 이전 run 258~262에서도 job은 성공이었다(그 run들의 CI는 다른 job의 시험 실패로 빨갰다). | **사용자 조치 요청: `main` 보호의 필수 상태 확인에 `Docker OCR readiness` 추가**(평가 측은 설정을 바꿀 수 없다). 추가 뒤 `GET branches/main`으로 확인 |
+| Docker OCR readiness 필수 확인(2026-10-03) | **완료·확인됨(2026-10-03)** — 연속 초록 3회 기준 충족(CI run 263·264·265·267·268) 뒤 사용자가 `main` 필수 확인에 추가. 평가 측이 `GET branches/main`으로 필수 확인 3개(`점수 하락 게이트`·`테스트 (SQLite + PostgreSQL/pgvector + Redis)`·`Docker OCR readiness`)·`everyone`·관리자 포함을 확인 | [GITHUB_ACCESS 9절](GITHUB_ACCESS.md) |
 | 준비서면 534210 문제지(2026-10-03) | 문제지 없음 — **카목 단계는 현재 정정 상태 유지**(문제지가 생기면 그때 대조) | [TK-12](TK-12_ci_red_gitignored_mirror_data.md), [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 7차(6차 회귀 보완 + 보안 보강) 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
@@ -105,5 +105,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
 - 보안 점검 후속: 결정 완료(2026-10-03 '추천대로') — 위 결정 표 참조. 남은 사용자 조치는 **GitHub 경고 처리**(URL 부분 문자열·평문 로깅의 오탐/수정 안 함)뿐이며, 경고 위치를 확인한 뒤 사용자가 GitHub에서 한다.
 - TK-38 A(PDF 정규식 지수 증가): **결정 완료(2026-10-03 '추천대로') — 앞당기지 않고 보안 보강 라운드의 첫 항목(S1)으로 둔다.** 6차 범위(TK-30~33)는 `paragraph_reconstruction.py`·이름 마스킹·법리 군집이라 `pdf_parser.py`를 직접 지정하지 않으나, R2의 'PDF 폭 40 INJ-1' 항목이 같은 파일을 건드릴 수 있어 충돌을 피하려고 6차 검증 뒤로 둔다. **그 사이 조작된 PDF 위험은 남아 있다**(코드 변경 없이 줄일 방법은 확인하지 못함). 지시서: [PROMPT_FOR_SECURITY_ROUND.md](PROMPT_FOR_SECURITY_ROUND.md)(6차 검증 직후 전달, 전달 전 평가 측이 strict xfail을 먼저 고정).
-- 6차 병합·F1 기준값·CodeQL 위협 모델: **결정 완료(2026-10-03)** — 위 결정 표 참조. 남은 사용자 조치는 **오탐 65건의 GitHub 처리**(`GITHUB_ACCESS.md` 8절 번호 목록)와 7차 완료 뒤 **F1 착수 승인**이다.
-- **`Docker OCR readiness`를 `main` 필수 확인에 추가(사용자 조치, 기준 충족):** 위 결정 표 참조. 추천: **추가**. 현재 필수 확인은 `점수 하락 게이트`·`테스트 (SQLite + PostgreSQL/pgvector + Redis)` 2개다.
+- 6차 병합·F1 기준값·CodeQL 위협 모델: **결정 완료(2026-10-03)** — 위 결정 표 참조. 오탐 65건은 사용자가 처리했고 평가 측이 64건 닫힘·**`#103` 1건 열림**을 확인했다(`GITHUB_ACCESS.md` 9절). 남은 사용자 조치는 **`#103` 닫기**와 7차 완료 뒤 **F1 착수 승인**이다.
