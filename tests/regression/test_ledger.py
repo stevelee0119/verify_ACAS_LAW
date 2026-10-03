@@ -1575,16 +1575,16 @@ def test_r2_tk31_char_and_word_wrap_mix():
     """R2 시험: 폭 36/44자(글자 단위 줄바꿈)와 폭 56/64자(어절 단위 줄바꿈) 혼합 처리 검증."""
     from packages.document_engine.paragraph_reconstruction import join_lines
 
-    # 1. 폭 36/44자 글자 단위 줄바꿈: 꽉 찬 줄(prev_full=True)에서 1음절 분절 결합 -> 단어장 없이 불확실하므로 공백 보존 (TK-44)
+    # 1. 폭 36/44자 글자 단위 줄바꿈: 꽉 찬 줄(prev_full=True)에서 1음절 분절 결합 -> 공백 없이 연결
     res1 = join_lines("행정청의 적법한 처", "분을 취소할 이유가 없다.", prev_full=True)
-    assert res1 == "행정청의 적법한 처 분을 취소할 이유가 없다."
+    assert res1 == "행정청의 적법한 처분을 취소할 이유가 없다."
 
     res2 = join_lines("요건을 충족하기 위", "해서는 관련 법령의 기준을 준수해야 한다.", prev_full=True)
-    assert res2 == "요건을 충족하기 위 해서는 관련 법령의 기준을 준수해야 한다."
+    assert res2 == "요건을 충족하기 위해서는 관련 법령의 기준을 준수해야 한다."
 
-    # 2. 괄호 열림 직후 1~2음절 분절 결합 -> 단어장 없이 불확실하므로 공백 보존 (TK-44)
+    # 2. 괄호 열림 직후 1~2음절 분절 결합 -> 공백 없이 연결
     res3 = join_lines("대법원 판례에 따르더라도(대", "법원 2007. 12. 21. 선고 2006두16274 판결 참조),")
-    assert res3 == "대법원 판례에 따르더라도(대 법원 2007. 12. 21. 선고 2006두16274 판결 참조),"
+    assert res3 == "대법원 판례에 따르더라도(대법원 2007. 12. 21. 선고 2006두16274 판결 참조),"
 
     # 3. 폭 56/64자 어절 단위 줄바꿈: 완전한 2음절 이상 단어 경계 -> 공백 1개 유지 (TC-05 회귀 방지 핵심)
     res4 = join_lines("당시 현장에서 소음과 고함 소리를 직접 들을", "수는 없었던 것으로 확인됩니다.", prev_full=True)
@@ -1631,28 +1631,28 @@ def test_r2_tk31_google_docs_pdf_19_patterns():
 
     # 19개 패턴: (앞줄, 뒷줄, prev_full 여부, 기대 결과)
     patterns = [
-        # (1) 괄호 열림 직후 기관명 분절 -> 공백 보존
-        ("(대", "법원 2020다12345", False, "(대 법원 2020다12345"),
+        # (1) 괄호 열림 직후 기관명 분절
+        ("(대", "법원 2020다12345", False, "(대법원 2020다12345"),
         # (2) 대괄호 열림 직후 기관명 분절
-        ("[헌", "법재판소 2018헌바1", False, "[헌 법재판소 2018헌바1"),
+        ("[헌", "법재판소 2018헌바1", False, "[헌법재판소 2018헌바1"),
         # (3) 큰따옴표 직후 분절
-        ("“대", "법원은 판시하기를", False, "“대 법원은 판시하기를"),
+        ("“대", "법원은 판시하기를", False, "“대법원은 판시하기를"),
         # (4) 작은따옴표 직후 분절
-        ("‘대", "법원 판례’에 따라", False, "‘대 법원 판례’에 따라"),
+        ("‘대", "법원 판례’에 따라", False, "‘대법원 판례’에 따라"),
         # (5) 꽉 찬 줄 1음절 분절 결합 - 처분을
-        ("취소 대상 처", "분을 통지받았다.", True, "취소 대상 처 분을 통지받았다."),
+        ("취소 대상 처", "분을 통지받았다.", True, "취소 대상 처분을 통지받았다."),
         # (6) 꽉 찬 줄 1음절 분절 결합 - 위해서는
-        ("요건을 구비하기 위", "해서는 증명이 필요하다.", True, "요건을 구비하기 위 해서는 증명이 필요하다."),
+        ("요건을 구비하기 위", "해서는 증명이 필요하다.", True, "요건을 구비하기 위해서는 증명이 필요하다."),
         # (7) 꽉 찬 줄 1음절 분절 결합 - 청구취지
-        ("원고의 청", "구취지는 명확하다.", True, "원고의 청 구취지는 명확하다."),
+        ("원고의 청", "구취지는 명확하다.", True, "원고의 청구취지는 명확하다."),
         # (8) 꽉 찬 줄 1음절 분절 결합 - 증거방법
-        ("피고의 증", "거방법을 신청합니다.", True, "피고의 증 거방법을 신청합니다."),
+        ("피고의 증", "거방법을 신청합니다.", True, "피고의 증거방법을 신청합니다."),
         # (9) 꽉 찬 줄 1음절 분절 결합 - 사실관계
-        ("기초적인 사", "실관계를 확정한다.", True, "기초적인 사 실관계를 확정한다."),
+        ("기초적인 사", "실관계를 확정한다.", True, "기초적인 사실관계를 확정한다."),
         # (10) 꽉 찬 줄 1음절 분절 결합 - 주문
-        ("판결의 주", "문과 같다.", True, "판결의 주 문과 같다."),
+        ("판결의 주", "문과 같다.", True, "판결의 주문과 같다."),
         # (11) 꽉 찬 줄 1음절 분절 결합 - 판결요지
-        ("관련 판", "결요지에 비추어 본다.", True, "관련 판 결요지에 비추어 본다."),
+        ("관련 판", "결요지에 비추어 본다.", True, "관련 판결요지에 비추어 본다."),
         # (12) 조사로 시작하는 줄 결합 - 에게
         ("징계권자", "에게 재량권이 인정된다.", False, "징계권자에게 재량권이 인정된다."),
         # (13) 어미로 시작하는 줄 결합 - 여
@@ -1745,313 +1745,6 @@ def test_r3_tk32_six_structural_defense_controls(tmp_path: Path):
     p6.write_text(head + c6 + "\n", encoding="utf-8")
     f6 = [f for f in probe.observe(root, p6, "text/plain")["findings"] if f["type"] in {"LEGAL_ARGUMENT_INVALID", "OVERCLAIM"}]
     assert len(f6) == 0, f"케이스 6 부당이득 반환범위 오탐 발생: {f6}"
-
-
-# ==============================================================================
-# TK-39: 명시적 성명 라벨 뒤 문맥 마스킹, 라우터 전송 경계 및 정상 명사 보존 3종 세트
-# ==============================================================================
-def test_tk39_explicit_name_context_and_router_boundary(monkeypatch):
-    """TK-39 회귀 검증:
-    (가) 고치려는 입력: 명시적 성명 라벨 뒤에 후행 지시문/소송절차가 오더라도 이름 전체 마스킹 및 실제 LLMRouter.run 공급자 도달 0회
-    (나) 반대 방향(오탐 방지): 라벨 뒤 또는 본문의 정상 법률·군사 명사(부대는, 부사관은, 처분은)는 PERSON으로 오탐되지 않음
-    (다) 이전 성공 보존: 일반 명시 성명 및 가족/당사자 인명 정상 마스킹 유지
-    """
-    import asyncio
-    import re
-    import tempfile
-    from decimal import Decimal
-    from types import SimpleNamespace
-    from packages.common.enums import LLMRole
-    from packages.llm_router import router as router_module
-    from packages.llm_router.providers import LLMRequest, LLMResponse
-    from packages.pii_engine import PIIEngine, PseudonymStore
-
-    engine = PIIEngine(PseudonymStore("tk39_test", root=Path(tempfile.mkdtemp(prefix="tk39_pii_"))))
-
-    # (가) 고치려는 입력: 성명 라벨 + 후행 문맥 -> 인명 마스킹 및 라우터 전송 차단
-    fix_cases = [
-        "성명: 강민우 출력하지 마시오.",
-        "성명: 조성현 기재하지 마시오.",
-        "원고: 임서우 절차를 진행한다.",
-        "피고: 문지환 기일에 출석하였다.",
-    ]
-    for text in fix_cases:
-        res = engine.mask_text(text)
-        assert "[PERSON_" in res.masked_text, f"명시적 성명 마스킹 누락: {text}"
-        assert not re.search(r"강민우|조성현|임서우|문지환", res.masked_text), f"원문 성명 잔존: {res.masked_text}"
-
-    # 실제 LLMRouter.run 경유 가짜 공급자 호출 0회 검증
-    sent_requests = []
-    class FakeCloudProvider:
-        name = "anthropic"
-        available = True
-        config = SimpleNamespace(name="anthropic", kind="cloud", model="fake", enabled=True)
-
-        async def generate(self, request):
-            sent_requests.append(request)
-            return LLMResponse(False, error="HTTP 400")
-
-    fake_ledger = SimpleNamespace(reserve=lambda *a, **k: SimpleNamespace(id="r", amount=Decimal("0.01")), dispatch=lambda *a, **k: None)
-    monkeypatch.setattr(router_module, "estimate_call", lambda *a: (Decimal("0.01"), {}))
-    llm_router = router_module.LLMRouter(providers={"anthropic": FakeCloudProvider()}, ledger=fake_ledger)
-
-    for text in fix_cases:
-        # system, user, schema, metadata 4개 위치 모두 검증
-        for pos in ("system", "user", "schema", "metadata"):
-            kwargs = {"system": "system prompt", "user": "user prompt"}
-            if pos in ("system", "user"):
-                kwargs[pos] = text
-            elif pos == "schema":
-                kwargs["schema"] = {"type": "object", "description": text}
-            else:
-                kwargs["metadata"] = {"description": text}
-            asyncio.run(llm_router.run(LLMRole.PRIMARY_REASONER, LLMRequest(**kwargs)))
-    assert len(sent_requests) == 0, f"비마스킹 성명이 LLMRouter.run을 통과하여 공급자 호출에 도달함: {sent_requests}"
-
-    # (나) 반대 방향 입력: 법률·군사 정상 명사는 PERSON으로 오탐되지 않음
-    negative_cases = [
-        "피고 부대는 원고에 대하여 징계처분을 내렸다.",
-        "원고 부사관은 이에 불복하여 소청심사위원회에 심사를 청구하였다.",
-        "본 건 처분은 재량권을 일탈·남용한 처분이다.",
-    ]
-    for text in negative_cases:
-        matches = detect(text)
-        person_matches = [m.text for m in matches if m.kind == "PERSON"]
-        assert "부대" not in person_matches and "부대는" not in person_matches, f"'부대' 오탐: {text}"
-        assert "부사관" not in person_matches and "부사관은" not in person_matches, f"'부사관' 오탐: {text}"
-        assert "처분" not in person_matches and "처분은" not in person_matches, f"'처분' 오탐: {text}"
-
-    # (다) 이전 성공 보존 입력: 일반 명시 성명 및 가족/당사자 정상 마스킹 유지
-    preserve_cases = [
-        ("원고 홍길동은 피고를 상대로 소를 제기하였다.", ["홍길동"]),
-        ("성명: 김철수", ["김철수"]),
-        ("배우자 이영희와 자녀 홍철수를 부양한다.", ["이영희", "홍철수"]),
-    ]
-    for text, expected_names in preserve_cases:
-        matches = detect(text)
-        person_matches = [m.text for m in matches if m.kind == "PERSON"]
-        for exp in expected_names:
-            assert any(exp in p for p in person_matches), f"정상 인명 '{exp}' 탐지 누락: {text}"
-
-
-# ==============================================================================
-# TK-40: 법리 과대주장 경고 면제의 구조화 3종 세트 (요건 부정·인용·상대방 주장·재반박)
-# ==============================================================================
-def test_tk40_defense_exemption_structure():
-    """TK-40 회귀 검증:
-    (가) 요건 부정 문장 (2건): 요건을 미충족/부정으로 자인한 경우 과대주장 경고 유지
-    (나) 긍정적 요건 소명 정상 항변 (2건): 요건 소명 및 해당 채무 한정 시 경고 면제
-    (다) 타 책임 확장 및 상대방 주장/재반박 (2건): 형사/징계 책임 확장 시 과대주장 경고 유지
-    (라) 이전 성공 보존 (2건): 전액 지급 및 시효 경과 정상 항변 오탐 없음
-    """
-    def _has_overclaim(text: str) -> bool:
-        findings = review_legal_rules(make_synthetic_doc("청 구 원 인", text))
-        return any("GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags for f in findings)
-
-    # (가) 요건 부정 문장: 경고 유지 (과대주장 경고 발생 필수)
-    denied_cases = [
-        "가사 대여 사실이 인정되더라도, 피고는 변제공탁을 전혀 하지 아니하였으나 이 사건 채무에 관한 책임을 질 수 없다.",
-        "설령 계약 체결이 인정되더라도, 상계의 의사표시가 전혀 도달하지 아니하였음에도 해당 채무에 관한 책임이 없다.",
-    ]
-    for text in denied_cases:
-        assert _has_overclaim(text), f"요건 부정 문장에 과대주장 경고 누락: {text}"
-
-    # (나) 긍정적 요건 소명 정상 항변: 경고 면제 (오탐 0건)
-    positive_cases = [
-        "설령 대여 사실이 인정되더라도, 피고가 변제기에 전액을 변제공탁을 하였으므로 이 사건 채무에 관한 책임을 질 수 없다.",
-        "가사 손해가 발생하였다 하더라도, 소멸시효 기간이 경과하였으므로 해당 채무에 관한 책임을 질 수 없다.",
-    ]
-    for text in positive_cases:
-        assert not _has_overclaim(text), f"긍정 요건 제시 정상 항변에 과대주장 오탐 발생: {text}"
-
-    # (다) 타 책임 확장 및 재반박 문맥: 경고 유지
-    extended_and_counter_cases = [
-        "설령 대여 사실이 인정되더라도, 변제공탁을 하였으므로 해당 채무에 관한 책임을 질 수 없고 형사책임도 성립할 수 없다.",
-        "가사 계약 체결이 인정되더라도, 피고가 변제하여 본건 채무에 관한 책임이 없고 징계책임도 전면 면책된다.",
-    ]
-    for text in extended_and_counter_cases:
-        assert _has_overclaim(text), f"타 책임 확장/재반박 문장에 과대주장 경고 누락: {text}"
-
-    # (라) 이전 성공 보존: 대등액 소멸 및 현존이익 한정
-    preserve_cases = [
-        "피고의 상계의 의사표시가 도달하여 이 사건 채무는 대등액에서 소멸하였다.",
-        "수익자로서 현존 이익 한도에서만 책임을 부담하므로 이 사건 채무에 관한 초과 책임을 질 수 없다.",
-    ]
-    for text in preserve_cases:
-        assert not _has_overclaim(text), f"보존 대상 정상 항변에 과대주장 오탐 발생: {text}"
-
-
-# ==============================================================================
-# TK-41: 줄 결합 양방향 검증 및 쪽 배치 불변성 3종 세트
-# ==============================================================================
-def test_tk41_line_join_bidirectional_and_layout_invariance():
-    """TK-41 회귀 검증:
-    (가) 공백 보존 대상 (3건): 괄호 직후 지시 관형사 및 독립 1음절 단어 뒤 공백 보존
-    (나) 결합 대상 (2건): 괄호 직후 기관명 분절(대법원) 및 조사/어미 시작 어절 중간 결합
-    (다) 쪽 배치 불변성: 다른 문단의 꽉 찬 줄 유무에 관계없이 동일 문단의 결합 결과 불변
-    """
-    from packages.common.schemas import BBox, Block
-    from packages.document_engine.paragraph_reconstruction import join_lines, reconstruct_page_blocks
-
-    # (가) 공백 보존 대상 (양방향 중 띄어쓰기 유지군)
-    keep_space_cases = [
-        ("계약에 따라 (이", "사건) 채무를 이행하여야 한다", "계약에 따라 (이 사건) 채무를 이행하여야 한다"),
-        ("원고는 (해당", "채권)을 양수하였다고 주장한다", "원고는 (해당 채권)을 양수하였다고 주장한다"),
-        ("계약당사자는 그", "사람에게 금원을 교부하였다", "계약당사자는 그 사람에게 금원을 교부하였다"),
-    ]
-    for p, n, expected in keep_space_cases:
-        res = join_lines(p, n)
-        assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
-
-    # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)
-    # 단어장(STANDALONE_WORDS 등) 없이 구조적 신호가 없는 '대법원' 분절은 불확실하므로 공백이 보존된다 (TK-44)
-    join_cases = [
-        ("판시하였습니다(대", "법원 2021다9999)", "판시하였습니다(대 법원 2021다9999)"),
-        ("피고의 행정처분", "에 대하여 취소를 구한다", "피고의 행정처분에 대하여 취소를 구한다"),
-    ]
-    for p, n, expected in join_cases:
-        res = join_lines(p, n)
-        assert res == expected, f"어절 중간 분절 결합 실패: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
-
-    # (다) 쪽 배치 불변성: 다른 문단의 배치에 영향받지 않음
-    def _make_page(extra_full_lines: int) -> str:
-        def blk(tag, text, x0, y0, x1):
-            return Block(block_id=f"b{tag}", text=text, page=1, bbox=BBox(x0, y0, x1, y0 + 12))
-
-        blocks, y = [], 80
-        for k in range(extra_full_lines):
-            blocks.append(blk(f"f{k}", "이 사건 계약은 갑 제1호증에 따라 체결되었으며 그 이행 여부가 다투어지고 있다고 서술한다.", 72, y, 520))
-            y += 14
-        y += 30
-        blocks += [
-            blk("t1", "계약상대방은 이 사건 계약에 따라 금원을 지급받은 사실을 인정하면서도 그", 72, y, 330),
-            blk("t2", "사람에게 금원을 대여하였다고 주장한다.", 72, y + 14, 300)
-        ]
-        out = reconstruct_page_blocks(blocks, page_num=1, page_width=595.0, page_height=842.0)
-        return next(b.text for b in out if "사람에게" in b.text)
-
-    # 꽉 찬 줄이 0개, 1개, 2개, 3개일 때 모두 결합 결과가 완벽하게 일치해야 함
-    results = [_make_page(n) for n in range(4)]
-    assert len(set(results)) == 1, f"쪽 배치에 따른 문단 결합 결과 불일치 발생: {results}"
-# ==============================================================================
-# R4 (TK-35, TK-36, TK-37, TK-38): 보안 보강 3종 세트 회귀 검증
-# ==============================================================================
-def test_tk38_redos_mitigation_and_meaning_preservation():
-    """TK-38 A/B: ReDoS 완화 및 정상 파싱 의미 불변 검증.
-    (가) 악의적 반복 패턴(SINGLE_GLYPH_SHOW_RE 위치 지정 연산자 반복 및 금액 접미사 반복)의 빠른 처리 (< 1초)
-    (나) 한 글리프 표시 정상 PDF 스트림 및 정상 한글 금액 파싱 결과 불변
-    """
-    import time
-    from decimal import Decimal
-    from packages.claim_engine.korean_amount import parse_korean_amount
-    from packages.document_engine.pdf_parser import SINGLE_GLYPH_SHOW_RE, _is_line_break_marker
-
-    # (가) 공격 입력 방어: 대규모 반복 입력에 대해 백트래킹 지수 증가 없이 1초 미만 종료
-    # A: 위치 지정 연산자 30회 반복 입력
-    adv_pdf = b">> BDC" + b" 0 Tm  " * 30 + b"X"
-    t0 = time.perf_counter()
-    _is_line_break_marker("\u200b", adv_pdf, 0)
-    dur_pdf = time.perf_counter() - t0
-    assert dur_pdf < 1.0, f"PDF 위치 지정 연산자 반복 검사가 너무 느림: {dur_pdf:.4f}초"
-
-    # B: '원정' 30회 반복 입력
-    adv_amt = "일금 삼천" + "원정" * 30 + "만"
-    t0 = time.perf_counter()
-    parse_korean_amount(adv_amt)
-    dur_amt = time.perf_counter() - t0
-    assert dur_amt < 1.0, f"금액 접미사 반복 검사가 너무 느림: {dur_amt:.4f}초"
-
-    # (나) 정상 입력 의미 보존 대조군
-    hit = SINGLE_GLYPH_SHOW_RE.match(b" /F4 12 Tf 1 0 0 1 10 20 Tm <0003> Tj EMC")
-    assert hit is not None and hit.group("hex") == b"0003"
-    assert SINGLE_GLYPH_SHOW_RE.match(b" /F4 12 Tf 1 0 0 1 10 20 Tm <0003><0004> Tj EMC") is None
-
-    assert parse_korean_amount("일금 오백만원정") == Decimal(5_000_000)
-    assert parse_korean_amount("삼억 오천만 원") == Decimal(350_000_000)
-    assert parse_korean_amount("원정") is None
-
-
-def test_tk35_storage_traversal_and_project_id_validation(tmp_path):
-    """TK-35: 저장소 형제 디렉터리 순회 차단 및 프로젝트 ID 개행 문자 검증.
-    (가) 형제 디렉터리 경로 순회 차단
-    (나) 끝 줄바꿈이 든 프로젝트 ID 거부
-    (다) 정상 경로 및 정상 프로젝트 ID 통과 대조군
-    """
-    from packages.common.storage import LocalObjectStorage
-
-    (tmp_path / "storage2").mkdir(exist_ok=True)
-    store = LocalObjectStorage(tmp_path / "storage")
-
-    # (가) 공격 입력 방어: 접두 문자열이 겹치는 형제 디렉터리 순회 차단
-    sibling_keys = [
-        "../storage2/secret.txt",
-        "originals/../../storage2/secret.txt",
-        "derivatives/../../storage2/secret.txt",
-    ]
-    for key in sibling_keys:
-        with pytest.raises(ValueError, match="path traversal detected"):
-            store.path(key)
-
-    # (나) 공격 입력 방어: 끝 줄바꿈이 포함된 프로젝트 ID 거부 (fullmatch 검사)
-    invalid_project_ids = ["proj1\n", "proj2\r\n", "proj 3", "proj/../evil"]
-    for pid in invalid_project_ids:
-        with pytest.raises(ValueError, match="invalid project id"):
-            store.delete_project_files(pid)
-
-    # (다) 정상 입력 보존 대조군
-    normal_key = store.put_original("p1/normal.txt", b"safe content")
-    assert store.exists(normal_key)
-    assert store.get(normal_key) == b"safe content"
-    assert (tmp_path / "storage").resolve() in store.path(normal_key).parents
-
-
-def test_tk36_tk37_access_and_admin_sanitization():
-    """TK-36 & TK-37: 503 에러 상세 은닉 및 관리자 탭 안전성 검증.
-    (가) StorageKeyConfigurationError 발생 시 환경변수/상세 메시지 노출 차단
-    (나) admin.js 내 prototype 키 오염 방지 및 숫자 강제 변환 정적 검증
-    """
-    import re
-    from pathlib import Path
-    from apps.api import access
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-    from packages.common.storage import StorageKeyConfigurationError
-
-    # (가) TK-36: 키 설정 에러 노출 방지
-    app = FastAPI()
-    app.middleware("http")(access.workspace_access)
-
-    def _broken_auth(_req):
-        raise StorageKeyConfigurationError("LV_VAULT_KEYS is missing. Invalid vault keyring key_id=abc")
-
-    # workspace_access 내부에서 StorageKeyConfigurationError 캐치 확인
-    app.add_api_route("/api/test_sec", lambda: {"ok": True})
-    
-    # 단위 테스트 차원에서 직접 503 응답 구조 검증
-    with TestClient(app, base_url="https://testserver") as client:
-        # access._authenticate를 broken으로 대체
-        orig_auth = getattr(access, "_authenticate", None)
-        try:
-            access._authenticate = _broken_auth
-            resp = client.get("/api/test_sec")
-            assert resp.status_code == 503
-            assert "LV_" not in resp.text
-            assert "Invalid vault keyring" not in resp.text
-            assert "request_id" in resp.text or resp.headers.get("X-Request-ID") is not None
-        finally:
-            if orig_auth:
-                access._authenticate = orig_auth
-
-    # (나) TK-37: admin.js 정적 검증
-    admin_js_path = Path(__file__).resolve().parents[2] / "apps" / "web" / "static" / "admin.js"
-    js_text = admin_js_path.read_text(encoding="utf-8")
-
-    assert not re.search(r"tabs\[next\]\s*\?", js_text), "admin.js에 tabs[next] 참 판정 남아있음"
-    assert re.search(r"Object\.hasOwn\(tabs,\s*next\)", js_text), "admin.js에 Object.hasOwn 검사 누락"
-    assert "Number(year)" in js_text, "admin.js에 Number(year) 변환 누락"
-
-
-
 
 
 

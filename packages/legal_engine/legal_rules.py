@@ -309,18 +309,26 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
 
                 for req_pat in req_list:
                     for rm in re.finditer(req_pat, unit):
-                        # 매칭 직후(35자) 부정·미충족 서술 연결 검사
-                        after_span = unit[rm.end():rm.end() + 35]
+                        # 매칭 직후를 같은 절(clause)로 한정하고 결론절(책임/지급 의무)은 제외하여 구조적으로 요건 부정을 판별
+                        after_span = unit[rm.end():]
+                        clause_match = re.search(r"(?:[,.\n]|(?:고|며|지만|으나|면|는데)\s)", after_span)
+                        clause = after_span[:clause_match.end()] if clause_match else after_span
+                        
+                        clause_no_concl = re.sub(r"(?:책임|지급\s*의무|채무|손해배상).*?(?:없|않|아니|면|부담).*", "", clause)
+                        
                         is_neg_match = re.search(
                             r"(?:하지\s*(?:않|못|아니)|되지\s*(?:않|못|아니)|도달하지|도래하지|"
-                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|없(?:었)?(?:으나|음|으며)?|"
-                            r"없음에도|부존재|미충족|흠결|결여)",
-                            after_span
+                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|"
+                            r"없(?:었)?(?:으나|음|으며|다|고)|없음에도|부존재|미충족|흠결|결여)",
+                            clause_no_concl
                         )
                         is_neg = False
                         if is_neg_match:
-                            prefix = after_span[:is_neg_match.start()].rstrip()
-                            if not re.search(r"(?:지체|주저|이의|거절|반대|방해)$", prefix):
+                            between = clause_no_concl[:is_neg_match.start()]
+                            clean_between = re.sub(r"\s+", "", between)
+                            # 요건이 부정 서술어의 직접 대상인지 문법적으로 판별 (TK-45)
+                            # 허용: 조사(을,를,이,가,은,는,도,지), 존재 구문(한적이, 한사실이 등)
+                            if re.fullmatch(r"([을를이가은는도지])?(한적이|한사실이|한바가|한일이|함이|한바)?", clean_between):
                                 is_neg = True
                         # 매칭 직전(15자)에 '전혀', '일체' 등 부정 부사가 결합된 경우
                         before_span = unit[max(0, rm.start() - 15):rm.start()]

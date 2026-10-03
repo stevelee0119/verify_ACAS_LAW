@@ -127,9 +127,9 @@ PARTY_AND_TITLE_LABELS = [
     "채권자", "채무자", "증인", "피해자", "고소인", "고발인", "참고인",
     "망", "소외", "배우자", "자녀", "남편", "아들", "딸", "가족", "대리인",
     # 작성/담당/진술 관계인 등 추가
-    "작성자", "진술자", "조사자", "면담자", "보고자", "확인자",
-    "매도인", "매수인", "임대인", "임차인", "도급인", "수급인", "위임인", "수임인", "양도인", "양수인",
-    "사용자", "근로자", "보증인", "연대보증인", "부", "모", "부모", "조부", "조모", "아내", "처", "보호자",
+    "작성자", "진술자", "조사자", "면담자", "보고자", "확인자", "진술인", "제보자", "수신자",
+    "매도인", "매수인", "임대인", "임차인", "도급인", "수급인", "위임인", "수임인", "양도인", "양수인", "의뢰인", "상대방",
+    "사용자", "근로자", "보증인", "연대보증인", "부모", "조부", "조모", "아내", "보호자",
     "법정대리인", "친권자", "후견인",
 ]
 
@@ -183,7 +183,7 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "", is_expli
         return False
     # 서술문 종결 또는 조사 분리는 끝 글자 단일 배제가 아니라 문맥 및 구조로 판단한다 (TK-30).
     # 2글자 이상의 명백한 복합 격조사 배제
-    if clean.endswith(("에게", "으로", "라고", "에서")):
+    if clean.endswith(("에게", "으로", "라고", "에서", "한다", "이다", "하다", "된다")):
         return False
     
     # 성씨 확인
@@ -202,11 +202,7 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "", is_expli
     # 후행 서술문 맥락 배제 (TK-39):
     # 명시적 라벨 직후 후보는 후행 문맥으로 제외하지 않는다 (성명: {이름} 출력하지 마시오 등).
     # 문맥 기반 제외는 라벨이 없는 암묵 후보에만 적용한다.
-    if not is_explicit_label:
-        if re.search(r"^[ \t]*(?:선임|해임|취임|선출|결의|회의|후보|안건|침해|행사|남용|절차|기일|조서|진행)", after_text):
-            return False
-        if re.search(r"^[ \t]*(?:기재와 같다|판결을 구한다|구한다|바란다|원한다|명한다|출력하지|기재하지|마시오|하지\s*마|금지)", after_text):
-            return False
+    # (기존 낱말 기반 제외는 과마스킹과 유출 딜레마로 삭제됨. 미해결 트레이드오프는 사용자 결정으로 상정 - TK-43)
 
     return True
 
@@ -530,19 +526,18 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
             continue
 
         # 명시적 라벨 직후 후보는 후행 일반 문맥으로 제외되지 않는 점을 완화(TK-39, TK-43)
-        # 콜론 등 강력한 구분자가 있거나 직접 성명 표지인 경우에만 명시적 라벨로 인정한다.
+        # 콜론 등 기호만으로는 명시적 라벨로 인정하지 않고, 직접 성명 표지가 있어야 한다.
         after_text = text[end:end + 30]
         full_matched_str = m.group(0)
-        is_name_label = any(k in full_matched_str for k in ("성명", "서명자", "명의인", "이름", ":", "："))
+        is_name_label = any(k in full_matched_str for k in ("성명", "서명자", "명의인", "이름"))
 
-        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46):
+        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46, TK-48):
         # 명시적 라벨이 아닌 경우에만 clean_name 자체 또는 조사를 분리한 stem이 불용어인지 검사하여 제외한다.
-        if not is_name_label:
-            josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
-            if josa_match:
-                stem = clean_name[:josa_match.start()]
-                if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
-                    continue
+        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+        if josa_match and not is_name_label:
+            stem = clean_name[:josa_match.start()]
+            if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
 
         full_is_valid = is_valid_korean_name_structure(clean_name, after_text, is_explicit_label=is_name_label)
 
