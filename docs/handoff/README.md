@@ -74,7 +74,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 동일 시행일 복수 버전 | 두 버전 병기·대조 | 6차 |
 | 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만** → 그 검증 뒤 **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 → TK-24 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md) |
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
-| `main` 보호 갱신(2026-10-03) | CI 테스트 job을 필수 확인에 추가, **관리자 포함 적용 켬**(`enforcement_level: everyone`). PR 필수·최신 유지는 계속 꺼짐 | 사용자가 웹 설정으로 변경, 평가 측이 `GET branches/main`으로 확인 |
+| `main` 보호 갱신(2026-10-03) | CI 테스트 job을 필수 확인에 추가, **관리자 포함 적용 켬**(`enforcement_level: everyone`). PR 필수·최신 유지 끔, 강제 푸시·삭제 금지 유지 | 사용자가 웹 설정으로 변경. 평가 측이 API로 필수 확인·적용 수준을, 사용자 스크린샷 3장으로 나머지 옵션 전부를 확인 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
 | `main` 병합 | 5차 검증 뒤 PR(사용자 요청 시에만 PR 생성) | 사용자 |
 | 기능 라운드 F1 D1~D6 | 쟁점 매트릭스 별도 탭 유지 · 상단 요약+HIGH 이상 고정 안내 · 파일 정보 노출은 보안 카드 · 참고 의견(승격 없음) · **회귀 보완(6차) 검증 뒤 순차** · 기존 전송 정책 그대로 | [F1 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md), [FR-01](FR-01_review_screen_and_reference_integration.md) |
