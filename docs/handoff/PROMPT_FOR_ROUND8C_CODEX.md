@@ -24,11 +24,12 @@
    ```
    - 보고서에 `python --version`과 `tesseract --version` 첫 줄을 적는다.
    - 설치하지 못한 것은 못 했다고 적는다.
-2. **시작 커밋:** `evaluator/round8-promotion` @ e349fad(정정 2026-10-03, 처음 지시는 d20cde2)
+2. **시작 커밋:** `evaluator/round8-promotion` 최신(78c38dc 이후, 정정 2026-10-03 — 처음 지시는 d20cde2)
    - d20cde2는 8B(170c647) 위에 평가 측이 보호 시험 표시를 승격한 커밋이다. e349fad는 그 위에 `Steve_ACASiaLAW`(a04826f)를 병합해 `scripts/verify_all.py`·이 지시서·TK-53을 넣은 것이다. 제품 코드는 d20cde2와 같다.
    - **정정 사유:** d20cde2에는 `scripts/verify_all.py`가 없어 3절 점검 명령을 실행할 수 없었다(평가 측 지시 오류).
    - 이미 d20cde2에서 시작했다면 `git fetch origin evaluator/round8-promotion && git merge origin/evaluator/round8-promotion`으로 병합 커밋 하나를 더한다(리베이스·강제 푸시 금지). 충돌은 없다(제품 코드 변경 없음).
-   - 점검 기준(`--base`)과 diff 기준은 그대로 d20cde2다.
+   - 점검 기준(`--base`)은 그대로 d20cde2다. 평가 측이 e349fad에서 `verify_all.py --base d20cde2` 전체 모드를 돌려 종료 0을 확인했다(Linux·Python 3.11.15·tesseract 5.3.4, 브라우저 197 통과).
+   - 보고서의 diff 기준은 78c38dc다(4절). d20cde2로 잡으면 평가 측이 병합한 문서가 섞인다.
    - 이 위에서는 수용 시험에 strict XPASS가 없다. 그래서 너의 커밋도 CI 필수 확인 3개(점수 하락 게이트·테스트·Docker OCR readiness)를 모두 통과할 수 있고, 통과해야 한다.
 3. **작업 브랜치와 푸시:** 저장소 규칙(ruleset)은 `main`과 `Steve_ACASiaLAW`에 걸려 있다. 작업 브랜치는 제약 없이 푸시할 수 있다.
    - 새 브랜치 `codex/round8c-key-context`를 만들어 푸시한다. 그다음 `Steve_ACASiaLAW` 대상 PR을 연다. 제목은 `8C: TK-53 이름 키 정규화 + 키 문맥 축소`로 한다.
@@ -74,7 +75,7 @@ python scripts/verify_all.py --base d20cde2
 - `--quick`은 중간 확인용이며 보고서에는 쓰지 않는다.
 
 ## 4. 보고서: `docs/handoff/requests/31_round8c_completion.md`
-1. `git diff d20cde2 HEAD --stat` 출력 그대로(전체와 `-- tests/`)
+1. `git diff 78c38dc HEAD --stat` 출력 그대로(전체와 `-- tests/`). 78c38dc가 조상이 아니면(평가 측 브랜치를 병합하지 않았으면) 그 사실을 적는다
 2. 설계 메모 링크, 메모와 달라진 점
 3. `verify_all.py` 콘솔 출력 그대로(HEAD SHA가 찍힌 것)
 4. 같은 SHA의 CI 실행 링크와 단계별 결과
