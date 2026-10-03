@@ -47,7 +47,7 @@
 | [TK-40](TK-40_defense_exemption_by_keyword_cooccurrence.md) | 회귀(법리, **P1**) + 지시 위반 소지 | 6차: 요건 낱말·한정 결론 낱말 **공존만으로 경고 면제** — 요건 부정 4→0, 타 책임 확장 3→1(정상 항변 오탐 2→0은 개선). 6차 지시서가 금지한 예외 낱말 목록(설정 22개) | R6-02 strict xfail 6 | 열림(**7차 R2**) |
 | [TK-41](TK-41_line_join_one_direction_default.md) | 회귀(입력 계층, P2) | 6차: 괄호 뒤 짧은 어절 `(이 사건)` 공백 삭제(10쌍 6→4), 같은 문단이 쪽의 다른 문단 배치(꽉 찬 줄 2개 이상)에 따라 `그 사람`→`그사람`. 시험 19개가 모두 '붙여라' 한 방향 | R6-03 strict xfail 4 | 열림(**7차 R3**) |
 | [TK-42](TK-42_admin_js_declaration_deleted.md) | 회귀(프런트엔드, **P1**) | 7차 S5가 `admin.js`의 `let ready, initialized, previousHash` 선언 한 줄을 지워 쪽 초기화가 `initialized is not defined`로 중단(사용자 관리 메뉴·작업 제어 없음). 브라우저 시험 197건 중 55건 시점에 통과 4·실패 34·오류 17, `CI` 20분 시간 초과. 한 줄 복구로 197건 통과 | `test_round7_findings` admin 초기화 + 브라우저 197 | 열림(**7차 보완 R7-A**) |
-| [TK-43](TK-43_explicit_label_relaxation_overreach.md) | 회귀(개인정보, P2) + 설계 한계 | 7차 R1이 '명시 성명 라벨' 완화를 모든 당사자 라벨로 확대 → `{원고·피고·증인…} 진술 조서는`의 `진술`을 인명으로 가림(12건 신규). 라벨 어휘 밖(`이름:`·`작성자:`…) 0/60 미탐은 시작과 같으며 **어휘 확대는 사용자 결정** | `test_round7_findings` 12건 | 열림(**R7-C**) · 사용자 결정 대기 |
+| [TK-43](TK-43_explicit_label_relaxation_overreach.md) | 회귀(개인정보, P2) + 설계 한계 | 7차 R1이 '명시 성명 라벨' 완화를 모든 당사자 라벨로 확대 → `{원고·피고·증인…} 진술 조서는`의 `진술`을 인명으로 가림(12건 신규). 라벨 어휘 밖(`이름:`·`작성자:`…) 0/60 미탐은 시작과 같으며 **어휘 확대는 승인됨(2026-10-03)** | `test_round7_findings` 12건 + 어휘 strict xfail 8 | 열림(**R7-C**) |
 | [TK-44](TK-44_line_join_word_lists_and_ledger_regression.md) | 회귀(입력 계층, P2) + 지시 위반(낱말 목록) | 7차 R3이 `PAREN_DETERMINERS`·`STANDALONE_WORDS` 목록으로 맞춤 → 기존 원장 2건 실패(`하기 위\|해서는`), 목록 밖 0/14, `right_edge` 쪽 전역이라 같은 문단이 다른 줄 수에 따라 달라짐 | `tests/regression` + `test_round7_findings` 1 + strict xfail 5 | 열림(**R7-B**) |
 | [TK-45](TK-45_defense_negation_by_word_match.md) | 회귀(법리, P2) + 지시 위반 소지 | 7차 R2의 요건 부정 판정이 낱말 위치 일치 → `지체하지 않고` 등 정상 항변 새 오탐 3, 변형 표현 미탐(요건 부정 3/8·타 책임 1/5). 감사 표본 5건 해소 여부 미보고 | `test_round7_findings` 3건 | 열림(**R7-D**) |
 
@@ -102,10 +102,10 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 6차 점검 판정(2026-10-03) | 독립 감사(Codex)의 핵심 결론 타당 — **6차 완료 승인 불가**, 기준선 `79.9/77.3`·버전 `0.9.13` 유지, F1 보류. 새 회귀 4건(TK-39·40·41, R6-04)은 평가 측 독립 재현으로 확인 | [AUDIT_REVIEW_ROUND6](AUDIT_REVIEW_ROUND6.md), HISTORY 11절 |
 | 6차 병합·F1 기준값·CodeQL(2026-10-03) | **병합 허용**(평가 측이 `a8ead24`로 병합, 승격 `7adf43f`, 시작 SHA `7adf43f`) · **F1 게이트 초기 기준값 추천대로 확정**(비공개 변형 이름 마스킹 ≥ 95%, F3 ≥ 98%) · CodeQL 위협 모델에 **로컬 입력 포함**을 켰다(신규 경고 65건의 원인 확인) | [7차 지시서](PROMPT_FOR_STABILIZATION_ROUND7.md) 0.1·2절, [GITHUB_ACCESS 8절](GITHUB_ACCESS.md) |
 | 7차 독립 측정 판정(2026-10-03) | **F1 착수 불가·7차 완료 승인 불가** — 구현 지표(점수 81.7/79.2·회귀 게이트·6차 회귀 40·보안 11 XPASS)는 재현되나 `admin.js` 선언 삭제(P1)·원장 2건·과마스킹·새 오탐이 확인됨. 충족 G5·G7·G10, 미충족 G1·G2·G3·G4·G6·G9, G8 미실시. 기준선 `79.9/77.3`·버전 `0.9.13` 유지 | [f1_gate_verdict](../scorecards/f1_gate_verdict.md), [HISTORY 12절](../scorecards/HISTORY.md), TK-42~45, [7차 보완 지시서](PROMPT_FOR_STABILIZATION_ROUND7B.md) |
+| 7차 측정 후속 결정(2026-10-03 '추천대로') | ① **구현 브랜치(4da3910)는 병합하지 않고** 구현 측이 7차 보완 지시서대로 고친 뒤 고정 SHA에서 평가 측이 병합·XPASS 승격 ② **라벨 어휘 확대 승인**(범주 전체 닫힌 목록, 보호 시험은 대표 4개·나머지는 비공개 변형으로 측정) ③ 7차 보완 지시서를 Antigravity에 전달(사용자) | [TK-43](TK-43_explicit_label_relaxation_overreach.md), [7차 보완 지시서](PROMPT_FOR_STABILIZATION_ROUND7B.md) |
 
 ## 아직 사용자가 정할 것
-- **7차 구현 브랜치(4da3910)의 처리(평가 측 추천: 병합하지 않고 구현 측이 고친 뒤 고정 SHA에서 병합·승격).** 지금 병합하면 `Steve`의 `CI`가 브라우저 시험 시간 초과로 막히고 strict xfail 51건 승격이 오류 있는 코드에 고정된다. 평가 측은 새 보호 시험·티켓·보완 지시서만 `Steve`에 올렸다. 다른 선택(병합 후 빨간 시작 상태로 보완)을 원하면 알려 달라.
-- **라벨 어휘 확대(TK-43):** `이름:`·`작성자:`·`담당자:`·`진술인:`처럼 엔진 라벨 어휘 밖의 이름 표지를 어휘에 추가할지(탐지 신호 추가). 평가 측은 추가를 권한다(이름 누락은 P1). 결정 전에는 구현 측이 어휘를 넓히지 않는다.
+- **7차 보완 지시서 전달(사용자):** [PROMPT_FOR_STABILIZATION_ROUND7B.md](PROMPT_FOR_STABILIZATION_ROUND7B.md)를 Antigravity에 붙여 넣는다. 구현 측이 `4da3910` 위에 `Steve_ACASiaLAW` 최신을 병합해 시작한다. 결정 완료: 구현 브랜치 병합 보류, 라벨 어휘 확대 승인(2026-10-03 '추천대로').
 - `#103`(`runner.py:46`)을 닫았다는 사용자 보고(2026-10-03)는 평가 측이 아직 확인하지 못했다 — 경고는 `main` 반영 뒤 수집에서만 갱신된다.
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
 - (결정 완료 2026-10-03) `main` 보호의 관리자 포함 적용: 사용자가 켰고 평가 측이 확인했다. 앞으로 주인 계정으로 푸시하는 에이전트도 필수 확인 2개가 초록이 아닌 커밋을 `main`에 올릴 수 없다. **병합은 PR로**(`CI`는 PR에서 돈다).

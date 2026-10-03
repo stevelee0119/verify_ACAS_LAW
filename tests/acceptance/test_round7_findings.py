@@ -178,3 +178,28 @@ def test_word_boundary_join_does_not_depend_on_a_word_list(index):
     from packages.document_engine.paragraph_reconstruction import join_lines
     prev, nxt, kwargs, expected = UNLISTED_BOUNDARY_PAIRS[index]
     assert join_lines(prev, nxt, **kwargs) == expected
+
+
+# ---------------------------------------------------------------------------
+# R7-06 (미해결, strict xfail) 라벨 어휘 밖의 인명 표지 — 사용자 결정(2026-10-03 '추천대로')으로 어휘 확대 승인(TK-43 요구 3)
+# 여기에는 대표 라벨 4개만 둔다. 같은 범주(성명 직접 표지·작성/담당/진술 관계인·거래 당사자·가족/보호 관계)의 다른 낱말은
+# 평가 측 비공개 변형으로 따로 잰다 — 목록을 이 시험의 4개에 맞추는 것으로는 통과하지 못한다.
+# ---------------------------------------------------------------------------
+NEW_LABELS = ["이름", "작성자", "담당자", "진술인"]
+NEW_LABEL_FORMATS = ["{label}: {name} 확인 요망", "{label} {name}은 기일에 출석하였다."]
+NEW_LABEL_NAMES = ["한도현", "서윤재"]
+
+
+@pytest.mark.xfail(strict=True, reason="TK-43: 엔진 라벨 어휘(성명·당사자·직책)에 없는 인명 표지는 이름이 가려지지 않는다 — 어휘 확대 승인됨")
+@pytest.mark.parametrize("label", NEW_LABELS)
+@pytest.mark.parametrize("form", range(len(NEW_LABEL_FORMATS)))
+def test_name_after_a_person_reference_label_outside_the_old_vocabulary_is_fully_masked(label, form):
+    name = NEW_LABEL_NAMES[(NEW_LABELS.index(label) + form) % 2]
+    text = NEW_LABEL_FORMATS[form].format(label=label, name=name)
+    covered = set()
+    from packages.pii_engine.detector import detect
+    for match in detect(text):
+        if "PERSON" in str(getattr(match, "type", None) or getattr(match, "pii_type", None) or getattr(match, "kind", None)).upper():
+            covered.update(range(match.start, match.end))
+    start = text.index(name)
+    assert all(index in covered for index in range(start, start + len(name))), f"이름이 전부 가려지지 않았다: {text!r}"
