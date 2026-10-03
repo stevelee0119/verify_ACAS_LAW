@@ -43,3 +43,11 @@ Claude 연동에 승인된 권한: **읽기** — administration, commit statuse
 - **이미 승인된 권한과 실제 동작이 일치:** administration 읽기 → `main` 보호 조회 가능, actions·workflows 쓰기 → 수동 실행 가능, code 쓰기 → 푸시 가능.
 - **방어선 메모:** 앱에 `code`·`workflows`·`repository hooks` 쓰기가 있으므로 병합 방어선(필수 확인 2개 + 관리자 포함 적용 + 강제 푸시·삭제 금지)이 앱 토큰에도 적용되는 것이 중요하다. 이 세션에서는 `hooks` 경로를 프록시가 막는다.
 - **대체 경로:** (A) 사용자가 Security 탭의 경고 건수·심각도를 알려 준다. (B) 평가 측이 읽기 전용 점검 워크플로를 `.github/workflows/`에 추가한다 — 코드 스캔은 워크플로의 `GITHUB_TOKEN`에 `security-events: read`를 주어 경고를 아티팩트로 내보내면 제가 Actions 읽기로 가져올 수 있다(Dependabot 경고는 `GITHUB_TOKEN`으로 읽을 수 없으므로 `pip-audit`로 의존성 취약점을 직접 점검하는 단계를 둔다). (C) 읽기 전용 fine-grained 토큰을 세션 환경에 저장(이 환경에서 통하는지는 시험 필요). **(B)는 새 워크플로 파일을 추가하는 변경이라 사용자 승인 후에만 만든다.**
+
+## 5. 경고 건수(사용자 보고, 2026-10-03, 경로 A)
+| 항목 | 보고된 값 | 평가 측 해석(한계 포함) |
+|---|---|---|
+| Dependabot vulnerabilities | **No open alerts** | 의존성 그래프가 읽는 매니페스트(pip)와 GitHub 권고 DB 기준으로 열린 경고가 없다는 뜻이다. 매니페스트에 없는 패키지, Docker 베이스 이미지의 OS 패키지는 이 신호가 다루지 않을 수 있다(범위는 확인하지 못함). 시점 값이며 평가 측이 직접 읽은 것이 아니다 |
+| Dependabot malware alerts | **disabled** | 꺼짐으로 기록. 켤지는 선택이며 지원 범위는 확인하지 못했다 |
+| 코드 스캔(CodeQL) 열린 경고 | **미보고** — 첫 분석(`main` `9933548`)은 성공했으나 건수를 아직 받지 못함 | 보고 대기 |
+| 비밀 스캔 열린 경고 | **미보고** | 보고 대기 |
