@@ -125,7 +125,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **8B 판정 뒤 사용자 결정(2026-10-03 제안, [process_review](../scorecards/process_review_2026-10-03.md) 5·6절):**
   ① 과마스킹(TK-43)을 8차 수용 기준에서 분리할지
   ② 8C 구현 담당(추천: Codex 시험 전환 2개 증분)
-  ③ 감사를 마일스톤 감사로 바꿀지와 설계 메모 단계 도입
+  ③ 감사 시점(라운드 첫 완료·F1 착수 전, 보완 증분마다의 재측정 감사는 축소)과 설계 메모 단계 도입
   ④ 평가 측 자동 재측정(구현 PR 구독 → 건수만 코멘트)
 - (완료) **8B 지시서 전달(사용자):** [PROMPT_FOR_ROUND8B_TK52.md](PROMPT_FOR_ROUND8B_TK52.md)를 Antigravity에 전달한다. 수정 커밋은 새 브랜치(`antigravity/round8b-tk52`)로 올리고, 평가 측 재측정·승격 뒤 평가 측이 PR #5 브랜치를 초록 SHA로 fast-forward한다(사용자 승인 2026-10-03). PR #5 병합은 사용자.
 - (전달 완료) **8차 지시서 전달(사용자):** [PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)를 구현 담당(Antigravity 또는 Codex — 사용자 선택)에게 전달한다. 구현 측도 `Steve_ACASiaLAW`에 직접 푸시할 수 없으므로 작업 브랜치 → PR로 올린다. 다음 사용자 결정: 기준선 상향(81.7/79.2) 여부.
