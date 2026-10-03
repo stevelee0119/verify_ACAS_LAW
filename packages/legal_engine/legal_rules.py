@@ -311,12 +311,17 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
                     for rm in re.finditer(req_pat, unit):
                         # 매칭 직후(35자) 부정·미충족 서술 연결 검사
                         after_span = unit[rm.end():rm.end() + 35]
-                        is_neg = bool(re.search(
+                        is_neg_match = re.search(
                             r"(?:하지\s*(?:않|못|아니)|되지\s*(?:않|못|아니)|도달하지|도래하지|"
-                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|없었(?:으나|음|으며)?|"
+                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|없(?:었)?(?:으나|음|으며)?|"
                             r"없음에도|부존재|미충족|흠결|결여)",
                             after_span
-                        ))
+                        )
+                        is_neg = False
+                        if is_neg_match:
+                            prefix = after_span[:is_neg_match.start()].rstrip()
+                            if not re.search(r"(?:지체|주저|이의|거절|반대|방해)$", prefix):
+                                is_neg = True
                         # 매칭 직전(15자)에 '전혀', '일체' 등 부정 부사가 결합된 경우
                         before_span = unit[max(0, rm.start() - 15):rm.start()]
                         if re.search(r"(?:전혀|일체|전무)", before_span):

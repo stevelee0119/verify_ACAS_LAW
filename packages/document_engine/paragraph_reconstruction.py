@@ -142,13 +142,8 @@ def get_unclosed_delimiter(text: str) -> Optional[str]:
 
 
 # 괄호/따옴표 바로 뒤에 붙는 지시 관형사 (예: '(이 사건)', '(해당 채무)', '(위 계약)') (TK-41)
-PAREN_DETERMINERS = {"이", "해당", "위", "본", "그", "저", "동", "각"}
 
 # 독립 어절로 쓰이는 1음절 관형사·접속사·명사·수사 (어절 경계 보존) (TK-41)
-STANDALONE_WORDS = {
-    "그", "이", "저", "위", "본", "각", "동", "해당",
-    "및", "또", "더", "법", "한", "두", "세", "네", "몇", "매"
-}
 
 
 def join_lines(
@@ -180,31 +175,14 @@ def join_lines(
     if first in ")]}」』”’>》〉】,.;:!?%·":
         return p + n
 
-    # 1. 괄호/따옴표 바로 뒤에 1~2음절만 걸치고 줄바꿈된 경우 (TK-31, TK-41)
-    m_paren = re.search(r"[\(\[\{“\"'‘「『<《〈【]([가-힣]{1,2})$", p)
-    if m_paren and re.match(r"[가-힣]", first):
-        paren_stem = m_paren.group(1)
-        # 괄호 안의 지시 관형사(이, 해당, 위 등) 뒤에 명사가 오는 경우 공백 유지 (TK-41)
-        if paren_stem in PAREN_DETERMINERS:
-            return p + " " + n
-        # 그 외 고유명사/기관명 분절(예: '판시하였습니다(대' + '법원')은 공백 없이 연결
-        return p + n
-
-    # 2. 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임 (예: '징계권자' + '에게', '대하' + '여')
+    # 1. 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임 (예: '징계권자' + '에게', '대하' + '여')
     words = n.split()
     first_word = words[0].rstrip(".,;:)]」』”’'\"") if words else ""
     if re.match(r"[가-힣]", last) and first_word in MID_WORD_STARTS:
         return p + n
 
-    # 3. 꽉 찬 줄(prev_full) 또는 글자 단위 줄바꿈 문맥에서 앞 줄 끝이 1음절 한글 단어로 끊긴 경우 (TK-41)
-    # 독립 관형사/접속사/명사('그', '이', '저', '위', '본', '각', '및', '또', '더', '법' 등)는 공백 보존
-    words_p = p.split()
-    last_word = words_p[-1] if words_p else ""
-    if (prev_full or char_wrap_context) and len(last_word) == 1 and re.match(r"[가-힣]", last) and re.match(r"[가-힣]", first):
-        if last_word not in STANDALONE_WORDS:
-            return p + n
-
-    # 일반적인 단어 경계 줄바꿈: 한글 낱말 사이 공백 1개 유지
+    # 2. 구조적 신호(줄 끝 위치, 문단의 줄 분포 등)로 명확히 분절된 어절임이 확인되지 않으면
+    # 불확실한 경우로 보아 베이스라인(공백 유지) 동작을 따른다.
     return p + " " + n
 
 
@@ -307,14 +285,7 @@ def reconstruct_page_blocks(
     curr_group: List[Block] = []
     active_closer: Optional[str] = None
 
-    # 쪽 내 오른쪽 경계(right edge) 분석 (문단별 마진 참조용)
-    x1_values = [round(b.bbox.x1, 1) for b in blocks if b.bbox is not None]
-    right_edge = 0.0
-    if x1_values:
-        repeated = [v for v in set(x1_values) if x1_values.count(v) >= 2]
-        right_edge = max(repeated) if repeated else max(x1_values)
-        if page_width > 0:
-            right_edge = max(right_edge, 0.75 * page_width)
+    # 쪽 내 오른쪽 경계(right edge) 분석은 이제 문단별(flush_group 내부)로 수행합니다.
 
     def flush_group() -> None:
         nonlocal curr_group, active_closer
@@ -326,8 +297,15 @@ def reconstruct_page_blocks(
             active_closer = None
             return
 
-        # 문단 내부 줄들의 레이아웃 신호 분석 (TK-41: 쪽 전체가 아닌 해당 문단 내부 줄들에서만 도출)
+        # 문단 내부 줄들의 레이아웃 신호 분석 (TK-41, TK-44: 쪽 전체가 아닌 해당 문단 내부 줄들에서만 도출)
         group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
+        right_edge = 0.0
+        if group_x1:
+            repeated = [v for v in set(group_x1) if group_x1.count(v) >= 2]
+            right_edge = max(repeated) if repeated else max(group_x1)
+            if page_width > 0:
+                right_edge = max(right_edge, 0.75 * page_width)
+
         group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
         group_char_wrap = group_full_count >= 2
 

@@ -118,14 +118,19 @@ PARTY_AND_TITLE_LABELS = [
     "소송대리인변호사", "소송대리인", "담당변호사", "대리인변호사", "변호인", "변호사",
     # 대표자 및 직책
     "대표이사", "대표자", "대표", "이사장", "원장", "소장", "이사", "감사",
-    "지배인", "관리인", "회장", "사장",
+    "지배인", "관리인", "회장", "사장", "담당자",
     # 성명/서명 표지
-    "성명", "서명자", "명의인",
+    "성명", "서명자", "명의인", "이름",
     # 소송 당사자 및 관계인
     "피고인", "피의자", "피신청인", "피청구인", "피고", "원고",
     "신청인", "청구인", "상고인", "항소인",
     "채권자", "채무자", "증인", "피해자", "고소인", "고발인", "참고인",
     "망", "소외", "배우자", "자녀", "남편", "아들", "딸", "가족", "대리인",
+    # 작성/담당/진술 관계인 등 추가
+    "작성자", "진술자", "조사자", "면담자", "보고자", "확인자",
+    "매도인", "매수인", "임대인", "임차인", "도급인", "수급인", "위임인", "수임인", "양도인", "양수인",
+    "사용자", "근로자", "보증인", "연대보증인", "부", "모", "부모", "조부", "조모", "아내", "처", "보호자",
+    "법정대리인", "친권자", "후견인",
 ]
 
 def _build_spaced_label_regex(labels: Sequence[str]) -> str:
@@ -524,18 +529,22 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         if _covered_by_span(guard_spans, start, end):
             continue
 
-        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39):
-        # clean_name 자체 또는 조사를 분리한 stem이 법률·군사·서식 불용어인 경우 인명에서 제외한다.
-        # 예: '피고 부대는' -> stem '부대'는 군사 용어이므로 제외
-        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
-        if josa_match:
-            stem = clean_name[:josa_match.start()]
-            if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
-                continue
-
-        # 명시적 라벨 직후 후보는 후행 일반 문맥으로 탈락하지 않는다 (TK-39)
+        # 명시적 라벨 직후 후보는 후행 일반 문맥으로 제외되지 않는 점을 완화(TK-39, TK-43)
+        # 콜론 등 강력한 구분자가 있거나 직접 성명 표지인 경우에만 명시적 라벨로 인정한다.
         after_text = text[end:end + 30]
-        full_is_valid = is_valid_korean_name_structure(clean_name, after_text, is_explicit_label=True)
+        full_matched_str = m.group(0)
+        is_name_label = any(k in full_matched_str for k in ("성명", "서명자", "명의인", "이름", ":", "："))
+
+        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46):
+        # 명시적 라벨이 아닌 경우에만 clean_name 자체 또는 조사를 분리한 stem이 불용어인지 검사하여 제외한다.
+        if not is_name_label:
+            josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+            if josa_match:
+                stem = clean_name[:josa_match.start()]
+                if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
+                    continue
+
+        full_is_valid = is_valid_korean_name_structure(clean_name, after_text, is_explicit_label=is_name_label)
 
         # 조사 분리는 clean_name 전체가 유효하지 않거나(4음절 등 비표준),
         # 3음절이더라도 복성이 아닌 4음절 또는 조사를 분리한 형태가 더 확실한 경우에만 수행
