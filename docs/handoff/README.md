@@ -124,7 +124,8 @@ python scripts/scorecard.py && python scripts/score_gate.py
 ## 아직 사용자가 정할 것
 - Round 7 종결 절차: **완료**(위 결정 표). 종결 기록 커밋은 저장소 규칙(필수 확인 3개) 때문에 PR [stevelee0119/verify_ACAS_LAW#3](https://github.com/stevelee0119/verify_ACAS_LAW/pull/3)으로 올렸다(사용자 승인 '1번'). **병합은 사용자.**
 - **8C 지시서 전달(사용자):** [PROMPT_FOR_ROUND8C_CODEX.md](PROMPT_FOR_ROUND8C_CODEX.md)를 Codex 작업 설명에 붙여 넣는다(시작 `evaluator/round8-promotion` d20cde2). Codex 환경 설정에 tesseract·Python 3.11을 넣는다. 평가 측은 Codex PR을 구독해 자동 재측정한다.
-- **제안(사용자 설정): 저장소 규칙(ruleset 24413473)의 대상을 `~ALL`에서 기본·통합 브랜치(`main`, `Steve_ACASiaLAW`)로 좁히기.** 지금은 작업 브랜치도 기존 커밋 갱신마다 '새 브랜치 → CI → fast-forward'를 거쳐야 한다. 대상을 좁혀도 병합은 PR의 필수 확인으로 계속 막힌다.
+- (사용자 설정 2026-10-03) ruleset 24413473의 대상을 `~ALL`에서 `main`으로 좁혔다. 작업 브랜치의 '새 브랜치 → CI → fast-forward' 단계가 없어졌다.
+  **추가 제안:** 실제 통합 브랜치는 `Steve_ACASiaLAW`다(`main`보다 108커밋 앞서고, `main`은 10-01 `9933548`). 지금은 보호 규칙이 없어 필수 확인 없이 병합, 직접·강제 푸시, 삭제가 가능하다. ruleset 대상에 `refs/heads/Steve_ACASiaLAW`를 더하기를 권한다.
 - (결정 완료 2026-10-03 '1~5 추천대로') 8B 판정 뒤 사용자 결정 ①~④ — 위 결정 표.
 - (완료) **8B 지시서 전달(사용자):** [PROMPT_FOR_ROUND8B_TK52.md](PROMPT_FOR_ROUND8B_TK52.md)를 Antigravity에 전달한다. 수정 커밋은 새 브랜치(`antigravity/round8b-tk52`)로 올리고, 평가 측 재측정·승격 뒤 평가 측이 PR #5 브랜치를 초록 SHA로 fast-forward한다(사용자 승인 2026-10-03). PR #5 병합은 사용자.
 - (전달 완료) **8차 지시서 전달(사용자):** [PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)를 구현 담당(Antigravity 또는 Codex — 사용자 선택)에게 전달한다. 구현 측도 `Steve_ACASiaLAW`에 직접 푸시할 수 없으므로 작업 브랜치 → PR로 올린다. 다음 사용자 결정: 기준선 상향(81.7/79.2) 여부.
