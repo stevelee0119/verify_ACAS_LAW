@@ -34,17 +34,20 @@
 | [TK-27](TK-27_reference_date_arbitrary_pick.md) | 불확실성 보존 | 기준일 후보가 여럿이면 계약은 늦은 날짜·처분은 이른 날짜를 임의로 고름 | `test_reference_date_is_not_picked_arbitrarily…` | 해결(e6b58fd) |
 | [TK-28](TK-28_pii_label_punctuation_and_audit_findings.md) | 개인정보 + 감사 지적 | 당사자 라벨 뒤 구분자가 공백이 아니면 이름 미마스킹(16변형 중 13), system/schema 예외, 입원↔퇴원 혈압 모순, 참고자료 승격·PDF 연결(미재현) | `test_pii_label_variants.py` | 5차 부분 해결(라벨 구분자 13건·system 등록 상수·입원/퇴원) · **이름 회귀·미해결 잔여 → TK-30** |
 | [TK-29](TK-29_reference_match_evidence_level.md) | 불확실성 단조 회귀 | 참고자료 제목 부분 일치·미독 파일만으로 부존재 판정을 낮추고 PARTIALLY_VERIFIED로 올림(4차 S3 신규) | `test_reference_match_guard.py` | **해결(5차 c6a9dc0)** — 평가 측 보호 시험 3건 XPASS, 독립 감사 18/18 |
-| [TK-30](TK-30_pii_name_regression_round5.md) | 회귀(개인정보) | 5차 이름 개선과 함께 4차에 마스킹되던 이름이 노출(`성명: 김민기`)·마지막 글자 잔존(`원고 김하은`), 라벨 칸이 여럿인 `원  고   윤하기` 노출, 정상 안내문 PERSON 오탐 | `test_round5_regressions.py` | 열림 |
-| [TK-31](TK-31_pdf_join_midword_space.md) | 회귀(입력 단계) | 줄 결합이 어절 한가운데에 공백(`(대 법원`)을 넣어 TC-06 법원명·선고일 손실, dev 81.7→81.2. PDF 폭 40 INJ-1 잔여 1건 | `test_round5_regressions.py`, `test_layout_invariance_pdf.py` | 열림 |
-| [TK-32](TK-32_civil_cluster_false_positive_and_names.md) | 오탐 + 설정 정확성 | 민법 군집 확장으로 요건을 제시한 정상 항변을 과대주장으로 표시, 설정의 장 이름 오류(사무관리·부당이득·불법행위) | `test_round5_regressions.py` | 열림 |
+| [TK-30](TK-30_pii_name_regression_round5.md) | 회귀(개인정보) | 5차 이름 개선과 함께 4차에 마스킹되던 이름이 노출(`성명: 김민기`)·마지막 글자 잔존(`원고 김하은`), 라벨 칸이 여럿인 `원  고   윤하기` 노출, 정상 안내문 PERSON 오탐 | `test_round5_regressions.py` | 열림 **6차(01070f6): 고정 입력은 해결(XPASS), 일반화 미완 → TK-39·40·41로 승계** |
+| [TK-31](TK-31_pdf_join_midword_space.md) | 회귀(입력 단계) | 줄 결합이 어절 한가운데에 공백(`(대 법원`)을 넣어 TC-06 법원명·선고일 손실, dev 81.7→81.2. PDF 폭 40 INJ-1 잔여 1건 | `test_round5_regressions.py`, `test_layout_invariance_pdf.py` | 열림 **6차(01070f6): 고정 입력은 해결(XPASS), 일반화 미완 → TK-39·40·41로 승계** |
+| [TK-32](TK-32_civil_cluster_false_positive_and_names.md) | 오탐 + 설정 정확성 | 민법 군집 확장으로 요건을 제시한 정상 항변을 과대주장으로 표시, 설정의 장 이름 오류(사무관리·부당이득·불법행위) | `test_round5_regressions.py` | 열림 **6차(01070f6): 고정 입력은 해결(XPASS), 일반화 미완 → TK-39·40·41로 승계** |
 | [TK-33](TK-33_evaluation_marker_and_report_accuracy.md) | 절차·하드코딩 | 문단 복원기에 평가 자료 표식 분기(`HO-\d+\|TC-\d+\|홀드아웃용…`), 완료 보고의 비교 기준·성공 단계만 적은 CI 결과·"10건 전수 해소" 오기 | `check_hardcoding_diff.py`의 `eval_marker` | 열림 |
 | [TK-34](TK-34_item_level_temporal_review.md) | 탐지 공백(새 탐지) | 행위시법 검토가 조 단위 버전만 비교해 목 단위 신설·이동(제2조 제1호 카목: 성과 도용→데이터 부정사용)을 못 봄. **6차 범위 밖** | strict xfail XPASS + 오탐 대조 유지 | 열림(6차 검증 뒤 착수, 시험 고정됨) |
 | [TK-35](TK-35_storage_path_prefix_check.md) | 보안(방어 심층) | CodeQL 경로 10건 + 원본 파일 권한 0o444(모든 사용자 읽기, 1건) + 프로젝트 ID 로그 줄 위조 3건(총 14건): `_abs`가 경로를 접두 문자열로 비교해 형제 디렉터리(`storage2`)를 통과시킴(6건, 재현·현재 호출 경로 악용은 확인 못 함) + 허용 문자 검사가 막는 4건(`match`+`$`는 끝 줄바꿈 허용 → `fullmatch`). **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
 | [TK-36](TK-36_exception_text_in_responses.md) | 보안(정보 노출) | CodeQL 2건: `access.py:369`가 키 설정 오류 문구(환경변수 이름)를 503 본문에 실음, `main.py:264`는 관리자 전용 진단. **6차 범위 밖** | 착수 시 평가 측이 strict xfail 고정 | 열림(6차 직후 보안 보강) |
 | [TK-37](TK-37_client_key_validation_prototype.md) | 보안(클라이언트) | CodeQL 14건(prototype 13 + DOM 1): 관리자 화면 `tabs[next]` 검증이 `#admin/__proto__`를 통과해 `pref.*` 대입이 `Object.prototype`을 오염(논리 재현). **6차 범위 밖** | 착수 시 브라우저 시험 | 열림(6차 직후 보안 보강) |
 | [TK-38](TK-38_regex_polynomial_growth.md) | 보안·견고성(**우선순위 높음**) | CodeQL `py/redos` 2건: **`pdf_parser.py` `SINGLE_GLYPH_SHOW_RE`가 지수 증가 — 조작된 PDF의 105바이트가 처리를 20초 이상 멈춤(재현)**, `korean_amount.py:65`는 지수지만 현재 호출 경로로 도달 불가 + 이차 증가 정규식 다수. **6차 범위 밖** | 착수 시 strict xfail(n=14·18·24가 1초 안에 끝날 것) | 열림(보안 보강 라운드 S1, 6차 검증 직후) |
+| [TK-39](TK-39_explicit_name_context_exclusion.md) | 회귀(개인정보, **P1**) | 6차: `성명: {이름} 출력하지 마시오.`류 후행 문맥에서 이름 전체 마스킹 **21/21→3/21**, 실제 라우터를 거쳐 공급자 호출 도달 **0/36→36/36**(가짜 공급자), 기존 시험 `test_legal_military_terms_not_masked_as_person` PASS→FAIL. 낱말 예외 추가 금지, 구조로 | `test_round6_regressions.py` R6-01 strict xfail 30 + 기존 시험 | 열림(**7차 R1**) |
+| [TK-40](TK-40_defense_exemption_by_keyword_cooccurrence.md) | 회귀(법리, **P1**) + 지시 위반 소지 | 6차: 요건 낱말·한정 결론 낱말 **공존만으로 경고 면제** — 요건 부정 4→0, 타 책임 확장 3→1(정상 항변 오탐 2→0은 개선). 6차 지시서가 금지한 예외 낱말 목록(설정 22개) | R6-02 strict xfail 6 | 열림(**7차 R2**) |
+| [TK-41](TK-41_line_join_one_direction_default.md) | 회귀(입력 계층, P2) | 6차: 괄호 뒤 짧은 어절 `(이 사건)` 공백 삭제(10쌍 6→4), 같은 문단이 쪽의 다른 문단 배치(꽉 찬 줄 2개 이상)에 따라 `그 사람`→`그사람`. 시험 19개가 모두 '붙여라' 한 방향 | R6-03 strict xfail 4 | 열림(**7차 R3**) |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · [보안 보강](PROMPT_FOR_SECURITY_ROUND.md)(6차 직후 전달)
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md)
 
 **기능 개선 요청(결함 티켓과 별도):** [FR-01 검토 화면 중복 해소·참고자료(RAG) 활용 — 타당성 검토](FR-01_review_screen_and_reference_integration.md) · [F1 라운드 작업 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md)(5차 검증 뒤 착수)
 
@@ -78,7 +81,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | TK-09 모델 의견 승격 | 기본 꺼짐 유지 | 변경 없음 |
 | 기준선 상향(2026-10-03 갱신) | **회귀 해소 뒤 81.7 이상으로 상향**(5차 실측 dev 81.2는 회귀 상태라 올리지 않음) | 평가 측이 실측으로 사용자 승인 후 |
 | 동일 시행일 복수 버전 | 두 버전 병기·대조 | 6차 |
-| 다음 라운드 범위(2026-10-03 갱신) | **5차 회귀 보완(TK-30~33)만** → 그 검증 뒤 **보안 보강(TK-38 A·B, TK-35~37)** → **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 → TK-24 | [6차 지시서](PROMPT_FOR_STABILIZATION_ROUND6.md), [보안 보강 지시서](PROMPT_FOR_SECURITY_ROUND.md) |
+| 다음 라운드 범위(2026-10-03 6차 점검 뒤 갱신) | **7차 = 6차 회귀 보완(TK-39·40·41) + 보안 보강(TK-35~38) + F1 착수 기준 확정** → 7차 검증과 F1 게이트 1차 판정 → **'행위시법 검토 보강'(요청 16 + TK-34)** → F1 게이트 재측정·사용자 승인 → **F1**(F1→F2→F3) → TK-24. (사용자 결정 순서 '행위시법 보강 → F1 → TK-24'는 그대로이고, 7차 지시서가 F1 착수 게이트를 더한다) | [7차 지시서](PROMPT_FOR_STABILIZATION_ROUND7.md) |
 | `main` 보호 | 점수 하락 게이트 먼저, CI는 초록 뒤 추가. Docker OCR readiness 제외. 강제 푸시·삭제 금지 켬, PR 필수·관리자 포함·최신 유지는 켜지 않음 | 5차 지시서 U8 |
 | `main` 보호 갱신(2026-10-03) | CI 테스트 job을 필수 확인에 추가, **관리자 포함 적용 켬**(`enforcement_level: everyone`). PR 필수·최신 유지 끔, 강제 푸시·삭제 금지 유지 | 사용자가 웹 설정으로 변경. 평가 측이 **API(`GET branches/main/protection`)로 전 항목 직접 확인**, 사용자 스크린샷 3장과 일치 |
 | 생성 소프트웨어명(PDF `Producer`) | 작성자 정보에서 분리해 INFO | 5차 지시서 U9-2 |
@@ -88,10 +91,11 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
 | Docker OCR readiness 필수 확인(2026-10-03) | **연속 초록 3회 확인 뒤 추가**(2026-10-03 현재 **2회**: CI run 263, 수동 실행 37083845753) | 평가 측이 `CI` 실행마다 이 job 결과를 세어 3회째에 사용자에게 요청 |
 | 준비서면 534210 문제지(2026-10-03) | 문제지 없음 — **카목 단계는 현재 정정 상태 유지**(문제지가 생기면 그때 대조) | [TK-12](TK-12_ci_red_gitignored_mirror_data.md), [TK-34](TK-34_item_level_temporal_review.md) |
-| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 6차와 보안 보강 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
+| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 7차(6차 회귀 보완 + 보안 보강) 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
 | 코드 스캔 경고 분류(2026-10-03, 03:13 재수집 반영) | 열린 경고가 38건에서 **103건**(critical 2·high 76·medium 25)으로 늘었다(`main` 코드는 그대로, 신규 65건은 모두 운영자 입력 경로 — 분석 설정 변경 추정). 조치 완료 6(워크플로) · 티켓 TK-35 14·TK-36 2·TK-37 14·TK-38 2 · **오탐/의도 후보 65건**(사용자가 GitHub에서 처리, 위협 모델 설정 확인 권고) | [GITHUB_ACCESS 6·8절](GITHUB_ACCESS.md) |
 | 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`·`b28582a`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 — TK-38이 조작 PDF로 처리를 멈출 수 있는 실제 위험으로 확인됐으나 사용자가 '추천대로'로 **앞당기지 않고 보안 보강 첫 항목(S1)으로 두기로 결정**(같은 날) |
+| 6차 점검 판정(2026-10-03) | 독립 감사(Codex)의 핵심 결론 타당 — **6차 완료 승인 불가**, 기준선 `79.9/77.3`·버전 `0.9.13` 유지, F1 보류. 새 회귀 4건(TK-39·40·41, R6-04)은 평가 측 독립 재현으로 확인 | [AUDIT_REVIEW_ROUND6](AUDIT_REVIEW_ROUND6.md), HISTORY 11절 |
 
 ## 아직 사용자가 정할 것
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
@@ -100,3 +104,5 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - 서면9 같은 PDF의 온라인 재실행(5차 U4 이후) 결과 확인.
 - 보안 점검 후속: 결정 완료(2026-10-03 '추천대로') — 위 결정 표 참조. 남은 사용자 조치는 **GitHub 경고 처리**(URL 부분 문자열·평문 로깅의 오탐/수정 안 함)뿐이며, 경고 위치를 확인한 뒤 사용자가 GitHub에서 한다.
 - TK-38 A(PDF 정규식 지수 증가): **결정 완료(2026-10-03 '추천대로') — 앞당기지 않고 보안 보강 라운드의 첫 항목(S1)으로 둔다.** 6차 범위(TK-30~33)는 `paragraph_reconstruction.py`·이름 마스킹·법리 군집이라 `pdf_parser.py`를 직접 지정하지 않으나, R2의 'PDF 폭 40 INJ-1' 항목이 같은 파일을 건드릴 수 있어 충돌을 피하려고 6차 검증 뒤로 둔다. **그 사이 조작된 PDF 위험은 남아 있다**(코드 변경 없이 줄일 방법은 확인하지 못함). 지시서: [PROMPT_FOR_SECURITY_ROUND.md](PROMPT_FOR_SECURITY_ROUND.md)(6차 검증 직후 전달, 전달 전 평가 측이 strict xfail을 먼저 고정).
+- **6차 병합 작업(사용자 결정 대기):** 7차 시작 상태를 만들려면 평가 측이 6차 구현(`origin/super_cosmos_surges_19h47` 01070f6)을 `Steve_ACASiaLAW`에 병합하고 22 XPASS 승격 패치·6차 회귀 보호 시험을 적용해야 한다(`docs/handoff/staged/`). `git merge`가 자동 권한 분류기에 막혀 사용자 결정이 필요하다. 7차 지시서는 병합이 끝난 뒤에만 구현 측에 전달한다.
+- **F1 착수 기준 확인:** 7차 지시서 2절의 게이트 G1~G10과 초기 기준값(비공개 변형 이름 마스킹 ≥ 95%, F3는 ≥ 98%)을 사용자가 검토·조정한다. F1 착수 자체는 7차 완료 후 판정서를 보고 승인한다.
