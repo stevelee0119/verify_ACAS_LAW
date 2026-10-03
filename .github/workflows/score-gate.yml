@@ -65,6 +65,11 @@ jobs:
         if: ${{ !cancelled() }}
         run: python -m pytest tests/acceptance -q -p no:cacheprovider
 
+      # 지난 라운드들이 고정한 회귀 원장(약 4초). 전체 시험(CI)은 20분 안에 끝나지 못할 수 있어 7차에서 원장 실패 2건이 늦게 드러났다 — 여기서 먼저 잡는다
+      - name: 회귀 원장 시험
+        if: ${{ !cancelled() }}
+        run: python -m pytest tests/regression -q -p no:cacheprovider
+
       # 직전 푸시(PR이면 기준 브랜치) 대비: 전에 통과하던 항목이 떨어졌는지(회귀), 새로 추가된 줄에 시험 입력의 값·조문 번호가 들어갔는지(하드코딩)
       - name: 회귀 게이트(항목 단위)
         if: ${{ !cancelled() }}
