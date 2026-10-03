@@ -1881,6 +1881,61 @@ def test_tk40_defense_exemption_structure():
         assert not _has_overclaim(text), f"보존 대상 정상 항변에 과대주장 오탐 발생: {text}"
 
 
+# ==============================================================================
+# TK-41: 줄 결합 양방향 검증 및 쪽 배치 불변성 3종 세트
+# ==============================================================================
+def test_tk41_line_join_bidirectional_and_layout_invariance():
+    """TK-41 회귀 검증:
+    (가) 공백 보존 대상 (3건): 괄호 직후 지시 관형사 및 독립 1음절 단어 뒤 공백 보존
+    (나) 결합 대상 (2건): 괄호 직후 기관명 분절(대법원) 및 조사/어미 시작 어절 중간 결합
+    (다) 쪽 배치 불변성: 다른 문단의 꽉 찬 줄 유무에 관계없이 동일 문단의 결합 결과 불변
+    """
+    from packages.common.schemas import BBox, Block
+    from packages.document_engine.paragraph_reconstruction import join_lines, reconstruct_page_blocks
+
+    # (가) 공백 보존 대상 (양방향 중 띄어쓰기 유지군)
+    keep_space_cases = [
+        ("계약에 따라 (이", "사건) 채무를 이행하여야 한다", "계약에 따라 (이 사건) 채무를 이행하여야 한다"),
+        ("원고는 (해당", "채권)을 양수하였다고 주장한다", "원고는 (해당 채권)을 양수하였다고 주장한다"),
+        ("계약당사자는 그", "사람에게 금원을 교부하였다", "계약당사자는 그 사람에게 금원을 교부하였다"),
+    ]
+    for p, n, expected in keep_space_cases:
+        res = join_lines(p, n)
+        assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
+
+    # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)
+    join_cases = [
+        ("판시하였습니다(대", "법원 2021다9999)", "판시하였습니다(대법원 2021다9999)"),
+        ("피고의 행정처분", "에 대하여 취소를 구한다", "피고의 행정처분에 대하여 취소를 구한다"),
+    ]
+    for p, n, expected in join_cases:
+        res = join_lines(p, n)
+        assert res == expected, f"어절 중간 분절 결합 실패: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
+
+    # (다) 쪽 배치 불변성: 다른 문단의 배치에 영향받지 않음
+    def _make_page(extra_full_lines: int) -> str:
+        def blk(tag, text, x0, y0, x1):
+            return Block(block_id=f"b{tag}", text=text, page=1, bbox=BBox(x0, y0, x1, y0 + 12))
+
+        blocks, y = [], 80
+        for k in range(extra_full_lines):
+            blocks.append(blk(f"f{k}", "이 사건 계약은 갑 제1호증에 따라 체결되었으며 그 이행 여부가 다투어지고 있다고 서술한다.", 72, y, 520))
+            y += 14
+        y += 30
+        blocks += [
+            blk("t1", "계약상대방은 이 사건 계약에 따라 금원을 지급받은 사실을 인정하면서도 그", 72, y, 330),
+            blk("t2", "사람에게 금원을 대여하였다고 주장한다.", 72, y + 14, 300)
+        ]
+        out = reconstruct_page_blocks(blocks, page_num=1, page_width=595.0, page_height=842.0)
+        return next(b.text for b in out if "사람에게" in b.text)
+
+    # 꽉 찬 줄이 0개, 1개, 2개, 3개일 때 모두 결합 결과가 완벽하게 일치해야 함
+    results = [_make_page(n) for n in range(4)]
+    assert len(set(results)) == 1, f"쪽 배치에 따른 문단 결합 결과 불일치 발생: {results}"
+    assert "그 사람" in results[0], f"독립 단어 '그 사람' 공백 소실: {results[0]}"
+
+
+
 
 
 
