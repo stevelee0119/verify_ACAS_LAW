@@ -58,7 +58,7 @@
 | [TK-51](TK-51_structured_request_pii_boundary.md) | 개인정보 경계(**P1**, 기존 공백) | 구조화(JSON) 요청에서 라벨이 키·이름이 값이면 `_walk_fields`가 문맥을 잃어 실명이 공급자에 도달 — 평가 측 재현 246/324(7adf43f~61ef12f 동일). Codex 인계 문서 지적을 다른 입력으로 재현. F1/F3가 넓히는 경로 | `test_structured_request_privacy.py`(strict xfail 4) | 8차 44e73f9(PR #5): 구조화 요청 도달 **0/324·0/216**(해소), 단 과차단 증가 → TK-52. **병합 전** |
 | [TK-52](TK-52_round8_stem_leak_and_overblocking.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 | 8차 44e73f9: 조사 재귀 분리로 명시 성명 stem 계열 실명 누락(평가 측 16 → 9), 문맥 결합으로 정상 구조화 요청 과차단 6 → 14/28, 추가 불용어가 보호 시험 낱말 6개를 모두 포함하고 새 비공개 명사 과마스킹은 70→60/140·48→48/112 | 평가 측 비공개 세트(8차), 보호 시험 | 열림(PR #5 보완 필요) |
 
-**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md) · [7차 보완(7B, 7C가 후속)](PROMPT_FOR_STABILIZATION_ROUND7B.md) · [7차 보완 2차(7C, b26754e로 소화·미승인)](PROMPT_FOR_STABILIZATION_ROUND7C.md) · [7D(범위 축소: 시험 복원·법리·F1 문서)](PROMPT_FOR_STABILIZATION_ROUND7D.md) · **[8차 개인정보 경계(TK-51·TK-43)](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)**
+**구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md) · [7차 보완(7B, 7C가 후속)](PROMPT_FOR_STABILIZATION_ROUND7B.md) · [7차 보완 2차(7C, b26754e로 소화·미승인)](PROMPT_FOR_STABILIZATION_ROUND7C.md) · [7D(범위 축소: 시험 복원·법리·F1 문서)](PROMPT_FOR_STABILIZATION_ROUND7D.md) · [8차 개인정보 경계(TK-51·TK-43)](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md) · **[8차 보완(8B, TK-52 + PR #5 갱신 절차)](PROMPT_FOR_ROUND8B_TK52.md)**
 
 **기능 개선 요청(결함 티켓과 별도):** [FR-01 검토 화면 중복 해소·참고자료(RAG) 활용 — 타당성 검토](FR-01_review_screen_and_reference_integration.md) · [F1 라운드 작업 지시서](PROMPT_FOR_FEATURE_ROUND_F1.md)(5차 검증 뒤 착수)
 
@@ -120,7 +120,8 @@ python scripts/scorecard.py && python scripts/score_gate.py
 
 ## 아직 사용자가 정할 것
 - Round 7 종결 절차: **완료**(위 결정 표). 종결 기록 커밋은 저장소 규칙(필수 확인 3개) 때문에 PR [stevelee0119/verify_ACAS_LAW#3](https://github.com/stevelee0119/verify_ACAS_LAW/pull/3)으로 올렸다(사용자 승인 '1번'). **병합은 사용자.**
-- **8차 지시서 전달(사용자):** [PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)를 구현 담당(Antigravity 또는 Codex — 사용자 선택)에게 전달한다. 구현 측도 `Steve_ACASiaLAW`에 직접 푸시할 수 없으므로 작업 브랜치 → PR로 올린다. 다음 사용자 결정: 기준선 상향(81.7/79.2) 여부.
+- **8B 지시서 전달(사용자):** [PROMPT_FOR_ROUND8B_TK52.md](PROMPT_FOR_ROUND8B_TK52.md)를 Antigravity에 전달한다. 수정 커밋은 새 브랜치(`antigravity/round8b-tk52`)로 올리고, 평가 측 재측정·승격 뒤 평가 측이 PR #5 브랜치를 초록 SHA로 fast-forward한다(사용자 승인 2026-10-03). PR #5 병합은 사용자.
+- (전달 완료) **8차 지시서 전달(사용자):** [PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)를 구현 담당(Antigravity 또는 Codex — 사용자 선택)에게 전달한다. 구현 측도 `Steve_ACASiaLAW`에 직접 푸시할 수 없으므로 작업 브랜치 → PR로 올린다. 다음 사용자 결정: 기준선 상향(81.7/79.2) 여부.
 - 다음 라운드 순서(추천): 개인정보 경계(TK-51 + TK-43 과마스킹) → '행위시법 검토 보강'(요청 16 + TK-34) → F1 직전 재측정·독립 감사 → F1 착수 승인.
 - `#103`(`runner.py:46`)을 닫았다는 사용자 보고(2026-10-03)는 평가 측이 아직 확인하지 못했다 — 경고는 `main` 반영 뒤 수집에서만 갱신된다.
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
