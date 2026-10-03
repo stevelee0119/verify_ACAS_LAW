@@ -14,18 +14,18 @@ from typing import Any, Dict, List, Set, Tuple
 from packages.common.enums import LLMRole
 from packages.legal_engine.argument_validity_verifier import _OPINION_SCHEMA, _OPINION_SYSTEM
 from packages.llm_router.router import SYSTEM_BASE, _VERDICT_SCHEMA
-from packages.pii_engine.detector import PARTY_AND_TITLE_LABELS, detect
+from packages.pii_engine.detector import PARTY_AND_TITLE_LABELS, detect, is_valid_korean_name_structure
 from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
 from packages.verification_engine.ai_document_detector import AI_DETECTOR_SYSTEM_PROMPT, _DETECTOR_SCHEMA
 
 POLICY_VERSION = "payload-pii-v3"
 
 # ===========================================================================
-# 라벨 키 집합: detector.py의 PARTY_AND_TITLE_LABELS에서 단일 출처로 구성
+# 라벨 키 집합: detector.py의 PARTY_AND_TITLE_LABELS에서 단일 출처로 구성 (TK-51, TK-52 2절)
 # 개인정보 종류 키(주민등록번호, 연락처, 이메일)도 포함
 # ===========================================================================
 _PII_TYPE_KEYS = {"주민등록번호", "주민번호", "연락처", "전화번호", "휴대전화", "이메일", "생년월일"}
-# 라벨 어휘 + 개인정보 종류 키를 합쳐서 문맥 복원에 사용
+# 라벨 어휘 + 개인정보 종류 키를 합쳐서 키: 값 문맥 복원 및 형제/이웃 결합 판정에 사용
 CONTEXT_LABEL_KEYS: frozenset = frozenset(
     set(PARTY_AND_TITLE_LABELS) | _PII_TYPE_KEYS
 )
@@ -106,7 +106,7 @@ def is_registered_schema(schema: Any) -> bool:
 
 
 # ===========================================================================
-# R8-A (TK-51): 구조화 JSON 값에서 문맥을 복원하여 문자열 추출
+# R8-A / 8B-2 (TK-51, TK-52 2절): 구조화 JSON 값에서 문맥을 복원하여 문자열 추출
 # ===========================================================================
 def _try_json_parse(value: str):
     """문자열을 JSON으로 파싱 시도. 성공하면 파싱 결과, 실패하면 None 반환."""
@@ -122,9 +122,14 @@ def _try_json_parse(value: str):
 def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
     """값에서 (경로, 검사할 텍스트) 쌍을 수집한다.
 
-    사전: 모든 문자열 값에 '키: 값' 문맥을 추가하고, 형제 문자열 값들을 이어붙인 문맥도 생성.
-    배열: 이웃 문자열 원소를 이어붙인 문맥도 생성.
-    JSON 문자열: 재귀적으로 파싱하여 같은 규칙 적용.
+    사전:
+      - 원본 문자열 값은 항상 검사.
+      - 키가 CONTEXT_LABEL_KEYS에 속하는 경우에만 '키: 값' 문맥을 합성 (TK-52 2절: 비라벨 키의 과차단 방지).
+      - 형제 결합: 선행 값이 라벨이고 후행 값이 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (역할/이름 쌍 지원).
+    배열:
+      - 선행 원소가 라벨이고 후행 원소가 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (라벨 나열 배열 과차단 방지).
+    JSON 문자열:
+      - 재귀적으로 파싱하여 같은 규칙 적용.
     """
     results: List[Tuple[str, str]] = []
 
@@ -138,8 +143,8 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
             results.append((path, value))
 
     elif isinstance(value, dict):
-        # 각 키-값 쌍을 개별 검사
-        str_values: List[str] = []  # 형제 문자열 값 수집용
+        # 각 키-값 쌍을 검사
+        str_items: List[Tuple[str, str]] = []  # 형제 문자열 (key, value) 수집용
         for key, item in value.items():
             current_path = f"{path}.{key}" if path else str(key)
 
@@ -149,40 +154,48 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
                     # JSON 문자열이면 파싱하여 재귀 검사
                     results.extend(_collect_texts_from_value(decoded, current_path))
                 else:
-                    # 모든 키에 대해 '키: 값' 문맥을 생성 (TK-51 항목 2)
-                    results.append((current_path, f"{key}: {item}"))
-                    # 원본 값도 검사
+                    # 원본 값 검사
                     results.append((current_path, item))
-                    # 형제 값 결합용 수집
-                    str_values.append(item)
+                    # 키가 라벨 어휘에 속할 때만 '키: 값' 문맥 생성 (TK-52 2절)
+                    if key in CONTEXT_LABEL_KEYS:
+                        results.append((current_path, f"{key}: {item}"))
+                    str_items.append((key, item))
             else:
                 # 비문자열 값은 재귀
                 results.extend(_collect_texts_from_value(item, current_path))
 
-        # 형제 문자열 값들을 원래 순서로 이어붙인 문맥 (TK-51 항목 2)
-        # 예: {"역할": "원고", "이름값": "편하람"} → "원고 편하람"
-        if len(str_values) >= 2:
-            sibling_text = " ".join(str_values)
-            sibling_path = f"{path}.__siblings__" if path else "__siblings__"
-            results.append((sibling_path, sibling_text))
+        # 형제 문자열 결합:
+        # '라벨 값 다음에 이름 구조 값이 올 때만' 결합 문맥을 생성한다 (TK-52 2절)
+        # 예: {"역할": "원고", "이름값": "편하람"} -> "원고 편하람"
+        for i in range(len(str_items) - 1):
+            (k1, v1), (k2, v2) = str_items[i], str_items[i + 1]
+            if v1 in CONTEXT_LABEL_KEYS and v2 not in CONTEXT_LABEL_KEYS and is_valid_korean_name_structure(v2):
+                sibling_path = f"{path}.__siblings__[{i}]" if path else f"__siblings__[{i}]"
+                results.append((sibling_path, f"{v1} {v2}"))
 
     elif isinstance(value, (list, tuple)):
         # 각 원소를 개별 검사
         str_elements: List[str] = []  # 이웃 원소 결합용
         for idx, item in enumerate(value):
             current_path = f"{path}[{idx}]"
-            results.extend(_collect_texts_from_value(item, current_path))
-            # 문자열 원소 수집
             if isinstance(item, str):
                 decoded = _try_json_parse(item)
-                if decoded is None:
+                if decoded is not None:
+                    results.extend(_collect_texts_from_value(decoded, current_path))
+                else:
+                    results.append((current_path, item))
                     str_elements.append(item)
+            else:
+                results.extend(_collect_texts_from_value(item, current_path))
 
-        # 이웃 문자열 원소를 이어붙인 문맥 (TK-51 항목 2)
-        if len(str_elements) >= 2:
-            neighbor_text = " ".join(str_elements)
-            neighbor_path = f"{path}.__neighbors__" if path else "__neighbors__"
-            results.append((neighbor_path, neighbor_text))
+        # 배열 이웃 결합:
+        # '선행 원소가 라벨이고 후행 원소가 이름 구조일 때만' 결합 문맥을 생성한다 (TK-52 2절)
+        # 예: ["원고", "편하람"] -> 결합 / ["원고", "피고", "증인"] -> 결합 안 함
+        for i in range(len(str_elements) - 1):
+            w1, w2 = str_elements[i], str_elements[i + 1]
+            if w1 in CONTEXT_LABEL_KEYS and w2 not in CONTEXT_LABEL_KEYS and is_valid_korean_name_structure(w2):
+                neighbor_path = f"{path}.__neighbors__[{i}]" if path else f"__neighbors__[{i}]"
+                results.append((neighbor_path, f"{w1} {w2}"))
 
     return results
 

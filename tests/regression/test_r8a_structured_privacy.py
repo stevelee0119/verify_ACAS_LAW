@@ -201,3 +201,58 @@ class TestPlaintextPreserved:
         bodies = _sent_bodies(monkeypatch, system="s", user=text)
         # 전송 시도가 있었어야 함 (400 에러이므로 bodies에 기록)
         assert len(bodies) >= 1, "정상 평문이 차단됨"
+
+
+# ===========================================================================
+# 9. 8B-2 과차단 방지 대조 시험 (TK-52 2절)
+#    - 전송되어야 한다: 비인명 당사자 값(법인·기관·지자체·'○○ 측'), 장소·직무 명사,
+#      라벨만 나열한 배열, 사건 서술 값
+# ===========================================================================
+class TestOverblockingPrevention:
+    """사람 이름이 없는 정상 구조화 요청이 차단되지 않고 공급자로 전송되는지 확인한다."""
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"원고": "사단법인 한국협회", "피고": "재단법인 미래복지"},
+            {"당사자": "원고 측", "상대방": "피고 측"},
+            {"사건": {"장소명": "서울중앙지방법원", "직무": "총괄관리"}},
+            {"관련라벨": ["원고", "피고", "증인", "참고인"]},
+            {"사건서술": "계약 해제 통보 후 원상회복 및 손해배상을 청구함"},
+            {"피고": "사단법인 대한다문화협회", "소재": "서울법원종합청사"},
+        ],
+    )
+    def test_normal_structured_requests_not_blocked(self, monkeypatch, payload):
+        """이름 없는 정상 구조화 요청은 차단되지 않아야 한다."""
+        bodies = _sent_bodies(
+            monkeypatch,
+            system="s",
+            user=json.dumps(payload, ensure_ascii=False),
+        )
+        assert len(bodies) >= 1, f"정상 요청이 과차단됨: {payload}"
+
+
+# ===========================================================================
+# 10. 8B-1 stem 계열 실명 보존 시험 (TK-52 1절)
+#     - 불용어로 시작하고 끝 음절이 조사형인 실명이 조사 유무와 여러 당사자 라벨에 걸쳐
+#       정상적으로 PERSON으로 탐지/차단되는지 확인
+# ===========================================================================
+class TestStemLikeNamesPreserved:
+    """끝 음절이 조사형이고 앞부분이 불용어인 실명이 제외되지 않고 보존/차단되는지 확인한다."""
+
+    @pytest.mark.parametrize("label", ["원고", "피고", "증인", "신청인"])
+    @pytest.mark.parametrize("name", ["임용은", "정산이", "조사도", "신청은", "공지이", "심사가"])
+    @pytest.mark.parametrize("suffix", ["", "은", "는", "이", "가", "을", "를"])
+    def test_stem_like_name_detected_and_blocked(self, monkeypatch, label, name, suffix):
+        """라벨 뒤 stem형 실명이 조사가 붙거나 붙지 않아도 PERSON으로 탐지되어 차단되어야 한다."""
+        from packages.pii_engine.detector import detect
+
+        text = f"{label} {name}{suffix} 출석했다."
+        matches = [m for m in detect(text) if m.kind == "PERSON"]
+        # 성명 표지 또는 당사자 라벨 뒤 {이름}{조사} 패턴에서 실명이 마스킹되어야 함
+        if suffix:
+            assert any(name in m.text or m.text in name for m in matches), f"실명이 탐지되지 않음: {text!r}"
+            # 라우터 전송 시에도 차단되어야 함
+            bodies = _sent_bodies(monkeypatch, system="s", user=text)
+            assert not any(name in b for b in bodies), f"실명이 공급자로 유출됨: {text!r}"
+
