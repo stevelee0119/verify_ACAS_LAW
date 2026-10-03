@@ -1834,5 +1834,53 @@ def test_tk39_explicit_name_context_and_router_boundary(monkeypatch):
             assert any(exp in p for p in person_matches), f"정상 인명 '{exp}' 탐지 누락: {text}"
 
 
+# ==============================================================================
+# TK-40: 법리 과대주장 경고 면제의 구조화 3종 세트 (요건 부정·인용·상대방 주장·재반박)
+# ==============================================================================
+def test_tk40_defense_exemption_structure():
+    """TK-40 회귀 검증:
+    (가) 요건 부정 문장 (2건): 요건을 미충족/부정으로 자인한 경우 과대주장 경고 유지
+    (나) 긍정적 요건 소명 정상 항변 (2건): 요건 소명 및 해당 채무 한정 시 경고 면제
+    (다) 타 책임 확장 및 상대방 주장/재반박 (2건): 형사/징계 책임 확장 시 과대주장 경고 유지
+    (라) 이전 성공 보존 (2건): 전액 지급 및 시효 경과 정상 항변 오탐 없음
+    """
+    def _has_overclaim(text: str) -> bool:
+        findings = review_legal_rules(make_synthetic_doc("청 구 원 인", text))
+        return any("GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS" in f.tags for f in findings)
+
+    # (가) 요건 부정 문장: 경고 유지 (과대주장 경고 발생 필수)
+    denied_cases = [
+        "가사 대여 사실이 인정되더라도, 피고는 변제공탁을 전혀 하지 아니하였으나 이 사건 채무에 관한 책임을 질 수 없다.",
+        "설령 계약 체결이 인정되더라도, 상계의 의사표시가 전혀 도달하지 아니하였음에도 해당 채무에 관한 책임이 없다.",
+    ]
+    for text in denied_cases:
+        assert _has_overclaim(text), f"요건 부정 문장에 과대주장 경고 누락: {text}"
+
+    # (나) 긍정적 요건 소명 정상 항변: 경고 면제 (오탐 0건)
+    positive_cases = [
+        "설령 대여 사실이 인정되더라도, 피고가 변제기에 전액을 변제공탁을 하였으므로 이 사건 채무에 관한 책임을 질 수 없다.",
+        "가사 손해가 발생하였다 하더라도, 소멸시효 기간이 경과하였으므로 해당 채무에 관한 책임을 질 수 없다.",
+    ]
+    for text in positive_cases:
+        assert not _has_overclaim(text), f"긍정 요건 제시 정상 항변에 과대주장 오탐 발생: {text}"
+
+    # (다) 타 책임 확장 및 재반박 문맥: 경고 유지
+    extended_and_counter_cases = [
+        "설령 대여 사실이 인정되더라도, 변제공탁을 하였으므로 해당 채무에 관한 책임을 질 수 없고 형사책임도 성립할 수 없다.",
+        "가사 계약 체결이 인정되더라도, 피고가 변제하여 본건 채무에 관한 책임이 없고 징계책임도 전면 면책된다.",
+    ]
+    for text in extended_and_counter_cases:
+        assert _has_overclaim(text), f"타 책임 확장/재반박 문장에 과대주장 경고 누락: {text}"
+
+    # (라) 이전 성공 보존: 대등액 소멸 및 현존이익 한정
+    preserve_cases = [
+        "피고의 상계의 의사표시가 도달하여 이 사건 채무는 대등액에서 소멸하였다.",
+        "수익자로서 현존 이익 한도에서만 책임을 부담하므로 이 사건 채무에 관한 초과 책임을 질 수 없다.",
+    ]
+    for text in preserve_cases:
+        assert not _has_overclaim(text), f"보존 대상 정상 항변에 과대주장 오탐 발생: {text}"
+
+
+
 
 

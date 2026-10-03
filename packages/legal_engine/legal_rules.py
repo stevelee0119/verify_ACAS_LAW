@@ -298,23 +298,55 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             if rule.get("unless") and re.search(rule["unless"], unit):
                 continue
 
-            # TK-32 및 보완 지시서 5.1절: 요건이 구체적으로 제시되고 해당 채무로 한정된 결론을 과대주장으로 경고하지 않음
+            # TK-32, TK-40: 요건의 긍정적 소명, 발화 주체, 책임 범위의 구조적 판정
             if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
                 signals = load_defense_groups().get("structural_signals", {})
                 req_list = signals.get("stated_requirements", [])
                 lim_list = signals.get("limited_conclusions", [])
-                req_pats = "|".join(req_list)
-                lim_pats = "|".join(lim_list)
 
-                has_req = bool(req_pats and re.search(req_pats, unit))
+                has_positive_req = False
+                has_denied_req = False
+
+                for req_pat in req_list:
+                    for rm in re.finditer(req_pat, unit):
+                        # 매칭 직후(35자) 부정·미충족 서술 연결 검사
+                        after_span = unit[rm.end():rm.end() + 35]
+                        is_neg = bool(re.search(
+                            r"(?:하지\s*(?:않|못|아니)|되지\s*(?:않|못|아니)|도달하지|도래하지|"
+                            r"아니하(?:였|고|여|면)|않았(?:으나|음|으며)?|않음에도|없었(?:으나|음|으며)?|"
+                            r"없음에도|부존재|미충족|흠결|결여)",
+                            after_span
+                        ))
+                        # 매칭 직전(15자)에 '전혀', '일체' 등 부정 부사가 결합된 경우
+                        before_span = unit[max(0, rm.start() - 15):rm.start()]
+                        if re.search(r"(?:전혀|일체|전무)", before_span):
+                            is_neg = True
+
+                        if is_neg:
+                            has_denied_req = True
+                        else:
+                            has_positive_req = True
+
+                lim_pats = "|".join(lim_list)
                 has_lim = bool(lim_pats and re.search(lim_pats, unit))
 
-                # 1. 요건이 구체적으로 제시되고 결론이 해당 채무/범위로 한정된 정상 항변: 경고 제외 (오탐 방지)
-                if has_req and has_lim and not re.search(r"당연(?:히)?\s*무효|전면\s*면책|전액\s*면제", unit):
+                # 타 법적 책임(형사·징계·행정 등)으로의 확장 또는 무제한 무효 주장 여부 검사
+                is_extended = bool(re.search(
+                    r"형사(?:책임|상\s*책임|처벌|고소|범죄)|징계(?:책임|처분|사유)|행정(?:처분|제재)|"
+                    r"당연(?:히)?\s*무효|전면\s*면책|전액\s*면제|어떠한\s*책임도",
+                    unit
+                ))
+
+                # 1. 요건이 긍정적으로 소명되고, 결론이 해당 채무로 한정되며, 타 책임으로 확장되지 않은 정상 항변: 경고 제외
+                if has_positive_req and not has_denied_req and has_lim and not is_extended:
                     continue
 
-                # 2. 결론은 한정되었으나 요건 제시가 부족한 경우: 근거 부족 시 요건 확인 요청 표현으로 분기
-                if has_lim and not has_req:
+                # 2. 요건을 부정·미충족으로 자인하였거나 타 책임으로 확장한 경우: 과대주장 경고 유지 (원 규칙)
+                if has_denied_req or is_extended:
+                    pass
+
+                # 3. 결론은 한정되었으나 요건 소명이 부족한 경우: "요건 확인 요청"으로 완화
+                elif has_lim and not has_positive_req:
                     mod_rule = dict(rule)
                     mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
                     mod_rule["explanation"] = (
