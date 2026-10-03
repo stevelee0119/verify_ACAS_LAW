@@ -34,7 +34,8 @@ def _run(cmd: List[str], timeout: int, extra_env: Optional[Dict[str, str]] = Non
     """인자 목록으로만 실행한다(shell 미사용). 명령은 이 파일 안에서 정한 것이고 외부 입력은 검증된 --base뿐이다."""
     t0 = time.time()
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False,
+        # 감사 완료: 인자 목록·shell=False, 명령은 이 파일에서 정하고 외부 입력(--base)은 BASE_RE로 검증한다
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, shell=False,  # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit
                            env={**os.environ, "LV_ALLOW_NETWORK": "0", **(extra_env or {})})
         out = (r.stdout or "") + (r.stderr or "")
         code = r.returncode
@@ -108,10 +109,9 @@ def _pytest(args: List[str], timeout: int) -> Dict:
 
 
 def _env() -> Dict:
-    tess = shutil.which("tesseract")
     tver = None
-    if tess:
-        r = subprocess.run([tess, "--version"], capture_output=True, text=True, shell=False)
+    if shutil.which("tesseract"):
+        r = subprocess.run(["tesseract", "--version"], capture_output=True, text=True, shell=False)
         first = ((r.stdout or r.stderr).splitlines() or [""])[0]
         tver = first.split()[-1] if first else None
     env = {"python": platform.python_version(), "os": platform.platform(), "tesseract": tver}
