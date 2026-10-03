@@ -90,6 +90,11 @@ def _person_text(text: str):
             if "PERSON" in str(getattr(m, "type", None) or getattr(m, "pii_type", None) or getattr(m, "kind", None)).upper()]
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="TK-43 알려진 미해결(사용자 결정 2026-10-03 '추천대로'): 실명 유출 0(R7-12)을 하한으로 고정하고 과마스킹은 닫힌 불용어 집합으로 줄인다. "
+           "7C(b26754e)는 후행 문맥 제외 목록을 삭제해 유출을 막았으나 이 12건이 다시 가려진다. 7E(개인정보 경계 마무리)에서 해소하면 XPASS가 되며 평가 측이 표시를 지운다.",
+)
 @pytest.mark.parametrize("label", PARTY_LABELS)
 @pytest.mark.parametrize("phrase", COMMON_NOUN_PHRASES)
 def test_common_noun_after_a_party_label_is_not_masked_as_a_person(label, phrase):
@@ -289,6 +294,11 @@ NEW_VOCAB_LABELS = ["사용자", "근로자", "보증인", "후견인", "임차�
 COMMON_NOUNS_AFTER_LABEL = ["계정은", "서명은", "지시는", "의견은"]
 
 
+@pytest.mark.xfail(
+    strict=False,
+    reason="TK-43 알려진 미해결(사용자 결정 2026-10-03 '추천대로', 7E 예정): 24조합 중 18건이 가려진다(일부 조합은 이미 통과해 strict를 쓰지 않는다). "
+           "승인 조건 '새 라벨 뒤 일반 명사 오탐 0'은 그대로이며 7E 수용 기준이다. 24건 모두 통과하면 평가 측이 표시를 지운다.",
+)
 @pytest.mark.parametrize("label", NEW_VOCAB_LABELS)
 @pytest.mark.parametrize("noun", COMMON_NOUNS_AFTER_LABEL)
 def test_common_noun_after_an_added_label_is_not_masked_as_a_person(label, noun):
