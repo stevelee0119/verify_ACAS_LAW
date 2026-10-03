@@ -1567,3 +1567,113 @@ def test_r1_tk30_inspect_request_blocked_zero_provider_call():
     mock_provider.generate.assert_not_called()
 
 
+# ===========================================================================
+# 28. R2 (TK-31, TK-33): 줄 결합, 문단 복원, 표식 분기 제거 및 불변성 회귀 시험
+# ===========================================================================
+
+def test_r2_tk31_char_and_word_wrap_mix():
+    """R2 시험: 폭 36/44자(글자 단위 줄바꿈)와 폭 56/64자(어절 단위 줄바꿈) 혼합 처리 검증."""
+    from packages.document_engine.paragraph_reconstruction import join_lines
+
+    # 1. 폭 36/44자 글자 단위 줄바꿈: 꽉 찬 줄(prev_full=True)에서 1음절 분절 결합 -> 공백 없이 연결
+    res1 = join_lines("행정청의 적법한 처", "분을 취소할 이유가 없다.", prev_full=True)
+    assert res1 == "행정청의 적법한 처분을 취소할 이유가 없다."
+
+    res2 = join_lines("요건을 충족하기 위", "해서는 관련 법령의 기준을 준수해야 한다.", prev_full=True)
+    assert res2 == "요건을 충족하기 위해서는 관련 법령의 기준을 준수해야 한다."
+
+    # 2. 괄호 열림 직후 1~2음절 분절 결합 -> 공백 없이 연결
+    res3 = join_lines("대법원 판례에 따르더라도(대", "법원 2007. 12. 21. 선고 2006두16274 판결 참조),")
+    assert res3 == "대법원 판례에 따르더라도(대법원 2007. 12. 21. 선고 2006두16274 판결 참조),"
+
+    # 3. 폭 56/64자 어절 단위 줄바꿈: 완전한 2음절 이상 단어 경계 -> 공백 1개 유지 (TC-05 회귀 방지 핵심)
+    res4 = join_lines("당시 현장에서 소음과 고함 소리를 직접 들을", "수는 없었던 것으로 확인됩니다.", prev_full=True)
+    assert res4 == "당시 현장에서 소음과 고함 소리를 직접 들을 수는 없었던 것으로 확인됩니다."
+
+    res5 = join_lines("원고와 피고 쌍방은 상호 양보를 통한 원만한 합의에 도달하지", "못한 채 본안 소송에 이르게 되었습니다.", prev_full=False)
+    assert res5 == "원고와 피고 쌍방은 상호 양보를 통한 원만한 합의에 도달하지 못한 채 본안 소송에 이르게 되었습니다."
+
+
+def test_r2_tk31_line_endings_and_blank_lines():
+    """R2 시험: CRLF 줄바꿈, 빈 줄 구분, 앞뒤 공백 정규화 불변성 검증."""
+    from packages.document_engine.paragraph_reconstruction import join_lines, reconstruct_paragraphs_from_text
+
+    # CRLF 및 공백 정규화
+    res = join_lines("첫 번째 줄 내용입니다.\r\n", "\r\n두 번째 줄 내용입니다.")
+    assert res == "첫 번째 줄 내용입니다. 두 번째 줄 내용입니다."
+
+    # 빈 줄로 분리된 단락 복원 시 독립된 블록으로 정상 분리 유지
+    raw_text = "제1단락의 본문 내용입니다.\r\n\r\n제2단락의 본문 내용입니다.\n\n\n제3단락의 본문 내용입니다."
+    blocks = reconstruct_paragraphs_from_text(raw_text)
+    assert len(blocks) == 3
+    assert blocks[0].text == "제1단락의 본문 내용입니다."
+    assert blocks[1].text == "제2단락의 본문 내용입니다."
+    assert blocks[2].text == "제3단락의 본문 내용입니다."
+
+
+def test_r2_tk31_docx_manual_break_invariance():
+    """R2 시험: docx 수동 줄바꿈(\\x0b) 및 강제 소프트 줄바꿈의 불변성 검증."""
+    from packages.document_engine.paragraph_reconstruction import reconstruct_paragraphs_from_text
+
+    # docx에서 Shift+Enter로 삽입되는 수동 줄바꿈(\x0b) 또는 개행 처리
+    raw_text = "소송대리인 변호사 홍길동\n담당변호사 이순신\n주소: 서울 서초구 서초대로 123"
+    blocks = reconstruct_paragraphs_from_text(raw_text)
+    # 단독 줄 및 구조 신호에 의해 적절한 블록으로 분할/보존되는지 검증
+    all_text = "\n".join(b.text for b in blocks)
+    assert "변호사 홍길동" in all_text
+    assert "이순신" in all_text
+    assert "서초대로 123" in all_text
+
+
+def test_r2_tk31_google_docs_pdf_19_patterns():
+    """R2 시험: Google Docs 및 한글 PDF 등에서 자주 발생하는 19개 분절/결합 패턴 대응 시험."""
+    from packages.document_engine.paragraph_reconstruction import join_lines
+
+    # 19개 패턴: (앞줄, 뒷줄, prev_full 여부, 기대 결과)
+    patterns = [
+        # (1) 괄호 열림 직후 기관명 분절
+        ("(대", "법원 2020다12345", False, "(대법원 2020다12345"),
+        # (2) 대괄호 열림 직후 기관명 분절
+        ("[헌", "법재판소 2018헌바1", False, "[헌법재판소 2018헌바1"),
+        # (3) 큰따옴표 직후 분절
+        ("“대", "법원은 판시하기를", False, "“대법원은 판시하기를"),
+        # (4) 작은따옴표 직후 분절
+        ("‘대", "법원 판례’에 따라", False, "‘대법원 판례’에 따라"),
+        # (5) 꽉 찬 줄 1음절 분절 결합 - 처분을
+        ("취소 대상 처", "분을 통지받았다.", True, "취소 대상 처분을 통지받았다."),
+        # (6) 꽉 찬 줄 1음절 분절 결합 - 위해서는
+        ("요건을 구비하기 위", "해서는 증명이 필요하다.", True, "요건을 구비하기 위해서는 증명이 필요하다."),
+        # (7) 꽉 찬 줄 1음절 분절 결합 - 청구취지
+        ("원고의 청", "구취지는 명확하다.", True, "원고의 청구취지는 명확하다."),
+        # (8) 꽉 찬 줄 1음절 분절 결합 - 증거방법
+        ("피고의 증", "거방법을 신청합니다.", True, "피고의 증거방법을 신청합니다."),
+        # (9) 꽉 찬 줄 1음절 분절 결합 - 사실관계
+        ("기초적인 사", "실관계를 확정한다.", True, "기초적인 사실관계를 확정한다."),
+        # (10) 꽉 찬 줄 1음절 분절 결합 - 주문
+        ("판결의 주", "문과 같다.", True, "판결의 주문과 같다."),
+        # (11) 꽉 찬 줄 1음절 분절 결합 - 판결요지
+        ("관련 판", "결요지에 비추어 본다.", True, "관련 판결요지에 비추어 본다."),
+        # (12) 조사로 시작하는 줄 결합 - 에게
+        ("징계권자", "에게 재량권이 인정된다.", False, "징계권자에게 재량권이 인정된다."),
+        # (13) 어미로 시작하는 줄 결합 - 여
+        ("처분의 효력에 대하", "여 다툰다.", False, "처분의 효력에 대하여 다툰다."),
+        # (14) 어미로 시작하는 줄 결합 - 하여
+        ("사실을 확인", "하여 조치를 취했다.", False, "사실을 확인하여 조치를 취했다."),
+        # (15) 조사로 시작하는 줄 결합 - 를
+        ("원고의 청구", "를 기각한다.", False, "원고의 청구를 기각한다."),
+        # (16) 조사로 시작하는 줄 결합 - 는
+        ("피고 행정청", "은 적법하게 처리했다.", False, "피고 행정청은 적법하게 처리했다."),
+        # (17) 조사로 시작하는 줄 결합 - 의
+        ("본건 계약", "의 내용을 검토한다.", False, "본건 계약의 내용을 검토한다."),
+        # (18) 숫자/날짜 사이 공백 유지
+        ("2007.", "12. 21. 선고", False, "2007. 12. 21. 선고"),
+        # (19) 완전한 2음절 어절 사이 공백 유지 (TC-05 유형)
+        ("소리를 직접 들을", "수는 없었습니다.", True, "소리를 직접 들을 수는 없었습니다."),
+    ]
+
+    for idx, (p, n, pf, expected) in enumerate(patterns, 1):
+        actual = join_lines(p, n, prev_full=pf)
+        assert actual == expected, f"패턴 {idx} 실패: '{p}' + '{n}' (prev_full={pf}) -> 실제 '{actual}', 기대 '{expected}'"
+
+
+
