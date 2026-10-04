@@ -60,29 +60,6 @@ _ENGLISH_PERSON_FIELD_SUFFIXES = (
     "fname", "lname", "pname", "nm",
 )
 _NAME_VALUE_RE = re.compile(r"^(?P<name>[가-힣]{2,4})")
-_SAFE_NONPERSON_PREFIX_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"^\s*(?:주식회사|㈜|유한회사|사단법인|재단법인|비영리법인|협동조합|사회적협동조합)\s+",
-        r"^\s*(?:국립|공립|사립|시립|도립).+\s*$",
-        r"^\s*(?:원고|피고|신청인|상대방)\s*측\s*$",
-        r"^\s*대한민국\s*$",
-    )
-)
-_SAFE_NONPERSON_VALUE_PATTERNS = tuple(
-    re.compile(pattern, re.IGNORECASE)
-    for pattern in (
-        r"^\s*(?:주식회사|㈜|유한회사|사단법인|재단법인|비영리법인|협동조합|사회적협동조합)\b",
-        r"(?:법인|협회|공단|공사|연구원|교육원|관측소|대학교|대학|병원|학교|법원|청사|도서관)$",
-        r"(?:특별자치시|특별자치도|광역시|특별시|자치시|자치도|시|도|군|구|읍|면|동|로|길|시장|공원)$",
-        r"^\s*(?:국립|공립|사립|시립|도립).+\s*$",
-        r"^\s*업무[가-힣]+\s*$",
-        r"^\s*(?:원고|피고|신청인|상대방)\s*측\s*$",
-        r"^\s*대한민국\s*$",
-    )
-)
-
-
 def _normalise_korean_key(key: str) -> str:
     """공백·괄호·구두점 표기가 달라도 키의 한글 라벨을 비교한다."""
     text = unicodedata.normalize("NFKC", key)
@@ -97,16 +74,13 @@ def _person_label_for_key(key: Any) -> str | None:
     normalized = unicodedata.normalize("NFKC", key)
     korean_key = _normalise_korean_key(normalized)
     if korean_key:
-        # 기존 비인명 영역은 제외한다. 그 밖의 미등록 '-명' 키는 민감 필드로 본다.
-        if any(
-            korean_key.startswith(_normalise_korean_key(head))
-            for head in _NON_PERSON_NAME_KEY_HEADS
-        ):
-            return None
+        # 기존의 구체적인 사람 라벨 신호를 먼저 본다. 키 앞의 분류어가 이를 지우지 않는다.
         korean_labels = {
             _normalise_korean_key(label)
             for label in PARTY_AND_TITLE_LABELS
-            if isinstance(label, str) and re.search(r"[가-힣]", label)
+            if isinstance(label, str)
+            and re.search(r"[가-힣]", label)
+            and _normalise_korean_key(label) not in {"이름", "성명"}
         }
         for label in sorted(korean_labels, key=len, reverse=True):
             if label and label in korean_key:
@@ -114,6 +88,12 @@ def _person_label_for_key(key: Any) -> str | None:
                     original for original in PARTY_AND_TITLE_LABELS
                     if _normalise_korean_key(original) == label
                 )
+
+        # 기존 비인명 분류어는 구체적인 사람 라벨이 없을 때만 우선한다.
+        if any(korean_key.startswith(_normalise_korean_key(head)) for head in _NON_PERSON_NAME_KEY_HEADS):
+            return None
+
+        # 이름·성명 표지와 그 외 필드 형태는 나머지 키에서만 사람 문맥 신호로 쓴다.
         if korean_key.endswith("명"):
             return "명"
         for suffix in _KOREAN_PERSON_FIELD_SUFFIXES:
@@ -127,17 +107,23 @@ def _person_label_for_key(key: Any) -> str | None:
     if not english_key:
         return None
     words = english_key.split()
-    if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
-        # 명시적인 사람 역할 표지가 있으면 'company representative'처럼 사람 필드로 인정한다.
-        role_terms = _ENGLISH_PERSON_KEY_LABELS - {"name", "full name", "person name", "contact name"}
-        if not any(label in words for label in role_terms):
-            return None
     label_phrases = {tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS}
+    strong_label_phrases = label_phrases - {("name",), ("full", "name"), ("contact", "name")}
+    for phrase in sorted(strong_label_phrases, key=len, reverse=True):
+        if len(phrase) == 1 and phrase[0] in words:
+            return " ".join(phrase)
+        if len(phrase) > 1 and any(tuple(words[i:i + len(phrase)]) == phrase for i in range(len(words) - len(phrase) + 1)):
+            return " ".join(phrase)
+
+    if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
+        return None
+
     for phrase in label_phrases:
         if len(phrase) == 1 and phrase[0] in words:
             return " ".join(phrase)
         if len(phrase) > 1 and any(tuple(words[i:i + len(phrase)]) == phrase for i in range(len(words) - len(phrase) + 1)):
             return " ".join(phrase)
+
     compact_key = re.sub(r"[^a-z0-9]", "", english_key)
     if any(
         compact_key.endswith(suffix) and len(compact_key) > len(suffix)
@@ -150,6 +136,43 @@ def _person_label_for_key(key: Any) -> str | None:
 def _is_person_name_key(key: Any) -> bool:
     """detector 라벨 어휘를 바탕으로 키가 사람 이름 필드인지 판정한다."""
     return _person_label_for_key(key) is not None
+
+
+def _is_explicit_person_name_field_key(key: Any) -> bool:
+    """이름 필드 표지가 있는 키인지 판정한다. 역할 라벨만으로는 값을 강제 차단하지 않는다."""
+    if not isinstance(key, str) or _person_label_for_key(key) is None:
+        return False
+    normalized = unicodedata.normalize("NFKC", key)
+    korean_key = _normalise_korean_key(normalized)
+    if korean_key.endswith("명"):
+        return True
+    if korean_key.endswith("이름") or korean_key.endswith("성명") or korean_key.endswith("성함") or korean_key.endswith("존함"):
+        return True
+    if korean_key.endswith(("명의자", "명의인", "보유자", "소유자", "계좌주")):
+        return True
+
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+    english_key = re.sub(r"[^a-z0-9]+", " ", separated.casefold()).strip()
+    compact_key = re.sub(r"[^a-z0-9]", "", english_key)
+    if compact_key == "name":
+        return False
+    return any(
+        compact_key.endswith(suffix) and len(compact_key) > len(suffix)
+        for suffix in _ENGLISH_PERSON_FIELD_SUFFIXES
+    )
+
+
+def _name_context_candidate(value: str) -> str | None:
+    """역할 라벨 문맥에 붙일 짧은 이름 후보만 고른다; 다중 토큰 값은 원문 검사에 둔다."""
+    if not isinstance(value, str):
+        return None
+    candidate = unicodedata.normalize("NFKC", value).strip()
+    if re.search(r"\s", candidate):
+        return None
+    compact = re.sub(r"[^가-힣]", "", candidate)
+    if not 2 <= len(compact) <= 4:
+        return None
+    return _name_like_value(candidate)
 
 
 def _name_like_value(value: str) -> str | None:
@@ -172,29 +195,21 @@ def _name_like_value(value: str) -> str | None:
     return None
 
 
-def _is_proven_nonperson_name_value(value: Any) -> bool:
-    """이름 필드에서 이름이 아님을 타입 형태로 확인할 수 있는 값만 통과시킨다."""
-    if value is None:
-        return True
-    if not isinstance(value, str):
-        return False
-    candidate = unicodedata.normalize("NFKC", value).strip()
-    if not candidate:
-        return True
-    if any(pattern.search(candidate) for pattern in _SAFE_NONPERSON_PREFIX_PATTERNS):
-        return True
-    if _name_like_value(candidate):
-        return False
-    return any(pattern.search(candidate) for pattern in _SAFE_NONPERSON_VALUE_PATTERNS)
-
-
 def _person_name_value_paths(value: Any, path: str = "") -> Set[str]:
-    """이름 키 아래 이름 아님이 입증되지 않은 값의 경로를 수집한다."""
+    """명시적인 사람 이름 필드 아래 비어 있지 않은 값을 fail-closed 대상으로 수집한다."""
     blocked: Set[str] = set()
     if isinstance(value, dict):
         for key, item in value.items():
             current_path = f"{path}.{key}" if path else str(key)
-            if _is_person_name_key(key) and not _is_proven_nonperson_name_value(item):
+            generic_name_value = (
+                isinstance(key, str)
+                and unicodedata.normalize("NFKC", key).casefold().strip() == "name"
+                and _name_context_candidate(item) is not None
+            )
+            if (
+                (_is_explicit_person_name_field_key(key) or generic_name_value)
+                and not (item is None or isinstance(item, str) and not item.strip())
+            ):
                 blocked.add(current_path)
             if isinstance(item, str):
                 decoded = _try_json_parse(item)
@@ -350,9 +365,10 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
                         results.append((current_path, f"{key}: {item}"))
                     else:
                         label = _person_label_for_key(key)
-                        name = _name_like_value(item)
-                        if label and name and not _is_proven_nonperson_name_value(item):
-                            results.append((current_path, f"{label}: {name}"))
+                        name = _name_context_candidate(item)
+                        if label and name:
+                            detector_label = label if re.search(r"[가-힣]", label) else "이름"
+                            results.append((current_path, f"{detector_label}: {name}"))
                     str_items.append((key, item))
             else:
                 # 비문자열 값은 재귀
