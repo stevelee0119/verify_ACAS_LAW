@@ -1,6 +1,6 @@
 # Codex 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-04 평가 측(PR #15 수용·병합 뒤). 이전 전달문을 모두 대체한다.
+갱신: 2026-10-04 평가 측(F1 병합 게이트 판정 뒤). 이전 전달문을 모두 대체한다.
 
 ```
 [Codex 작업 — 통합 지시 2026-10-04]
@@ -20,4 +20,9 @@
  - 가림은 되나 종류가 RRN으로 표시된다(서면9 PDF, 9933548 ACCOUNT → 22ca134 RRN).
  - 요구·수용은 티켓 3·4절. 필수 보장(연락처·주민등록번호 누락 0)을 깨지 않는다. 평가 측 비공개 세트는 평가 측이 잰다.
  - 새 브랜치 codex/tk58-account-kind, 관련 시험(tests/test_pii_and_claims.py, tests/regression/test_r8f_contact_rrn.py, tests/regression/test_r8f1_rrn_linebreak.py)만 돌린다. 이 시험들은 고치지 않는다. Steve_ACASiaLAW 대상 PR, CI 뒤 '검토 요청'.
+
+[D] (먼저) F1 독립 감사(G8) — 읽기 전용. docs/handoff/PROMPT_FOR_AUDIT_F1.md 전체를 따른다.
+ - 대상 SHA: PR #13이 Steve_ACASiaLAW(a986f67 이후)를 병합한 head. 구현 측이 PR #13에 '검토 요청'으로 SHA를 알리면 시작한다. 기준 SHA: a986f67.
+ - 저장소를 수정·커밋·푸시하지 않는다. 보고서는 사용자에게 제출한다(저장소에 올리지 않음).
+ - F1은 Antigravity가 구현했으므로 Codex가 독립 감사자다. [B]·[C]보다 먼저 한다.
 ```
