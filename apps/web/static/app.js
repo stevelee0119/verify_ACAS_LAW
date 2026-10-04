@@ -318,11 +318,172 @@ function renderProject() {
   renderTimeline();
   operationsUI.renderJobControls();
   projectTools.renderControls();
+  syncPrivacyAck();
   $("reportScope").textContent = state.run ? `${dateText(state.run.started_at)} · 자료 ${state.run.document_ids.length}개 · ${label(state.run.state)}${$("staleNotice").hidden?"":" · 변경 전 자료 기준"}` : "검증 결과가 없습니다.";
   // 보고서 생성은 상단 버튼 하나로 한다(보고서 탭은 내려받기 목록만 보여 준다).
   const reportReady = ["COMPLETED","PARTIAL_COMPLETED"].includes(state.run?.state);
   $("reportBtn").disabled = !reportReady;
   $("reportBtn").title = reportReady ? "완료된 검증 결과로 검토 보고서를 생성합니다" : "검증이 끝나면 보고서를 생성할 수 있습니다";
+}
+
+// 업로드 개인정보 안내 설정 상태 (하드코딩 대체 문구 배제, API 동적 로드 전용)
+let privacyNoticeConfig = {
+  loaded: false,
+  error: null,
+  title: "",
+  version: "",
+  bullets: [],
+  ack_label: "",
+  report_header: "",
+  ack_error_message: "",
+};
+
+function isPrivacyNoticeLoaded() {
+  return !!(privacyNoticeConfig && privacyNoticeConfig.loaded && !privacyNoticeConfig.error);
+}
+
+function renderPrivacyNoticeElements() {
+  const titleEl = $("privacyNoticeTitle");
+  const verEl = $("privacyNoticeVersion");
+  const ul = $("privacyNoticeBullets");
+  const labelEl = $("privacyAckLabel");
+  const fileInput = $("fileInput");
+  const fileBtn = $("fileInputButton") || document.querySelector('label[for="fileInput"]');
+  const reportTextEl = $("reportPrivacyNoticeText");
+
+  if (!privacyNoticeConfig.loaded && !privacyNoticeConfig.error) {
+    // 1) 안내를 불러오는 중인 상태
+    if (titleEl) titleEl.textContent = "안내를 불러오는 중";
+    if (verEl) verEl.textContent = "";
+    if (ul) {
+      const li = document.createElement("li");
+      li.textContent = "안내를 불러오는 중...";
+      ul.replaceChildren(li);
+    }
+    if (labelEl) labelEl.textContent = "안내를 불러오는 중...";
+    if (fileInput) fileInput.disabled = true;
+    if (fileBtn) fileBtn.setAttribute("aria-disabled", "true");
+    return;
+  }
+
+  if (privacyNoticeConfig.error) {
+    // 2) 안내 로드 실패 상태
+    if (titleEl) titleEl.textContent = "안내 불러오기 실패";
+    if (verEl) verEl.textContent = "";
+    if (ul) {
+      const li = document.createElement("li");
+      li.textContent = privacyNoticeConfig.error;
+      ul.replaceChildren(li);
+    }
+    if (labelEl) labelEl.textContent = "안내를 불러오지 못하여 업로드할 수 없습니다.";
+    if (fileInput) fileInput.disabled = true;
+    if (fileBtn) fileBtn.setAttribute("aria-disabled", "true");
+    return;
+  }
+
+  // 3) 정상 로드 완료 상태
+  if (titleEl) titleEl.textContent = privacyNoticeConfig.title || "제한적 개인정보 가림 기능 제공 안내";
+  if (verEl && privacyNoticeConfig.version) {
+    verEl.textContent = `(v${privacyNoticeConfig.version})`;
+  }
+  if (ul && privacyNoticeConfig.bullets) {
+    ul.replaceChildren(...privacyNoticeConfig.bullets.map(text => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }));
+  }
+  if (labelEl && privacyNoticeConfig.ack_label) {
+    labelEl.textContent = privacyNoticeConfig.ack_label;
+  }
+  if (fileInput) fileInput.disabled = !!state.uploadBatch?.busy;
+  if (fileBtn) fileBtn.setAttribute("aria-disabled", String(!!state.uploadBatch?.busy));
+
+  if (reportTextEl && privacyNoticeConfig.report_header) {
+    reportTextEl.textContent = privacyNoticeConfig.report_header;
+  }
+}
+
+async function loadPrivacyNotice() {
+  // 개인정보 처리 안내문 로드 (401·404를 포함한 모든 응답 실패 시 정상적으로 오류 처리)
+  try {
+    const res = await fetch("/api/privacy-notice");
+    if (!res.ok) {
+      throw new Error(`서버 응답 오류(${res.status})`);
+    }
+    const data = await res.json();
+    if (!data || !data.version) {
+      throw new Error("안내 데이터 형식이 올바르지 않습니다.");
+    }
+    privacyNoticeConfig = {
+      loaded: true,
+      error: null,
+      ...data,
+    };
+  } catch (e) {
+    privacyNoticeConfig = {
+      loaded: false,
+      error: "개인정보 처리 안내를 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.",
+      title: "",
+      version: "",
+      bullets: [],
+      ack_label: "",
+      report_header: "",
+      ack_error_message: "",
+    };
+  }
+  renderPrivacyNoticeElements();
+}
+
+function getPrivacyAck(projectId) {
+  if (!projectId) return false;
+  return sessionStorage.getItem(`privacy_ack_${projectId}`) === "true";
+}
+
+function setPrivacyAck(projectId, value) {
+  if (!projectId) return;
+  sessionStorage.setItem(`privacy_ack_${projectId}`, value ? "true" : "false");
+  const el = $("privacyAck");
+  if (el) el.checked = !!value;
+}
+
+function syncPrivacyAck() {
+  const p = state.project;
+  const ack = getPrivacyAck(p?.id);
+  const el = $("privacyAck");
+  if (el) el.checked = ack;
+  const errEl = $("privacyAckError");
+  if (errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
+  }
+}
+
+function checkPrivacyAck(projectId) {
+  if (!isPrivacyNoticeLoaded()) {
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    toast(msg);
+    return false;
+  }
+  const ack = $("privacyAck")?.checked || getPrivacyAck(projectId);
+  if (!ack) {
+    const msg = privacyNoticeConfig.ack_error_message || "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.";
+    const errEl = $("privacyAckError");
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.hidden = false;
+    }
+    toast(msg);
+    $("privacyAck")?.focus();
+    return false;
+  }
+  setPrivacyAck(projectId, true);
+  const errEl = $("privacyAckError");
+  if (errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
+  }
+  return true;
 }
 
 function renderSummary() {
@@ -930,8 +1091,9 @@ function renderUploadStatus() {
     $("dropArea").before(area);
   }
   const batch = state.uploadBatch;
-  $("fileInput").disabled = !!batch?.busy;
-  document.querySelector('label[for="fileInput"]').setAttribute("aria-disabled", String(!!batch?.busy));
+  const isInputDisabled = !isPrivacyNoticeLoaded() || !!batch?.busy;
+  $("fileInput").disabled = isInputDisabled;
+  document.querySelector('label[for="fileInput"]')?.setAttribute("aria-disabled", String(isInputDisabled));
   area.hidden = !batch || batch.projectId !== state.project?.id;
   if (area.hidden) return;
   area.replaceChildren();
@@ -998,6 +1160,10 @@ async function reconcileUploads(batch) {
 async function upload(files) {
   const id = state.project?.id;
   if (!id || !files.length) return;
+  if (!checkPrivacyAck(id)) {
+    $("fileInput").value = "";
+    return;
+  }
   if (state.uploadBatch?.busy) return toast("다른 파일의 등록이 진행 중입니다.");
   const batch = {projectId: id, busy: true, entries: files.map(file => ({name: file.name, status: "WAITING"}))};
   state.uploadBatch = batch;
@@ -1012,6 +1178,7 @@ async function upload(files) {
         entry.sha256 = prepared.sha256;
         const form = new FormData();
         form.append("file", prepared.body, file.name);
+        form.append("privacy_ack", "true");
         entry.status = "SENDING";
         renderUploadStatus();
         await api(`/projects/${id}/documents`, {method: "POST", body: form});
@@ -1740,7 +1907,33 @@ $("selectAll").onchange = () => {
 };
 $("bulkExclude").onclick = action(() => setScope([...state.selected], false));
 $("bulkInclude").onclick = action(() => setScope([...state.selected], true));
-$("fileInput").onchange = action(e => upload([...e.target.files]));
+if ($("privacyAck")) {
+  $("privacyAck").onchange = e => {
+    setPrivacyAck(state.project?.id, e.target.checked);
+    if (e.target.checked && $("privacyAckError")) {
+      $("privacyAckError").hidden = true;
+      $("privacyAckError").textContent = "";
+    }
+  };
+}
+const fileBtnEl = $("fileInputButton") || document.querySelector('label[for="fileInput"]');
+if (fileBtnEl) {
+  fileBtnEl.addEventListener("click", e => {
+    if (!isPrivacyNoticeLoaded()) {
+      e.preventDefault();
+      const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+      toast(msg);
+    }
+  });
+}
+$("fileInput").onchange = action(e => {
+  if (!isPrivacyNoticeLoaded()) {
+    $("fileInput").value = "";
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    return toast(msg);
+  }
+  return upload([...e.target.files]);
+});
 $("dropArea").ondragover = e => {
   e.preventDefault();
   e.currentTarget.classList.add("dragging");
@@ -1749,6 +1942,10 @@ $("dropArea").ondragleave = e => e.currentTarget.classList.remove("dragging");
 $("dropArea").ondrop = action(async e => {
   e.preventDefault();
   e.currentTarget.classList.remove("dragging");
+  if (!isPrivacyNoticeLoaded()) {
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    return toast(msg);
+  }
   await upload([...e.dataTransfer.files]);
 });
 $("documentForm").onsubmit = action(async e => {
@@ -1939,12 +2136,18 @@ function showLoadFailure(missing) {
 }
 
 async function init() {
+  renderPrivacyNoticeElements();
+  loadPrivacyNotice();
   icons();
   const missing = missingModules();
   if (missing.length) return showLoadFailure(missing);
   try {
     const health = await api("/health");
     const identity = await operationsUI.refreshIdentity();
+    if (!privacyNoticeConfig.loaded) {
+      // 신원 확인 후 개인정보 처리 안내가 로드되지 않은 상태면 재호출
+      await loadPrivacyNotice();
+    }
     projectTools.start();
     $("connection").textContent = `${identity.authentication === "local" ? "로컬" : "조직"} 작업 공간 · v${health.version}`;
     await loadProjects();

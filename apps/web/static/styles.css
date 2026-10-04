@@ -1593,3 +1593,65 @@ dialog.admin-detail[open] {display:flex; flex-direction:column;}
   padding-top: 24px;
   border-top: 2px dashed var(--line);
 }
+
+/* 업로드 개인정보 안내 및 확인 체크박스 */
+.privacy-notice {
+  margin: 12px 0 16px;
+  padding: 14px 16px;
+  background: #fdfaf2;
+  border: 1px solid #e8dbb8;
+  border-radius: 6px;
+  color: #3b3528;
+}
+.privacy-notice-text strong {
+  display: block;
+  font-size: 13px;
+  color: #8c5b08;
+  margin-bottom: 6px;
+}
+.privacy-notice-text ul {
+  margin: 0 0 10px 0;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.privacy-notice-text li {
+  margin-bottom: 3px;
+}
+.privacy-ack-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px dashed #e8dbb8;
+}
+.privacy-ack-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.privacy-ack-label input[type="checkbox"] {
+  width: 17px;
+  height: 17px;
+  cursor: pointer;
+}
+.privacy-ack-error {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: #b3261e;
+}
+.report-privacy-notice {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  margin: 8px 0 12px;
+  background: #eef5f3;
+  border-left: 3px solid var(--green);
+  font-size: 13px;
+  color: #174238;
+  border-radius: 0 4px 4px 0;
+}

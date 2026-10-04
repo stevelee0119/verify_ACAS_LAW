@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 import pytest
 from playwright.sync_api import expect, sync_playwright
 
+from tests.frontend_helpers import privacy_notice_mock_payload
+
 ROOT = Path(__file__).resolve().parents[1]
 CONTRIBUTORS = "개발 기여: 스티브, 아나스타샤, 스텔라, 에이미, 쏘니"
 
@@ -22,6 +24,8 @@ def test_footer_shows_copyright_and_contributors_small(width, height):
             route.fulfill(path=str(files[path]))
         elif path == "/api/health":
             route.fulfill(json={"status": "ok", "version": "0.9.8"})
+        elif path == "/api/privacy-notice":
+            route.fulfill(json=privacy_notice_mock_payload())
         else:
             route.fulfill(status=401, json={"detail": "Login required"})
 

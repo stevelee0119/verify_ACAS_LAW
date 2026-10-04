@@ -5,6 +5,7 @@ import io
 import json
 
 from packages.legal_engine.reasoning_format import row_cell_text, format_context_review
+from packages.common.privacy_notice import REPORT_HEADER_NOTICE
 from packages.common.terminology import EDITABLE_COPY_NOTICE, REVIEW_NOTICE
 from .snapshot import json_lines, technical_payload, xml_text
 from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, detail_level, evidence_summary,
@@ -106,6 +107,7 @@ def build_report_docx(run_result, *, project=None, manifest=None, reveal_sealed=
 
     doc.add_heading("법률문서 검증보고서", 0)
     paragraph(metadata.get("label", "DRAFT / 검토용 초안"), "Subtitle")
+    paragraph(REPORT_HEADER_NOTICE)
     project = project or {}
     paragraph(f"{project.get('name', '')} 사건의 문서 검증 결과와 사람의 검토 기록입니다. 시스템 판정은 실행 당시의 근거 범위에 한정됩니다.")
     paragraph(REVIEW_NOTICE)
