@@ -599,3 +599,10 @@
 **측정하지 못한 것:** CI 테스트 작업(판정 시점 진행 중), 충돌 해소 뒤 결과, 온라인 대조.
 
 **추기(2026-10-04) — 충돌 해소 0848e69 수용.** CI(테스트·점수 하락 게이트·Docker, push·PR) 성공 인용. 해소 내용은 평가 측 사전 해소안과 같다(`styles.css` 빈 줄 위치만 다름). F1 수용, F2 착수 조건 충족. 병합은 0.10.0 릴리스 뒤. → [PR #13 코멘트](https://github.com/stevelee0119/verify_ACAS_LAW/pull/13#issuecomment-5979119284)
+
+# 버전 커밋 판정 — PR #15 `codex/version-0.10.0` 472861e (2026-10-04)
+판정 방식: CI 결과 인용(테스트·점수 하락 게이트·Docker, push·PR 성공) + 평가 측 도구 재실행. **수용.**
+- 커밋 1개·파일 3개(`config.py` version, `releases.json` 0.10.0, README 표) — VERSION_POLICY 6절 3 충족.
+- `check_version_policy.py --base f48284c` 위반 없음(상향 1건), `update_readme.py --check` 종료 0, 보호 경로 변경 없음.
+- releases.json·README 수치와 티켓이 `version_verdicts.json` 0.10.0과 같다.
+- 병합은 사용자 승인 뒤. → [PR #15 코멘트](https://github.com/stevelee0119/verify_ACAS_LAW/pull/15#issuecomment-5979233496)
