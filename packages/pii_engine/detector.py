@@ -114,10 +114,6 @@ SINGLE_SURNAMES = {
 
 # 당사자, 소송관계인, 대표자, 직책, 성명/서명, 변호사 라벨 어휘군
 PARTY_AND_TITLE_LABELS = [
-    # 영문 구조화 필드에서도 전송 전 이름 문맥을 복원한다.
-    "person", "name", "full name", "person name", "contact name", "plaintiff", "defendant",
-    "witness", "applicant", "claimant", "petitioner", "respondent", "attorney", "counsel",
-    "representative", "employee", "employer",
     # 변호사 및 소송대리인
     "소송대리인변호사", "소송대리인", "담당변호사", "대리인변호사", "변호인", "변호사",
     # 대표자 및 직책
@@ -136,6 +132,18 @@ PARTY_AND_TITLE_LABELS = [
     "사용자", "근로자", "보증인", "연대보증인", "부모", "조부", "조모", "아내", "보호자",
     "법정대리인", "친권자", "후견인",
 ]
+
+# 구조화된 키 해석 전용 어휘. 평문 LABELLED_PARTY_PERSON_RE에는 합치지 않는다.
+STRUCTURED_PERSON_KEY_LABELS = frozenset(
+    {
+        "person", "name", "full name", "person name", "contact name",
+        "plaintiff", "defendant", "witness", "applicant", "claimant",
+        "petitioner", "respondent", "attorney", "counsel", "representative",
+        "employee", "employer", "given name", "family name", "first name",
+        "last name", "surname", "forename", "alias", "account holder",
+        "account owner", "signatory", "payee",
+    }
+)
 
 def _build_spaced_label_regex(labels: Sequence[str]) -> str:
     spaced = []
