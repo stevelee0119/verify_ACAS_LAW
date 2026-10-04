@@ -155,7 +155,8 @@ def _authorize(session, request, principal, route, params, payload):
         raise HTTPException(403, "Administrator required")
     if read and template.endswith("/diagnostics/sources"):
         return
-    if read and template.endswith(("/health", "/diagnostics", "/project-defaults")):
+    # 정적 안내문(/privacy-notice) 및 헬스체크 등은 인증된 사용자에게 읽기 허용
+    if read and template.endswith(("/health", "/diagnostics", "/project-defaults", "/privacy-notice")):
         return
     if template.endswith("/calculations/interest") and principal.role in {"MEMBER", "ADMIN"}:
         return
@@ -315,7 +316,7 @@ async def workspace_access(request, call_next):
         if mode == "multi-user" and _public_shell(request):
             return await forward(request)
         if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path == "/api/health":
-            # Readiness probes are public, never configuration or principal data.
+            # 준비 상태 점검(Readiness probe)은 비인증 공개, 설정이나 개인정보 없음
             response = await forward(request)
             response.headers["Cache-Control"] = "no-store"
             return response

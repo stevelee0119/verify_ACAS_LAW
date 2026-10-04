@@ -89,6 +89,8 @@ const operationsUI = (() => {
             resolve();
             if (typeof resumeAuthenticatedRun === "function") resumeAuthenticatedRun();
             if (typeof projectTools !== "undefined") projectTools.start();
+            // 로그인 완료 후 개인정보 처리 안내 재호출 (동적 갱신 보장)
+            if (typeof loadPrivacyNotice === "function") loadPrivacyNotice();
           }
         } catch (e) { error.textContent = e.message; }
         finally { password.value = token.value = ""; submit.disabled = false; modeButtons.forEach(tab => tab.disabled = false); }

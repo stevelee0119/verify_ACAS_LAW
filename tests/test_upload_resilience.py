@@ -23,7 +23,7 @@ def test_upload_failure_has_safe_reason_and_trace_id(client, project, monkeypatc
     def fail(*args):
         raise error
     monkeypatch.setattr(projects, "_store_document", fail)
-    response = client.post(f"/api/projects/{project['id']}/documents", files={"file": ("test.pdf", PAYLOAD)})
+    response = client.post(f"/api/projects/{project['id']}/documents", files={"file": ("test.pdf", PAYLOAD)}, data={"privacy_ack": "true"})
     assert response.status_code == 503
     detail = response.json()["detail"]
     assert detail["code"] == code
@@ -36,7 +36,7 @@ def test_upload_failure_has_safe_reason_and_trace_id(client, project, monkeypatc
 def test_upload_success_and_validation_keep_trace_id(client, project):
     path = f"/api/projects/{project['id']}/documents"
     for payload, status in [(PAYLOAD, 201), (b"", 400)]:
-        response = client.post(path, files={"file": ("test.pdf", payload)})
+        response = client.post(path, files={"file": ("test.pdf", payload)}, data={"privacy_ack": "true"})
         assert response.status_code == status
         assert len(response.headers["X-Request-ID"]) == 32
 
@@ -57,7 +57,8 @@ def test_blocking_upload_does_not_block_health(client, project, monkeypatch):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=client.app),
                                     base_url="http://testserver", headers=dict(client.headers)) as ac:
             task = asyncio.create_task(ac.post(f"/api/projects/{project['id']}/documents",
-                                               files={"file": ("test.pdf", PAYLOAD)}))
+                                               files={"file": ("test.pdf", PAYLOAD)},
+                                               data={"privacy_ack": "true"}))
             try:
                 assert await asyncio.to_thread(started.wait, 5)
                 response = await asyncio.wait_for(ac.get("/api/health"), timeout=3)

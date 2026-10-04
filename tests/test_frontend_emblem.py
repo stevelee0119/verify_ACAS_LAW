@@ -8,6 +8,8 @@ from urllib.parse import urlsplit
 from playwright.sync_api import expect, sync_playwright
 from PIL import Image, ImageColor
 
+from tests.frontend_helpers import privacy_notice_mock_payload
+
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -24,6 +26,8 @@ def test_emblem_login_and_header_at_desktop_tablet_and_mobile_sizes(tmp_path):
             route.fulfill(path=str(files[path]))
         elif path == "/api/health":
             route.fulfill(json={"status": "ok", "version": "0.4.0"})
+        elif path == "/api/privacy-notice":
+            route.fulfill(json=privacy_notice_mock_payload())
         else:
             route.fulfill(status=401, json={"detail": "Login required"})
 
@@ -156,6 +160,8 @@ def test_sidebar_is_the_only_project_creation_entry(tmp_path, width, height):
             route.fulfill(path=str(ROOT / "apps/web" / path.lstrip("/")))
         elif path == "/api/health":
             route.fulfill(json={"version": "test", "status": "ok"})
+        elif path == "/api/privacy-notice":
+            route.fulfill(json=privacy_notice_mock_payload())
         elif path == "/api/identity/me":
             route.fulfill(json={"user_id": "member", "role": "MEMBER", "authentication": "password"})
         elif path == "/api/auth/me":
