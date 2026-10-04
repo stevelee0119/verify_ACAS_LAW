@@ -4,7 +4,8 @@
 환경 차이, 표 합계 오기). 이 도구의 요약을 보고서에 그대로 붙이고, 평가 측은 같은 명령으로 다시 잰다.
 
 사용: python scripts/verify_all.py --base <기준 커밋> [--quick] [--skip-ui] [--allow-env-mismatch] [--out artifacts/verify_all.json]
-- --quick: 전체 시험·브라우저 시험을 건너뛴다(중간 확인용, 보고서에는 쓰지 않는다).
+- --quick: 전체 시험·브라우저 시험을 건너뛴다. 2026-10-04부터 구현 측의 표준 점검이다(전체 시험·브라우저 시험은 같은 SHA의 CI가 돈다).
+  전체 모드는 평가 측이 수용 판정 SHA에서 한 번 돈다(사용자 승인 '검증 실행 중복 줄이기', docs/AGENT_ROLES.md 2.1).
 - CI 환경(Python 3.11·tesseract 5.3.4)과 다르면 'environment' 단계가 실패한다. --allow-env-mismatch는 그 단계를 경고로 낮추되 보고서에 그 사실을 적어야 한다.
 - 종료 코드: 0 = 모든 단계 통과, 1 = 실패 단계 있음, 2 = 측정 못 함(커밋·추적되지 않은 변경, 잘못된 기준 커밋).
 시험 결과는 junit XML이 아니라 이 도구가 붙이는 pytest 플러그인이 쓰는 JSON 줄로 집계한다(외부 XML 파서 불필요).
@@ -149,13 +150,17 @@ def main(argv: Optional[List[str]] = None) -> int:
                                  + ("" if env_ok else " — CI와 다름" + (" (--allow-env-mismatch)" if a.allow_env_mismatch else ""))]}
     s["acceptance"] = _pytest(["tests/acceptance"], a.timeout)
     s["regression_ledger"] = _pytest(["tests/regression"], a.timeout)
-    sc = _run([sys.executable, "scripts/scorecard.py"], a.timeout)
-    gate_cmd = [sys.executable, "scripts/score_gate.py"] + ([] if a.allow_env_mismatch else ["--strict-env"])
+    card = os.path.join("artifacts", "scorecard.json")
+    sc = _run([sys.executable, "scripts/scorecard.py", "--out", card], a.timeout)
+    gate_cmd = [sys.executable, "scripts/score_gate.py", "--current", card] + ([] if a.allow_env_mismatch else ["--strict-env"])
     gate = _run(gate_cmd, a.timeout)
     s["score_gate"] = {**gate, "scorecard_tail": sc["tail"], "ok": sc["code"] == 0 and gate["code"] == 0}
+    # 회귀 게이트는 방금 만든 현재 성적표를 다시 쓴다(같은 코드를 두 번 채점하지 않는다, 2026-10-04)
+    reuse = ["--head-scorecard", card] if sc["code"] == 0 else []
     for name, script in (("regression_gate", "regression_gate.py"), ("hardcoding_diff", "check_hardcoding_diff.py"),
-                         ("test_edits", "check_test_edits.py"), ("version_policy", "check_version_policy.py")):
-        r = _run([sys.executable, f"scripts/{script}", "--base", a.base], a.timeout)
+                         ("test_edits", "check_test_edits.py"), ("protected_paths", "check_protected_paths.py"),
+                         ("version_policy", "check_version_policy.py")):
+        r = _run([sys.executable, f"scripts/{script}", "--base", a.base] + (reuse if name == "regression_gate" else []), a.timeout)
         r["ok"] = r["code"] == 0
         s[name] = r
     if not a.quick:
