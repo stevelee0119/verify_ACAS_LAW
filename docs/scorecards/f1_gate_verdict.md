@@ -463,7 +463,7 @@
 | 요구 5(문구 한 곳 관리) | 문구 상수(`packages/common/privacy_notice.py`)가 있으나 **`apps/web/index.html`에 같은 문구를 따로 적음** — 미흡(경미) |
 | **CI(ca35315)** | **`테스트` 실패, `Docker OCR readiness` 실패**(점수 게이트 성공). Docker 실패는 `scripts/check_upload_runtime.py`가 `privacy_ack` 없이 업로드해 422(로그 확인). 테스트 실패는 확인 값 없이 업로드하는 기존 시험(`test_api.py` 13·`test_upload_resilience.py` 5·`test_improvements.py` 2 등, 평가 측 재현)과 브라우저 `test_frontend_upload.py` 7 |
 | 보고서 대조 | 기존 시험 실패는 지시서대로 **평가 측에 인계**했다(적절). `check_upload_runtime.py`(CI 필수 확인 경로)는 적지 않았다. 실행 환경은 Windows·Python 3.14·OCR 없음(`--allow-env-mismatch`)으로 밝혔다 |
-| 평가 측 `verify_all --base a04826f` | 진행 중(기록 시점) |
+| 평가 측 `verify_all --base a04826f`(ca35315) | **종료 1.** 환경·수용 875·원장 224·점수 게이트·회귀 게이트·하드코딩·시험 편집·버전 정책은 통과. 전체 시험 실제 실패 23(`test_api.py`·`test_upload_resilience.py`·`test_improvements.py` 등, 모두 확인 값 없는 업로드), 브라우저 실제 실패 7(`test_frontend_upload.py`). 1차 판정의 원인과 같음 |
 
 - **평가 측 결정(지시서 2절 '보호 시험 갱신 여부를 정한다'):** 확인 값 없이 업로드하던 기존 시험과 `check_upload_runtime.py`는 새 API 계약(사용자 결정)에 맞춰 **요청에 확인 값만 더하는 최소 수정을 승인**한다. 브라우저 시험은 체크 조작을 더한다. 단언 삭제·완화, 표시 추가, 시험 삭제는 금지이며, 평가 측이 diff로 확인한다. 보완 지시: [업로드 안내 지시서 6절](../handoff/PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md).
 
@@ -504,4 +504,8 @@
 
 **릴리스:** 첫 릴리스(8F + 업로드 안내)는 **F1 병합 전에** `Steve_ACASiaLAW` → `main`으로 낸다. F1은 그다음 릴리스에 들어간다.
 
-**바꾸지 않은 것:** 순서상 F1 앞에 있던 '행위시법 검토 보강'(요청 16 + TK-34, 사용자 결정 2026-10-03)은 이번 결정의 범위 밖이라 그대로 두었다. 진행 기록은 아직 없다.
+**행위시법 검토 보강(사용자 결정 2026-10-04, 추가):** F1 앞의 별도 라운드였던 '행위시법 검토 보강'(요청 16 + TK-34)을 **F1 라운드의 작업 묶음 FT로 포함**한다. 그래서 F1 착수 요건도 아니다.
+- 순서: F1 → F2 → **FT** → F3. F3는 8F를 기다리므로, 그 사이 라우터와 무관한 FT를 진행한다. 겹치는 파일은 `packages/legal_engine/temporal_review.py`·`packages/source_adapters/legal_history.py`이며, 8F·업로드 안내와 겹치지 않는다.
+- FT는 탐지 변경이다. 그래서 F1 지시서의 '새 탐지 금지·점수 불변'의 예외로 두고 규칙을 따로 둔다(점수 하락 0, FT 커밋 분리, 새 `rule_id`는 요청서 승인).
+- 설계 보충(목 단위 대조, 복수 버전 병기)을 먼저 내고 평가 측 회신 뒤 구현한다. 평가 측은 보호 시험 T10·T11을 먼저 고정한다.
+- 병합 판정의 G3(법리)·G4·G5에 FT 결과를 포함한다. 지시서: [F1 지시서 1절 FT](../handoff/PROMPT_FOR_FEATURE_ROUND_F1.md)
