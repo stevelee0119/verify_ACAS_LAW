@@ -32,7 +32,7 @@
  ...ame_key_coverage_and_english_label_overreach.md |  69 +++++++++++
  ...55_round8d_overblock_and_key_head_regression.md |  51 ++++++++
  docs/handoff/requests/34_round8e_design.md         |  13 ++
- docs/handoff/requests/35_round8e_completion.md    |  88 +++++++++++++++
+ docs/handoff/requests/35_round8e_completion.md    |  86 +++++++++++++++
  docs/scorecards/DAILY_TREND.md                     |  32 +++++
  docs/scorecards/HISTORY.md                         |  14 +++
  docs/scorecards/RELEASE_PROCEDURE.md               |  70 +++++++++++
@@ -41,7 +41,7 @@
  packages/llm_router/privacy.py                     | 132 ++++++++++++---------
  .../test_round8_known_open_key_signal.py           |  59 +++++++++
  tests/regression/test_r8e_key_context.py           |  94 ++++++++++++++
- 17 files changed, 852 insertions(+), 57 deletions(-)
+ 17 files changed, 850 insertions(+), 57 deletions(-)
 ```
 
 `git diff a7bd8bd HEAD --stat -- tests/`:
@@ -76,13 +76,11 @@ verify_all — HEAD 2c52653, 기준 d20cde2, 모드 full
 
 ## 동일 SHA CI
 
-구현 SHA `2c52653e12dcb19c6133eb3a9d1b49e9e34e0fc6`의 CI 실행 링크:
+제품 구현 SHA는 `2c52653e12dcb19c6133eb3a9d1b49e9e34e0fc6`다. 보고서만 추가한 브랜치 HEAD `3306895276e96b3122c7cdbeafa90846bed727fa`의 필수 CI도 성공했다.
 
-- [CI 37174472943](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174472943): Docker OCR readiness 성공; 통합 테스트가 보고서 작성 시점에 진행 중.
-- [CI 37174470378](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174470378): Docker OCR readiness 성공; 통합 테스트가 보고서 작성 시점에 진행 중.
-- [점수 게이트 37174472917](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174472917): 성공.
-- [점수 게이트 37174470381](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174470381): 성공.
+- [CI 37174907883](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174907883): SQLite 통합 테스트, 마이그레이션, PostgreSQL/pgvector + Celery 테스트 모두 성공; Docker OCR readiness 성공.
+- [점수 게이트 37174910032](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37174910032): 점수, acceptance, regression ledger/gate, 하드코딩, 시험 변경, 버전 정책 단계 모두 성공.
 
 ## 미해결 및 측정 대기
 
-키 신호가 없는 역할 명사 유형은 TK-55에서 정한 알려진 미해결이다. 비공개 세트와 새 즉석 점검의 수치는 평가 측이 측정한다. 본 보고서는 그 결과를 추정하지 않는다. 위 CI 통합 테스트는 보고서 작성 시점에 아직 완료되지 않아, 완료 후 동일 SHA 결과를 확인할 필요가 있다.
+키 신호가 없는 역할 명사 유형은 TK-55에서 정한 알려진 미해결이다. 비공개 세트와 새 즉석 점검의 수치는 평가 측이 측정한다. 본 보고서는 그 결과를 추정하지 않는다.
