@@ -5,6 +5,8 @@
 ```
 [Codex 작업 — 통합 지시 2026-10-04]
 
+0. 시작: 작업 브랜치를 최신 Steve_ACASiaLAW에서 만든 뒤 `git fetch origin evaluator/round8-promotion && git merge origin/evaluator/round8-promotion`(병합 커밋). 티켓 TK-58은 평가 측 브랜치에 있다.
+
 [A] 버전 커밋 0.10.0 — 완료(PR #15 472861e 수용·병합). 할 일 없음.
 
 [B] (낮음, 0.10.0 배포 뒤) CodeQL 로그 주입 경보 2건 정리 — apps/api/project_purge.py 63·73행
@@ -17,5 +19,5 @@
 [C] (보통, 0.10.0 다음 릴리스 전) TK-58 계좌번호의 RRN 분류 — docs/handoff/TK-58_account_number_labeled_rrn.md
  - 가림은 되나 종류가 RRN으로 표시된다(서면9 PDF, 9933548 ACCOUNT → 22ca134 RRN).
  - 요구·수용은 티켓 3·4절. 필수 보장(연락처·주민등록번호 누락 0)을 깨지 않는다. 평가 측 비공개 세트는 평가 측이 잰다.
- - 새 브랜치 codex/tk58-account-kind, 관련 시험(tests/ 중 pii 관련)만 돌린다. Steve_ACASiaLAW 대상 PR, CI 뒤 '검토 요청'.
+ - 새 브랜치 codex/tk58-account-kind, 관련 시험(tests/test_pii_and_claims.py, tests/regression/test_r8f_contact_rrn.py, tests/regression/test_r8f1_rrn_linebreak.py)만 돌린다. 이 시험들은 고치지 않는다. Steve_ACASiaLAW 대상 PR, CI 뒤 '검토 요청'.
 ```
