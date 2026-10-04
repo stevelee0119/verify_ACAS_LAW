@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
+import unicodedata
 from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Set, Tuple
@@ -14,7 +16,12 @@ from typing import Any, Dict, List, Set, Tuple
 from packages.common.enums import LLMRole
 from packages.legal_engine.argument_validity_verifier import _OPINION_SCHEMA, _OPINION_SYSTEM
 from packages.llm_router.router import SYSTEM_BASE, _VERDICT_SCHEMA
-from packages.pii_engine.detector import PARTY_AND_TITLE_LABELS, detect, is_valid_korean_name_structure
+from packages.pii_engine.detector import (
+    PARTY_AND_TITLE_LABELS,
+    STRUCTURED_PERSON_KEY_LABELS,
+    detect,
+    is_valid_korean_name_structure,
+)
 from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
 from packages.verification_engine.ai_document_detector import AI_DETECTOR_SYSTEM_PROMPT, _DETECTOR_SCHEMA
 
@@ -27,8 +34,108 @@ POLICY_VERSION = "payload-pii-v3"
 _PII_TYPE_KEYS = {"주민등록번호", "주민번호", "연락처", "전화번호", "휴대전화", "이메일", "생년월일"}
 # 라벨 어휘 + 개인정보 종류 키를 합쳐서 키: 값 문맥 복원 및 형제/이웃 결합 판정에 사용
 CONTEXT_LABEL_KEYS: frozenset = frozenset(
-    set(PARTY_AND_TITLE_LABELS) | _PII_TYPE_KEYS
+    set(PARTY_AND_TITLE_LABELS) | set(STRUCTURED_PERSON_KEY_LABELS) | _PII_TYPE_KEYS
 )
+
+_NON_PERSON_NAME_KEY_HEADS = (
+    "사건", "법원", "회사", "법인", "기관", "장소", "지명", "부서", "직무",
+    "직책", "직위", "문서", "서류", "파일", "자료", "사업", "서비스",
+)
+_NON_PERSON_ENGLISH_KEY_HEADS = {
+    "case", "court", "company", "corporation", "organization", "place", "location",
+    "department", "team", "job", "position", "office", "document", "file", "event",
+    "business", "service", "product", "site", "subject",
+}
+_ENGLISH_PERSON_KEY_LABELS = frozenset(
+    label.casefold()
+    for label in STRUCTURED_PERSON_KEY_LABELS
+    if isinstance(label, str) and label.isascii() and label.strip()
+)
+_NAME_VALUE_RE = re.compile(
+    r"^(?P<name>[가-힣]{2,4})"
+    r"(?:\s*(?:님|씨|군|양|선생|변호사|변호인|사무관|검사|판사|대위|중위|소령|중령|대령|병장|상병|일병|이병))?"
+    r"(?:\s*[（(][^()（）\r\n]{1,24}[)）])?$"
+)
+
+
+def _normalise_korean_key(key: str) -> str:
+    """공백·괄호·구두점 표기가 달라도 키의 한글 라벨을 비교한다."""
+    text = unicodedata.normalize("NFKC", key)
+    return re.sub(r"[^가-힣0-9a-z]", "", text.casefold())
+
+
+def _person_label_for_key(key: Any) -> str | None:
+    """키에서 사람 이름 문맥을 구성할 detector 라벨 어휘를 반환한다."""
+    if not isinstance(key, str) or not key.strip():
+        return None
+
+    normalized = unicodedata.normalize("NFKC", key)
+    korean_key = _normalise_korean_key(normalized)
+    if korean_key:
+        # 단순히 '-명/이름'으로 끝나는 비인명 키에는 사람 문맥을 붙이지 않는다.
+        if any(
+            korean_key == f"{head}{suffix}"
+            for head in _NON_PERSON_NAME_KEY_HEADS
+            for suffix in ("명", "이름")
+        ):
+            return None
+        korean_labels = {
+            _normalise_korean_key(label)
+            for label in PARTY_AND_TITLE_LABELS
+            if isinstance(label, str) and re.search(r"[가-힣]", label)
+        }
+        for label in sorted(korean_labels, key=len, reverse=True):
+            if label and label in korean_key:
+                return next(
+                    original for original in PARTY_AND_TITLE_LABELS
+                    if _normalise_korean_key(original) == label
+                )
+
+    # camelCase, snake_case, 괄호·공백 변형을 동일한 영어 토큰으로 처리한다.
+    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
+    english_key = re.sub(r"[^a-z0-9]+", " ", separated.casefold()).strip()
+    if not english_key:
+        return None
+    words = english_key.split()
+    if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
+        # 명시적인 사람 역할 표지가 있으면 'company representative'처럼 사람 필드로 인정한다.
+        role_terms = _ENGLISH_PERSON_KEY_LABELS - {"name", "full name", "person name", "contact name"}
+        if not any(label in words for label in role_terms):
+            return None
+    label_phrases = sorted(
+        (tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS),
+        key=lambda phrase: (-len(phrase), phrase),
+    )
+    phrase_matches = []
+    for phrase in label_phrases:
+        positions = [
+            position
+            for position in range(len(words) - len(phrase) + 1)
+            if tuple(words[position:position + len(phrase)]) == phrase
+        ]
+        if positions:
+            phrase_matches.append((phrase, positions[0]))
+    if phrase_matches:
+        phrase, _ = min(phrase_matches, key=lambda item: (-len(item[0]), item[1], item[0]))
+        if phrase[-1] == "name" and tuple(phrase[:-1]) in label_phrases:
+            return " ".join(phrase[:-1])
+        return " ".join(phrase)
+    return None
+
+
+def _is_person_name_key(key: Any) -> bool:
+    """detector 라벨 어휘를 바탕으로 키가 사람 이름 필드인지 판정한다."""
+    return _person_label_for_key(key) is not None
+
+
+def _name_like_value(value: str) -> str | None:
+    """키 문맥을 붙일 단일 한국어 이름 토큰만 반환한다."""
+    candidate = unicodedata.normalize("NFKC", value).strip()
+    match = _NAME_VALUE_RE.fullmatch(candidate)
+    if not match:
+        return None
+    name = match.group("name")
+    return name if is_valid_korean_name_structure(name) else None
 
 
 # ===========================================================================
@@ -156,9 +263,16 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
                 else:
                     # 원본 값 검사
                     results.append((current_path, item))
-                    # 키가 라벨 어휘에 속할 때만 '키: 값' 문맥 생성 (TK-52 2절)
-                    if key in CONTEXT_LABEL_KEYS:
+                    # 식별번호 종류 키의 기존 문맥은 유지한다. 사람 이름 키는 이름 꼴 값에만
+                    # 문맥을 붙여 장소·직무·법인 값의 차단을 늘리지 않는다.
+                    if key in _PII_TYPE_KEYS:
                         results.append((current_path, f"{key}: {item}"))
+                    else:
+                        label = _person_label_for_key(key)
+                        name = _name_like_value(item)
+                        if label and name:
+                            detector_label = "이름" if label.isascii() else label
+                            results.append((current_path, f"{detector_label}: {name}"))
                     str_items.append((key, item))
             else:
                 # 비문자열 값은 재귀

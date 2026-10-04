@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from bisect import bisect_right
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -65,6 +66,24 @@ RRN_MASKED_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-
 # 주민등록번호 라벨이 명시된 문맥에서는 뒷자리 첫 글자와 관계없이 13자리 번호 또는 마스킹 번호를 개인정보로 포착한다.
 RRN_LABELLED_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*(\d{2}\d{2}\d{2}[ \t]*[-–]?[ \t]*[\d*●xX]{7})(?!\d)")
 PHONE_RE = re.compile(r"(?<!\d)(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})(?!\d)")
+# 연락처·주민번호는 숫자 사이 구분 문자의 표기만 정규화한 뷰에서 검사한다.
+# 구분 문자는 정규화 단계에서 하이픈 하나로 모이고, 공백·개행은 제거된다.
+RRN_NORMALIZED_RE = re.compile(r"(?<!\d)((?:\d-?){6})([1-9](?:-?\d){6})(?!\d)")
+RRN_MASKED_NORMALIZED_RE = re.compile(
+    r"(?<!\d)((?:\d-?){6})([1-9](?:-?[*●xX]){6})(?![\d])"
+)
+RRN_LABELLED_NORMALIZED_RE = re.compile(
+    r"(?:주민등록번호|주민번호)\s*[:：]?\s*((?:\d-?){6}(?:[\d*●xX]-?){7})(?!\d)"
+)
+PHONE_NORMALIZED_RE = re.compile(
+    r"(?<!\d)(?:01-?[016789](?:-?\d){3,4}(?:-?\d){4}|"
+    r"0(?:-?\d){1,2}(?:-?\d){3,4}(?:-?\d){4})(?!\d)"
+)
+BUSINESS_REG_NORMALIZED_RE = re.compile(r"(?<![\d-])(\d{3}-\d{2}-\d{5})(?![\d-])")
+BUSINESS_REG_LABELLED_NORMALIZED_RE = re.compile(
+    r"(?:사업자\s*(?:등록)?\s*번호|사업자번호)\s*[:：]?\s*"
+    r"(\d{3}-\d{2}-\d{5})(?!\d)"
+)
 # 차량번호: "12가 3456", "345나 7890", "서울 12가 3456" 등 (일반 명사 '차량' 오탐 방지 및 조사 허용)
 VEHICLE_RE = re.compile(
     r"(?<![0-9])(?:(?:서울|경기|인천|강원|충북|충남|전북|전남|경북|경남|제주|부산|대구|광주|대전|울산|세종)\s*)?"
@@ -132,6 +151,18 @@ PARTY_AND_TITLE_LABELS = [
     "사용자", "근로자", "보증인", "연대보증인", "부모", "조부", "조모", "아내", "보호자",
     "법정대리인", "친권자", "후견인",
 ]
+
+# 구조화된 키 해석 전용 어휘. 평문 LABELLED_PARTY_PERSON_RE에는 합치지 않는다.
+STRUCTURED_PERSON_KEY_LABELS = frozenset(
+    {
+        "person", "name", "full name", "person name", "contact name",
+        "plaintiff", "defendant", "witness", "applicant", "claimant",
+        "petitioner", "respondent", "attorney", "counsel", "representative",
+        "employee", "employer", "given name", "family name", "first name",
+        "last name", "surname", "forename", "alias", "account holder",
+        "account owner", "signatory", "payee",
+    }
+)
 
 def _build_spaced_label_regex(labels: Sequence[str]) -> str:
     spaced = []
@@ -476,6 +507,136 @@ def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool
     return span_start <= start and end <= span_end
 
 
+def _normalise_contact_view(text: str) -> Tuple[str, List[int]]:
+    """숫자 사이 표기를 정리한 연락처 탐지 뷰와 문자별 원문 위치를 만든다."""
+    expanded: List[Tuple[str, int]] = []
+    for source_index, source_char in enumerate(text):
+        for char in unicodedata.normalize("NFKC", source_char):
+            expanded.append((char, source_index))
+
+    def is_separator(char: str) -> bool:
+        category = unicodedata.category(char)
+        return char.isspace() or category[0] in {"P", "S"} or category == "Cf"
+
+    normalized: List[str] = []
+    source_positions: List[int] = []
+    index = 0
+    while index < len(expanded):
+        char, source_index = expanded[index]
+        if not is_separator(char):
+            normalized.append(char)
+            source_positions.append(source_index)
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(expanded) and is_separator(expanded[end][0]):
+            end += 1
+        left_is_digit = bool(normalized and normalized[-1].isdigit())
+        right_is_digit = end < len(expanded) and expanded[end][0].isdigit()
+        if left_is_digit and right_is_digit:
+            run = expanded[index:end]
+            has_symbol = any(
+                unicodedata.category(item)[0] in {"P", "S"}
+                or unicodedata.category(item) == "Cf"
+                for item, _ in run
+            )
+            if has_symbol:
+                normalized.append("-")
+                source_positions.append(run[0][1])
+        else:
+            for separator, separator_source_index in expanded[index:end]:
+                normalized.append(separator)
+                source_positions.append(separator_source_index)
+        index = end
+
+    return "".join(normalized), source_positions
+
+
+def _original_span(source_positions: List[int], start: int, end: int) -> Tuple[int, int]:
+    """정규화된 [start, end) 구간을 감싸는 원문 구간으로 되돌린다."""
+    return source_positions[start], source_positions[end - 1] + 1
+
+
+def _has_hyphen_adjacent_to_linebreak(text: str) -> bool:
+    """원문에 하이픈류 구분자가 줄바꿈 바로 앞이나 뒤에 있는지 확인한다."""
+    for index, char in enumerate(text):
+        if char not in "\r\n":
+            continue
+        for neighbor_index in (index - 1, index + 1):
+            if not 0 <= neighbor_index < len(text):
+                continue
+            neighbor = text[neighbor_index]
+            normalized = unicodedata.normalize("NFKC", neighbor)
+            if normalized == "-" or unicodedata.category(neighbor) == "Pd" or neighbor == "\u2212":
+                return True
+    return False
+
+
+def _contact_matches(
+    text: str,
+    normalized: str,
+    source_positions: List[int],
+    guard_spans: List[Tuple[int, int]],
+    block_id: Optional[str],
+    page: Optional[int],
+) -> List[PIIMatch]:
+    matches: List[PIIMatch] = []
+
+    # 3-2-5로 표시된 사업자번호는 짧은 휴대전화 패턴과 숫자만 보면 겹친다.
+    # 정규화 뷰에서 기존의 그룹 구조를 보존해 연락처 후보에서 제외한다.
+    business_spans = [
+        m.span(1)
+        for pattern in (BUSINESS_REG_NORMALIZED_RE, BUSINESS_REG_LABELLED_NORMALIZED_RE)
+        for m in pattern.finditer(normalized)
+    ]
+
+    patterns = (
+        ("RRN", RRN_NORMALIZED_RE, 0, 1.0, ""),
+        ("RRN", RRN_MASKED_NORMALIZED_RE, 0, 0.95, "마스킹된 주민등록번호 형식"),
+        ("RRN", RRN_LABELLED_NORMALIZED_RE, 1, 0.95, "주민등록번호 라벨 문맥"),
+        ("PHONE", PHONE_NORMALIZED_RE, 0, 0.95, ""),
+    )
+    for kind, pattern, group, base_confidence, base_note in patterns:
+        for found in pattern.finditer(normalized):
+            norm_start, norm_end = found.span(group)
+            start, end = _original_span(source_positions, norm_start, norm_end)
+            if start and text[start - 1] in "([（［":
+                start -= 1
+            if end < len(text) and text[end] in ")]）］":
+                end += 1
+            if _covered_by_span(guard_spans, start, end):
+                continue
+            if kind == "RRN":
+                prefix_context = normalized[max(0, found.start(group) - 20):found.start(group)]
+                if CORP_LABEL_PREFIX_RE.search(prefix_context) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    continue
+                if re.search(r"[\r\n]", text[start:end]) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    if not _has_hyphen_adjacent_to_linebreak(text[start:end]):
+                        continue
+            elif any(
+                business_start <= found.start() and found.end() <= business_end
+                for business_start, business_end in business_spans
+            ):
+                continue
+
+            raw = text[start:end]
+            confidence = base_confidence
+            note = base_note
+            if kind == "RRN" and not base_note:
+                digits = re.sub(r"\D", "", raw)
+                if validate_rrn(digits):
+                    confidence = 1.0
+                    note = "검증부호 일치"
+                else:
+                    confidence = 0.8
+                    note = "형식 일치, 검증부호 불일치"
+            if not any(existing.kind == kind and existing.start == start and existing.end == end for existing in matches):
+                matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
+
+    return matches
+
+
 def is_lawyer_court_address_context(text: str, start: int, end: int) -> bool:
     """주소 구간이 소송대리인(변호사 사무소) 또는 법원 주소 문맥에 위치하는지 검사한다.
 
@@ -519,7 +680,20 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         return matches
 
     guard_spans = legal_identifier_spans(text)
+    contact_view, contact_source_positions = _normalise_contact_view(text)
+    matches.extend(
+        _contact_matches(
+            text,
+            contact_view,
+            contact_source_positions,
+            guard_spans,
+            block_id,
+            page,
+        )
+    )
     for kind, pattern, base_confidence in DETECTORS:
+        if kind in {"RRN", "PHONE"}:
+            continue
         for m in pattern.finditer(text):
             start, end = m.start(), m.end()
             if _covered_by_span(guard_spans, start, end):
@@ -549,14 +723,6 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 if is_lawyer_court_address_context(text, start, end):
                     continue
             matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
-
-    # 주민등록번호 라벨이 명시된 13자리 번호(변형/외국인/합성 포함) 포착
-    for m in RRN_LABELLED_RE.finditer(text):
-        start, end = m.start(1), m.end(1)
-        if _covered_by_span(guard_spans, start, end):
-            continue
-        raw = m.group(1)
-        matches.append(PIIMatch("RRN", raw, start, end, block_id, page, 0.95, "주민등록번호 라벨 문맥"))
 
     for m in ACCOUNT_LABELLED_RE.finditer(text):
         start, end = m.start(1), m.end(1)
