@@ -8,7 +8,7 @@
 0. 시작: 작업 브랜치마다 `git fetch origin evaluator/round8-promotion && git merge origin/evaluator/round8-promotion`(병합 커밋, 리베이스·강제 푸시 금지).
    규칙(AGENTS.md): 커밋 전에는 바꾼 부분의 시험만 돌린다. 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청').
 
-[A] PR #11 업로드 안내 — 할 일 없음. 평가 측 수용 판정 대기(CI 완료 확인 중).
+[A] PR #11 업로드 안내 — 수용 완료(41faa2e). 할 일 없음.
 
 [B] PR #13 F1 보완 — 브랜치 antigravity/f1-review-screen
  1) app.js의 AI_SECURITY_FINDING_TYPES·SECURITY_CARD_FINDING_TYPES 하드코딩을 지우고 /api/finding-categories 응답으로 분류한다.
