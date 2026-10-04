@@ -13,4 +13,9 @@
    기록용 값을 CodeQL이 정화로 인식하는 형태로 만든다: 도우미 하나(예: _log_id(v) = str(v).replace("\r", "").replace("\n", "")[:40])를 두고
    63·73행(과 routers/projects.py의 project_purge_retry 로그)에 쓴다. 동작·메시지 형식은 바꾸지 않는다.
  - 새 브랜치 codex/codeql-purge-log에서 커밋 1개. 관련 시험(tests/test_project_lifecycle.py, tests/test_storage_encryption.py)만 돌린다(로그 문구를 단언하는 기존 시험은 없음, 평가 측 확인). Steve_ACASiaLAW 대상 PR, CI 뒤 '검토 요청'.
+
+[C] (보통, 0.10.0 다음 릴리스 전) TK-58 계좌번호의 RRN 분류 — docs/handoff/TK-58_account_number_labeled_rrn.md
+ - 가림은 되나 종류가 RRN으로 표시된다(서면9 PDF, 9933548 ACCOUNT → 22ca134 RRN).
+ - 요구·수용은 티켓 3·4절. 필수 보장(연락처·주민등록번호 누락 0)을 깨지 않는다. 평가 측 비공개 세트는 평가 측이 잰다.
+ - 새 브랜치 codex/tk58-account-kind, 관련 시험(tests/ 중 pii 관련)만 돌린다. Steve_ACASiaLAW 대상 PR, CI 뒤 '검토 요청'.
 ```
