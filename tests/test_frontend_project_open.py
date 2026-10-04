@@ -13,6 +13,8 @@ from urllib.parse import urlsplit
 import pytest
 from playwright.sync_api import expect, sync_playwright
 
+from tests.frontend_helpers import privacy_notice_mock_payload
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -35,6 +37,8 @@ def test_clicking_an_existing_project_gives_feedback_and_opens_it(width, height,
             return route.fulfill(path=str(files[path]))
         if path == "/api/health":
             return route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        if path == "/api/privacy-notice":
+            return route.fulfill(json=privacy_notice_mock_payload())
         if path == "/api/identity/me":
             if not authenticated:
                 return route.fulfill(status=401, json={"detail": "Login required"})

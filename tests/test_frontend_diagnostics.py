@@ -5,6 +5,8 @@ from urllib.parse import urlsplit
 
 from playwright.sync_api import expect, sync_playwright
 
+from tests.frontend_helpers import privacy_notice_mock_payload
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -24,6 +26,8 @@ def test_diagnostics_layout_and_technical_disclosure(tmp_path):
             route.fulfill(path=str(files[path]))
         elif path == "/api/health":
             route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        elif path == "/api/privacy-notice":
+            route.fulfill(json=privacy_notice_mock_payload())
         elif path == "/api/diagnostics":
             route.fulfill(json=data)
         elif path == "/api/admin/storage":
