@@ -119,7 +119,7 @@ def test_web_table_renders_each_part_on_its_own_line():
             page.goto("http://layout.test/")
             select_first_project(page)
             page.wait_for_function("state.result && state.result.documents && state.result.documents.length === 1")
-            page.evaluate("switchTab('ai-verification')")
+            page.evaluate("switchTab('review')")
             cell = page.locator("#aiVerificationRows tr").nth(0).locator("td").nth(3)
             lines = cell.locator(".reasoning-line")
             expect(lines).to_have_count(2)

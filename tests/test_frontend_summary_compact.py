@@ -75,7 +75,7 @@ def test_summary_metrics_are_compact(width, height, max_cell, tmp_path):
             for title in ("배포가능 상태", "검증위험 지수", "AI 작성 진단"):
                 expect(page.locator(".metric", has_text=title)).to_be_visible()
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-            page.evaluate("switchTab('ai-verification')")
+            page.evaluate("switchTab('review')")
             page.get_by_text("준비서면.pdf: 추가 관련 법조문 검토", exact=True).click()
             page.get_by_text("준비서면.pdf: 검색 완료 · AI 대조 미실행", exact=True).click()
             expect(page.get_by_text("민법 제492조", exact=False)).to_contain_text("별도 검토 필요")
