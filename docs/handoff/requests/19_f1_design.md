@@ -2,7 +2,7 @@
 
 - **작성**: 구현 담당 에이전트 (Antigravity)
 - **일자**: 2026-10-04
-- **근거**: [FR-01 타당성 검토](file:///C:/Users/mrlee/.gemini/antigravity/worktrees/verify_ACAS_LAW/super_cosmos_surges_19h47/docs/handoff/FR-01_review_screen_and_reference_integration.md), 사용자 확정 결정 D1~D6 (2026-10-02), [22_f1_design_prep.md](file:///C:/Users/mrlee/.gemini/antigravity/worktrees/verify_ACAS_LAW/super_cosmos_surges_19h47/docs/handoff/requests/22_f1_design_prep.md)
+- **근거**: [FR-01 타당성 검토](docs/handoff/FR-01_review_screen_and_reference_integration.md), 사용자 확정 결정 D1~D6 (2026-10-02), [22_f1_design_prep.md](docs/handoff/requests/22_f1_design_prep.md)
 - **시작 SHA**: `a04826f6959dee0e1fed9d402d61cbfbdbdf5457` (`upstream/Steve_ACASiaLAW`)
 - **작업 브랜치**: `antigravity/f1-review-screen`
 
