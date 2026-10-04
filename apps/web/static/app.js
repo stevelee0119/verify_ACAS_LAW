@@ -318,11 +318,58 @@ function renderProject() {
   renderTimeline();
   operationsUI.renderJobControls();
   projectTools.renderControls();
+  syncPrivacyAck();
   $("reportScope").textContent = state.run ? `${dateText(state.run.started_at)} · 자료 ${state.run.document_ids.length}개 · ${label(state.run.state)}${$("staleNotice").hidden?"":" · 변경 전 자료 기준"}` : "검증 결과가 없습니다.";
   // 보고서 생성은 상단 버튼 하나로 한다(보고서 탭은 내려받기 목록만 보여 준다).
   const reportReady = ["COMPLETED","PARTIAL_COMPLETED"].includes(state.run?.state);
   $("reportBtn").disabled = !reportReady;
   $("reportBtn").title = reportReady ? "완료된 검증 결과로 검토 보고서를 생성합니다" : "검증이 끝나면 보고서를 생성할 수 있습니다";
+}
+
+function getPrivacyAck(projectId) {
+  if (!projectId) return false;
+  return sessionStorage.getItem(`privacy_ack_${projectId}`) === "true";
+}
+
+function setPrivacyAck(projectId, value) {
+  if (!projectId) return;
+  sessionStorage.setItem(`privacy_ack_${projectId}`, value ? "true" : "false");
+  const el = $("privacyAck");
+  if (el) el.checked = !!value;
+}
+
+function syncPrivacyAck() {
+  const p = state.project;
+  const ack = getPrivacyAck(p?.id);
+  const el = $("privacyAck");
+  if (el) el.checked = ack;
+  const errEl = $("privacyAckError");
+  if (errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
+  }
+}
+
+function checkPrivacyAck(projectId) {
+  const ack = $("privacyAck")?.checked || getPrivacyAck(projectId);
+  if (!ack) {
+    const msg = "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다.";
+    const errEl = $("privacyAckError");
+    if (errEl) {
+      errEl.textContent = msg;
+      errEl.hidden = false;
+    }
+    toast(msg);
+    $("privacyAck")?.focus();
+    return false;
+  }
+  setPrivacyAck(projectId, true);
+  const errEl = $("privacyAckError");
+  if (errEl) {
+    errEl.hidden = true;
+    errEl.textContent = "";
+  }
+  return true;
 }
 
 function renderSummary() {
@@ -998,6 +1045,10 @@ async function reconcileUploads(batch) {
 async function upload(files) {
   const id = state.project?.id;
   if (!id || !files.length) return;
+  if (!checkPrivacyAck(id)) {
+    $("fileInput").value = "";
+    return;
+  }
   if (state.uploadBatch?.busy) return toast("다른 파일의 등록이 진행 중입니다.");
   const batch = {projectId: id, busy: true, entries: files.map(file => ({name: file.name, status: "WAITING"}))};
   state.uploadBatch = batch;
@@ -1012,6 +1063,7 @@ async function upload(files) {
         entry.sha256 = prepared.sha256;
         const form = new FormData();
         form.append("file", prepared.body, file.name);
+        form.append("privacy_ack", "true");
         entry.status = "SENDING";
         renderUploadStatus();
         await api(`/projects/${id}/documents`, {method: "POST", body: form});
@@ -1631,6 +1683,15 @@ $("selectAll").onchange = () => {
 };
 $("bulkExclude").onclick = action(() => setScope([...state.selected], false));
 $("bulkInclude").onclick = action(() => setScope([...state.selected], true));
+if ($("privacyAck")) {
+  $("privacyAck").onchange = e => {
+    setPrivacyAck(state.project?.id, e.target.checked);
+    if (e.target.checked && $("privacyAckError")) {
+      $("privacyAckError").hidden = true;
+      $("privacyAckError").textContent = "";
+    }
+  };
+}
 $("fileInput").onchange = action(e => upload([...e.target.files]));
 $("dropArea").ondragover = e => {
   e.preventDefault();
