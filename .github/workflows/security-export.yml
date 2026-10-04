@@ -1,0 +1,89 @@
+name: 보안 경고 내보내기
+
+# 평가 에이전트용 읽기 전용 측정 워크플로다. 게이트가 아니며 필수 확인에 넣지 않는다. 설정을 바꾸지 않는다.
+# - 코드 스캔(CodeQL) 열린 경고를 규칙·파일·줄 단위로 아티팩트에 남긴다(평가 세션의 연동에는 Code scanning alerts 읽기 권한이 없다).
+# - Python 의존성 취약점을 pip-audit로 직접 점검한다(Dependabot 경고는 GITHUB_TOKEN으로 읽을 수 없다).
+# 실행 요약에는 규칙별 건수만 싣고 파일 경로는 아티팩트에 둔다. 수동 실행에서 show_locations를 켠 경우에만 로그에도 남긴다.
+# 이 파일이 바뀐 푸시, 수동 실행, 주 1회 예약 실행에서 돈다.
+on:
+  workflow_dispatch:
+    inputs:
+      show_locations:
+        description: "경고의 파일·줄을 실행 로그에 출력한다(아티팩트를 내려받을 수 없을 때만 켠다)"
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 3 * * 1"
+  push:
+    paths:
+      - ".github/workflows/security-export.yml"
+      - "scripts/export_security_alerts.py"
+
+permissions:
+  contents: read
+  security-events: read
+
+concurrency:
+  group: security-export
+  cancel-in-progress: false
+
+jobs:
+  export:
+    name: 코드 스캔 경고·의존성 취약점 내보내기
+    if: github.event.repository.fork == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 코드 스캔 열린 경고 내보내기
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          python scripts/export_security_alerts.py --out-dir out | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: 경고 위치 출력(수동 실행에서 show_locations를 켠 경우만, 로그에만 남김)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.show_locations }}
+        run: python scripts/export_security_alerts.py --print-locations out/code_scanning_alerts.json
+
+      # pip-audit는 취약점이 있으면 종료 코드 1을 낸다. 이 잡은 측정이므로 결과를 파일로 남기고 단계는 통과시킨다.
+      - name: Python 의존성 취약점 점검(pip-audit)
+        if: always()
+        run: |
+          python -m pip install --upgrade pip pip-audit
+          mkdir -p out
+          set +e
+          pip-audit -r requirements-test.txt --progress-spinner off --format json --output out/pip_audit.json
+          echo "$?" > out/pip_audit.exitcode
+          set -e
+          python - <<'PY' | tee -a "$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+          path = pathlib.Path("out/pip_audit.json")
+          code = pathlib.Path("out/pip_audit.exitcode").read_text().strip()
+          print("\n## Python 의존성 취약점(pip-audit, requirements-test.txt)\n")
+          if not path.exists():
+              print(f"결과 파일이 없다(종료 코드 {code}). 점검을 끝내지 못했다.")
+          else:
+              data = json.loads(path.read_text(encoding="utf-8"))
+              deps = data.get("dependencies", [])
+              vulnerable = [d for d in deps if d.get("vulns")]
+              print(f"점검한 패키지 {len(deps)}개, 취약점이 있는 패키지 **{len(vulnerable)}개**(종료 코드 {code}).")
+              print("패키지·권고 번호는 아티팩트 `security-alerts`의 `pip_audit.json`에 있다.")
+          PY
+
+      - name: 아티팩트 업로드
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-alerts
+          path: out/
+          retention-days: 14
+          if-no-files-found: warn

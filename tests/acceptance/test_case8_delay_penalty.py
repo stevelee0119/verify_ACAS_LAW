@@ -34,8 +34,8 @@ def _load_spec():
 CHECKS = {c["id"]: c["label"] for c in _load_spec()["checks"]}
 
 # 알려진 미해결. {입력 방식: {항목 id: 인계 티켓}}
-# 2026-10-01 de243cc에서 PDF 22/22가 되었다. 원문 텍스트 입력만 LEG-1이 남는다(같은 문장인데 PDF 입력은 통과, 원인 미특정 → TK-20).
-KNOWN_OPEN = {"pdf": {}, "text": {"LEG-1": "TK-20"}}
+# 2026-10-01 de243cc에서 PDF 22/22, 3차 구현 9933548에서 원문 텍스트 입력도 22/22가 되었다.
+KNOWN_OPEN = {"pdf": {}, "text": {}}      # 9933548(3차 구현)에서 텍스트 입력 LEG-1도 해결
 
 
 @functools.lru_cache(maxsize=None)

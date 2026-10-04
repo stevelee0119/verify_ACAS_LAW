@@ -7,6 +7,8 @@ import pytest
 
 from playwright.sync_api import expect, sync_playwright
 
+from tests.frontend_helpers import privacy_notice_mock_payload
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -25,6 +27,8 @@ def test_progress_staleness_reconnect_and_layout(tmp_path):
             route.fulfill(path=str(files[path]))
         elif path == "/api/health":
             route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        elif path == "/api/privacy-notice":
+            route.fulfill(json=privacy_notice_mock_payload())
         elif path == "/api/verification-runs/run":
             if disconnected[0]:
                 route.abort("failed")
@@ -123,6 +127,8 @@ def test_expired_poll_pauses_and_explicit_login_resumes_same_results(tmp_path):
                             route.fulfill(path=str(files[path]))
                         elif path == "/api/health":
                             route.fulfill(json={"status": "ok", "version": "0.5.0"})
+                        elif path == "/api/privacy-notice":
+                            route.fulfill(json=privacy_notice_mock_payload())
                         elif path == "/api/auth/login":
                             expired[0] = False
                             route.fulfill(json={"user": {"id": "member"}})

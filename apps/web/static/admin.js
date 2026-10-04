@@ -9,9 +9,10 @@ const adminUI = (() => {
   let identity = null, root, navigation, panel, toolbar, rows, pager, feedback, summary, detail;
   let active = false, tab = "users", epoch = 0, data = [], usersById = new Map(), smtp = null;
   let ready = false, initialized = false, previousHash = "";
-  const preferences = Object.fromEntries(Object.keys(tabs).map(key => [key, {
+  // 보안(TK-37): prototype 오염 방지를 위해 preferences를 null prototype 객체로 생성
+  const preferences = Object.assign(Object.create(null), Object.fromEntries(Object.keys(tabs).map(key => [key, {
     query:"", status:"", role:"", page:1, size:20, period:new Date().toISOString().slice(0, 7),
-  }]));
+  }])));
   const statusOf = user => user.approval_status === "APPROVED"
     ? (user.enabled ? "ACTIVE" : "DISABLED") : user.approval_status;
   const number = value => typeof value === "number" && Number.isFinite(value) ? value.toLocaleString("ko-KR") : "미집계";
@@ -36,7 +37,8 @@ const adminUI = (() => {
   function open(next = "users") {
     if (!identity || identity.role !== "ADMIN" || !identity.organization_id) return;
     if (!active) previousHash = location.hash.startsWith("#admin/") ? "" : location.hash;
-    location.hash = "#admin/" + (tabs[next] ? next : "users");
+    // 보안(TK-37): Object.hasOwn 검사로 __proto__ 등 prototype 키 통과 방지
+    location.hash = "#admin/" + (Object.hasOwn(tabs, next) ? next : "users");
     route();
   }
   function leave() {
@@ -55,7 +57,8 @@ const adminUI = (() => {
       root.hidden = true; navigation.setAttribute("aria-pressed", "false");
       return;
     }
-    const selected = tabs[next] ? next : "users";
+    // 보안(TK-37): Object.hasOwn 검사로 __proto__ 등 prototype 키 통과 방지
+    const selected = Object.hasOwn(tabs, next) ? next : "users";
     if (active && tab === selected) return;
     active = true; tab = selected;
     document.body.classList.add("admin-active");
@@ -105,7 +108,8 @@ const adminUI = (() => {
       };
       const download = command("CSV", "download", () => {
         const [year, month] = pref.period.split("-");
-        location.href = "/api/admin/users/export.csv?year=" + year + "&month=" + Number(month);
+        // 보안(TK-37): CSV export 주소의 year를 Number(year)로 변환
+        location.href = "/api/admin/users/export.csv?year=" + Number(year) + "&month=" + Number(month);
       });
       download.title = "선택 월 전체 사용자 CSV 다운로드";
       toolbar.append(field, download);

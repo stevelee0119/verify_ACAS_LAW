@@ -20,6 +20,7 @@ from .polarity import asserted
 
 ENGINE_NAME = "legal_engine.legal_rules"
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "rules.json"
+DEFENSE_GROUPS_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_defense_groups.json"
 RELIEF_HEAD_RE = re.compile(r"청\s*구\s*취\s*지")
 GROUNDS_HEAD_RE = re.compile(r"청\s*구\s*원\s*인")
 DEFENDANT_HEAD_RE = re.compile(r"(?:^|\n)\s*피\s*고")
@@ -35,6 +36,50 @@ def load_rules() -> Dict[str, Any]:
         return json.loads(RULES_PATH.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {"rules": [], "sources": {}}
+
+
+@lru_cache(maxsize=1)
+def load_defense_groups() -> Dict[str, Any]:
+    """무리한 법리 주장 판별을 위한 법리 군집 및 구조 신호 로드 (TK-26 단일 진실 원천)."""
+    try:
+        return json.loads(DEFENSE_GROUPS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"clusters": {}, "structural_signals": {}}
+
+
+@lru_cache(maxsize=1)
+def get_defense_overclaim_pattern() -> re.Pattern[str]:
+    """legal_defense_groups.json으로부터 체계로 닫힌 법리 군집 기반 과대주장 정규식을 동적 생성."""
+    groups = load_defense_groups()
+    clusters = groups.get("clusters", {})
+    signals = groups.get("structural_signals", {})
+
+    all_articles = set()
+    all_terms = set()
+    for c in clusters.values():
+        all_articles.update(c.get("article_numbers", c.get("articles", [])))
+        # 편·장·절 범위(ranges 또는 article_ranges)가 정의된 경우 조문 번호 전체를 체계로 닫아 포함
+        for r in c.get("ranges", c.get("article_ranges", [])):
+            start = r.get("from") or r.get("start")
+            end = r.get("to") or r.get("end")
+            if start and end:
+                for art_num in range(int(start), int(end) + 1):
+                    all_articles.add(str(art_num))
+        all_terms.update(c.get("terms", []))
+
+    concessions = "|".join(signals.get("hypothetical_concessions", ["설령", "가사", "백보\\s*양보하여", "가령", "만일", "만약"]))
+    verbs = "|".join(signals.get("concession_verbs", ["인정되", "문제\\s*된다", "있", "해당한"]))
+    connectors = "|".join(signals.get("concession_connectors", ["하더라도", "되더라도", "더라도", "으나", "지만"]))
+    p1 = rf"(?:(?:{concessions})[^.\n]{{0,50}}?(?:{verbs})[가-힣\s]{{0,10}}?(?:{connectors})[^.\n]{{0,20}}?)"
+
+    art_pattern = "|".join(sorted(all_articles, key=lambda x: -len(x)))
+    term_pattern = "|".join(re.escape(t).replace(r"\ ", r"\s*") for t in sorted(all_terms, key=lambda x: -len(x)))
+    p2 = rf"(?:(?:헌법|민법|형법)?\s*(?:제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?|상)?\s*(?:{term_pattern})|제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?)"
+
+    c_alt = "|".join(signals.get("categorical_conclusions", ["당연(?:히)?\\s*무효", "허용될\\s*수\\s*없", "전면\\s*면책", "전액\\s*면제"]))
+    p3 = rf"(?:{c_alt})(?:[^.\n]{{0,50}}?(?:{c_alt}))*"
+
+    return re.compile(rf"{p1}[^.\n]{{0,100}}?{p2}[^.\n]{{0,100}}?{p3}")
 
 
 def _sections(text: str) -> Dict[str, str]:
@@ -197,6 +242,98 @@ def _is_negated_expression(rule: Dict[str, Any], unit: str, match: re.Match) -> 
     return False
 
 
+# Grammatical boundaries keep quotative -다고/-라고 together and do not
+# mistake party nouns ending in -고 for connective endings.
+_PAST_STEM_FINALS = "".join(chr(n) for n in range(0xAC00, 0xD7A4)
+                          if (n - 0xAC00) % 28 == 20)  # Korean past-tense final ssang-siot.
+_ADNOMINAL_FINALS = "".join(chr(n) for n in range(0xAC00, 0xD7A4)
+                          if (n - 0xAC00) % 28 == 4)  # Adnominal final nieun.
+_REQUIREMENT_CLAUSE_END_RE = re.compile(
+    r"[,;.!?\n]|(?:으므로|므로|기에|음에도|는데도|더라도|더니|던데|다가|"
+    r"느라고|느라|아서|어서|으나|지만|는데|"
+    rf"[{_PAST_STEM_FINALS}](?:고|자|으며)|"
+    r"(?:하|되|있|없|않)(?:고|으며|자)|으며|면서|하여|되어|"
+    r"(?:을|를)\s+(?:[가-힣]+(?:히|게)\s+)*[가-힣]+자|"
+    rf"[{_ADNOMINAL_FINALS}]\s*(?:뒤|후|다음))"
+    r"(?=\s|[,;.!?]|$)"
+)
+# Count negating morphemes, not their overlapping auxiliary phrases:
+# e.g. -없지 않- contains two negations, while -지 아니하- contains one.
+_REQUIREMENT_NEGATION_RE = re.compile(
+    r"않(?:았|으|음|다|고|아|는|은|을|습|지|기)|못(?:하|했|해|한)|"
+    r"아니(?:하|었|다|라|며|고|므로|어서)|아닌|아닙|아님|아닐|"
+    r"없(?:었|으|음|다|고|어|는|을|습|지|이)|"
+    r"(?<![가-힣])(?:안|못)\s+(?=[가-힣])"
+)
+_REQUIREMENT_NEGATIVE_MODIFIER_RE = re.compile(
+    r"(?:없(?:는|었던)|않(?:은|는|았던)|못(?:한|하는|했던)|아닌|"
+    r"전무(?:한|했던)|불가(?:능)?(?:한|했던))\s*$"
+)
+_REQUIREMENT_EXISTENCE_RE = re.compile(r"있(?:었|으|음|다|고|어|는|을|습|지)|존재하")
+_REQUIREMENT_ADJUNCT_RE = re.compile(
+    r"^\s*(?:에\s*(?:따라|의하여|관하여|대하여)|"
+    r"(?:의\s*)?(?:직후|직전|이후|이전|후|전|뒤)"
+    r"(?:에|부터|까지|에도)?)(?:\s|$)"
+)
+_REQUIREMENT_BARE_SUFFIX_RE = re.compile(r"[\s이가은는을를도만의,;.!?]*")
+
+
+def _defense_requirement_state(
+    unit: str, requirements: List[str], limited_conclusions: List[str],
+    polarities: Dict[str, str],
+) -> tuple[bool, bool, bool]:
+    """Read claimed fulfilment, denial and uncertainty within requirement clauses.
+
+    This checks what the writer asserts, not whether the legal defense actually
+    succeeds. Config metadata distinguishes facts required to exist from
+    disqualifying facts required to be absent. Bare mentions and nested
+    negations do not establish fulfilment, even beside another positive fact.
+    """
+    boundaries = [m.end() for m in _REQUIREMENT_CLAUSE_END_RE.finditer(unit)]
+    boundaries.append(len(unit))
+    conclusions = [
+        m.span() for pat in limited_conclusions for m in re.finditer(pat, unit)
+    ]
+    positive = denied = uncertain = False
+    for pattern in requirements:
+        for match in re.finditer(pattern, unit):
+            end = next((end for end in boundaries if end >= match.end()), len(unit))
+            # Reuse the configured conclusion spans, not a second word list.
+            later_conclusions = [
+                start for start, _ in conclusions if match.end() <= start < end
+            ]
+            if later_conclusions:
+                end = min(later_conclusions)
+            if any(start <= match.start() < stop for start, stop in conclusions):
+                continue
+            after = unit[match.end():end]
+            if _REQUIREMENT_ADJUNCT_RE.match(after):
+                continue
+            if _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(unit[:match.start()]):
+                uncertain = True
+                continue
+            negations = list(_REQUIREMENT_NEGATION_RE.finditer(after))
+            requires_absence = polarities.get(pattern) == "absent"
+            if len(negations) == 1:
+                if requires_absence:
+                    positive = True
+                else:
+                    denied = True
+            elif len(negations) > 1:
+                uncertain = True
+            elif requires_absence:
+                if _REQUIREMENT_EXISTENCE_RE.search(after):
+                    denied = True
+                else:
+                    uncertain = True
+            elif (_REQUIREMENT_BARE_SUFFIX_RE.fullmatch(after)
+                  and not _REQUIREMENT_CLAUSE_END_RE.search(match.group())):
+                uncertain = True
+            else:
+                positive = True
+    return positive, denied, uncertain
+
+
 def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
     table = load_rules()
     sources = table.get("sources") or {}
@@ -215,7 +352,10 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             continue
         if rule.get("context") and not re.search(rule["context"], text):
             continue
-        pattern = re.compile(rule["pattern"])
+        if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
+            pattern = get_defense_overclaim_pattern()
+        else:
+            pattern = re.compile(rule["pattern"])
         scope = rule.get("scope", "BODY")
         if scope == "RELIEF_ALL":
             relief = sections["RELIEF"]
@@ -249,6 +389,51 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             # 법이 정한 예외를 근거로 든 문장은 규칙이 겨냥한 무리한 주장이 아니다(추가지시 G4 오탐 방지).
             if rule.get("unless") and re.search(rule["unless"], unit):
                 continue
+
+            # TK-32, TK-40: 요건의 긍정적 소명, 발화 주체, 책임 범위의 구조적 판정
+            if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
+                signals = load_defense_groups().get("structural_signals", {})
+                req_list = signals.get("stated_requirements", [])
+                lim_list = signals.get("limited_conclusions", [])
+
+                has_positive_req, has_denied_req, uncertain_req = _defense_requirement_state(
+                    unit, req_list, lim_list, signals.get("requirement_polarities", {})
+                )
+
+                lim_pats = "|".join(lim_list)
+                has_lim = bool(lim_pats and re.search(lim_pats, unit))
+
+                # 타 법적 책임(형사·징계·행정 등)으로의 확장 또는 무제한 무효 주장 여부 검사
+                is_extended = bool(re.search(
+                    r"형사(?:책임|상\s*책임|처벌|고소|범죄)|징계(?:책임|처분|사유)|행정(?:처분|제재)|"
+                    r"당연(?:히)?\s*무효|전면\s*면책|전액\s*면제|어떠한\s*책임도",
+                    unit
+                ))
+
+                # 1. 요건이 긍정적으로 소명되고, 결론이 해당 채무로 한정되며, 타 책임으로 확장되지 않은 정상 항변: 경고 제외
+                if (has_positive_req and not has_denied_req and not uncertain_req
+                        and has_lim and not is_extended):
+                    continue
+
+                # 2. 요건을 부정·미충족으로 자인하였거나 타 책임으로 확장한 경우: 과대주장 경고 유지 (원 규칙)
+                if has_denied_req or is_extended:
+                    pass
+
+                # 3. 결론은 한정되었으나 요건 소명이 부족한 경우: "요건 확인 요청"으로 완화
+                elif has_lim and (not has_positive_req or uncertain_req):
+                    mod_rule = dict(rule)
+                    mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
+                    mod_rule["explanation"] = (
+                        "항변의 결론이 해당 채무로 한정되어 있으나 법정 요건에 관한 구체적 근거 또는 소명이 부족하므로, "
+                        "관련 요건의 충족 여부를 확인해야 합니다."
+                    )
+                    key = (rule["rule_id"], unit[:80])
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    out.append(_finding(doc, mod_rule, unit, sources))
+                    continue
+
             key = (rule["rule_id"], unit[:80])
             if key in seen:
                 continue

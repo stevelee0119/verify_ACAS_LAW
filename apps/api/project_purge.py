@@ -59,14 +59,17 @@ def purge_files(project_id: str) -> Dict[str, object]:
     try:
         result["files_removed"] = get_storage().delete_project_files(project_id)
     except Exception as exc:  # 저장소 오류는 삭제 결과와 로그로 알린다
-        logger.error("project_purge_files_failed project=%s error_type=%s", project_id, type(exc).__name__)
+        # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
+        logger.error("project_purge_files_failed project=%r error_type=%s", project_id, type(exc).__name__)
         result["file_errors"].append(f"원본·보고서 파일: {type(exc).__name__}")
-    if PROJECT_ID_RE.match(project_id):
+    # 보안(TK-35): match+$ 대신 fullmatch로 끝 줄바꿈 허용 방지
+    if PROJECT_ID_RE.fullmatch(project_id):
         vault = data_dir() / "pii_vault" / f"{project_id}.vault"
         try:
             if vault.exists():
                 vault.unlink()
         except OSError as exc:
-            logger.error("project_purge_vault_failed project=%s error_type=%s", project_id, type(exc).__name__)
+            # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
+            logger.error("project_purge_vault_failed project=%r error_type=%s", project_id, type(exc).__name__)
             result["file_errors"].append(f"가명 처리 보관소: {type(exc).__name__}")
     return result

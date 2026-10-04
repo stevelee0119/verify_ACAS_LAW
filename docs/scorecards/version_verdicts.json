@@ -1,0 +1,33 @@
+[
+ {
+  "version": "0.10.0",
+  "from": "0.9.13",
+  "level": "minor",
+  "measured_commit": "33b509f05c951e68fdd7cb4438bb850ec80ef4d3",
+  "conditions": {
+   "network": false,
+   "os": "Linux",
+   "python": "3.11.15",
+   "tesseract": "5.3.4",
+   "scoring": "scripts/scorecard.py(dev·holdout), regression_gate probe 12종"
+  },
+  "evidence": {
+   "M1": {
+    "baseline": "baseline.json(0.9.13, 430543d) dev 79.9 / holdout 77.3",
+    "candidate": "dev 81.7 / holdout 79.2(오탐 0)",
+    "delta": "+1.8 / +1.9 → 첫째 자리 범위(+1.0 이상 +5.0 미만)"
+   },
+   "M3": "인계 티켓 TK-57(연락처·주민등록번호 표기 변형) 수용 기준 모두 충족·해소(평가 측 비공개 세트 1·2·3판 누락·도달·오탐 0). 8차 구조화 요청 실명 도달 246 → 0/324(TK-51) 해소",
+   "P1": "regression_gate --base 430543d: probe 회귀 0·개선 70(성적표는 기준 커밋에 도구 없음 → baseline.json과 점수 게이트로 비교, 통과). --base 9933548(main): 회귀 없음",
+   "P2": "점수 게이트 통과(종합점수 하락·오탐 증가 0)",
+   "P3": "하드코딩 변경분 점검 통과(9933548..33b509f). 새 rule_id는 각 라운드 판정에서 확인",
+   "P4": "verify_all 전체 모드 종료 0(수용 925·원장 501·전체 3220·브라우저 197), 같은 SHA CI 필수 3개 성공",
+   "P5": "열린 신규 회귀 티켓 0(남은 것은 strict xfail로 고정한 알려진 미해결)",
+   "P6": "판정서 f1_gate_verdict '첫 릴리스 후보 판정'",
+   "not_measured": "AI 작성 판별·공식 DB 대조·Drive 대조(오프라인). 봉인 시험은 첫 릴리스에 한해 생략(세트 없음, 사용자 결정 2026-10-04)"
+  },
+  "decided_by": "evaluator(claude-code)",
+  "decided_at": "2026-10-04",
+  "note": "첫 판정. 등급 임계값 재검토 결과 현행 유지(사용자 결정 2026-10-04)."
+ }
+]

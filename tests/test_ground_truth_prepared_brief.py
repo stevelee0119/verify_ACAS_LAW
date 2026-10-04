@@ -3,8 +3,9 @@
 각 검증 모듈별 채점 기준:
 1. AI 생성 여부: Stylometry 분석(Low Perplexity, Low Burstiness) 및 앙상블 판정 확정
 2. 법령·판례 실재 여부: 가상 판례(2023다284109, 2024도1192) 및 가상 고시(제2025-12호) CRITICAL/FAKE 태그 부여,
-   실재 판례(2018도15313) 검증, 법령명 파서 오탐 방지(채무불이행 및 민법 -> 민법)
-3. 인용 법령 정확성: 행위시법 원칙(2020. 5. 12. 기준 카목 부존재, 14조의2 제6항 3배->5배 소급적용 오류)
+   실재 판례(대법원 2022. 10. 14. 선고 2020다268807 판결) 검증, 법령명 파서 오탐 방지(채무불이행 및 민법 -> 민법)
+3. 인용 법령 정확성: 행위시법 원칙(14조의2 제6항 3배->5배 소급적용 오류. 제2조 제1호 카목은 공식 연혁상 2020. 5. 12.에도
+   성과 도용으로 시행 중이었으므로 그 인용은 오류가 아니다. 신설된 데이터 부정사용 카목의 소급 적용은 acceptance 시험이 다룬다)
 4. 무리한 법률적 주장: 민사상 징역 3년 청구(관할 결함), 입증책임 전도 20억 당연확정, 변론권 원천박탈 궤변
 5. 프롬프트 인젝션: OVERRIDE 및 AIV-Rule-2026 사칭 지시문 격리 및 보안 경보
 6. PII 비식별화: 차량번호, 마스킹 주민번호, 계좌, 주소 비식별화
@@ -93,11 +94,12 @@ def test_precedent_and_regulation_existence(monkeypatch):
     parsed_law = law_name_suffix(raw_snippet)
     assert parsed_law == "민법"  # '의채무불이행및민법' 오탐 원천 박멸
 
-    # 2-2. 실재 판례 확인 (대법원 2018도15313 판결)
+    # 2-2. 실재 판례 확인 (대법원 2022. 10. 14. 선고 2020다268807 판결 — 국가법령정보센터 판례정보로 확인한 사건)
+    #      (이전에 쓰던 2018도15313은 공식 데이터베이스에서 확인되지 않아 바꾸었다. TK-12)
     mirror = LocalLegalMirror(root=MIRROR_ROOT if MIRROR_ROOT.exists() else None)
-    real_case = mirror.find_case("2018도15313")
+    real_case = mirror.find_case("2020다268807")
     assert real_case is not None
-    assert "2018도15313" in real_case["case_number"]
+    assert "2020다268807" in real_case["case_number"]
 
     # 2-3. 가상 판례 (대법원 2023다284109 판결) 부존재 검증 및 CRITICAL / FAKE_PRECEDENT 부여
     fake_case = mirror.find_case("2023다284109")
@@ -160,7 +162,11 @@ def test_temporal_retroactive_application_review():
     mirror = LocalLegalMirror(root=MIRROR_ROOT if MIRROR_ROOT.exists() else None)
     action_date = "2020-05-12"  # 서면상 행위일
 
-    # 3-1. 신설 조항 소급 적용 오류 (부경법 제2조 제1호 카목 - 2022-04-20 신설)
+    # 3-1. (정정, TK-12) 부경법 제2조 제1호 카목. 공식 연혁상 2020-05-12에도 카목(성과 도용)이 시행 중이었고(2019. 7. 9. 시행본),
+    #      2021. 12. 7. 개정이 그 카목을 파목으로 옮기고 데이터 부정사용 카목을 2022. 4. 20. 시행으로 신설했다.
+    #      따라서 성과 도용 문언을 카목으로 인용한 서면을 2020년 행위에 적용하는 것은 소급 적용 오류가 아니다.
+    #      (이전 기대 '카목 부존재 → HIGH'는 공식 원문과 맞지 않아 거두었다. 신설 카목(데이터)을 2020년 행위에 인용하는 경우의
+    #       검출은 tests/acceptance/test_prepared_brief_mirror_official.py의 strict xfail(TK-34)이 맡는다.)
     versions_ka = mirror.all_versions("부정경쟁방지 및 영업비밀보호에 관한 법률", "2")
     cite_ka = Citation(
         citation_id="c3",
@@ -170,10 +176,7 @@ def test_temporal_retroactive_application_review():
         attributes={"claim_text": "타인의 상당한 투자나 노력으로 만들어진 성과를 무단으로 사용하여 이익을 침해"},
     )
     f_ka = review_temporal_application(cite_ka, versions_ka, {"date": action_date, "basis": "FACT_DATE"})
-    assert f_ka is not None
-    assert f_ka.status == VerificationStatus.CONTRADICTED
-    assert f_ka.severity == Severity.HIGH
-    assert "RETROACTIVE_APPLICATION_ERROR" in f_ka.tags
+    assert f_ka is None or (f_ka.severity != Severity.HIGH and "RETROACTIVE_APPLICATION_ERROR" not in f_ka.tags)
 
     # 3-2. 배수 증액 규정 소급 적용 오류 (부경법 제14조의2 제6항 - 구 3배 -> 신 5배)
     versions_punitive = mirror.all_versions("부정경쟁방지 및 영업비밀보호에 관한 법률", "14의2")

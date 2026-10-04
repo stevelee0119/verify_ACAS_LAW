@@ -1,0 +1,4 @@
+{
+  "_설명": "평가 측이 검토해 승인한 구현 측의 보호 경로 변경. scripts/check_protected_paths.py가 읽는다. 이 파일을 마지막으로 바꾼 커밋이 'Agent: evaluator'일 때만 믿는다. commit은 그 파일을 마지막으로 바꾼 커밋의 SHA(7자 이상).",
+  "approved": []
+}

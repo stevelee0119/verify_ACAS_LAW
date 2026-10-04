@@ -15,6 +15,14 @@ from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
 from packages.common.enums import AuditEventType
+from packages.common.privacy_notice import (
+    ACK_LABEL,
+    NOTICE_BULLETS,
+    NOTICE_TITLE,
+    PRIVACY_ACK_ERROR_MESSAGE,
+    PRIVACY_NOTICE_VERSION,
+    REPORT_HEADER_NOTICE,
+)
 from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
@@ -114,6 +122,19 @@ def default_project_name() -> str:
 @router.get("/project-defaults")
 def project_defaults():
     return {**ProjectCreate().model_dump(), "name": default_project_name(), "creation_key": uuid4().hex}
+
+
+@router.get("/privacy-notice")
+def get_privacy_notice():
+    """업로드 개인정보 처리 안내 및 판 번호(상수 단일 관리)."""
+    return {
+        "title": NOTICE_TITLE,
+        "version": PRIVACY_NOTICE_VERSION,
+        "bullets": NOTICE_BULLETS,
+        "ack_label": ACK_LABEL,
+        "report_header": REPORT_HEADER_NOTICE,
+        "ack_error_message": PRIVACY_ACK_ERROR_MESSAGE,
+    }
 
 
 def bump_scope(session: Session, project_id: str) -> None:
@@ -248,7 +269,8 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
             session.rollback()
             if not is_retryable(exc):
                 raise
-            logger.warning("project_purge_retry project=%s attempt=%s error=%s",
+            # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
+            logger.warning("project_purge_retry project=%r attempt=%s error=%s",
                            project_id, attempt + 1, error_label(exc))
             if attempt + 1 == PURGE_ATTEMPTS:
                 raise HTTPException(409, {
@@ -302,8 +324,12 @@ def upload_document(
     file: UploadFile = File(...),
     document_kind: str = Form(""),
     is_own_document: bool = Form(False),
+    privacy_ack: bool = Form(False),
     session: Session = Depends(get_db),
 ) -> DocumentOut:
+    if not privacy_ack:
+        # 개인정보 직접 처리 미확인 시 422 거절 (화면과 동일한 사유 반환)
+        raise HTTPException(422, PRIVACY_ACK_ERROR_MESSAGE)
     # FastAPI runs this blocking file/DB work in its thread pool, not the event loop.
     request_id = uuid4().hex
     response.headers["X-Request-ID"] = request_id
@@ -408,7 +434,25 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
     audit = make_audit(session)
     audit.record(
         AuditEventType.UPLOAD,
-        {"filename": filename, "size": len(data), "mime": document.mime_type, "storage_key": storage_key},
+        {
+            "filename": filename,
+            "size": len(data),
+            "mime": document.mime_type,
+            "storage_key": storage_key,
+            "privacy_ack": True,
+            "notice_version": PRIVACY_NOTICE_VERSION,
+        },
+        project_id=project_id,
+        document_id=document.id,
+        actor=actor_id(),
+    )
+    audit.record(
+        AuditEventType.USER_OVERRIDE,
+        {
+            "action": "PRIVACY_NOTICE_ACKNOWLEDGED",
+            "notice_version": PRIVACY_NOTICE_VERSION,
+            "scope": "연락처·주민등록번호 외 개인정보 직접 처리 확인",
+        },
         project_id=project_id,
         document_id=document.id,
         actor=actor_id(),

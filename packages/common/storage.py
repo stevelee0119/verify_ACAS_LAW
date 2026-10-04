@@ -70,7 +70,8 @@ def _remove_tree(target: Path) -> int:
 
 
 def _project_dirs(root: Path, project_id: str):
-    if not PROJECT_ID_RE.match(project_id or ""):
+    # 보안(TK-35): match+$ 대신 fullmatch로 끝 줄바꿈 허용 방지
+    if not PROJECT_ID_RE.fullmatch(project_id or ""):
         raise ValueError("invalid project id")
     base = root.resolve()
     for area in ("originals", "derivatives"):
@@ -81,7 +82,7 @@ def _project_dirs(root: Path, project_id: str):
 
 
 class LocalObjectStorage(ObjectStorage):
-    """originals/ 는 쓰기 후 읽기 전용(0o444)으로 고정한다."""
+    """originals/ 는 쓰기 후 읽기 전용(0o400)으로 고정한다."""
 
     def __init__(self, root: Optional[Path] = None) -> None:
         self.root = Path(root or get_settings().storage_root)
@@ -91,7 +92,8 @@ class LocalObjectStorage(ObjectStorage):
     # -- 내부 -------------------------------------------------------------
     def _abs(self, storage_key: str) -> Path:
         p = (self.root / storage_key).resolve()
-        if not str(p).startswith(str(self.root.resolve())):
+        # 보안(TK-35): 접두 문자열 비교 대신 경로 구성요소 단위(is_relative_to)로 형제 디렉터리 접근 차단
+        if not p.is_relative_to(self.root.resolve()):
             raise ValueError("path traversal detected")  # 제21.1장
         return p
 
@@ -105,7 +107,8 @@ class LocalObjectStorage(ObjectStorage):
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
         try:
-            os.chmod(p, 0o444)
+            # 보안(TK-35): 소유자만 읽는 0o400으로 변경하여 사건 원본 기밀성 보장
+            os.chmod(p, 0o400)
         except OSError:  # pragma: no cover - 플랫폼 의존
             pass
         return storage_key

@@ -444,11 +444,11 @@ def test_quota_duplicate_and_rollback_do_not_send_false_warning(client, bootstra
         session.commit()
     content = b"Legal document test. " * 4
     url = f"/api/projects/{project['id']}/documents"
-    first = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")})
+    first = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")}, data={"privacy_ack": "true"})
     assert first.status_code == 201, first.text
-    duplicate = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")})
+    duplicate = client.post(url, headers=headers, files={"file":("test.txt", content, "text/plain")}, data={"privacy_ack": "true"})
     assert duplicate.status_code == 201 and duplicate.json()["id"] == first.json()["id"]
-    assert client.post(url, headers=headers, files={"file":("test.txt", b"x"*30, "text/plain")}).status_code == 413
+    assert client.post(url, headers=headers, files={"file":("test.txt", b"x"*30, "text/plain")}, data={"privacy_ack": "true"}).status_code == 413
     with get_session_factory()() as session:
         assert len(session.scalars(select(UserNotification)).all()) == 1
         assert session.get(User, bootstrap_data["admin_id"]).quota_warning_sent_at is None
@@ -472,7 +472,8 @@ def test_admin_unlimited_upload_and_legacy_warning_cancelled(client, bootstrap_d
         notice_id = notice.id
         session.commit()
     response = client.post(f"/api/projects/{project['id']}/documents", headers=headers,
-                           files={"file": ("new.txt", b"Another legal document.", "text/plain")})
+                           files={"file": ("new.txt", b"Another legal document.", "text/plain")},
+                           data={"privacy_ack": "true"})
     assert response.status_code == 201, response.text
     def unexpected_mail(*args):
         pytest.fail("An unlimited administrator must not receive quota warnings")
@@ -511,12 +512,12 @@ def test_member_storage_counts_trash_until_permanent_deletion(client, bootstrap_
         assert metrics["storage_unlimited"] is False
     url = f"/api/projects/{new}/documents"
     files = {"file": ("extra.txt", b"New legal document", "text/plain")}
-    assert client.post(url, headers=headers, files=files).status_code == 413
+    assert client.post(url, headers=headers, files=files, data={"privacy_ack": "true"}).status_code == 413
     assert client.post(f"/api/projects/{old}/restore", headers=headers).status_code == 200
-    assert client.post(url, headers=headers, files=files).status_code == 413
+    assert client.post(url, headers=headers, files=files, data={"privacy_ack": "true"}).status_code == 413
     assert client.delete(f"/api/projects/{old}", headers=headers).status_code == 204
     assert client.delete(f"/api/projects/{old}/purge", headers=headers).status_code == 200
-    assert client.post(url, headers=headers, files=files).status_code == 201
+    assert client.post(url, headers=headers, files=files, data={"privacy_ack": "true"}).status_code == 201
 
 
 def test_stale_smtp_claim_is_not_automatically_resent(bootstrap_data):

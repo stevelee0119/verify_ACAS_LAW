@@ -8,6 +8,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
+from uuid import uuid4
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -154,7 +155,8 @@ def _authorize(session, request, principal, route, params, payload):
         raise HTTPException(403, "Administrator required")
     if read and template.endswith("/diagnostics/sources"):
         return
-    if read and template.endswith(("/health", "/diagnostics", "/project-defaults")):
+    # 정적 안내문(/privacy-notice) 및 헬스체크 등은 인증된 사용자에게 읽기 허용
+    if read and template.endswith(("/health", "/diagnostics", "/project-defaults", "/privacy-notice")):
         return
     if template.endswith("/calculations/interest") and principal.role in {"MEMBER", "ADMIN"}:
         return
@@ -314,7 +316,7 @@ async def workspace_access(request, call_next):
         if mode == "multi-user" and _public_shell(request):
             return await forward(request)
         if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path == "/api/health":
-            # Readiness probes are public, never configuration or principal data.
+            # 준비 상태 점검(Readiness probe)은 비인증 공개, 설정이나 개인정보 없음
             response = await forward(request)
             response.headers["Cache-Control"] = "no-store"
             return response
@@ -365,8 +367,16 @@ async def workspace_access(request, call_next):
         if getattr(request.state, "clear_session_cookies", False):
             _clear_session_cookies(response, secure_transport(request))
     except StorageKeyConfigurationError as exc:
-        # 저장소 키 설정 오류를 인증 오류로 표시하면 엉뚱한 곳을 보게 된다.
-        response = JSONResponse({"detail": str(exc)}, status_code=503)
+        # 보안(TK-36): 저장소 키 설정 오류의 환경변수/상세 메시지 노출을 차단하고 고정 문구와 request_id만 반환
+        request_id = uuid4().hex[:12]
+        logging.getLogger(__name__).error(
+            "storage_key_configuration_error request_id=%s: %s", request_id, exc
+        )
+        response = JSONResponse(
+            {"detail": f"저장소 암호화 구성 오류로 요청을 처리하지 못했습니다. 문의 번호: {request_id}"},
+            status_code=503,
+            headers={"X-Request-ID": request_id},
+        )
     except ValueError:
         if endpoint_started:
             raise

@@ -62,7 +62,8 @@ def parse_korean_amount(text: str) -> Optional[Decimal]:
     """'이억오천만' → 250000000. 해석할 수 없으면 None."""
     body = re.sub(r"\s+", "", text or "")
     body = re.sub(r"^(?:일금|금|[₩\\￥]|KRW)+", "", body)
-    body = re.sub(r"(?:원정|원|정)+$", "", body)
+    # 보안(TK-38 B): 지수 증가 정규식 (?:원정|원|정)+$를 선형 [원정]+$로 교체
+    body = re.sub(r"[원정]+$", "", body)
     if not body or not re.fullmatch(rf"[{WORD_CHARS}\d,]+", body):
         return None
     if not re.search(rf"[{WORD_CHARS}]", body):

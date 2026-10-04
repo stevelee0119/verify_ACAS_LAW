@@ -28,3 +28,6 @@
 - `python -m pytest tests/acceptance/test_ai_majority_rule.py` 통과(평가 에이전트 작성, 현재는 미해결 항목이 strict xfail). 고친 뒤 XPASS(strict)로 실패하면 평가 에이전트가 xfail 표시를 지운다.
 - 서면7 온라인 보고서 재채점(사용자가 새 보고서를 주면 `scripts/score_report.py`)에서 AI-1(문서 판정이 AI 쪽)이 통과한다. 오프라인으로는 모델 경로를 재지 못한다.
 - 고정 시험(`score_gate`) 점수 하락·오탐 증가 없음.
+
+## 사용자 확인(2026-10-03)
+평가 측 해석을 승인했다: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단정 방지 장치(문구 '모델 다수 의견(참고)', `involvement`·`objective_traces`·`verdict_distribution` 표시)는 유지한다. 대안 해석(흔적 요건 유지)은 택하지 않았다.

@@ -26,12 +26,12 @@ def main():
         project = client.post("/api/projects", json={"name": "CI upload smoke"})
         project.raise_for_status()
         path = f"/api/projects/{project.json()['id']}/documents"
-        uploaded = client.post(path, files={"file": ("synthetic.docx", data)})
+        uploaded = client.post(path, files={"file": ("synthetic.docx", data)}, data={"privacy_ack": "true"})
         assert uploaded.status_code == 201
         saved = uploaded.json()
         assert saved["sha256"] == hashlib.sha256(data).hexdigest()
         assert len(uploaded.headers["X-Request-ID"]) == 32
-        repeated = client.post(path, files={"file": ("synthetic.docx", data)})
+        repeated = client.post(path, files={"file": ("synthetic.docx", data)}, data={"privacy_ack": "true"})
         assert repeated.status_code == 201 and repeated.json()["id"] == saved["id"]
         assert len(client.get(path).json()) == 1
         original = client.get(f"/api/documents/{saved['id']}/original")

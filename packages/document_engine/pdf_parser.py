@@ -489,6 +489,16 @@ class PdfParser(DocumentParser):
                 "표시 텍스트가 없어 스캔 PDF로 판단된다. OCR Adapter 결과가 없으면 본문 검증은 UNVERIFIED로 처리한다."
             )
             doc.structure["scanned_pdf"] = True
+
+        # 블록 문단 복원 (TK-22): 줄 단위 블록을 구조 신호에 기반하여 문단 단위로 결합
+        from .paragraph_reconstruction import reconstruct_page_blocks
+        for p in doc.pages:
+            p.blocks = reconstruct_page_blocks(
+                p.blocks,
+                page_num=p.page_number,
+                page_width=p.width,
+                page_height=p.height,
+            )
         return doc
 
     # -- 내부 유틸 --------------------------------------------------------
@@ -814,6 +824,9 @@ def _parse_with_pypdf(raw: bytes, doc: NormalizedDocument) -> None:
         doc.raw_layers["rendered_text"] = "\n".join(parts)
         doc.structure["parser_chain"].append("pypdf")
         doc.parse_warnings.append("pdfplumber로 열지 못해 pypdf 글자 추출로 읽었다(글자 색·위치 기반 숨김 검사는 하지 못함)")
+        from .paragraph_reconstruction import reconstruct_page_blocks
+        for p in doc.pages:
+            p.blocks = reconstruct_page_blocks(p.blocks, page_num=p.page_number)
     except Exception as exc:
         doc.structure["parser_chain"].append(f"pypdf:실패({type(exc).__name__})")
         doc.structure["parse_error"] = True
@@ -1293,8 +1306,9 @@ def _pdf_literal(body: bytes) -> str:
     return data.decode("latin-1", "ignore")
 
 
+# 보안(TK-38 A): 위치 지정 연산자 반복의 공백 중첩 한정자를 선형화하여 ReDoS 방지
 SINGLE_GLYPH_SHOW_RE = re.compile(
-    rb"^\s*(?:/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf\s*)?(?:[-\d.\s]+(?:Tm|Td|TD)\s*)*"
+    rb"^\s*(?:/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf\s*)?(?:[-\d.]+(?:\s+[-\d.]+)*\s+(?:Tm|Td|TD)\s*)*"
     rb"(?:<(?P<hex>[0-9A-Fa-f]{2,4})>|\((?P<lit>(?:\\.|[^\\)]))\))\s*Tj\s*EMC")
 FONT_SET_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf")
 GLYPH_SHOW_RE = re.compile(rb"/(?P<font>[A-Za-z0-9_.+-]+)\s+[\d.]+\s+Tf|<(?P<hex>[0-9A-Fa-f]{2,4})>\s*Tj")

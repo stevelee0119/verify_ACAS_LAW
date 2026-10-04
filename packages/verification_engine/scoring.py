@@ -99,11 +99,12 @@ def unified_authorship(document: Any) -> Dict[str, Any]:
     
     verdict = raw_verdict
 
-    # 두 축을 나눈다(v4 P6, TK-11): AI가 관여했다는 객관적 흔적이 있는가(관여), 있다면 문서의 어디까지인가(범위).
-    # 흔적이 없다는 것은 '사람 작성'의 근거가 아니다.
+    # 두 축을 나눈다(v4 P6, TK-11, TK-25): AI 객관적 흔적 여부(involvement)와 범위(scope)는 분리한다.
+    # 범위는 verdict 판정(문서 전체/일부)에 따르며, 흔적 유무에 의해 NOT_APPLICABLE로 무효화되지 않는다.
     involvement = "TRACES_FOUND" if traces else "NO_OBJECTIVE_TRACES"
-    scope = ({"AI_FULL_GENERATION_LIKELY": "WHOLE_DOCUMENT", "AI_PARTIAL_GENERATION": "PART_OF_DOCUMENT"}
-             .get(verdict, "UNDETERMINED") if traces else "NOT_APPLICABLE")
+    scope = {"AI_FULL_GENERATION_LIKELY": "WHOLE_DOCUMENT", "AI_PARTIAL_GENERATION": "PART_OF_DOCUMENT"}.get(
+        verdict, "NOT_APPLICABLE" if verdict in ("HUMAN_AUTHORED_LIKELY", "UNCERTAIN") else "UNDETERMINED"
+    )
     return {"document_id": document.document_id, "verdict": verdict,
             "basis": "AI_DETECTOR" if detector.get("verdict") else "STYLOMETRY",
             "score": detector.get("score"), "stylometry_signal": stylometry,

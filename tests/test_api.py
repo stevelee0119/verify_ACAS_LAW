@@ -111,6 +111,7 @@ def upload(client, project_id, path: Path, mime="application/pdf"):
         return client.post(
             f"/api/projects/{project_id}/documents",
             files={"file": (path.name, handle, mime)},
+            data={"privacy_ack": "true"},
         )
 
 
@@ -143,6 +144,7 @@ def test_rejects_unsupported_extension(client, project):
     response = client.post(
         f"/api/projects/{project['id']}/documents",
         files={"file": ("payload.exe", io.BytesIO(b"MZ\x90\x00fake"), "application/octet-stream")},
+        data={"privacy_ack": "true"},
     )
     assert response.status_code == 415
 
@@ -151,6 +153,7 @@ def test_rejects_executable_disguised_as_pdf(client, project):
     response = client.post(
         f"/api/projects/{project['id']}/documents",
         files={"file": ("bad.pdf", io.BytesIO(b"MZ\x90\x00" + b"A" * 100), "application/pdf")},
+        data={"privacy_ack": "true"},
     )
     assert response.status_code == 400
 
@@ -159,6 +162,7 @@ def test_rejects_empty_file(client, project):
     response = client.post(
         f"/api/projects/{project['id']}/documents",
         files={"file": ("empty.pdf", io.BytesIO(b""), "application/pdf")},
+        data={"privacy_ack": "true"},
     )
     assert response.status_code == 400
 
