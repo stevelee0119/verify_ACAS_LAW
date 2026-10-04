@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from bisect import bisect_right
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
@@ -65,6 +66,24 @@ RRN_MASKED_RE = re.compile(r"(?<!\d)(\d{2})(\d{2})(\d{2})[ \t]*[-–]?[ \t]*([1-
 # 주민등록번호 라벨이 명시된 문맥에서는 뒷자리 첫 글자와 관계없이 13자리 번호 또는 마스킹 번호를 개인정보로 포착한다.
 RRN_LABELLED_RE = re.compile(r"(?:주민등록번호|주민번호)\s*[:：]?\s*(\d{2}\d{2}\d{2}[ \t]*[-–]?[ \t]*[\d*●xX]{7})(?!\d)")
 PHONE_RE = re.compile(r"(?<!\d)(01[016789][-\s.]?\d{3,4}[-\s.]?\d{4}|0\d{1,2}[-\s.]?\d{3,4}[-\s.]?\d{4})(?!\d)")
+# 연락처·주민번호는 숫자 사이 구분 문자의 표기만 정규화한 뷰에서 검사한다.
+# 구분 문자는 정규화 단계에서 하이픈 하나로 모이고, 공백·개행은 제거된다.
+RRN_NORMALIZED_RE = re.compile(r"(?<!\d)((?:\d-?){6})([1-9](?:-?\d){6})(?!\d)")
+RRN_MASKED_NORMALIZED_RE = re.compile(
+    r"(?<!\d)((?:\d-?){6})([1-9](?:-?[*●xX]){6})(?![\d])"
+)
+RRN_LABELLED_NORMALIZED_RE = re.compile(
+    r"(?:주민등록번호|주민번호)\s*[:：]?\s*((?:\d-?){6}(?:[\d*●xX]-?){7})(?!\d)"
+)
+PHONE_NORMALIZED_RE = re.compile(
+    r"(?<!\d)(?:01-?[016789](?:-?\d){3,4}(?:-?\d){4}|"
+    r"0(?:-?\d){1,2}(?:-?\d){3,4}(?:-?\d){4})(?!\d)"
+)
+BUSINESS_REG_NORMALIZED_RE = re.compile(r"(?<![\d-])(\d{3}-\d{2}-\d{5})(?![\d-])")
+BUSINESS_REG_LABELLED_NORMALIZED_RE = re.compile(
+    r"(?:사업자\s*(?:등록)?\s*번호|사업자번호)\s*[:：]?\s*"
+    r"(\d{3}-\d{2}-\d{5})(?!\d)"
+)
 # 차량번호: "12가 3456", "345나 7890", "서울 12가 3456" 등 (일반 명사 '차량' 오탐 방지 및 조사 허용)
 VEHICLE_RE = re.compile(
     r"(?<![0-9])(?:(?:서울|경기|인천|강원|충북|충남|전북|전남|경북|경남|제주|부산|대구|광주|대전|울산|세종)\s*)?"
@@ -133,6 +152,18 @@ PARTY_AND_TITLE_LABELS = [
     "법정대리인", "친권자", "후견인",
 ]
 
+# 구조화된 키 해석 전용 어휘. 평문 LABELLED_PARTY_PERSON_RE에는 합치지 않는다.
+STRUCTURED_PERSON_KEY_LABELS = frozenset(
+    {
+        "person", "name", "full name", "person name", "contact name",
+        "plaintiff", "defendant", "witness", "applicant", "claimant",
+        "petitioner", "respondent", "attorney", "counsel", "representative",
+        "employee", "employer", "given name", "family name", "first name",
+        "last name", "surname", "forename", "alias", "account holder",
+        "account owner", "signatory", "payee",
+    }
+)
+
 def _build_spaced_label_regex(labels: Sequence[str]) -> str:
     spaced = []
     for label in sorted(labels, key=len, reverse=True):
@@ -199,6 +230,14 @@ def is_valid_korean_name_structure(raw_name: str, after_text: str = "", is_expli
     if clean.startswith(("선임", "해임", "취임", "선출", "지명", "추천", "임명")):
         return False
 
+    # 당사자 지칭 접미사('원고측', '피고측', '신청인측' 등) 배제 (TK-52 2절)
+    if clean.endswith("측"):
+        return False
+
+    # 법인 표지 접두사('사단법인', '재단법인', '학교법인', '의료법인' 등) 배제 (TK-52 2절)
+    if clean.startswith(("사단법인", "재단법인", "학교법인", "의료법인", "사회복지법인", "주식회사", "유한회사")):
+        return False
+
     # 후행 서술문 맥락 배제 (TK-39):
     # 명시적 라벨 직후 후보는 후행 문맥으로 제외하지 않는다 (성명: {이름} 출력하지 마시오 등).
     # 문맥 기반 제외는 라벨이 없는 암묵 후보에만 적용한다.
@@ -224,12 +263,56 @@ REPRESENTATIVE_NAME_STOPWORDS = {
 PARTY_HEADER_STOPWORDS = {
     "대한민국", "국가", "검사", "미상", "불상", "무죄", "유죄",
     "기각", "각하", "인용", "취하",
-    # 소송 절차 및 서식 항목 명사 (인명 오탐 방지 TK-30)
-    "신문", "신문절차", "신문기일", "변론기일", "조서",
-    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일", "이메일", "개인정보", "인적사항",
-    # 서면 제목("변 호 인  의 견 서")
-    "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서", "진술서", "확인서",
-    "탄원서", "소장", "항소장", "상고장", "이사회", "선임결의", "해임결의"
+    # ── 범주 1: 소송·심판 절차 및 기일 명사 ──
+    # 출처: 민사소송법 제146조~제165조, 형사소송법 제275조~제283조, 행정소송법 제8조
+    "신문", "심문", "진술", "변론", "공판", "기일", "공술", "진술기일",
+    "신문절차", "신문기일", "변론기일", "심문기일", "공판기일", "준비절차", "변론준비",
+    "심리", "결심", "선고", "판결", "결정", "명령", "항고", "준항고", "상소", "항소", "상고", "재심",
+    "조서", "공탁", "송달", "통지", "소환", "출석", "불출석", "집행", "강제집행", "가압류", "가처분",
+    "경매", "배당", "조정절차", "조정기일", "화해권고", "이의신청",
+    # ── 범주 2: 법원 서식·문서·기록 명사 ──
+    # 출처: 대법원 법원재판사무처리규칙 및 법원 민사소송서식집
+    "의견서", "답변서", "준비서면", "요지서", "이유서", "선임서", "신청서",
+    "진술서", "확인서", "탄원서", "항소장", "상고장", "이의서", "항고장", "준항고장",
+    "반소장", "청구서", "보고서", "통보서", "지시서", "계약서", "합의서", "위임장", "소송위임장",
+    "서면", "서류", "문서", "기록", "소송기록", "재판기록", "증거목록", "서증목록", "내용증명",
+    "등기사항", "등기부", "법인등기부", "가족관계증명서", "주민등록등본", "영수증",
+    # ── 범주 3: 민법·상법상 권리·의무·법률관계 및 계약·대금·비용 명사 ──
+    # 출처: 민법 제1편 총칙·제3편 채권, 상법 제2편 상행위
+    "계약", "해지", "해제", "취소", "철회", "변제", "상계", "공제", "양도", "양수",
+    "매매", "임대", "임차", "위임", "수임", "도급", "보증", "담보", "질권", "저당", "유치권",
+    "정산", "서명", "날인", "기명", "서명날인", "소유권", "점유권", "임차권", "전세권", "저당권",
+    "채권", "채무", "구상권", "손해배상", "부당이득", "원상회복", "원리금", "대여금", "매매대금",
+    "공사대금", "용역대금", "보증금", "임대차보증금", "전세보증금", "지연손해금", "지연이자", "약정이자",
+    "소송비용", "합의금", "임금채권", "보증채무", "채무불이행", "불법행위", "이행지체", "이행불능",
+    # ── 범주 4: 소송상 청구·주장·증거 및 사실인정 명사 ──
+    # 출처: 민사소송법 제2편 제3장 증거, 형사소송법 제2편 제3장 증거
+    "사실", "증거", "주장", "항변", "반박", "입증", "증명", "소명", "자백", "부인",
+    "청구취지", "청구원인", "공격방어", "주장사실", "인정사실", "주요사실",
+    "증거방법", "서증", "인증", "물증", "서증인부", "증인신문", "증거제출", "서증제출",
+    "인증신청", "감정신청", "검증신청", "사실조회신청", "인부", "부지", "증명책임", "입증책임", "입증취지",
+    # ── 범주 5: 근로기준법 및 노무·인사·업무 관리 명사 ──
+    # 출처: 근로기준법 제2조·제23조·제36조, 노동조합법 제81조
+    # (TK-52 3절: 계정·지시·의견은 근로기준법상 업무지시권, 전산관리규정상 사용자/근로자 전산계정,
+    #  소송법상 진술의견/감정의견의 근로·업무 관리 및 진술 범주로 근거 명시)
+    "계정", "지시", "의견", "근로계약", "취업규칙", "단체협약", "임금", "퇴직금", "통상임금", "평균임금",
+    "근로시간", "휴게시간", "연차휴가", "주휴수당", "연장근로", "야간근로", "인사이동", "전직", "대기발령",
+    "직위해제", "정직", "감봉", "견책", "업무지시", "작업지시", "관리감독", "업무수행", "직무수행",
+    "전산계정", "사용자계정", "관리책임", "감독권한", "선서서",
+    # ── 범주 6: 회사·법인·단체 조직 및 지분 명사 ──
+    # 출처: 상법 제3편 회사, 민법 제3장 법인
+    "이사회", "총회", "위원회", "의결", "결의", "선임결의", "해임결의", "소장",
+    "주주총회", "이사회결의", "정관변경", "주식양도", "신주발행", "자본금", "대표권",
+    "업무집행", "직무집행", "지배인선임", "감사보고서", "영업양도",
+    # ── 범주 7: 지자체·공공기관 및 기관 표지 명사 ──
+    # 출처: 지방자치법, 공공기관의 운영에 관한 법률
+    "지방자치단체", "공공기관", "행정복지센터", "시청", "구청", "군청", "주민센터",
+    "경찰서", "검찰청", "세무서", "구치소", "교도소", "우체국", "사단법인", "재단법인",
+    "학교법인", "의료법인", "사회복지법인",
+    # ── 범주 8: 신원·신상 정보 항목 명사 ──
+    # 출처: 법원 인적사항란·서식 기재 항목
+    "연락처", "주민번호", "전화번호", "휴대전화", "생년월일",
+    "이메일", "개인정보", "인적사항", "주소", "직업", "직위",
 }
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
@@ -281,6 +364,8 @@ LAWYER_NAME_RE = re.compile(
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
 JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
+# R8-B: 불용어 검사 시 조사 분리에 사용하는 꼬리 조사 정규식 (성능 최적화를 위해 모듈 수준에 정의)
+_JOSA_TAIL_RE = re.compile(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$")
 
 # 한 글자 친족 호칭(부, 모, 처, 자)은 '부대는', '부사관이', '처분은' 등의 일반 법률/군사용어 오탐을 막기 위해
 # 반드시 한자 괄호나 공백이 뒤따르는 독립된 문맥에서만 매칭한다.
@@ -422,6 +507,120 @@ def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool
     return span_start <= start and end <= span_end
 
 
+def _normalise_contact_view(text: str) -> Tuple[str, List[int]]:
+    """숫자 사이 표기를 정리한 연락처 탐지 뷰와 문자별 원문 위치를 만든다."""
+    expanded: List[Tuple[str, int]] = []
+    for source_index, source_char in enumerate(text):
+        for char in unicodedata.normalize("NFKC", source_char):
+            expanded.append((char, source_index))
+
+    def is_separator(char: str) -> bool:
+        category = unicodedata.category(char)
+        return char.isspace() or category[0] in {"P", "S"} or category == "Cf"
+
+    normalized: List[str] = []
+    source_positions: List[int] = []
+    index = 0
+    while index < len(expanded):
+        char, source_index = expanded[index]
+        if not is_separator(char):
+            normalized.append(char)
+            source_positions.append(source_index)
+            index += 1
+            continue
+
+        end = index + 1
+        while end < len(expanded) and is_separator(expanded[end][0]):
+            end += 1
+        left_is_digit = bool(normalized and normalized[-1].isdigit())
+        right_is_digit = end < len(expanded) and expanded[end][0].isdigit()
+        if left_is_digit and right_is_digit:
+            run = expanded[index:end]
+            has_symbol = any(
+                unicodedata.category(item)[0] in {"P", "S"}
+                or unicodedata.category(item) == "Cf"
+                for item, _ in run
+            )
+            if has_symbol:
+                normalized.append("-")
+                source_positions.append(run[0][1])
+        else:
+            for separator, separator_source_index in expanded[index:end]:
+                normalized.append(separator)
+                source_positions.append(separator_source_index)
+        index = end
+
+    return "".join(normalized), source_positions
+
+
+def _original_span(source_positions: List[int], start: int, end: int) -> Tuple[int, int]:
+    """정규화된 [start, end) 구간을 감싸는 원문 구간으로 되돌린다."""
+    return source_positions[start], source_positions[end - 1] + 1
+
+
+def _contact_matches(
+    text: str,
+    normalized: str,
+    source_positions: List[int],
+    guard_spans: List[Tuple[int, int]],
+    block_id: Optional[str],
+    page: Optional[int],
+) -> List[PIIMatch]:
+    matches: List[PIIMatch] = []
+
+    # 3-2-5로 표시된 사업자번호는 짧은 휴대전화 패턴과 숫자만 보면 겹친다.
+    # 정규화 뷰에서 기존의 그룹 구조를 보존해 연락처 후보에서 제외한다.
+    business_spans = [
+        m.span(1)
+        for pattern in (BUSINESS_REG_NORMALIZED_RE, BUSINESS_REG_LABELLED_NORMALIZED_RE)
+        for m in pattern.finditer(normalized)
+    ]
+
+    patterns = (
+        ("RRN", RRN_NORMALIZED_RE, 0, 1.0, ""),
+        ("RRN", RRN_MASKED_NORMALIZED_RE, 0, 0.95, "마스킹된 주민등록번호 형식"),
+        ("RRN", RRN_LABELLED_NORMALIZED_RE, 1, 0.95, "주민등록번호 라벨 문맥"),
+        ("PHONE", PHONE_NORMALIZED_RE, 0, 0.95, ""),
+    )
+    for kind, pattern, group, base_confidence, base_note in patterns:
+        for found in pattern.finditer(normalized):
+            norm_start, norm_end = found.span(group)
+            start, end = _original_span(source_positions, norm_start, norm_end)
+            if start and text[start - 1] in "([（［":
+                start -= 1
+            if end < len(text) and text[end] in ")]）］":
+                end += 1
+            if _covered_by_span(guard_spans, start, end):
+                continue
+            if kind == "RRN":
+                prefix_context = normalized[max(0, found.start(group) - 20):found.start(group)]
+                if CORP_LABEL_PREFIX_RE.search(prefix_context) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    continue
+                if re.search(r"[\r\n]", text[start:end]) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    continue
+            elif any(
+                business_start <= found.start() and found.end() <= business_end
+                for business_start, business_end in business_spans
+            ):
+                continue
+
+            raw = text[start:end]
+            confidence = base_confidence
+            note = base_note
+            if kind == "RRN" and not base_note:
+                digits = re.sub(r"\D", "", raw)
+                if validate_rrn(digits):
+                    confidence = 1.0
+                    note = "검증부호 일치"
+                else:
+                    confidence = 0.8
+                    note = "형식 일치, 검증부호 불일치"
+            if not any(existing.kind == kind and existing.start == start and existing.end == end for existing in matches):
+                matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
+
+    return matches
+
+
 def is_lawyer_court_address_context(text: str, start: int, end: int) -> bool:
     """주소 구간이 소송대리인(변호사 사무소) 또는 법원 주소 문맥에 위치하는지 검사한다.
 
@@ -465,7 +664,20 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         return matches
 
     guard_spans = legal_identifier_spans(text)
+    contact_view, contact_source_positions = _normalise_contact_view(text)
+    matches.extend(
+        _contact_matches(
+            text,
+            contact_view,
+            contact_source_positions,
+            guard_spans,
+            block_id,
+            page,
+        )
+    )
     for kind, pattern, base_confidence in DETECTORS:
+        if kind in {"RRN", "PHONE"}:
+            continue
         for m in pattern.finditer(text):
             start, end = m.start(), m.end()
             if _covered_by_span(guard_spans, start, end):
@@ -496,14 +708,6 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                     continue
             matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
 
-    # 주민등록번호 라벨이 명시된 13자리 번호(변형/외국인/합성 포함) 포착
-    for m in RRN_LABELLED_RE.finditer(text):
-        start, end = m.start(1), m.end(1)
-        if _covered_by_span(guard_spans, start, end):
-            continue
-        raw = m.group(1)
-        matches.append(PIIMatch("RRN", raw, start, end, block_id, page, 0.95, "주민등록번호 라벨 문맥"))
-
     for m in ACCOUNT_LABELLED_RE.finditer(text):
         start, end = m.start(1), m.end(1)
         if _covered_by_span(guard_spans, start, end) or re.fullmatch(r"(?:19|20)\d{2}-\d{1,2}-\d{1,2}", m.group(1)):
@@ -531,9 +735,27 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         full_matched_str = m.group(0)
         is_name_label = any(k in full_matched_str for k in ("성명", "서명자", "명의인", "이름"))
 
-        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46, TK-48):
-        # 명시적 라벨이 아닌 경우에만 clean_name 자체 또는 조사를 분리한 stem이 불용어인지 검사하여 제외한다.
-        josa_match = re.search(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$", clean_name)
+        # 조사 분리를 통한 문법적 경계 및 불용어 검사 (TK-39, TK-46, TK-48, 8B-1/TK-52):
+        # 1. 공백이 포함된 다중 토큰 후보(예: '계정은 이', '서명은 이')의 경우
+        #    첫 토큰 자체 또는 첫 토큰에서 조사를 분리한 stem이 불용어이면 제외
+        tokens = raw_name.split()
+        if len(tokens) > 1 and not is_name_label:
+            first_token = tokens[0]
+            if first_token in PARTY_HEADER_STOPWORDS or first_token in LEGAL_MILITARY_STOPWORDS or first_token in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
+            ft_jm = _JOSA_TAIL_RE.search(first_token)
+            if ft_jm:
+                ft_stem = first_token[:ft_jm.start()]
+                if ft_stem in PARTY_HEADER_STOPWORDS or ft_stem in LEGAL_MILITARY_STOPWORDS or ft_stem in REPRESENTATIVE_NAME_STOPWORDS:
+                    continue
+
+        # 2. clean_name 자체 불용어 검사
+        if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
+            continue
+
+        # 3. 단일 조사 분리 및 stem 불용어 검사 (TK-52 1절: 재귀 분리 폐지, 1회만 분리):
+        #    명시적 라벨이 아닌 경우에만 조사를 1회 분리하여 stem이 불용어인지 대조한다.
+        josa_match = _JOSA_TAIL_RE.search(clean_name)
         if josa_match and not is_name_label:
             stem = clean_name[:josa_match.start()]
             if stem in PARTY_HEADER_STOPWORDS or stem in LEGAL_MILITARY_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
@@ -544,9 +766,10 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         # 조사 분리는 clean_name 전체가 유효하지 않거나(4음절 등 비표준),
         # 3음절이더라도 복성이 아닌 4음절 또는 조사를 분리한 형태가 더 확실한 경우에만 수행
         if not full_is_valid or (len(clean_name) == 4 and clean_name[:2] not in DOUBLE_SURNAMES):
-            if josa_match and len(clean_name) >= 3:
-                stem = clean_name[:josa_match.start()]
-                trailing_part = clean_name[josa_match.start():]
+            josa_tail = _JOSA_TAIL_RE.search(clean_name)
+            if josa_tail and len(clean_name) >= 3:
+                stem = clean_name[:josa_tail.start()]
+                trailing_part = clean_name[josa_tail.start():]
                 after_preview = trailing_part + text[end:end + 25]
                 if is_valid_korean_name_structure(stem, after_preview, is_explicit_label=True):
                     clean_name = stem

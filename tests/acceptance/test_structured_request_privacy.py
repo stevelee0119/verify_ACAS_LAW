@@ -1,8 +1,7 @@
 """[평가 에이전트 소관] TK-51 구조화(JSON) 요청의 개인정보 경계 — 라벨이 키, 이름이 값일 때 실명이 공급자에 도달하지 않아야 한다.
 
 7adf43f·4da3910·b26754e·61ef12f 모두 같은 공백(기존 결함, 회귀 아님). 평문 요청 경계(R6-01·R7-12)와 별개다.
-실제 `LLMRouter.run`에 가짜 공급자만 붙이고 외부 네트워크는 쓰지 않는다. 지금은 strict xfail(알려진 미해결)이며
-해소되면 XPASS → 평가 측이 표시를 지운다. 입력은 평가 측 비공개 재현과 다른 이름·형식이다.
+실제 `LLMRouter.run`에 가짜 공급자만 붙이고 외부 네트워크는 쓰지 않는다. 8차(44e73f9)에서 해소되어 표시를 지웠다(2026-10-03). 입력은 평가 측 비공개 재현과 다른 이름·형식이다.
 """
 from __future__ import annotations
 
@@ -49,7 +48,7 @@ SHAPES = {
 }
 
 
-@pytest.mark.xfail(strict=True, reason="TK-51 알려진 미해결: 구조화 요청에서 라벨-값 쌍의 실명이 전송 전 검사를 통과한다(7adf43f부터)")
+# 승격(2026-10-03, 8차): 44e73f9부터 통과(170c647 유지)해 strict xfail 표시를 지웠다
 @pytest.mark.parametrize("shape", sorted(SHAPES))
 def test_structured_request_does_not_deliver_a_labelled_name(monkeypatch, shape):
     leaked = []
