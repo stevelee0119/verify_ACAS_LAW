@@ -606,3 +606,10 @@
 - `check_version_policy.py --base f48284c` 위반 없음(상향 1건), `update_readme.py --check` 종료 0, 보호 경로 변경 없음.
 - releases.json·README 수치와 티켓이 `version_verdicts.json` 0.10.0과 같다.
 - 병합은 사용자 승인 뒤. → [PR #15 코멘트](https://github.com/stevelee0119/verify_ACAS_LAW/pull/15#issuecomment-5979233496)
+
+# 릴리스 기록 — 0.10.0 (`main` 22ca134, 2026-10-04)
+- PR #16(`Steve_ACASiaLAW` a986f67 → `main`) 병합: 사용자 승인('병합해')으로 평가 측이 병합. 병합 커밋 22ca134, `main` 버전 0.10.0.
+- 같은 SHA(a986f67) CI: 테스트·점수 하락 게이트·Docker OCR readiness 모두 성공(CI 결과 인용). CodeQL 성공, 로그 주입 경보 2건은 오탐 판단(`%r` 기록·ID 검증) → Codex 전달문 [B] 정리 과제.
+- DB 마이그레이션 없음. 봉인 시험은 첫 릴리스에 한해 생략(사용자 결정).
+- **태그 `v0.10.0`: 미부착.** 이 세션의 git 푸시 권한이 평가 측 브랜치로 한정되어 태그 푸시가 거부됐다(HTTP 403). 사용자가 GitHub에서 22ca134에 태그를 단다.
+- **배포 직후 온라인 점검(RELEASE_PROCEDURE 4절): 대기.** `/api/health` 커밋 확인과 서면9 PDF 온라인 보고서(비교 기준 18/23)를 받으면 기록한다.
