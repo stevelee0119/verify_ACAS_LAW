@@ -558,6 +558,21 @@ def _original_span(source_positions: List[int], start: int, end: int) -> Tuple[i
     return source_positions[start], source_positions[end - 1] + 1
 
 
+def _has_hyphen_adjacent_to_linebreak(text: str) -> bool:
+    """원문에 하이픈류 구분자가 줄바꿈 바로 앞이나 뒤에 있는지 확인한다."""
+    for index, char in enumerate(text):
+        if char not in "\r\n":
+            continue
+        for neighbor_index in (index - 1, index + 1):
+            if not 0 <= neighbor_index < len(text):
+                continue
+            neighbor = text[neighbor_index]
+            normalized = unicodedata.normalize("NFKC", neighbor)
+            if normalized == "-" or unicodedata.category(neighbor) == "Pd" or neighbor == "\u2212":
+                return True
+    return False
+
+
 def _contact_matches(
     text: str,
     normalized: str,
@@ -597,7 +612,8 @@ def _contact_matches(
                 if CORP_LABEL_PREFIX_RE.search(prefix_context) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
                     continue
                 if re.search(r"[\r\n]", text[start:end]) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
-                    continue
+                    if not _has_hyphen_adjacent_to_linebreak(text[start:end]):
+                        continue
             elif any(
                 business_start <= found.start() and found.end() <= business_end
                 for business_start, business_end in business_spans
