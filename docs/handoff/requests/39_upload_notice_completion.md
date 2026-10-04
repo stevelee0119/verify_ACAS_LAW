@@ -331,3 +331,84 @@ verify_all — HEAD 4ac038e, 기준 a04826f, 모드 quick
 - **종료 코드 0 (성공)**
 - **CI 링크**: PR #11 (`https://github.com/stevelee0119/verify_ACAS_LAW/pull/11`)
 
+---
+
+## 8. 3차 보완 (2026-10-04, 판정 불승인 사유 해결 및 시험 맞춤 분기 제거)
+
+평가 측 3차 판정(`PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md` 8절)에 따라 다음 사항을 완벽히 이행하였습니다:
+
+### 1) `app.js` 401·404 임시 문구 사본(시험 맞춤 분기) 완전 제거
+- `apps/web/static/app.js`의 `loadPrivacyNotice()`에서 401·404 시 임의로 확정 문구 사본 객체를 채워 넣던 분기를 완전히 삭제하였습니다.
+- 401·404를 포함하여 서버 응답 오류가 발생하면 예외를 던져 정상적으로 `loaded: false`로 처리하며, 화면에 '안내 불러오기 실패' 및 사유를 알리고 파일 업로드를 차단합니다.
+- 제품 코드 내 시험 환경용 우회 분기나 문구 중복 관리를 근절하였습니다.
+
+### 2) 로그인 전 401 대응: (나) 방식 채택 및 사유
+- **선택 방식**: **(나) `/api/privacy-notice` 엔드포인트를 `/api/health`처럼 GET/HEAD 비인증 공개 엔드포인트로 설정** (`apps/api/access.py`의 `workspace_access` 및 `_authorize` 읽기 허용).
+- **채택 이유**:
+  1. `/api/privacy-notice`는 순수 정적 안내문(제목, 버전 1.1, 3대 안내 불릿, 체크 라벨, 보고서 머리)만을 제공하며, 사용자 정보, 계정 상태, 토큰, DB 설정 등 어떠한 동적 민감 정보도 포함하지 않습니다.
+  2. 사용자가 작업 공간에 로그인하기 전이라도 업로드 UI 진입 시점에 개인정보 처리 안내문이 즉각 안전하게 표시되어야 하므로, 헬스체크와 마찬가지로 비인증 읽기를 허용하는 것이 보안 및 아키텍처 관점에서 가장 안정적입니다.
+- **추가 보완 조치 (가 병행)**:
+  - 사용자가 모달을 통해 로그인한 직후(`apps/web/static/operations.js`) 및 초기화 과정에서 신원 확인 후(`apps/web/static/app.js` `init()`)에도 `loadPrivacyNotice()`를 재호출하도록 연동하여, 네트워크 지연이나 세션 갱신 시에도 항상 최신 안내문이 반영되도록 이중 방어하였습니다.
+
+### 3) 기존 브라우저 시험 6개 갱신 (평가 측 사전 승인 범위 준수)
+- **대상**: 모의 응답에서 모르는 경로에 401을 주던 기존 시험 6개
+  - `tests/test_frontend_diagnostics.py`
+  - `tests/test_frontend_emblem.py`
+  - `tests/test_frontend_footer.py`
+  - `tests/test_frontend_progress.py`
+  - `tests/test_frontend_project_open.py`
+  - `tests/test_frontend_upload.py`
+- **조치 사항**:
+  - `tests/frontend_helpers.py`에 `packages/common/privacy_notice.py` 상수를 연동한 `privacy_notice_mock_payload()` 도우미 함수를 추가하였습니다 (시험 파일 내 문구 하드코딩 없음).
+  - 각 시험의 `respond` 핸들러에 `/api/privacy-notice` 경로 모의 응답 1개만 추가하였습니다.
+  - 기존 단언 삭제·완화, 표시 변경, 시험 삭제는 일절 없습니다.
+
+### 4) 새 시험 추가 및 검증 (100% 통과)
+1. **API 새 시험 (`tests/test_upload_privacy_notice_api.py`)**:
+   - `test_unauthenticated_privacy_notice_get_returns_200_without_sensitive_data`: multi-user 비로그인 상태에서 `GET /api/privacy-notice` 호출 시 200 OK이며, 안내문 필수 필드(제목, 버전 1.1, 불릿)가 정상 반환되고 계정·비밀번호·토큰·DB 등 내부 설정값이 전혀 노출되지 않음을 검증 (5 passed).
+2. **브라우저 새 시험 (`tests/test_upload_privacy_notice_browser.py`)**:
+   - `test_upload_blocked_when_privacy_notice_returns_401_unauthenticated`: 401(로그인 전/비인증) 응답 시 화면에 '안내 불러오기 실패'가 표시되고, `fileInput`이 disabled 상태로 업로드가 차단되며, 파일 선택 시도시 POST 요청이 전송되지 않고 토스트 알림으로 공지됨을 검증 (6 passed).
+3. **기존 프론트엔드 브라우저 시험 6개 검증**:
+   - 6개 시험(총 31개 테스트 케이스) 전건 100% PASS 확인.
+
+### 5) 변경 파일 및 Diff Stat (3차 보완 커밋 `384b0c9`)
+
+```
+ apps/api/access.py                          |  7 +--
+ apps/web/static/app.js                      | 24 ++-------
+ apps/web/static/operations.js               |  2 +
+ tests/frontend_helpers.py                   | 22 ++++++++-
+ tests/test_frontend_diagnostics.py          |  4 ++
+ tests/test_frontend_emblem.py               |  6 +++
+ tests/test_frontend_footer.py               |  4 ++
+ tests/test_frontend_progress.py             |  6 +++
+ tests/test_frontend_project_open.py         |  4 ++
+ tests/test_frontend_upload.py               |  4 ++
+ tests/test_upload_privacy_notice_api.py     | 37 ++++++++++++++
+ tests/test_upload_privacy_notice_browser.py | 77 +++++++++++++++++++++++++++++
+ 12 files changed, 174 insertions(+), 23 deletions(-)
+```
+
+### 6) `verify_all.py` quick 모드 검증 결과
+
+명령: `python scripts/verify_all.py --base a04826f --quick --allow-env-mismatch`
+
+```
+verify_all — HEAD 384b0c9, 기준 a04826f, 모드 quick
+  환경: python 3.14.6, tesseract None, Windows-11-10.0.26340-SP0  [주의] CI 환경(python 3.11, tesseract 5.3.4)과 다름
+  [통과] environment: python 3.14.6, tesseract None — CI와 다름 (--allow-env-mismatch)
+  [통과] acceptance: 통과 924, 실제 실패 0, strict XPASS 0
+  [통과] regression_ledger: 통과 501, 실제 실패 0, strict XPASS 0
+  [통과] score_gate: 점수 게이트 통과
+  [통과] regression_gate: 회귀 없음
+  [통과] hardcoding_diff:   새로 추가된 줄에 시험 입력의 값·낱말·조문 번호 없음
+  [통과] test_edits:   기존 시험의 삭제·표시 변경 없음
+  [통과] protected_paths: 보호 경로 점검: 바뀐 보호 경로 23개 모두 평가 측 커밋 또는 승인
+  [통과] version_policy: 버전 정책: 위반 없음 (버전 변경 없음)
+요약 저장: artifacts/verify_all.json
+```
+
+- **종료 코드 0 (성공)**
+- **CI 링크**: PR #11 (`https://github.com/stevelee0119/verify_ACAS_LAW/pull/11`)
+
+
