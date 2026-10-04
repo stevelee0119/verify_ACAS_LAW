@@ -59,7 +59,7 @@
 | [TK-52](TK-52_round8_stem_leak_and_overblocking.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 | 8차 44e73f9: 조사 재귀 분리로 명시 성명 stem 계열 실명 누락(평가 측 16 → 9), 문맥 결합으로 정상 구조화 요청 과차단 6 → 14/28, 추가 불용어가 보호 시험 낱말 6개를 모두 포함하고 새 비공개 명사 과마스킹은 70→60/140·48→48/112 | 평가 측 비공개 세트(8차), 보호 시험 | 1절 해소(8B), 2·3절은 TK-53으로 이어짐 |
 | [TK-53](TK-53_round8b_key_context_leak_and_lexicon_failure.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 + 절차 | 8B 170c647: 이름 키 문맥을 정확 일치로 좁혀 라벨 밖 이름 키 실명 통과(즉석 점검 60→96/120), 키 문맥이 과마스킹을 요청 차단으로(8/28), 불용어 +145에도 과마스킹 변화 0, 보고서 부정확 | 평가 측 즉석 점검·비공개 세트(8차), 보호 시험 | 8C 86bd035: 세트 기준 충족(키 변형 96→0/120, 과차단 8→6/28) → 잔여는 TK-54 |
 | [TK-54](TK-54_round8c_name_key_coverage_and_english_label_overreach.md) | 유출 잔여(**P1**) + 회귀(과탐지·과차단, P2) + 범위·보고 | 8C: 이름 키 아래 '이름 꼴 아닌' 값 실명 통과(시작과 같음 120/144), 세트 밖 키 모양 통과(240→132/240), 영문 라벨이 평문 탐지에 섞여 오탐(0→2/8) | 평가 측 새 즉석 점검·비공개 세트, 평문 불변 | 8D 751fb50: 값 모양 0/168·평문 오탐 0 해소, 잔여·회귀는 TK-55 |
-| [TK-55](TK-55_round8d_overblock_and_key_head_regression.md) | 과차단(P2) + 회귀(유출, **P1**) + 유출 잔여(**P1**) | 8D: 과차단 6 → 14/28, 비인명 낱말로 시작하는 사람 키 유출 0 → 72/72, 역할 명사 키 144/144 | 평가 측 비공개 세트·새 즉석 점검 2판 | 열림 — **사용자 정책 결정 대기**(5절) |
+| [TK-55](TK-55_round8d_overblock_and_key_head_regression.md) | 과차단(P2) + 회귀(유출, **P1**) + 유출 잔여(**P1**) | 8D: 과차단 6 → 14/28, 비인명 낱말로 시작하는 사람 키 유출 0 → 72/72, 역할 명사 키 144/144 | 평가 측 비공개 세트·새 즉석 점검 2판 | 열림(8E, [지시서](PROMPT_FOR_ROUND8E_CODEX.md)) — 3절 유형은 알려진 미해결 strict xfail 24 |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md) · [7차 보완(7B, 7C가 후속)](PROMPT_FOR_STABILIZATION_ROUND7B.md) · [7차 보완 2차(7C, b26754e로 소화·미승인)](PROMPT_FOR_STABILIZATION_ROUND7C.md) · [7D(범위 축소: 시험 복원·법리·F1 문서)](PROMPT_FOR_STABILIZATION_ROUND7D.md) · [8차 개인정보 경계(TK-51·TK-43)](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md) · [8차 보완(8B, TK-52 + PR #5 갱신 절차)](PROMPT_FOR_ROUND8B_TK52.md) · **[8C(TK-53, 구현 Codex)](PROMPT_FOR_ROUND8C_CODEX.md)**
 
@@ -87,6 +87,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - AI 작성 판정은 다수결로 정한다(TK-11). 평가 에이전트의 해석(흔적 부재가 판정을 막지 않음)은 사용자 확인 대상이다.
 
 ## 사용자 결정(2026-10-04 반영됨)
+- **구조화 이름 키(TK-55, '좁게 + 스키마 고정'):** 키 의미 추측을 더 넓히지 않는다. 8E는 회귀 복구와 과차단 ≤ 6/28 회복만 한다. 키 신호 없는 유형은 알려진 미해결(strict xfail)로 두고, F1/F3 설계에서 자유 텍스트 키 허용 목록(스키마 고정)으로 막는다.
 - **릴리스 절차:** 평가 측 추천대로. `main` 병합 = 배포(Render가 `main` 푸시 시 자동 재배포, 사용자 확인). 조건: 평가 통과·봉인 시험·열린 P1 회귀 0·사용자 승인. **배포와 버전 상향은 분리**한다. 배포 직후 사용자가 온라인 점검 1회(서면9 PDF)를 실행해 결과 JSON을 평가 측에 준다. 첫 릴리스는 8C 수용 뒤. → [RELEASE_PROCEDURE](../scorecards/RELEASE_PROCEDURE.md)
 - **일자별 추이표:** 평가 결과를 제시할 때 1일 단위 표(성능 점수·주요 기능·개선·회귀·평가 개요)를 함께 낸다. → [DAILY_TREND](../scorecards/DAILY_TREND.md)
 
