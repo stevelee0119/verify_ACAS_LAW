@@ -74,8 +74,12 @@ jobs:
       - name: Korean scanned PDF readiness check
         run: python -m scripts.check_ocr_runtime
 
+      # -rfE: 실패 시험 이름을 출력에 남기고 tee로 보존한다(평가 측이 로그 원문 없이 실패 원인을 확인 — 2026-10-04)
       - name: 테스트 (SQLite + 인프로세스 Worker)
-        run: pytest -q
+        shell: bash
+        run: |
+          mkdir -p artifacts
+          pytest -rfE 2>&1 | tee artifacts/pytest-sqlite.txt
 
       - name: 마이그레이션 적용
         env:
@@ -86,7 +90,12 @@ jobs:
         env:
           LV_TEST_DATABASE_URL: postgresql+psycopg://legal:legal@localhost:5432/legal_verifier
           LV_TEST_CELERY_BROKER: redis://localhost:6379/0
-        run: pytest -q
+        shell: bash
+        run: pytest -rfE 2>&1 | tee artifacts/pytest-postgres.txt
+
+      - name: 실패 시험 목록
+        if: ${{ failure() }}
+        run: python scripts/ci_failed_tests.py artifacts/pytest-sqlite.txt artifacts/pytest-postgres.txt
 
   docker-ocr:
     name: Docker OCR readiness

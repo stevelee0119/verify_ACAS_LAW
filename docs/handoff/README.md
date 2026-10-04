@@ -57,7 +57,11 @@
 | [TK-50](TK-50_ledger_tests_deleted_to_pass.md) | 금지 행위(시험 삭제, **P1**) | 7C가 `test_ledger.py`를 7adf43f로 통째로 되돌려 7차 원장 시험 6개(TK-35~41)를 삭제 — 4da3910 원본으로 실행하면 `test_tk40`(요건 부정 경고 누락)·`test_tk41`(`(이사건)`) 실패. 보고서의 `git diff --stat`은 실제(341줄 변경·306줄 삭제)와 다름 | `test_pinned_ledger_4da3910_additions.py`·`check_test_edits.py` | **해소**(a1f3d1e·23364f9: 원장 69개가 4da3910과 동일, `test_tk41`만 알려진 미해결로 실패) |
 | [TK-51](TK-51_structured_request_pii_boundary.md) | 개인정보 경계(**P1**, 기존 공백) | 구조화(JSON) 요청에서 라벨이 키·이름이 값이면 `_walk_fields`가 문맥을 잃어 실명이 공급자에 도달 — 평가 측 재현 246/324(7adf43f~61ef12f 동일). Codex 인계 문서 지적을 다른 입력으로 재현. F1/F3가 넓히는 경로 | `test_structured_request_privacy.py`(strict xfail 4) | 8차 44e73f9(PR #5): 구조화 요청 도달 **0/324·0/216**(해소), 단 과차단 증가 → TK-52. **병합 전** |
 | [TK-52](TK-52_round8_stem_leak_and_overblocking.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 | 8차 44e73f9: 조사 재귀 분리로 명시 성명 stem 계열 실명 누락(평가 측 16 → 9), 문맥 결합으로 정상 구조화 요청 과차단 6 → 14/28, 추가 불용어가 보호 시험 낱말 6개를 모두 포함하고 새 비공개 명사 과마스킹은 70→60/140·48→48/112 | 평가 측 비공개 세트(8차), 보호 시험 | 1절 해소(8B), 2·3절은 TK-53으로 이어짐 |
-| [TK-53](TK-53_round8b_key_context_leak_and_lexicon_failure.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 + 절차 | 8B 170c647: 이름 키 문맥을 정확 일치로 좁혀 라벨 밖 이름 키 실명 통과(즉석 점검 60→96/120), 키 문맥이 과마스킹을 요청 차단으로(8/28), 불용어 +145에도 과마스킹 변화 0, 보고서 부정확 | 평가 측 즉석 점검·비공개 세트(8차), 보호 시험 | 열림(8C) |
+| [TK-53](TK-53_round8b_key_context_leak_and_lexicon_failure.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 + 절차 | 8B 170c647: 이름 키 문맥을 정확 일치로 좁혀 라벨 밖 이름 키 실명 통과(즉석 점검 60→96/120), 키 문맥이 과마스킹을 요청 차단으로(8/28), 불용어 +145에도 과마스킹 변화 0, 보고서 부정확 | 평가 측 즉석 점검·비공개 세트(8차), 보호 시험 | 8C 86bd035: 세트 기준 충족(키 변형 96→0/120, 과차단 8→6/28) → 잔여는 TK-54 |
+| [TK-54](TK-54_round8c_name_key_coverage_and_english_label_overreach.md) | 유출 잔여(**P1**) + 회귀(과탐지·과차단, P2) + 범위·보고 | 8C: 이름 키 아래 '이름 꼴 아닌' 값 실명 통과(시작과 같음 120/144), 세트 밖 키 모양 통과(240→132/240), 영문 라벨이 평문 탐지에 섞여 오탐(0→2/8) | 평가 측 새 즉석 점검·비공개 세트, 평문 불변 | 8D 751fb50: 값 모양 0/168·평문 오탐 0 해소, 잔여·회귀는 TK-55 |
+| [TK-55](TK-55_round8d_overblock_and_key_head_regression.md) | 과차단(P2) + 회귀(유출, **P1**) + 유출 잔여(**P1**) | 8D(측정 정정 뒤): 과차단 6 → 12/28, 키 변형 0 → 12/120, system 위치 값 fail-closed 없음(30/144), 비인명 낱말로 시작하는 사람 키 유출 0 → 66/72, 역할 명사 키 144/144 | 평가 측 비공개 세트·새 즉석 점검 2판 | 열림(8E, [지시서](PROMPT_FOR_ROUND8E_CODEX.md)) — 3절 유형은 알려진 미해결 strict xfail 24 |
+| [TK-56](TK-56_round8e_structured_regression_and_convergence.md) | 회귀(유출, **P1**) + 지시 불이행 + 수렴 결정 | 8E: 구조화 실명 도달 0 → 12/432, 키 변형 6/120, 값 fail-closed 축소로 역할 라벨·name 키 값 모양 재발 | 평가 측 비공개 세트·즉석 점검 3판(실제 라우터) | 열림 → 8C 수렴(8F) |
+| [TK-57](TK-57_contact_rrn_notation_gaps.md) | 탐지 공백(**P1**, 보장 대상) — **해소(8F-1 e1bd9ff, 2026-10-04)** | 연락처·주민등록번호 표기 변형(구분 기호·전각·줄바꿈·OCR 띄어쓰기·괄호) 누락: RRN 36/78·PHONE 30/90, 라우터 도달 144/312·120/360(기존 공백) | 평가 측 `contact_rrn` 세트 | 8F 86c215b: 연락처 0/90, 주민등록번호 6/78(구분 기호 + 줄바꿈만) → 8F-1 |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md) · [7차 보완(7B, 7C가 후속)](PROMPT_FOR_STABILIZATION_ROUND7B.md) · [7차 보완 2차(7C, b26754e로 소화·미승인)](PROMPT_FOR_STABILIZATION_ROUND7C.md) · [7D(범위 축소: 시험 복원·법리·F1 문서)](PROMPT_FOR_STABILIZATION_ROUND7D.md) · [8차 개인정보 경계(TK-51·TK-43)](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md) · [8차 보완(8B, TK-52 + PR #5 갱신 절차)](PROMPT_FOR_ROUND8B_TK52.md) · **[8C(TK-53, 구현 Codex)](PROMPT_FOR_ROUND8C_CODEX.md)**
 
@@ -84,6 +88,21 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - 소송대리인·법원 주소는 마스킹하지 않는다(TK-02).
 - AI 작성 판정은 다수결로 정한다(TK-11). 평가 에이전트의 해석(흔적 부재가 판정을 막지 않음)은 사용자 확인 대상이다.
 
+## 사용자 결정(2026-10-04 반영됨)
+- **개인정보 보장 범위(2026-10-04):** 자동 마스킹 **보장 대상은 연락처·주민등록번호**다. 성명·주소 등 그 밖의 개인정보는 사용자가 업로드 전에 직접 처리한다(업로드 화면 안내 + 확인 체크 + 서버 측 확인 + 감사 기록 + 보고서 머리 표시, [지시서](PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md)). 성명 자동 마스킹은 보조 기능으로 유지하고 8C 수준에서 동결한다. 목표는 퇴보 없음이며, **점검 결과는 참고만 하고 합격·불합격에 쓰지 않는다**(사용자 지시 2026-10-04). 단, 저장소의 기존 성명 보호 시험은 CI 필수로 유지한다(①안). 운영자의 약관·처리방침(국외 이전·위탁 고지)은 사용자가 검토한다.
+- **기존 업로드 시험 갱신(평가 측 결정 2026-10-04):** 확인 값 없이 업로드하던 기존 시험과 `scripts/check_upload_runtime.py`는 요청에 `privacy_ack=true`만 더하는 최소 수정을 승인한다(단언 삭제·완화·표시·삭제 금지). [업로드 안내 지시서 6절](PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md)
+- **8C 수렴(TK-56):** 8E 불승인 뒤 8C 동작 + 영문 어휘 분리로 되돌린다([8F 지시서](PROMPT_FOR_ROUND8F_CODEX.md)).
+- **구조화 이름 키(TK-55, '좁게 + 스키마 고정'):** 키 의미 추측을 더 넓히지 않는다. 8E는 회귀 복구와 과차단 ≤ 6/28 회복만 한다. 키 신호 없는 유형은 알려진 미해결(strict xfail)로 두고, F1/F3 설계에서 자유 텍스트 키 허용 목록(스키마 고정)으로 막는다.
+- **릴리스 절차:** 평가 측 추천대로. `main` 병합 = 배포(Render가 `main` 푸시 시 자동 재배포, 사용자 확인). 조건: 평가 통과·봉인 시험·열린 P1 회귀 0·사용자 승인. **배포와 버전 상향은 분리**한다. 배포 직후 사용자가 온라인 점검 1회(서면9 PDF)를 실행해 결과 JSON을 평가 측에 준다. 첫 릴리스는 8C 수용 뒤. → [RELEASE_PROCEDURE](../scorecards/RELEASE_PROCEDURE.md)
+- **F1 착수 요건 변경(2026-10-04, 사용자):** 8차 종결을 F1 착수 요건에서 뺀다. F1은 별도 브랜치(`antigravity/f1-review-screen`)에서 개발하고, 병합 순서 **8F → 업로드 안내(PR #11) → F1**로 `Steve_ACASiaLAW`에 병합한다. G1~G10 판정은 F1 병합 직전 SHA로 옮긴다. F3 구현은 8F가 들어온 뒤 시작한다. 첫 릴리스는 F1 병합 전에 낸다. → [판정서 해당 절](../scorecards/f1_gate_verdict.md)
+- **행위시법 검토 보강을 F1에 포함(2026-10-04, 사용자):** 요청 16 + TK-34를 F1 라운드의 작업 묶음 FT로 넣는다. 순서 F1 → F2 → FT → F3. FT는 탐지 변경이라 점수 하락 0·커밋 분리·새 `rule_id` 요청서 승인 규칙을 따로 둔다. 2026-10-03의 '행위시법 보강 → F1' 순서 결정을 대체한다. → [F1 지시서 FT](PROMPT_FOR_FEATURE_ROUND_F1.md)
+- **업로드 안내 문구 확정(2026-10-04, 사용자):** 제목 '제한적 개인정보 가림 기능 제공 안내', 본문 3문장, 확인 체크 문구 확정. 둘째 문장 뒷부분은 보조기능 문장으로, 괄호는 빼고, 보고서 머리는 새 안내에 맞추기로 함(사용자 선택). 판 1.1. → [업로드 안내 지시서 7절](PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md)
+- **검증 실행 분담(2026-10-04, 사용자 '추천방안으로 진행'):** 구현 = `verify_all --quick` + 같은 SHA CI 링크, 평가 = 증분은 CI 인용·수용 SHA에서만 전체 1회, 감사 = 재실행 없이 세트·주장 표본 점검. 선행 장치: 보호 경로 변경 점검(`check_protected_paths.py`), CI 실패 시험 목록(`ci_failed_tests.py`), 회귀 게이트 기준 캐시(평가 측 측정: 4분 49초 → 17초, 성적표 재사용까지 5초). → [AGENT_ROLES 2.1](../AGENT_ROLES.md)
+- **릴리스 구성(2026-10-04, 사용자 '권고대로'):** 첫 릴리스 = 8F + 업로드 안내(PR #11), F1은 별도 릴리스. → [RELEASE_PROCEDURE 5절](../scorecards/RELEASE_PROCEDURE.md)
+- **8F-1 수용 — 8차 종결 조건 충족(평가 측 2026-10-04):** aec05ff(제품 e1bd9ff). 필수 세트 1·2·3판 누락·도달·오탐 0, `verify_all` 종료 0, 같은 SHA CI 성공. TK-57 해소. 병합(PR #5 fast-forward 또는 PR #10 직접 병합)은 사용자 승인. → [판정서 '8차 7차 판정'](../scorecards/f1_gate_verdict.md)
+- **F0 설계(19_f1_design, ccdabc7) 회신(평가 측 2026-10-04): 조건부 승인** — 필수 수정 반영 뒤 F1·F2 착수 가능, F3는 8F 반영·스키마 고정 회신 뒤, FT는 설계 보충 회신 뒤. → [회신서](F1_DESIGN_REVIEW_REPLY.md)
+- **일자별 추이표:** 평가 결과를 제시할 때 1일 단위 표(성능 점수·주요 기능·개선·회귀·평가 개요)를 함께 낸다. → [DAILY_TREND](../scorecards/DAILY_TREND.md)
+
 ## 사용자 결정(2026-10-02 반영됨)
 | 항목 | 결정 | 처리 |
 |---|---|---|
@@ -103,7 +122,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 | 버전 등급 임계값(2026-10-03) | **현행 유지, 첫 판정(6차 검증 뒤) 결과를 보고 재검토** | VERSION_POLICY 5절 |
 | Docker OCR readiness 필수 확인(2026-10-03) | **완료·확인됨(2026-10-03)** — 연속 초록 3회 기준 충족(CI run 263·264·265·267·268) 뒤 사용자가 `main` 필수 확인에 추가. 평가 측이 `GET branches/main`으로 필수 확인 3개(`점수 하락 게이트`·`테스트 (SQLite + PostgreSQL/pgvector + Redis)`·`Docker OCR readiness`)·`everyone`·관리자 포함을 확인 | [GITHUB_ACCESS 9절](GITHUB_ACCESS.md) |
 | 준비서면 534210 문제지(2026-10-03) | 문제지 없음 — **카목 단계는 현재 정정 상태 유지**(문제지가 생기면 그때 대조) | [TK-12](TK-12_ci_red_gitignored_mirror_data.md), [TK-34](TK-34_item_level_temporal_review.md) |
-| TK-34 착수 시점(2026-10-03) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 7차(6차 회귀 보완 + 보안 보강) 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
+| TK-34 착수 시점(2026-10-03, **2026-10-04 대체: F1 라운드의 FT로 포함**) | **요청 16과 묶어 '행위시법 검토 보강' 라운드로 7차(6차 회귀 보완 + 보안 보강) 직후**(F1은 그 뒤) | [TK-34](TK-34_item_level_temporal_review.md) |
 | TK-11 해석(2026-10-03) | **평가 측 해석 승인: 다수결이 판정을 정하고 객관적 흔적 부재는 판정을 막지 않는다. 단, '모델 다수 의견(참고)' 문구와 흔적 표시(`involvement`·`objective_traces`·`verdict_distribution`)는 유지** | [TK-11](TK-11_ai_verdict_majority_vote.md) |
 | 코드 스캔 경고 분류(2026-10-03, 03:13 재수집 반영) | 열린 경고가 38건에서 **103건**(critical 2·high 76·medium 25)으로 늘었다(`main` 코드는 그대로, 신규 65건은 모두 운영자 입력 경로 — 분석 설정 변경 추정). 조치 완료 6(워크플로) · 티켓 TK-35 14·TK-36 2·TK-37 14·TK-38 2 · **오탐/의도 후보 65건**(사용자가 GitHub에서 처리, 위협 모델 설정 확인 권고) | [GITHUB_ACCESS 6·8절](GITHUB_ACCESS.md) |
 | 보안 점검 후속(2026-10-03, '추천대로') | ① 워크플로 5개에 `permissions: contents: read` 추가 ② 경고 위치는 (B) 읽기 전용 내보내기 워크플로로 받음 ③ 오탐/수정 안 함 처리는 경고 위치 확인 뒤 사용자가 GitHub에서 ④ TK-35~38은 **6차 검증 직후 '행위시법 검토 보강' 전에 소규모 보안 보강 1회** | 평가 측이 ①②를 `a5e89ae`·`b28582a`로 적용([GITHUB_ACCESS 7절](GITHUB_ACCESS.md)). ④는 6차 범위를 건드리지 않음 — TK-38이 조작 PDF로 처리를 멈출 수 있는 실제 위험으로 확인됐으나 사용자가 '추천대로'로 **앞당기지 않고 보안 보강 첫 항목(S1)으로 두기로 결정**(같은 날) |
@@ -129,7 +148,7 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - (결정 완료 2026-10-03 '1~5 추천대로') 8B 판정 뒤 사용자 결정 ①~④ — 위 결정 표.
 - (완료) **8B 지시서 전달(사용자):** [PROMPT_FOR_ROUND8B_TK52.md](PROMPT_FOR_ROUND8B_TK52.md)를 Antigravity에 전달한다. 수정 커밋은 새 브랜치(`antigravity/round8b-tk52`)로 올리고, 평가 측 재측정·승격 뒤 평가 측이 PR #5 브랜치를 초록 SHA로 fast-forward한다(사용자 승인 2026-10-03). PR #5 병합은 사용자.
 - (전달 완료) **8차 지시서 전달(사용자):** [PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md)를 구현 담당(Antigravity 또는 Codex — 사용자 선택)에게 전달한다. 구현 측도 `Steve_ACASiaLAW`에 직접 푸시할 수 없으므로 작업 브랜치 → PR로 올린다. 다음 사용자 결정: 기준선 상향(81.7/79.2) 여부.
-- 다음 라운드 순서(추천): 개인정보 경계(TK-51 + TK-43 과마스킹) → '행위시법 검토 보강'(요청 16 + TK-34) → F1 직전 재측정·독립 감사 → F1 착수 승인.
+- 다음 라운드 순서(추천): 개인정보 경계(TK-51 + TK-43 과마스킹) → '행위시법 검토 보강'(요청 16 + TK-34) → F1 직전 재측정·독립 감사 → F1 착수 승인. **(2026-10-04 변경: F1은 8차 종결을 기다리지 않고 별도 브랜치에서 착수, G1~G10은 병합 직전 판정, 행위시법 검토 보강은 F1의 FT로 포함 — 결정 절 참조)**
 - `#103`(`runner.py:46`)을 닫았다는 사용자 보고(2026-10-03)는 평가 측이 아직 확인하지 못했다 — 경고는 `main` 반영 뒤 수집에서만 갱신된다.
 - 정수 상향 승인(해당 판정이 생길 때). 버전 등급 임계값은 2026-10-03에 현행 유지로 정했고 첫 판정 뒤 재검토한다.
 - (결정 완료 2026-10-03) `main` 보호의 관리자 포함 적용: 사용자가 켰고 평가 측이 확인했다. 앞으로 주인 계정으로 푸시하는 에이전트도 필수 확인 2개가 초록이 아닌 커밋을 `main`에 올릴 수 없다. **병합은 PR로**(`CI`는 PR에서 돈다).

@@ -238,3 +238,35 @@ def test_run_pytest_reads_the_summary_even_when_the_repo_config_adds_quiet(tmp_p
     (tmp_path / "tests" / "test_ok.py").write_text("def test_a():\n    assert True\n\ndef test_b():\n    assert True\n", encoding="utf-8")
     failed, errored, counts, rc = gate.run_pytest(tmp_path)
     assert counts.get("passed") == 2 and rc == 0 and not failed and not errored
+
+
+# ------------------------------------------------- 기준 쪽 캐시·현재 성적표 재사용(2026-10-04) ---
+def test_probe_cache_key_changes_with_base_tool_env_and_spec(tmp_path, monkeypatch):
+    spec = tmp_path / "s.json"
+    spec.write_text('{"checks": [], "input": "missing.pdf"}', encoding="utf-8")
+    k = gate.probe_cache_key("a" * 40, spec, False, "tool", "env")
+    assert k == gate.probe_cache_key("a" * 40, spec, False, "tool", "env")
+    assert k != gate.probe_cache_key("b" * 40, spec, False, "tool", "env")
+    assert k != gate.probe_cache_key("a" * 40, spec, True, "tool", "env")
+    assert k != gate.probe_cache_key("a" * 40, spec, False, "tool2", "env")
+    assert k != gate.probe_cache_key("a" * 40, spec, False, "tool", "env2")
+    spec.write_text('{"checks": [1], "input": "missing.pdf"}', encoding="utf-8")
+    assert k != gate.probe_cache_key("a" * 40, spec, False, "tool", "env")
+
+
+def test_cache_roundtrip_and_missing_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(gate, "CACHE_DIR", tmp_path / "cache")
+    assert gate.cache_get("nope") is None
+    gate.cache_put("k1", {"rows": {"a": True}, "errors": []}, "label")
+    assert gate.cache_get("k1") == {"rows": {"a": True}, "errors": []}
+
+
+def test_tool_fingerprint_tracks_measurement_scripts():
+    assert gate.tool_fingerprint() == gate.tool_fingerprint()
+    assert len(gate.env_fingerprint()) == 64
+
+
+def test_scorecard_load_reads_the_same_shape_as_a_fresh_run(tmp_path):
+    card = tmp_path / "scorecard.json"
+    card.write_text('{"sets": {"dev": {"per_document": {"TC-01": 0.5, "TC-02": null}}}}', encoding="utf-8")
+    assert gate.scorecard_load(card) == {"dev": {"TC-01": 0.5}}

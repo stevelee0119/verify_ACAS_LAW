@@ -14,13 +14,22 @@
 종료 코드: 0 회귀 없음 · 1 회귀 또는 새 시험 실패 · 2 **측정하지 못함**(처리 오류·빈 결과·누락된 입력·시간 초과·시험 수집 0건). 2는 통과가 아니다.
 양쪽이 같은 오류를 내거나 시험이 하나도 돌지 않아도 '회귀 없음'으로 보이는 것을 막기 위해(독립 감사 Astra 4차의 지적) 측정 못 한 것은 항상 실패로 센다.
 측정 조건은 오프라인(LV_ALLOW_NETWORK=0)이다. AI 작성 판별·공식 DB 대조·Drive 대조는 재지 못한다.
+
+기준 쪽 캐시(2026-10-04 사용자 승인 '검증 실행 중복 줄이기'): 기준 커밋은 라운드 내내 고정인데 매번 다시 채점했다.
+기준 쪽 probe·성적표 결과를 `artifacts/regression_cache/`에 저장하고, 키가 같으면 다시 쓴다.
+키 = 기준 커밋 전체 SHA + 측정 도구(현재 `scripts/*.py`) 해시 + 환경(Python·tesseract·설치 패키지 판) + 명세·입력 파일 내용 해시.
+처리 오류가 있거나 빈 결과는 저장하지 않는다. 이 폴더는 저장소에 올리지 않는 로컬 캐시이며(CI는 매번 새로 잰다) `--no-cache`로 끈다.
+`--head-scorecard <파일>`: 같은 실행에서 이미 만든 현재 코드의 성적표를 다시 쓴다(verify_all·CI 점수 게이트가 먼저 만든다).
 """
 from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import hashlib
+import importlib.metadata
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -32,6 +41,7 @@ from typing import Dict, List, Optional, Set, Tuple
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "scripts" / "probe_document.py"
 SPECS = ROOT / "tests" / "fixtures" / "probes"
+CACHE_DIR = ROOT / "artifacts" / "regression_cache"
 
 
 def diff_rows(base: Dict[str, bool], head: Dict[str, bool]) -> Tuple[List[str], List[str]]:
@@ -85,6 +95,57 @@ def pytest_counts(output: str) -> Dict[str, int]:
                 counts["error" if key.startswith("error") else key] = int(number)
             return counts
     return counts
+
+
+def _digest(*parts: object) -> str:
+    h = hashlib.sha256()
+    for part in parts:
+        h.update(part if isinstance(part, bytes) else str(part).encode("utf-8"))
+        h.update(b"\x00")
+    return h.hexdigest()
+
+
+def tool_fingerprint() -> str:
+    """현재 측정 도구의 해시. 기준 쪽 probe도 현재 `probe_document.py`로 채점하므로 도구가 바뀌면 캐시를 쓰지 않는다."""
+    return _digest(*[f"{p.name}:{hashlib.sha256(p.read_bytes()).hexdigest()}" for p in sorted((ROOT / "scripts").glob("*.py"))])
+
+
+def env_fingerprint() -> str:
+    try:
+        tess = subprocess.run(["tesseract", "--version"], capture_output=True, text=True, shell=False).stdout.splitlines()[:1]
+    except OSError:
+        tess = ["none"]
+    packages = sorted(f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions() if d.metadata["Name"])
+    return _digest(sys.version, platform.system(), *tess, *packages)
+
+
+def job_input(spec: Path, text: bool) -> Optional[Path]:
+    data = json.loads(spec.read_text(encoding="utf-8"))
+    source = data.get("text_input" if text else "input")
+    return ROOT / source if source else None
+
+
+def probe_cache_key(base_sha: str, spec: Path, text: bool, tool: str, env: str) -> str:
+    source = job_input(spec, text)
+    data = source.read_bytes() if source and source.is_file() else b""
+    return _digest("probe", base_sha, tool, env, spec.name, spec.read_bytes(), text, hashlib.sha256(data).hexdigest())
+
+
+def cache_get(key: str) -> Optional[object]:
+    path = CACHE_DIR / f"{key}.json"
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))["result"]
+    except (OSError, ValueError, KeyError):
+        return None
+
+
+def cache_put(key: str, result: object, label: str) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (CACHE_DIR / f"{key}.json").write_text(json.dumps({"label": label, "result": result}, ensure_ascii=False),
+                                              encoding="utf-8")
+    except OSError:
+        pass
 
 
 def worktree(ref: str) -> Path:
@@ -166,7 +227,12 @@ def scorecard_run(tree: Path) -> Dict[str, Dict[str, float]]:
         raise RuntimeError(f"성적표 시간 초과({exc.timeout}s)") from exc
     if proc.returncode != 0 or not out.is_file():
         raise RuntimeError(f"성적표 실행 실패(종료 코드 {proc.returncode}) {proc.stderr[-200:]}")
-    data = json.loads(out.read_text(encoding="utf-8"))
+    return scorecard_load(out)
+
+
+def scorecard_load(path: Path) -> Dict[str, Dict[str, float]]:
+    """성적표 파일에서 {집합: {문서: 재현율}}을 읽는다."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
     # 값이 없는(채점하지 않은) 문서는 비교 대상에서 뺀다. 기준에 값이 있던 문서가 현재에 없으면 scorecard_diff가 측정 못 함으로 센다.
     return {name: {str(k): float(v) for k, v in (st.get("per_document") or {}).items() if v is not None}
             for name, st in data.get("sets", {}).items()}
@@ -208,11 +274,14 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--pytest", action="store_true", help="전체 시험의 새 실패까지 비교(느림)")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--no-cache", action="store_true", help="기준 쪽 캐시를 쓰지도 저장하지도 않는다")
+    parser.add_argument("--head-scorecard", help="이미 만든 현재 코드의 성적표 파일(같은 실행에서 만든 것만)")
     args = parser.parse_args(argv)
     try:
         base_ref = subprocess.run(["git", "rev-parse", "--short", args.base], cwd=ROOT, capture_output=True, text=True,
                                   check=True).stdout.strip()
-        base_tree = worktree(args.base)
+        base_sha = subprocess.run(["git", "rev-parse", f"{args.base}^{{commit}}"], cwd=ROOT, capture_output=True,
+                                  text=True, check=True).stdout.strip()
     except (OSError, subprocess.CalledProcessError) as exc:
         print(f"기준 커밋을 열 수 없다: {exc}", file=sys.stderr)
         return 2
@@ -222,17 +291,52 @@ def main(argv: Optional[List[str]] = None) -> int:
     report: Dict[str, object] = {"base": base_ref, "head": head_ref + ("+미커밋" if dirty else ""), "specs": [],
                                  "regressions": [], "improved": [], "new_test_failures": [], "unmeasured": []}
     unmeasured_reasons: List[str] = report["unmeasured"]  # type: ignore[assignment]
+    work, missing = jobs()
+    unmeasured_reasons += missing
+    if not work:
+        unmeasured_reasons.append("측정할 명세·입력이 하나도 없다")
+    use_cache = not args.no_cache
+    tool, env = (tool_fingerprint(), env_fingerprint()) if use_cache else ("", "")
+    probe_keys = {j: probe_cache_key(base_sha, j[0], j[1], tool, env) for j in work} if use_cache else {}
+    score_key = _digest("scorecard", base_sha, env) if use_cache else ""
+    cached = {j: cache_get(k) for j, k in probe_keys.items()}
+    cached_score = cache_get(score_key) if use_cache else None
+    hits = sum(v is not None for v in cached.values()) + (cached_score is not None)
+    report["base_cache_hits"] = f"{hits}/{len(work) + 1}" if use_cache else "꺼짐"
+    need_tree = args.pytest or not use_cache or cached_score is None or any(v is None for v in cached.values())
     try:
-        work, missing = jobs()
-        unmeasured_reasons += missing
-        if not work:
-            unmeasured_reasons.append("측정할 명세·입력이 하나도 없다")
+        base_tree = worktree(args.base) if need_tree else None
+    except (OSError, subprocess.CalledProcessError) as exc:
+        print(f"기준 커밋을 열 수 없다: {exc}", file=sys.stderr)
+        return 2
+
+    def base_probe(job: Tuple[Path, bool]) -> Tuple[Dict[str, bool], List[str]]:
+        hit = cached.get(job)
+        if hit is not None:
+            return {str(k): bool(v) for k, v in hit["rows"].items()}, list(hit["errors"])
+        rows, errors = probe_run(job[0], job[1], base_tree)
+        if use_cache and rows and not errors:
+            cache_put(probe_keys[job], {"rows": rows, "errors": errors}, f"{base_ref} {job[0].name} {'text' if job[1] else 'primary'}")
+        return rows, errors
+
+    def base_scorecard() -> Dict[str, Dict[str, float]]:
+        if cached_score is not None:
+            return cached_score  # type: ignore[return-value]
+        result = scorecard_run(base_tree)  # type: ignore[arg-type]
+        if use_cache and result and any(result.values()):
+            cache_put(score_key, result, f"{base_ref} scorecard")
+        return result
+
+    def head_scorecard() -> Dict[str, Dict[str, float]]:
+        return scorecard_load(Path(args.head_scorecard)) if args.head_scorecard else scorecard_run(ROOT)
+
+    try:
         with cf.ThreadPoolExecutor(max_workers=max(1, args.workers)) as pool:
-            base_futures = {j: pool.submit(probe_run, j[0], j[1], base_tree) for j in work}
+            base_futures = {j: pool.submit(base_probe, j) for j in work}
             head_futures = {j: pool.submit(probe_run, j[0], j[1], None) for j in work}
             pytest_futures = ({"base": pool.submit(run_pytest, base_tree), "head": pool.submit(run_pytest, ROOT)}
                               if args.pytest else {})
-            score_futures = {"base": pool.submit(scorecard_run, base_tree), "head": pool.submit(scorecard_run, ROOT)}
+            score_futures = {"base": pool.submit(base_scorecard), "head": pool.submit(head_scorecard)}
             for j in work:
                 spec, text = j
                 label = f"{spec.stem}/{'text' if text else 'primary'}"
@@ -267,13 +371,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     report["new_test_failures"] = new_failures
                     report["fixed_test_failures"] = sorted(base_run[0] - head_run[0])
     finally:
-        remove_worktree(base_tree)
+        if base_tree is not None:
+            remove_worktree(base_tree)
     bad = bool(report["regressions"] or report["new_test_failures"])
     code = 1 if bad else (2 if unmeasured_reasons else 0)
     if args.json:
         print(json.dumps(report, ensure_ascii=False))
         return code
-    print(f"회귀 게이트 — 기준 {report['base']} → 현재 {report['head']} (오프라인)")
+    print(f"회귀 게이트 — 기준 {report['base']} → 현재 {report['head']} (오프라인, 기준 캐시 {report['base_cache_hits']})")
     for row in report["specs"]:
         print(f"  {row['spec']:<45} {row['base']:>7} → {row['head']:<7}")
     for item in report["regressions"]:

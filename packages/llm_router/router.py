@@ -359,13 +359,16 @@ class LLMRouter:
         if provider is None:
             return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 
+        # R8-A (TK-51): SYSTEM_BASE 조립 전 원본 system을 보존하여
+        # JSON 구조가 깨지지 않은 상태에서 개인정보 검사를 수행한다.
+        original_system = request.system
         request = replace(request, system=f"{SYSTEM_BASE}\n[역할] {role}\n{request.system}")
         privacy = {}
         if provider.config.kind != "local" and policy == ExternalAIPolicy.MASKED:
             from .privacy import inspect_request
 
             try:
-                privacy = inspect_request(request)
+                privacy = inspect_request(request, _original_system=original_system)
             except Exception:
                 privacy = {"status": "BLOCKED", "reason": "INSPECTION_FAILED"}
             if privacy["status"] != "PASSED":
