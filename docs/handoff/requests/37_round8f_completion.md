@@ -93,3 +93,68 @@ verify_all — HEAD 86c215b, 기준 d20cde2, 모드 full
 ## 미해결·측정 대기
 
 성명 자동 마스킹은 사용자의 결정대로 8C 수준에 동결했다. 키 신호가 없는 유형과 이름 값 fail-closed의 알려진 미해결은 8C 수렴에 따른다. 연락처·주민등록번호 필수 게이트, 성명 동결 지표, 과차단 지표는 평가 측이 실제 라우터 경로와 비공개 세트로 측정한다. 결과는 추정하지 않는다.
+
+## 8F-1 보완 — 구분 기호가 줄바꿈에 붙은 주민등록번호
+
+평가 측 최신 판 `4858a33`을 merge commit `fac0069`로 반영한 뒤 작업했다. 8F-1 설계 메모는 [38_round8f1_design.md](38_round8f1_design.md)다. 구현 SHA는 `e1bd9ffe4b3af02dc71d413b6310adad22e3c1e4`다.
+
+- 라벨 없는 주민등록번호의 원문 구간에 줄바꿈이 있으면, 줄바꿈 바로 앞·뒤에 NFKC 후 하이픈, Unicode Pd 대시, 또는 U+2212가 있는 경우에만 차단한다.
+- 하이픈류 없이 줄만 넘긴 번호는 기존과 같이 탐지하지 않는다. 기존 `test_ocr_spaced_resident_numbers_are_masked_before_leaving`는 수정하지 않았다.
+- 새 시험은 구분자 두 방향을 user·system·구조화 값에 실제 `LLMRouter.run`으로 넣고 미전송을 확인한다. 무기호 줄넘김은 탐지되지 않고 전송되며, 사건번호·날짜·금액 대조군도 주민번호로 분류되지 않고 전송된다.
+
+`git diff 7ec9f93 HEAD --stat` (8F-1 증가분):
+
+```text
+ docs/AGENT_ROLES.md                                |  1 +
+ docs/handoff/PROMPT_FOR_ROUND8F_CODEX.md           | 23 +++++-
+ docs/handoff/PROMPT_FOR_UPLOAD_PRIVACY_NOTICE.md   | 23 ++++++
+ docs/handoff/README.md                             |  5 +-
+ ...ound8e_structured_regression_and_convergence.md |  5 ++
+ docs/handoff/requests/37_round8f_completion.md     | 65 ++++++++++++++++
+ docs/handoff/requests/38_round8f1_design.md        |  5 ++
+ docs/scorecards/DAILY_TREND.md                     | 13 +--
+ docs/scorecards/HISTORY.md                         |  6 ++
+ docs/scorecards/approved_test_marks.json           | 12 +++
+ docs/scorecards/f1_gate_verdict.md                 | 71 +++++++++++++++-
+ packages/pii_engine/detector.py                    | 18 +++-
+ scripts/check_test_edits.py                        | 34 +++++++-
+ tests/regression/test_r8f1_rrn_linebreak.py        | 96 ++++++++++++++++++++++
+ tests/test_check_test_edits.py                     | 32 ++++++++
+ 15 files changed, 395 insertions(+), 14 deletions(-)
+```
+
+`git diff 7ec9f93 HEAD --stat -- packages/ tests/`:
+
+```text
+ packages/pii_engine/detector.py             | 18 +++-
+ tests/regression/test_r8f1_rrn_linebreak.py | 96 +++++++++++++++++++++++++++++
+ tests/test_check_test_edits.py              | 32 ++++++++++
+ 3 files changed, 145 insertions(+), 1 deletion(-)
+```
+
+`python scripts/verify_all.py --base d20cde2` 출력은 제품 SHA `e1bd9ff`에서 종료 코드 0이다. 환경: Linux, Python 3.11.17, Tesseract 5.3.4.
+
+```text
+verify_all — HEAD e1bd9ff, 기준 d20cde2, 모드 full
+  환경: python 3.11.17, tesseract 5.3.4, Linux-6.18.44-x86_64-with-glibc2.39
+  [통과] environment: python 3.11.17, tesseract 5.3.4
+  [통과] acceptance: 통과 909, 실제 실패 0, strict XPASS 0
+  [통과] regression_ledger: 통과 501, 실제 실패 0, strict XPASS 0
+  [통과] score_gate: 점수 게이트 통과
+  [통과] regression_gate: 회귀 없음
+  [통과] hardcoding_diff:   새로 추가된 줄에 시험 입력의 값·낱말·조문 번호 없음
+  [통과] test_edits:   기존 시험의 삭제·표시 변경 없음
+  [통과] version_policy: 버전 정책: 위반 없음 (버전 변경 없음)
+  [통과] full_tests: 통과 3207, 실제 실패 0, strict XPASS 0
+  [통과] browser_tests: 통과 196, 실제 실패 0, strict XPASS 0
+요약 저장: artifacts/verify_all.json
+```
+
+표적 실행에서 새 8F-1 시험, 기존 무기호 줄넘김 시험, 시험 표시 검사 시험이 통과했다. 평가 측 판정의 21개 xfail 표시 및 acceptance xfail 24건은 그대로 유지됐다.
+
+같은 제품 SHA의 CI 결과:
+
+- [PR CI run 37181424993](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37181424993): 성공. SQLite/in-process worker, migration, PostgreSQL/pgvector + Celery broker 테스트 및 Docker OCR readiness 모두 성공.
+- [PR score gate 37181425011](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37181425011): 성공. 점수 게이트와 수용·회귀·하드코딩·시험 표시·버전 정책 단계 성공.
+- [Push CI run 37181423153](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37181423153): 성공. SQLite/in-process worker, migration, PostgreSQL/pgvector + Celery broker 테스트 및 Docker OCR readiness 모두 성공.
+- [Push score gate 37181423159](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37181423159): 성공. 점수 게이트와 전체 보호 단계 성공.
