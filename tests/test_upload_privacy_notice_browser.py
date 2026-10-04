@@ -312,6 +312,9 @@ def test_upload_blocked_when_privacy_notice_returns_401_and_recovers_after_login
         elif path == f"/api/projects/{project['id']}":
             route.fulfill(json=project)
         elif path == f"/api/projects/{project['id']}/documents":
+            if route.request.method == "GET":
+                route.fulfill(json=[])
+                return
             control["posts"] += 1
             route.fulfill(status=201, json={"id": "doc1"})
         elif path == "/api/privacy-notice":
@@ -319,18 +322,9 @@ def test_upload_blocked_when_privacy_notice_returns_401_and_recovers_after_login
             if not control["authenticated"]:
                 route.fulfill(status=401, json={"detail": "Authentication required"})
             else:
-                route.fulfill(json={
-                    "title": "제한적 개인정보 가림 기능 제공 안내",
-                    "version": "1.1",
-                    "bullets": [
-                        "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.",
-                        "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다.",
-                        "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요.",
-                    ],
-                    "ack_label": "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.",
-                    "report_header": "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리",
-                    "ack_error_message": "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.",
-                })
+                from tests.frontend_helpers import privacy_notice_mock_payload
+
+                route.fulfill(json=privacy_notice_mock_payload())
         else:
             route.fulfill(status=401, json={"detail": "Unauthorized"})
 
