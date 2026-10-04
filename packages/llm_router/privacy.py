@@ -448,6 +448,10 @@ def inspect_request(request, *, _original_system: str = None):
                 # 원본 system은 사용자 제공 동적 값이므로 등록 상수 면책 없음
                 blocked_kinds[m.kind] += 1
                 detected_paths.add(f"original_system.{path}")
+        for path in _person_name_value_paths(_original_system, "original_system"):
+            kinds["PERSON"] += 1
+            blocked_kinds["PERSON"] += 1
+            detected_paths.add(path)
 
     # 최상위 payload 필드를 개별 순회하여 경로 기반 등록 판정이 정확하게 동작하도록 함
     # (payload 전체를 _walk_fields에 넘기면 최상위 형제 결합이 경로 판정을 혼동시킴)

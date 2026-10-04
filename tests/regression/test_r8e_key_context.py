@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import json
+import asyncio
+from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
 
-from packages.llm_router import privacy
-from packages.llm_router.providers import LLMRequest
+from packages.common.enums import LLMRole
+from packages.llm_router import privacy, router as router_module
+from packages.llm_router.providers import LLMRequest, LLMResponse
 
 
 def _inspect_payload(payload):
@@ -59,3 +63,32 @@ def test_explicit_person_name_fields_keep_fail_closed_value_shapes(key, value):
 def test_generic_unmarked_role_noun_remains_outside_key_inference():
     assert privacy._person_label_for_key("등록참여자") is None
 
+
+@pytest.mark.parametrize("position", ["user", "original_system"])
+def test_name_field_fail_closed_blocks_actual_router_send_in_both_positions(monkeypatch, position):
+    monkeypatch.setattr(router_module, "estimate_call", lambda *a: (Decimal("0.01"), {}))
+    sent = []
+
+    class FakeProvider:
+        name, available = "anthropic", True
+        config = SimpleNamespace(name="anthropic", kind="cloud", model="fake", enabled=True)
+
+        async def generate(self, request):
+            sent.append(request)
+            return LLMResponse(False, error="unused")
+
+    ledger = SimpleNamespace(
+        reserve=lambda *a, **k: SimpleNamespace(id="reservation", amount=Decimal("0.01")),
+        dispatch=lambda *a, **k: None,
+    )
+    router = router_module.LLMRouter(providers={"anthropic": FakeProvider()}, ledger=ledger)
+    structured_name = json.dumps({"contactName": "박 초원"}, ensure_ascii=False)
+    request = (
+        LLMRequest(system="합성 검토", user=structured_name)
+        if position == "user"
+        else LLMRequest(system=structured_name, user="일반 요청")
+    )
+
+    asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request))
+
+    assert sent == []
