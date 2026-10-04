@@ -287,8 +287,8 @@
 | **새 즉석 점검: 세트 밖 이름 키 모양(240)** | 240 | **132** | 0(지시서 1(a)) | **미충족(P1 잔여)** |
 | **새 즉석 점검: 평문 영문 낱말 속 라벨 오탐(8)** | 0 | **2** | 시작 수준 | **미충족(P2 회귀)** |
 | 새 즉석 점검: 영문 사람 라벨 키 + 조직 명사 차단(12) | 0 | 8 | 측정·보고 | 유출 0 하한 우선 |
-| CI(같은 SHA) | — | b5258c0: [`CI` 37167658441](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37167658441) 성공(테스트·Docker OCR), [`점수 게이트` 37167658459](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37167658459) 성공 · 86bd035: 점수 게이트·Docker OCR 성공, 테스트 job 진행 중(기록 시점) | 3개 성공 | 충족(b5258c0) |
-| 평가 측 `verify_all --base d20cde2`(86bd035) | — | 진행 중(기록 시점, 결과는 PR #10 코멘트와 이 판정에 덧붙인다) | 종료 0 | — |
+| CI(같은 SHA) | — | b5258c0: [`CI` 37167658441](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37167658441) 성공(테스트·Docker OCR), [`점수 게이트` 37167658459](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37167658459) 성공 · 86bd035: [`CI` 37168531424](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37168531424) 성공(테스트·Docker OCR), [`점수 게이트` 37168531425](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/37168531425) 성공 | 3개 성공 | 충족 |
+| 평가 측 `verify_all --base d20cde2`(86bd035, 전체 모드) | — | **종료 0**: 수용 909·원장 432·전체 3135·브라우저 197 통과, 실제 실패 0, strict XPASS 0, 회귀 게이트·하드코딩·시험 삭제·버전 통과(브라우저는 Chromium 1194를 1243 이름으로 연결, 보고서는 196건) | 종료 0 | 충족 |
 
 **보고서 대조**
 - 사실과 맞는 것: diff stat, 환경 공개(3.11.17·tesseract 5.3.4 컨테이너), `verify_all` 출력, CI 링크.
