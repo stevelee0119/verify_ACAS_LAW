@@ -95,10 +95,10 @@
 
 | 검증 항목 | 실행 명령 | 결과 | 상세 내용 |
 | :--- | :--- | :---: | :--- |
-| **평가 측 보호 시험 (T3, T4, T5)** | `pytest tests/acceptance/test_f1_protected.py` | **PASS** | 6 passed, 6 deselected (T3 배정 완전성 3건, T4 AI 탭 배타성 2건, T5 JSON 키 불변 1건 통과) |
+| **평가 측 보호 시험 (T3, T4, T5)** | `pytest tests/acceptance/test_f1_protected.py` | **PASS** | 4 passed, 3 skipped (T3 1, T4 2, T5 1 통과, T1·T2·T4 검토 행은 review_items 없음으로 건너뜀) |
 | **배정표 단위 시험** | `pytest tests/test_finding_categories.py` | **PASS** | 8 passed (전수 97건 매핑, 무결성, API 응답 검증) |
 | **F1 브라우저 기능 시험** | `pytest tests/test_f1_ai_security_tab_browser.py` | **PASS** | 5 passed (배너 노출, 탭 전환, 하단 임시 섹션 렌더링 검증) |
-| **기존 브라우저 시험 위치 이전** | `pytest tests/test_drive_rag_relevance.py tests/test_frontend_citation_groups.py tests/test_frontend_model_opinions.py tests/test_frontend_summary_compact.py tests/test_reasoning_layout.py` | **PASS** | 15 passed (locator 및 탭 전환 조정, 내용 단언 불변) |
+| **기존 브라우저 시험 위치 이전** | `pytest tests/test_drive_rag_relevance.py tests/test_frontend_citation_groups.py tests/test_frontend_model_opinions.py tests/test_frontend_summary_compact.py tests/test_reasoning_layout.py` | **PASS** | 61 passed (locator 및 탭 전환 조정, 내용 단언 불변) |
 | **보호 경로 점검** | `python scripts/check_protected_paths.py --base a04826f` | **PASS** | 보호 경로 23건 모두 평가 측 커밋 또는 승인 확인 |
 | **사례 리터럴 점검** | `python scripts/check_case_literals.py` | **PASS** | 신규 하드코딩 없음 (기존 부채 4건 유지) |
 | **하드코딩 변경 점검** | `python scripts/check_hardcoding_diff.py --base a04826f` | **PASS** | 신규 코드 내 사건 값/조문 번호 없음 |
