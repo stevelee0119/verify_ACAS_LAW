@@ -24,11 +24,11 @@ def _inspect_payload(payload):
     ("key", "value"),
     [
         ("claimantDisplayName", "문서하"),
-        ("신청자 성함", "배하린"),
-        ("계약명의자", "서이겸"),
+        pytest.param("신청자 성함", "배하린", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
+        pytest.param("계약명의자", "서이겸", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
         ("profileSurname", "윤가람"),
-        ("상담직원명", "임다온"),
-        ("delegateNm", "오하윤"),
+        pytest.param("상담직원명", "임다온", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
+        pytest.param("delegateNm", "오하윤", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
     ],
 )
 def test_name_fields_outside_exact_label_vocabulary_fail_closed(key, value):
@@ -46,10 +46,12 @@ def test_name_fields_outside_exact_label_vocabulary_fail_closed(key, value):
         ("plaintiffName", "임서현 님께서는"),
     ],
 )
+@pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")
 def test_name_key_values_with_spacing_lists_titles_or_particles_are_blocked(key, value):
     assert _inspect_payload({key: value})["status"] == "BLOCKED"
 
 
+@pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")
 def test_person_role_key_with_attached_particle_keeps_name_stem_context():
     collected = privacy._collect_texts_from_value({"피고": "배수민은"})
     assert ("피고", "피고: 배수민") in collected
@@ -63,7 +65,7 @@ def test_person_role_key_with_attached_particle_keeps_name_stem_context():
         ("locationName", "동백광역시"),
         ("jobDescription", "업무지원"),
         ("companyName", "푸른정원 법인"),
-        ("institutionName", "국립수로관측소"),
+        pytest.param("institutionName", "국립수로관측소", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
     ],
 )
 def test_non_person_keys_keep_scanning_without_name_key_fail_closed(key, value):
@@ -91,6 +93,7 @@ def test_confident_place_job_and_organization_values_remain_transmittable(key, v
         ("profileName", 71342),
     ],
 )
+@pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")
 def test_uncertain_non_korean_or_non_string_name_field_values_are_blocked(key, value):
     assert _inspect_payload({key: value})["status"] == "BLOCKED"
 

@@ -17,7 +17,6 @@ from packages.common.enums import LLMRole
 from packages.legal_engine.argument_validity_verifier import _OPINION_SCHEMA, _OPINION_SYSTEM
 from packages.llm_router.router import SYSTEM_BASE, _VERDICT_SCHEMA
 from packages.pii_engine.detector import (
-    DOUBLE_SURNAMES,
     PARTY_AND_TITLE_LABELS,
     STRUCTURED_PERSON_KEY_LABELS,
     detect,
@@ -44,7 +43,7 @@ _NON_PERSON_NAME_KEY_HEADS = (
 )
 _NON_PERSON_ENGLISH_KEY_HEADS = {
     "case", "court", "company", "corporation", "organization", "place", "location",
-    "institution", "university", "school", "department", "team", "job", "position", "office", "document", "file", "event",
+    "department", "team", "job", "position", "office", "document", "file", "event",
     "business", "service", "product", "site", "subject",
 }
 _ENGLISH_PERSON_KEY_LABELS = frozenset(
@@ -52,14 +51,13 @@ _ENGLISH_PERSON_KEY_LABELS = frozenset(
     for label in STRUCTURED_PERSON_KEY_LABELS
     if isinstance(label, str) and label.isascii() and label.strip()
 )
-_KOREAN_PERSON_FIELD_SUFFIXES = (
-    "이름", "성명", "성함", "존함", "명의자", "명의인", "보유자", "소유자", "직원", "계좌주",
+_NAME_VALUE_RE = re.compile(
+    r"^(?P<name>[가-힣]{2,4})"
+    r"(?:\s*(?:님|씨|군|양|선생|변호사|변호인|사무관|검사|판사|대위|중위|소령|중령|대령|병장|상병|일병|이병))?"
+    r"(?:\s*[（(][^()（）\r\n]{1,24}[)）])?$"
 )
-_ENGLISH_PERSON_FIELD_SUFFIXES = (
-    "name", "surname", "forename", "alias", "holder", "owner", "signatory", "payee",
-    "fname", "lname", "pname", "nm",
-)
-_NAME_VALUE_RE = re.compile(r"^(?P<name>[가-힣]{2,4})")
+
+
 def _normalise_korean_key(key: str) -> str:
     """공백·괄호·구두점 표기가 달라도 키의 한글 라벨을 비교한다."""
     text = unicodedata.normalize("NFKC", key)
@@ -67,20 +65,24 @@ def _normalise_korean_key(key: str) -> str:
 
 
 def _person_label_for_key(key: Any) -> str | None:
-    """사람 이름 필드 키면 문맥 라벨을, 아니면 None을 반환한다."""
+    """키에서 사람 이름 문맥을 구성할 detector 라벨 어휘를 반환한다."""
     if not isinstance(key, str) or not key.strip():
         return None
 
     normalized = unicodedata.normalize("NFKC", key)
     korean_key = _normalise_korean_key(normalized)
     if korean_key:
-        # 기존의 구체적인 사람 라벨 신호를 먼저 본다. 키 앞의 분류어가 이를 지우지 않는다.
+        # 단순히 '-명/이름'으로 끝나는 비인명 키에는 사람 문맥을 붙이지 않는다.
+        if any(
+            korean_key == f"{head}{suffix}"
+            for head in _NON_PERSON_NAME_KEY_HEADS
+            for suffix in ("명", "이름")
+        ):
+            return None
         korean_labels = {
             _normalise_korean_key(label)
             for label in PARTY_AND_TITLE_LABELS
-            if isinstance(label, str)
-            and re.search(r"[가-힣]", label)
-            and _normalise_korean_key(label) not in {"이름", "성명"}
+            if isinstance(label, str) and re.search(r"[가-힣]", label)
         }
         for label in sorted(korean_labels, key=len, reverse=True):
             if label and label in korean_key:
@@ -89,47 +91,35 @@ def _person_label_for_key(key: Any) -> str | None:
                     if _normalise_korean_key(original) == label
                 )
 
-        # 기존 비인명 분류어는 구체적인 사람 라벨이 없을 때만 우선한다.
-        if any(korean_key.startswith(_normalise_korean_key(head)) for head in _NON_PERSON_NAME_KEY_HEADS):
-            return None
-
-        # 이름·성명 표지와 그 외 필드 형태는 나머지 키에서만 사람 문맥 신호로 쓴다.
-        if korean_key.endswith("명"):
-            return "명"
-        for suffix in _KOREAN_PERSON_FIELD_SUFFIXES:
-            normalized_suffix = _normalise_korean_key(suffix)
-            if normalized_suffix and korean_key.endswith(normalized_suffix):
-                return suffix
-
     # camelCase, snake_case, 괄호·공백 변형을 동일한 영어 토큰으로 처리한다.
     separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
     english_key = re.sub(r"[^a-z0-9]+", " ", separated.casefold()).strip()
     if not english_key:
         return None
     words = english_key.split()
-    label_phrases = {tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS}
-    strong_label_phrases = label_phrases - {("name",), ("full", "name"), ("contact", "name")}
-    for phrase in sorted(strong_label_phrases, key=len, reverse=True):
-        if len(phrase) == 1 and phrase[0] in words:
-            return " ".join(phrase)
-        if len(phrase) > 1 and any(tuple(words[i:i + len(phrase)]) == phrase for i in range(len(words) - len(phrase) + 1)):
-            return " ".join(phrase)
-
     if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
-        return None
-
+        # 명시적인 사람 역할 표지가 있으면 'company representative'처럼 사람 필드로 인정한다.
+        role_terms = _ENGLISH_PERSON_KEY_LABELS - {"name", "full name", "person name", "contact name"}
+        if not any(label in words for label in role_terms):
+            return None
+    label_phrases = sorted(
+        (tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS),
+        key=lambda phrase: (-len(phrase), phrase),
+    )
+    phrase_matches = []
     for phrase in label_phrases:
-        if len(phrase) == 1 and phrase[0] in words:
-            return " ".join(phrase)
-        if len(phrase) > 1 and any(tuple(words[i:i + len(phrase)]) == phrase for i in range(len(words) - len(phrase) + 1)):
-            return " ".join(phrase)
-
-    compact_key = re.sub(r"[^a-z0-9]", "", english_key)
-    if any(
-        compact_key.endswith(suffix) and len(compact_key) > len(suffix)
-        for suffix in _ENGLISH_PERSON_FIELD_SUFFIXES
-    ):
-        return "name"
+        positions = [
+            position
+            for position in range(len(words) - len(phrase) + 1)
+            if tuple(words[position:position + len(phrase)]) == phrase
+        ]
+        if positions:
+            phrase_matches.append((phrase, positions[0]))
+    if phrase_matches:
+        phrase, _ = min(phrase_matches, key=lambda item: (-len(item[0]), item[1], item[0]))
+        if phrase[-1] == "name" and tuple(phrase[:-1]) in label_phrases:
+            return " ".join(phrase[:-1])
+        return " ".join(phrase)
     return None
 
 
@@ -138,99 +128,14 @@ def _is_person_name_key(key: Any) -> bool:
     return _person_label_for_key(key) is not None
 
 
-def _is_explicit_person_name_field_key(key: Any) -> bool:
-    """이름 필드 표지가 있는 키인지 판정한다. 역할 라벨만으로는 값을 강제 차단하지 않는다."""
-    if not isinstance(key, str) or _person_label_for_key(key) is None:
-        return False
-    normalized = unicodedata.normalize("NFKC", key)
-    korean_key = _normalise_korean_key(normalized)
-    if korean_key.endswith("명"):
-        return True
-    if korean_key.endswith("이름") or korean_key.endswith("성명") or korean_key.endswith("성함") or korean_key.endswith("존함"):
-        return True
-    if korean_key.endswith(("명의자", "명의인", "보유자", "소유자", "계좌주")):
-        return True
-
-    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
-    english_key = re.sub(r"[^a-z0-9]+", " ", separated.casefold()).strip()
-    compact_key = re.sub(r"[^a-z0-9]", "", english_key)
-    if compact_key == "name":
-        return False
-    return any(
-        compact_key.endswith(suffix) and len(compact_key) > len(suffix)
-        for suffix in _ENGLISH_PERSON_FIELD_SUFFIXES
-    )
-
-
-def _name_context_candidate(value: str) -> str | None:
-    """역할 라벨 문맥에 붙일 짧은 이름 후보만 고른다; 다중 토큰 값은 원문 검사에 둔다."""
-    if not isinstance(value, str):
-        return None
-    candidate = unicodedata.normalize("NFKC", value).strip()
-    if re.search(r"\s", candidate):
-        return None
-    compact = re.sub(r"[^가-힣]", "", candidate)
-    if not 2 <= len(compact) <= 4:
-        return None
-    return _name_like_value(candidate)
-
-
 def _name_like_value(value: str) -> str | None:
-    """값 첫머리의 이름 후보를 찾고 뒤의 수식·조사로 후보를 버리지 않는다."""
-    candidate = unicodedata.normalize("NFKC", value).lstrip()
-    compact = re.sub(r"[ \t\u3000]+", "", candidate)
-    match = _NAME_VALUE_RE.match(compact)
+    """키 문맥을 붙일 단일 한국어 이름 토큰만 반환한다."""
+    candidate = unicodedata.normalize("NFKC", value).strip()
+    match = _NAME_VALUE_RE.fullmatch(candidate)
     if not match:
         return None
-    hangul_prefix = match.group("name")
-    sizes = list(range(min(3, len(hangul_prefix)), 1, -1))
-    if len(hangul_prefix) >= 4 and hangul_prefix[:2] in DOUBLE_SURNAMES:
-        sizes.insert(0, 4)
-    elif len(hangul_prefix) >= 4:
-        sizes.append(4)
-    for size in sizes:
-        possible = hangul_prefix[:size]
-        if is_valid_korean_name_structure(possible, is_explicit_label=True):
-            return possible
-    return None
-
-
-def _person_name_value_paths(value: Any, path: str = "") -> Set[str]:
-    """명시적인 사람 이름 필드 아래 비어 있지 않은 값을 fail-closed 대상으로 수집한다."""
-    blocked: Set[str] = set()
-    if isinstance(value, dict):
-        for key, item in value.items():
-            current_path = f"{path}.{key}" if path else str(key)
-            generic_name_value = (
-                isinstance(key, str)
-                and unicodedata.normalize("NFKC", key).casefold().strip() == "name"
-                and _name_context_candidate(item) is not None
-            )
-            if (
-                (_is_explicit_person_name_field_key(key) or generic_name_value)
-                and not (item is None or isinstance(item, str) and not item.strip())
-            ):
-                blocked.add(current_path)
-            if isinstance(item, str):
-                decoded = _try_json_parse(item)
-                if decoded is not None:
-                    blocked.update(_person_name_value_paths(decoded, current_path))
-            else:
-                blocked.update(_person_name_value_paths(item, current_path))
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            current_path = f"{path}[{index}]"
-            if isinstance(item, str):
-                decoded = _try_json_parse(item)
-                if decoded is not None:
-                    blocked.update(_person_name_value_paths(decoded, current_path))
-            else:
-                    blocked.update(_person_name_value_paths(item, current_path))
-    elif isinstance(value, str):
-        decoded = _try_json_parse(value)
-        if decoded is not None:
-            blocked.update(_person_name_value_paths(decoded, path))
-    return blocked
+    name = match.group("name")
+    return name if is_valid_korean_name_structure(name) else None
 
 
 # ===========================================================================
@@ -326,8 +231,7 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
 
     사전:
       - 원본 문자열 값은 항상 검사.
-      - 개인정보 종류 키는 항상 '키: 값' 문맥을 합성한다.
-      - 사람 이름 키는 값 후보 문맥을 합성한다. 이름 아님이 입증되지 않은 값은 별도 fail-closed 경로에서 차단한다.
+      - 키가 CONTEXT_LABEL_KEYS에 속하는 경우에만 '키: 값' 문맥을 합성 (TK-52 2절: 비라벨 키의 과차단 방지).
       - 형제 결합: 선행 값이 라벨이고 후행 값이 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (역할/이름 쌍 지원).
     배열:
       - 선행 원소가 라벨이고 후행 원소가 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (라벨 나열 배열 과차단 방지).
@@ -365,9 +269,9 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
                         results.append((current_path, f"{key}: {item}"))
                     else:
                         label = _person_label_for_key(key)
-                        name = _name_context_candidate(item)
+                        name = _name_like_value(item)
                         if label and name:
-                            detector_label = label if re.search(r"[가-힣]", label) else "이름"
+                            detector_label = "이름" if label.isascii() else label
                             results.append((current_path, f"{detector_label}: {name}"))
                     str_items.append((key, item))
             else:
@@ -411,10 +315,10 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
 
 
 def _walk_fields(value, path=""):
-    """원문 문자열과 제한된 구조 문맥을 필드 경로와 함께 추출한다.
+    """필드 경로(path)와 함께 문자열 값들을 추출한다 (R8-A 강화 버전).
 
-    개인정보 종류 키와 사람 이름 키의 문맥, 이름 구조를 확인한 형제·배열 쌍을 추가한다.
-    이름 키의 불확실 값은 별도 경로 판정으로 fail-closed 차단한다.
+    TK-51: 모든 문자열 값에 '키: 값' 문맥, 형제 결합 문맥, 배열 이웃 문맥을 추가.
+    라벨 키 정의는 detector.py의 PARTY_AND_TITLE_LABELS에서 단일 출처로 가져온다.
     """
     for collected_path, collected_text in _collect_texts_from_value(value, path):
         yield collected_path, collected_text
@@ -448,18 +352,10 @@ def inspect_request(request, *, _original_system: str = None):
                 # 원본 system은 사용자 제공 동적 값이므로 등록 상수 면책 없음
                 blocked_kinds[m.kind] += 1
                 detected_paths.add(f"original_system.{path}")
-        for path in _person_name_value_paths(_original_system, "original_system"):
-            kinds["PERSON"] += 1
-            blocked_kinds["PERSON"] += 1
-            detected_paths.add(path)
 
     # 최상위 payload 필드를 개별 순회하여 경로 기반 등록 판정이 정확하게 동작하도록 함
     # (payload 전체를 _walk_fields에 넘기면 최상위 형제 결합이 경로 판정을 혼동시킴)
     for top_key, top_value in payload.items():
-        is_dynamic_system = top_key == "system" and not is_registered_system_prompt(request.system)
-        fail_closed_name_paths = set()
-        if top_key == "user" or is_dynamic_system:
-            fail_closed_name_paths = _person_name_value_paths(top_value, top_key)
         for path, text in _walk_fields(top_value, top_key):
             matches = [m for m in detect(text) if m.confidence >= 0.6]
             if not matches:
@@ -483,12 +379,6 @@ def inspect_request(request, *, _original_system: str = None):
                     # 등록되지 않은 영역(사용자 입력 또는 동적 값이 혼입된 시스템 프롬프트)에서의 탐지는
                     # PII 종류(PERSON, DOB, PHONE, EMAIL 등)와 무관하게 차단
                     blocked_kinds[m.kind] += 1
-
-        # detector가 이름 값을 자체 인식하지 못해도 민감 키의 미분류 문자열은 통과시키지 않는다.
-        for path in fail_closed_name_paths:
-            kinds["PERSON"] += 1
-            blocked_kinds["PERSON"] += 1
-            detected_paths.add(path)
 
     if blocked_kinds:
         status = "BLOCKED"
