@@ -50,4 +50,5 @@
 - **버전은 성능 기준으로만 올린다**(사용자 지시 2026-10-02). 구현 커밋은 프로그램 버전을 바꾸지 않는다. 평가 에이전트가 같은 조건에서 잰 성능으로 상향 자리(정수 급격·소수점 첫째 자리 일부·둘째 자리 미세)를 판정서(`docs/scorecards/version_verdicts.json`)로 정하고, 구현 에이전트는 판정서대로 버전 커밋 1개만 만든다. 자세한 기준·절차: `docs/scorecards/VERSION_POLICY.md`, 점검: `scripts/check_version_policy.py`.
 - 커밋 메시지 끝에 `Agent: implementer` 또는 `Agent: evaluator`를 적는다. 구현 커밋에는 게이트 출력의 점수 변화를 함께 적는다.
 - 기준선(`docs/scorecards/baseline.json`)은 낮추지 않는다. 낮춰야 하면 사유를 티켓으로 남기고 사용자가 승인한다.
+- **릴리스(2026-10-04 사용자 결정):** `main` 병합이 곧 배포다(Render가 `main` 푸시 시 자동 재배포). 배포는 평가 통과·봉인 시험·열린 P1 회귀 0·사용자 승인으로 하고, **버전 상향과는 분리한다**(상향 요건을 못 채우면 버전 유지로 배포). 평가 측이 `Steve_ACASiaLAW` → `main` 릴리스 PR을 열고, 사용자가 병합하며, 배포 직후 사용자가 온라인 점검 1회를 실행해 결과 JSON을 평가 측에 준다. 첫 릴리스는 8C 수용 뒤. 절차: `docs/scorecards/RELEASE_PROCEDURE.md`.
 - GitHub 설정(사용자가 직접): 기본 브랜치 보호 규칙에서 `score-gate`·`CI` 상태 확인 필수, Code Owners 검토 필수를 켠다. 이 저장소의 워크플로 파일만으로는 병합을 막지 못한다.
