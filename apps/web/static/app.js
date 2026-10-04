@@ -1518,13 +1518,14 @@ function renderFindings() {
     const attachedFindingIds = new Set();
 
     for (const d of docs) {
+      const docId = d.id || d.document_id || "";
       if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
         for (const row of d.ai_hallucination_table) {
           const matchedFids = [];
           for (const f of nonAIFindings) {
             const fid = f.id || f.finding_id;
             if (attachedFindingIds.has(fid)) continue;
-            const sameDoc = !f.document_id || f.document_id === d.id;
+            const sameDoc = !f.document_id || !docId || f.document_id === docId;
             if (!sameDoc) continue;
 
             const citMatch = (row.citation_id && f.citation_id === row.citation_id);
@@ -1552,9 +1553,9 @@ function renderFindings() {
 
           allReviewItems.push({
             doc: d,
-            item_id: `${d.id}_CITATION_${row.citation_id || row.location}`,
+            item_id: `${docId}_CITATION_${row.citation_id || row.location}`,
             kind: "CITATION",
-            document_id: d.id,
+            document_id: docId,
             location: { display: row.location },
             claim_text: row.claim_text,
             cited_authority: row.cited_authority,
@@ -1572,17 +1573,53 @@ function renderFindings() {
         }
       }
 
-      // 인용에 결합되지 않은 나머지 비-AI/보안 finding은 독립 행으로 추가
+      // 인용에 결합되지 않은 나머지 비-AI/보안 finding 처리
+      // 1) citation_id가 있는 finding들은 같은 인용별로 한 행으로 묶음
+      const remainingByCitation = new Map();
       for (const f of nonAIFindings) {
         const fid = f.id || f.finding_id;
         if (attachedFindingIds.has(fid)) continue;
-        if (f.document_id && f.document_id !== d.id) continue;
+        if (f.document_id && docId && f.document_id !== docId) continue;
+        if (f.citation_id) {
+          if (!remainingByCitation.has(f.citation_id)) remainingByCitation.set(f.citation_id, []);
+          remainingByCitation.get(f.citation_id).push(f);
+        }
+      }
+
+      for (const [cid, group] of remainingByCitation.entries()) {
+        const lead = group[0];
+        const groupFids = group.map(x => x.id || x.finding_id);
+        for (const fid of groupFids) attachedFindingIds.add(fid);
+
+        allReviewItems.push({
+          doc: d,
+          item_id: `${docId}_CITATION_${cid}`,
+          kind: "CITATION",
+          document_id: docId,
+          location: { page: lead.page },
+          claim_text: lead.detail || lead.title,
+          cited_authority: lead.title,
+          official_status: lead.status === "CONFIRMED" ? "OFFICIAL_CONFIRMED" : "OFFICIAL_NOT_FOUND",
+          reference_status: "NOT_CHECKED",
+          verdict_label: lead.title,
+          severity: lead.severity,
+          finding_ids: groupFids,
+          reasoning_sections: null,
+          counteraction: lead.recommendation,
+        });
+      }
+
+      // 2) citation_id가 없는 나머지 finding은 독립 행으로 추가
+      for (const f of nonAIFindings) {
+        const fid = f.id || f.finding_id;
+        if (attachedFindingIds.has(fid)) continue;
+        if (f.document_id && docId && f.document_id !== docId) continue;
         attachedFindingIds.add(fid);
         allReviewItems.push({
           doc: d,
-          item_id: `${d.id}_FINDING_${fid}`,
+          item_id: `${docId}_FINDING_${fid}`,
           kind: "FACT",
-          document_id: d.id,
+          document_id: docId,
           location: { page: f.page },
           claim_text: f.detail || f.title,
           cited_authority: null,

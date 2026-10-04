@@ -24,6 +24,8 @@
   - `apps/web/static/styles.css`: `.review-items-table`, `.inline-workflow-box`, `.inline-workflow-select`, `.inline-workflow-note`, `.review-references-wrap` 스타일 추가
   - `tests/test_f1_ai_security_tab_browser.py`: review 탭 locator를 `section[data-panel="review"]`로 수정 (단언 불변)
   - `tests/test_frontend_model_opinions.py`: 테스트 모의 서버에 `/api/finding-categories` 라우트 핸들러 추가
+  - `tests/test_drive_rag_relevance.py`: F2 화면 구조에 맞추어 renderTemporaryCitationSection 대신 renderFindings 호출로 갱신 (단언 불변)
+  - `tests/test_frontend_citation_groups.py`: F2 4열 표 locator `#aiVerificationRows tr`로 갱신 및 모의 서버에 `/api/finding-categories` 추가 (단언 불변)
 - **신규 파일 (4개)**:
   - `packages/verification_engine/review_items.py`: 단일 판정 객체 생성 모듈 (`build_document_review_items`, 순수 파생 심각도 `derive_item_severity`, 사람 말 사유 변환 `humanize_unverified_reason`)
   - `tests/test_f2_review_items.py`: F2 핵심 불변 조건 단위 시험 (T1 단일 판정, T2 손실 없음, T4 배타성, 근거 사다리 2축 분리, 직렬화)
@@ -45,7 +47,7 @@
 
 ### 2.2 클라이언트 4열 통합 검토 화면 (F2 화면 구현)
 - **표 칼럼 구성 (4열)**:
-  1. `위치` (10%): 파일명, 쪽수 표시, 쪽 보기 버튼, 항목 유형 배지
+  1. `위치` (10%): 파일명, 쪽수 표시, 쪽 보기 링크, 항목 유형 배지
   2. `문서 주장 및 인용 내용` (25%): 인용 판례/법령, 주장 문구, 파생 Finding 상세 모달 열기 버튼(`openFinding`), 복수 Finding 아코디언
   3. `근거 확인 결과` (25%): 심각도 배지, 확인 결과 배지, 생성 근거 텍스트, 인용 취지·맥락 검토(AI 참고 의견) 블록
   4. `법리적 타당성 검토 및 반박 근거` (40% - 최대 너비): 법리 검토 상세 섹션(`reasoningBlock`), 대응 방안 박스, **행 안 인라인 검토 워크플로우 컨트롤**
@@ -54,7 +56,7 @@
   - 순수 인용 행: `검토 상태: 저장 불가 (정보 전용)` 안내 노출.
 - **필터링 연동**: 항목 검색어, 중요도(CRITICAL~INFO), 검토 상태(NEEDS_REVIEW~RESOLVED) 필터가 통합 표에 즉각 적용.
 - **참고자료(RAG) 및 법조문 보존**: 표 하단에 주요 참고문헌 검토(RAG) 및 추가 관련 법조문 검토 섹션을 온전히 배치. F1 임시 섹션 제거.
-- **하위 호환 폴백 로직**: 구버전 API 응답이나 `review_items`가 없는 모의 데이터에서도 인용 행과 Finding을 결합하여 표를 표시하고 기존 브라우저 시험 100% 호환 보장.
+- **하위 호환 폴백 로직**: 구버전 API 응답이나 `review_items`가 없는 모의 데이터에서도 인용 행과 Finding을 결합하고, 같은 인용에서 파생된 복수 Finding을 묶어 아코디언으로 표시하여 기존 브라우저 시험 100% 호환 보장.
 
 ---
 
@@ -75,9 +77,11 @@
 
 | 검증 항목 | 실행 명령 | 결과 | pytest 최종 요약 출력 |
 | :--- | :--- | :---: | :--- |
-| **단위 및 보호 시험 묶음** | `pytest tests/test_f2_review_items.py tests/test_finding_categories.py tests/test_upload_privacy_notice_api.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `25 passed in 36.02s` |
+| **단위 및 보호 시험 묶음** | `pytest tests/test_f2_review_items.py tests/test_finding_categories.py tests/test_upload_privacy_notice_api.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `20 passed in 19.71s` (보호 시험 T1~T5, T2r, T6a 전수 통과) |
 | **F2 화면 브라우저 시험** | `pytest tests/test_f2_review_screen_browser.py -v` | **PASS** | `4 passed in 25.74s` |
-| **기존 브라우저 시험 묶음** | `pytest tests/test_f1_ai_security_tab_browser.py tests/test_frontend_model_opinions.py tests/test_reasoning_layout.py -v` | **PASS** | `15 passed in 71.52s` |
+| **주요 브라우저 시험 묶음** | `pytest tests/test_f1_ai_security_tab_browser.py tests/test_f2_review_screen_browser.py tests/test_upload_privacy_notice_browser.py tests/test_frontend_citation_groups.py tests/test_frontend_model_opinions.py tests/test_reasoning_layout.py -v` | **PASS** | `26 passed in 286.37s` |
+| **전체 프론트엔드 브라우저 시험 묶음** | `pytest tests/test_frontend_*.py -v` | **PASS** | `70 passed in 554.18s` |
+| **RAG 브라우저 및 단위 시험** | `pytest tests/test_drive_rag_relevance.py -v` | **PASS** | `47 passed in 23.74s` |
 | **사건 고유 값 점검** | `python scripts/check_case_literals.py` | **PASS** | 코드베이스 내 사건 고유 값 및 서면 문구 신규 하드코딩 0건 (종료 코드 0) |
 | **보호 경로 변경 점검** | `python scripts/check_protected_paths.py --base upstream/Steve_ACASiaLAW` | **PASS** | 보호 경로 점검: 바뀐 보호 경로 없음 (종료 코드 0) |
 | **시험 삭제·약화 점검** | `python scripts/check_test_edits.py --base upstream/Steve_ACASiaLAW` | **PASS** | 기존 시험의 삭제·표시 변경 없음 (종료 코드 0) |
