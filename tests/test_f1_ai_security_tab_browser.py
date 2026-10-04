@@ -252,7 +252,7 @@ def test_review_tab_filters_out_ai_security_findings(f1_browser_page):
     page.get_by_role("button", name="검증·검토", exact=True).click()
     page.locator('.tabs button[data-tab="review"]').click()
 
-    findings_container = page.locator("#findings")
+    findings_container = page.locator('section[data-panel="review"]')
 
     # 일반 법리 finding(CASE_NOT_FOUND)은 노출
     expect(findings_container).to_contain_text("대법원 판례 공식 DB 미발견")
@@ -286,7 +286,7 @@ def test_high_security_alert_banner_visible_and_jumpable(f1_browser_page):
 
 
 def test_temporary_citation_section_preserved_under_review(f1_browser_page):
-    """F2 전 정보 손실 방지를 위해 확인할 항목 하단 임시 섹션에 판례 인용표가 온전히 보존되어야 합니다."""
+    """F2 통합 표에 판례 인용표가 온전히 보존(정보 손실 0)되어야 합니다."""
     page = f1_browser_page
     page.goto("http://localhost/")
     select_first_project(page)
@@ -294,11 +294,10 @@ def test_temporary_citation_section_preserved_under_review(f1_browser_page):
     page.get_by_role("button", name="검증·검토", exact=True).click()
     page.locator('.tabs button[data-tab="review"]').click()
 
-    # 임시 보존 섹션 확인
-    temp_section = page.locator("#temporaryCitationSection")
-    expect(temp_section).to_be_visible()
-    expect(temp_section.locator("h3")).to_contain_text("판례 인용 및 법률 주장 검토")
+    # 통합 표 패널 확인
+    review_panel = page.locator('section[data-panel="review"]')
+    expect(review_panel).to_be_visible()
 
-    # 판례 인용 데이터 행 노출 확인
-    expect(temp_section.locator("#aiVerificationRows tr")).to_have_count(1)
-    expect(temp_section.locator("#aiVerificationRows")).to_contain_text("대법원 2022다12345 판결")
+    # 판례 인용 데이터 행 노출 확인 (내용 단언 불변)
+    expect(review_panel.locator("#aiVerificationRows tr")).to_have_count(1)
+    expect(review_panel.locator("#aiVerificationRows")).to_contain_text("대법원 2022다12345 판결")

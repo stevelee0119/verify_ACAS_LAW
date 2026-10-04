@@ -75,6 +75,13 @@ def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
             return route.fulfill(json=result)
         if path.endswith("/case-matrix"):
             return route.fulfill(body="null", content_type="application/json")
+        if path == "/api/finding-categories":
+            from packages.common.finding_category_map import CATEGORY_TO_TAB, FINDING_CATEGORY_MAP, get_category_counts
+            return route.fulfill(json={
+                "categories": {ft.value: cat.value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "tabs": {ft.value: CATEGORY_TO_TAB[cat].value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "counts": get_category_counts(),
+            })
         return route.fulfill(json=[])
 
     with sync_playwright() as playwright:
