@@ -15,7 +15,13 @@ from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
 from packages.common.enums import AuditEventType
-from packages.common.privacy_notice import PRIVACY_ACK_ERROR_MESSAGE, PRIVACY_NOTICE_VERSION
+from packages.common.privacy_notice import (
+    ACK_LABEL,
+    NOTICE_BULLETS,
+    PRIVACY_ACK_ERROR_MESSAGE,
+    PRIVACY_NOTICE_VERSION,
+    REPORT_HEADER_NOTICE,
+)
 from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
@@ -115,6 +121,18 @@ def default_project_name() -> str:
 @router.get("/project-defaults")
 def project_defaults():
     return {**ProjectCreate().model_dump(), "name": default_project_name(), "creation_key": uuid4().hex}
+
+
+@router.get("/privacy-notice")
+def get_privacy_notice():
+    """업로드 개인정보 처리 안내 및 판 번호(상수 단일 관리)."""
+    return {
+        "version": PRIVACY_NOTICE_VERSION,
+        "bullets": NOTICE_BULLETS,
+        "ack_label": ACK_LABEL,
+        "report_header": REPORT_HEADER_NOTICE,
+        "ack_error_message": PRIVACY_ACK_ERROR_MESSAGE,
+    }
 
 
 def bump_scope(session: Session, project_id: str) -> None:

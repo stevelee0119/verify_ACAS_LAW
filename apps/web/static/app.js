@@ -326,6 +326,56 @@ function renderProject() {
   $("reportBtn").title = reportReady ? "완료된 검증 결과로 검토 보고서를 생성합니다" : "검증이 끝나면 보고서를 생성할 수 있습니다";
 }
 
+let privacyNoticeConfig = {
+  version: "1.0",
+  bullets: [
+    "자동으로 가리는 개인정보는 연락처와 주민등록번호뿐입니다.",
+    "성명·주소 등 그 밖의 개인정보는 업로드 전에 직접 가려 주세요.",
+    "성명 등 자동 가림은 보조 기능이며 모두 가려진다고 보장하지 않습니다."
+  ],
+  ack_label: "연락처·주민등록번호 외의 개인정보를 직접 처리했습니다",
+  report_header: "연락처·주민등록번호 자동 가림 보장, 그 밖의 개인정보는 사용자 처리",
+  ack_error_message: "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다."
+};
+
+function renderPrivacyNoticeElements() {
+  const verEl = $("privacyNoticeVersion");
+  if (verEl && privacyNoticeConfig.version) {
+    verEl.textContent = `(v${privacyNoticeConfig.version})`;
+  }
+  const ul = $("privacyNoticeBullets");
+  if (ul && privacyNoticeConfig.bullets) {
+    ul.replaceChildren(...privacyNoticeConfig.bullets.map(text => {
+      const li = document.createElement("li");
+      li.textContent = text;
+      return li;
+    }));
+  }
+  const labelEl = $("privacyAckLabel");
+  if (labelEl && privacyNoticeConfig.ack_label) {
+    labelEl.textContent = privacyNoticeConfig.ack_label;
+  }
+  const reportTextEl = $("reportPrivacyNoticeText");
+  if (reportTextEl && privacyNoticeConfig.report_header) {
+    reportTextEl.textContent = privacyNoticeConfig.report_header;
+  }
+}
+
+async function loadPrivacyNotice() {
+  try {
+    const res = await fetch("/api/privacy-notice");
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.version) {
+        privacyNoticeConfig = data;
+      }
+    }
+  } catch (e) {
+    // API 연결 실패 시 기본 설정값 유지
+  }
+  renderPrivacyNoticeElements();
+}
+
 function getPrivacyAck(projectId) {
   if (!projectId) return false;
   return sessionStorage.getItem(`privacy_ack_${projectId}`) === "true";
@@ -353,7 +403,7 @@ function syncPrivacyAck() {
 function checkPrivacyAck(projectId) {
   const ack = $("privacyAck")?.checked || getPrivacyAck(projectId);
   if (!ack) {
-    const msg = "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다.";
+    const msg = privacyNoticeConfig.ack_error_message || "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다.";
     const errEl = $("privacyAckError");
     if (errEl) {
       errEl.textContent = msg;
@@ -1891,6 +1941,8 @@ function showLoadFailure(missing) {
 }
 
 async function init() {
+  renderPrivacyNoticeElements();
+  loadPrivacyNotice();
   icons();
   const missing = missingModules();
   if (missing.length) return showLoadFailure(missing);

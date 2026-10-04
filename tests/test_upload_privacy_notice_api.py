@@ -173,3 +173,18 @@ def test_upload_with_privacy_ack_succeeds_and_creates_audit(api_client, test_pro
         assert "주민" not in payload_str or "직접 처리 확인" in payload_str
         assert "010-" not in payload_str
         assert "주소" not in payload_str
+
+
+def test_privacy_notice_endpoint_returns_centralized_constants(api_client):
+    """안내 문구와 판 번호가 /api/privacy-notice에서 올바르게 제공되는지 검증."""
+    response = api_client.get("/api/privacy-notice")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["version"] == PRIVACY_NOTICE_VERSION
+    assert len(data["bullets"]) == 3
+    assert "연락처와 주민등록번호" in data["bullets"][0]
+    assert "직접 가려" in data["bullets"][1]
+    assert "보조 기능" in data["bullets"][2]
+    assert "직접 처리했습니다" in data["ack_label"]
+    assert "자동 가림 보장" in data["report_header"]
+    assert "확인해야 업로드할 수 있습니다" in data["ack_error_message"]

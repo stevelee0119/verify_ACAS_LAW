@@ -78,6 +78,7 @@ def upload_page():
 
 
 def select_file(page):
+    page.locator("#privacyAck").check()
     page.locator("#fileInput").set_input_files({"name": "검토의견서.docx", "mimeType": "application/octet-stream", "buffer": PAYLOAD})
     expect(page.locator("#uploadStatus")).to_contain_text("파일 등록 결과")
 
@@ -107,6 +108,7 @@ def test_registration_outcome_and_no_blind_post_retry(upload_page, mode, expecte
 
 def test_unreadable_local_file_is_not_sent(upload_page):
     page, control = upload_page
+    page.locator("#privacyAck").check()
     page.evaluate("""async () => {
         const file = new File(['data'], 'unavailable.docx');
         file.arrayBuffer = async () => {throw new DOMException('Unavailable', 'NotReadableError');};
