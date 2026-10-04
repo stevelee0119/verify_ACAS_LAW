@@ -6,7 +6,8 @@
 - 경고(종료 코드 0): 기존 시험의 `assert` 개수가 줄었다(약화 의심 — 사람이 본다).
 범위의 모든 커밋이 `Agent: evaluator` 꼬리표를 가지면(평가 측이 보호 시험을 고치는 경우) 점검을 건너뛴다.
 평가 측이 표시를 지시하고 구현 측이 붙인 경우(예: 알려진 미해결 strict xfail)는 `docs/scorecards/approved_test_marks.json`에
-적힌 시험·표시만 승인으로 본다. 그 파일을 마지막으로 바꾼 커밋이 `Agent: evaluator`일 때만 목록을 믿는다.
+적힌 시험·표시만 승인으로 본다. 평가 측이 지시한 시험 교체(삭제)는 `"mark": "delete"`로 적는다(2026-10-04).
+그 파일을 마지막으로 바꾼 커밋이 `Agent: evaluator`일 때만 목록을 믿는다.
 사용: python scripts/check_test_edits.py --base <기준 커밋>
 """
 from __future__ import annotations
@@ -108,7 +109,10 @@ def main(argv: Optional[List[str]] = None) -> int:
         after = collect(_show("HEAD", path))
         for name, (asserts, marks) in before.items():
             if name not in after:
-                removed.append(f"{path}::{name}")
+                if (f"{path}::{name}", "delete") in approvals:
+                    approved_seen.append(f"{path}::{name} (삭제)")
+                else:
+                    removed.append(f"{path}::{name}")
                 continue
             a_asserts, a_marks = after[name]
             added = a_marks - marks
