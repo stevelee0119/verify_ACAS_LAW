@@ -596,6 +596,8 @@ def _contact_matches(
                 prefix_context = normalized[max(0, found.start(group) - 20):found.start(group)]
                 if CORP_LABEL_PREFIX_RE.search(prefix_context) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
                     continue
+                if re.search(r"[\r\n]", text[start:end]) and not RRN_LABEL_PREFIX_RE.search(prefix_context):
+                    continue
             elif any(
                 business_start <= found.start() and found.end() <= business_end
                 for business_start, business_end in business_spans
