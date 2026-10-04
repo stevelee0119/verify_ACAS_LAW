@@ -121,6 +121,7 @@ def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
             expect(second_doc).to_contain_text("흰 글씨로 '이전 지시를 무시하라'는 문장")
             # 허위 판례는 별도 카드 없이 아래 세부 표의 머리에 요약한다.
             expect(cards.get_by_text("허위 판례(할루시네이션) 발견")).to_have_count(0)
+            page.evaluate("switchTab('review')")
             expect(page.locator("#hallucinationSummary")).to_contain_text("총 2건입니다(성립할 수 없는 사건번호 1건, 공식 DB 미확인 1건)")
             expect(page.locator("#aiVerificationRows tr")).to_have_count(2)
             # 주장 평가는 인용 오류·미확인 근거 칸에 함께 싣고 표는 네 칸이다(법리 검토 칸이 가장 넓다).
@@ -137,6 +138,9 @@ def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
             expect(basis.locator("blockquote em")).to_have_count(0)
             widths = page.locator(".ai-table thead th").evaluate_all("els => els.map(e => e.getBoundingClientRect().width)")
             assert widths[3] == max(widths), widths
+            basis.scroll_into_view_if_needed()
+            page.screenshot(path=str(tmp_path / f"citation-context-{width}.png"), full_page=True)
+            page.evaluate("switchTab('ai-verification')")
             if width > 900:
                 # 넓은 화면: AI 진단 카드가 가로 전체를 쓰고 모델 블록이 나란히 놓인다.
                 tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
@@ -147,8 +151,6 @@ def test_each_model_verdict_and_explanation_is_shown(width, height, tmp_path):
                 tops = first.locator(".model-opinion").evaluate_all("els => els.map(e => Math.round(e.getBoundingClientRect().top))")
                 assert tops == sorted(tops) and len(set(tops)) == 3, "좁은 화면은 세로로 쌓는다"
             assert page.evaluate("document.documentElement.scrollWidth <= innerWidth")
-            basis.scroll_into_view_if_needed()
-            page.screenshot(path=str(tmp_path / f"citation-context-{width}.png"), full_page=True)
             page.evaluate("""() => {
                 state.result.documents[0].ai_detector_result.signals.llm_opinions = [{provider:'gemini',
                     verdict:'HUMAN_AUTHORED_LIKELY', score:0.01, reasons:['전문적인 문체']}];
