@@ -122,3 +122,6 @@ A는 되돌림이라 메모를 적게 써도 된다.
 4. 보고서 `docs/handoff/requests/37_round8f_completion.md`에 '8F-1' 절을 덧붙인다. 담을 것: diff stat, `verify_all` 출력, 같은 SHA CI 링크.
 
 **수용:** 6절과 같다. 평가 측은 필수 세트 1·2판과 수용 시점의 3판(새 번호·새 문맥)을 잰다.
+
+## 9. 8F-1 판정 — 수용(2026-10-04 추가)
+aec05ff(제품 e1bd9ff): 필수 세트 1·2·3판 누락·도달·오탐 0, `verify_all` 종료 0, 같은 SHA CI 성공, 표시 목록 일치. 8차 종결 조건 충족. 다음은 7절(병합은 사용자 승인). → [판정서 '8차 7차 판정'](../scorecards/f1_gate_verdict.md)
