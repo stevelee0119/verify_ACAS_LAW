@@ -1220,9 +1220,93 @@ async function loadResults(generation, options = {}) {
   renderAIVerification();
 }
 
+// F1 유형별 화면 배정 상수 (AI 작성·보안 진단 탭 소속 47개 유형)
+const AI_SECURITY_FINDING_TYPES = new Set([
+  // AI 진단 카드 (5개)
+  "AI_AUTHORSHIP_LIKELY", "AI_FULL_GENERATION_SUSPECTED", "AI_HALLUCINATED_CONTENT",
+  "STYLE_SHIFT", "MODEL_ATTRIBUTION_SIGNAL",
+  // 인젝션 검증 카드 (17개)
+  "PROMPT_INJECTION_SUSPECTED", "HIDDEN_INSTRUCTION", "META_INSTRUCTION",
+  "SYSTEM_OVERRIDE_ATTEMPT", "ROLE_OVERRIDE_ATTEMPT", "VERIFICATION_SUPPRESSION",
+  "OUTPUT_MANIPULATION_ATTEMPT", "ENCODED_INSTRUCTION", "OBFUSCATED_INSTRUCTION",
+  "UNICODE_SMUGGLING", "OCR_LAYER_INJECTION", "METADATA_INJECTION",
+  "MULTIMODAL_INJECTION", "RAG_POISONING_SIGNAL", "TOOL_MANIPULATION_ATTEMPT",
+  "DATA_EXFILTRATION_INSTRUCTION", "MODEL_OUTPUT_QUARANTINED",
+  // 보안 카드 (25개)
+  "AUTHORSHIP_METADATA_LEAK", "GEOLOCATION_METADATA_LEAK", "METADATA_ANOMALY",
+  "HIDDEN_TEXT_MISMATCH", "OCR_LAYER_MISMATCH", "SIGNATURE_INVALID",
+  "MODIFIED_AFTER_SIGNATURE", "PAGE_STRUCTURE_OUTLIER", "RESIDUAL_TRACKED_CHANGE",
+  "RESIDUAL_COMMENT", "DELETED_TEXT_RECOVERABLE", "PRIOR_VERSION_RECOVERABLE",
+  "REDACTION_FAILURE", "HIDDEN_SHEET_OR_ROW", "CROPPED_IMAGE_RESIDUE",
+  "TEMPLATE_RESIDUE", "SPECIMEN_DOCUMENT_DECLARED", "INVALID_IDENTIFIER",
+  "PLACEHOLDER_IDENTIFIER", "STEGANOGRAPHIC_PAYLOAD", "TRACKING_CANARY_DETECTED",
+  "DOCUMENT_FINGERPRINT_SUSPECTED", "COVERT_CHANNEL_SUSPECTED",
+  "PRIVILEGE_EXPOSURE_RISK", "OUTBOUND_LEAK_RISK"
+]);
+
+const SECURITY_CARD_FINDING_TYPES = new Set([
+  "AUTHORSHIP_METADATA_LEAK", "GEOLOCATION_METADATA_LEAK", "METADATA_ANOMALY",
+  "HIDDEN_TEXT_MISMATCH", "OCR_LAYER_MISMATCH", "SIGNATURE_INVALID",
+  "MODIFIED_AFTER_SIGNATURE", "PAGE_STRUCTURE_OUTLIER", "RESIDUAL_TRACKED_CHANGE",
+  "RESIDUAL_COMMENT", "DELETED_TEXT_RECOVERABLE", "PRIOR_VERSION_RECOVERABLE",
+  "REDACTION_FAILURE", "HIDDEN_SHEET_OR_ROW", "CROPPED_IMAGE_RESIDUE",
+  "TEMPLATE_RESIDUE", "SPECIMEN_DOCUMENT_DECLARED", "INVALID_IDENTIFIER",
+  "PLACEHOLDER_IDENTIFIER", "STEGANOGRAPHIC_PAYLOAD", "TRACKING_CANARY_DETECTED",
+  "DOCUMENT_FINGERPRINT_SUSPECTED", "COVERT_CHANNEL_SUSPECTED",
+  "PRIVILEGE_EXPOSURE_RISK", "OUTBOUND_LEAK_RISK"
+]);
+
+function isAISecurityFinding(f) {
+  const type = f.finding_type || f.type;
+  return AI_SECURITY_FINDING_TYPES.has(type);
+}
+
+function isSecurityCardFinding(f) {
+  const type = f.finding_type || f.type;
+  return SECURITY_CARD_FINDING_TYPES.has(type);
+}
+
+function securityCard(docs, findings) {
+  const secFindings = (findings || []).filter(isSecurityCardFinding);
+  const card = node("div", null, "summary-card security-card");
+  card.append(node("h3", "보안 및 파일 진단"));
+  if (secFindings.length > 0) {
+    const list = node("ul", null, "security-finding-list");
+    for (const f of secFindings) {
+      const item = node("li", null, "security-finding-item");
+      const titleBtn = button(null, () => openFinding(f), "link-button");
+      titleBtn.append(
+        node("span", label(f.severity), `badge ${f.severity}`),
+        node("strong", ` ${friendlyText(f.title)}`)
+      );
+      item.append(titleBtn, node("small", friendlyText(f.detail), "muted"));
+      list.append(item);
+    }
+    card.append(list);
+  } else {
+    card.append(node("p", "문서 메타데이터 유출, 은닉 텍스트, 포렌식 위변조 등의 보안 특이사항이 발견되지 않았습니다.", "muted"));
+  }
+  return card;
+}
+
 function renderFindings() {
   const query = $("findingSearch").value.toLowerCase();
-  const findings = state.findings.filter(f => workflowUI.matches(f) && (!$("reviewFilter").value || f.review_status === $("reviewFilter").value) && (!$("severityFilter").value || f.severity === $("severityFilter").value) && `${f.title} ${f.detail}`.toLowerCase().includes(query)).sort((a,b) => workflowUI.priority(a) - workflowUI.priority(b));
+  // F1: AI·보안 유형은 확인할 항목에서 제외하고 AI·보안 탭에 모은다
+  const findings = state.findings.filter(f => !isAISecurityFinding(f) && workflowUI.matches(f) && (!$("reviewFilter").value || f.review_status === $("reviewFilter").value) && (!$("severityFilter").value || f.severity === $("severityFilter").value) && `${f.title} ${f.detail}`.toLowerCase().includes(query)).sort((a,b) => workflowUI.priority(a) - workflowUI.priority(b));
+  
+  // D2: HIGH 이상 AI·보안 항목 존재 시 최상단 한 줄 고정 안내 배너
+  const highSecFindings = (state.findings || []).filter(f => isAISecurityFinding(f) && (f.severity === "HIGH" || f.severity === "CRITICAL"));
+  const alertBanner = $("highSecurityAlertBanner");
+  const alertText = $("highSecurityAlertText");
+  if (alertBanner && alertText) {
+    if (highSecFindings.length > 0) {
+      alertText.textContent = `주의: HIGH 이상의 AI 작성·보안 진단 항목이 ${highSecFindings.length}건 있습니다.`;
+      alertBanner.hidden = false;
+    } else {
+      alertBanner.hidden = true;
+    }
+  }
+
   $("findings").replaceChildren();
   if (!findings.length) empty($("findings"), state.run ? "표시할 확인 항목이 없습니다. 미확인 범위는 보고서에서 별도로 확인할 수 있습니다." : "검증 결과가 없습니다.");
   // 같은 인용에서 나온 항목(예: 조회 범위 내 미발견 + 그 판례에 기댄 주장)은 한 줄로 묶고
@@ -1254,19 +1338,17 @@ function renderFindings() {
     for (const item of state.run.unverified_items) details.append(node("p", friendlyText(`${item.raw_text || item.document_id || ""} ${item.page ? `· ${item.page}쪽` : ""}: ${item.reason || "확인하지 못함"}`)));
     $("findings").append(details);
   }
+
+  // F1 임시 보존: 판례 인용 검토표 및 RAG 섹션을 확인할 항목 하단에 보존 (정보 손실 0)
+  renderTemporaryCitationSection();
 }
 
 function renderAIVerification() {
-  const container = $("aiVerificationRows");
-  const emptyMsg = $("aiVerificationEmpty");
   const cardsContainer = $("aiSummaryCards");
-  if (!container || !cardsContainer) return;
-
-  container.replaceChildren();
+  if (!cardsContainer) return;
   cardsContainer.replaceChildren();
 
   const docs = state.result?.documents || [];
-  let allRows = [];
   let detectorResults = [];
   let hasQuarantine = false;
 
@@ -1276,15 +1358,9 @@ function renderAIVerification() {
     if (det) {
       detectorResults.push({ filename: d.filename, ...det });
     }
-    if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
-      for (const row of d.ai_hallucination_table) {
-        allRows.push({ filename: d.filename, ...row });
-      }
-    }
   }
 
-  // AI 종합 요약 카드 렌더링
-  // 설명이 길어 가로 전체 폭을 쓴다(좁은 화면에서는 그대로 세로로 쌓인다).
+  // 1) 문서 AI 생성 여부 진단 카드
   const card1 = node("div", null, "summary-card summary-card-wide");
   card1.append(node("h3", "문서 AI 생성 여부 진단"));
   if (detectorResults.length > 0) {
@@ -1294,7 +1370,6 @@ function renderAIVerification() {
       item.append(
         node("div", `${res.filename}: `),
         node("span", verdictLabel, badgeClass),
-        // 이 값은 모델들이 낸 AI 작성 가능성 추정치(중앙값)다. 판정 근거의 신뢰도와는 다른 값이다.
         node("small", ` (AI 작성 가능성 추정치 ${(res.score || 0).toFixed(2)})`, "muted")
       );
       const dist = Object.entries(res.signals?.verdict_distribution || {}).filter(([, n]) => n);
@@ -1304,8 +1379,6 @@ function renderAIVerification() {
       if (coverage) item.append(node("p", `작성 주체 검토 범위: ${coverage.inspected_chars || 0}/${coverage.total_chars || 0}자 · ${coverage.is_full_coverage ? "대상 본문 전체" : "일부 표본 또는 미실행"}. 직접 인용·문서 속 지시문은 작성 주체 근거에서 제외합니다.`, "muted"));
       const opinions = res.signals?.llm_opinions || res.model_opinions || res.opinions || [];
       const failures = Object.entries(res.signals?.llm_failures || {});
-      // 모델별 설명은 모델 블록에서 모두 보이므로 요약에서는 뺀다. 예전 결과처럼
-      // 모델별 기록이 없으면 근거를 자르지 않고 모두 보인다.
       const summary = (res.reasons || []).filter(r => !opinions.length || !/^\[[a-z]+\] /.test(r));
       if (summary.length) {
         const reasonList = node("ul", null, "reason-list");
@@ -1319,9 +1392,10 @@ function renderAIVerification() {
     card1.append(node("p", state.run ? "검증 완료 후 분석 결과를 표시합니다." : "검증을 시작하면 AI 작성 여부를 진단합니다.", "muted"));
   }
 
-  // 허위 판례는 별도 카드로 두지 않고 아래 세부 대조표의 머리에 요약한다(중복 방지).
-  renderHallucinationSummary(allRows);
-  cardsContainer.append(card1, injectionCard(docs, hasQuarantine));
+  // 2) 프롬프트 인젝션 검증 카드 & 3) 보안 카드
+  cardsContainer.append(card1, injectionCard(docs, hasQuarantine), securityCard(docs, state.findings));
+
+  // 기존 RAG 및 관련 법조문 검토 섹션 (F2/F3 통합 전까지 기존 브라우저 시험 호환성 유지)
   const references = referenceSection(docs);
   if (references) cardsContainer.append(references);
   for (const d of docs) {
@@ -1336,8 +1410,28 @@ function renderAIVerification() {
     }
     cardsContainer.append(section);
   }
+}
 
-  // 테이블 렌더링
+function renderTemporaryCitationSection() {
+  const container = $("aiVerificationRows");
+  const emptyMsg = $("aiVerificationEmpty");
+  if (!container) return;
+
+  container.replaceChildren();
+
+  const docs = state.result?.documents || [];
+  let allRows = [];
+
+  for (const d of docs) {
+    if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
+      for (const row of d.ai_hallucination_table) {
+        allRows.push({ filename: d.filename, ...row });
+      }
+    }
+  }
+
+  renderHallucinationSummary(allRows);
+
   if (allRows.length === 0) {
     if (emptyMsg) emptyMsg.hidden = false;
     return;
@@ -1352,7 +1446,6 @@ function renderAIVerification() {
       node("strong", r.cited_authority || "인용 판례"),
       node("p", r.claim_text || "", "claim-text")
     );
-    // 주장 평가는 짧은 배지라 인용 오류·미확인 근거 칸 머리에 함께 싣고, 남는 폭은 법리 검토 칸에 준다.
     const tdBasis = node("td");
     let verdictCls = "badge HIGH";
     if (r.basis === "OFFICIAL_CONFIRMED") {
@@ -1617,6 +1710,14 @@ async function loadAudit() {
 }
 document.querySelectorAll("[data-close]").forEach(el => el.onclick = () => el.closest("dialog").close());
 document.querySelectorAll("[data-tab]").forEach(el => el.onclick = () => switchTab(el.dataset.tab));
+document.addEventListener("click", e => {
+  const jump = e.target.closest("[data-jump-tab]");
+  if (jump) {
+    e.preventDefault();
+    const target = jump.getAttribute("data-jump-tab");
+    if (target) switchTab(target);
+  }
+});
 $("menuButton").onclick = () => $("sidebar").classList.toggle("open");
 $("projectSearch").oninput = renderProjects;
 $("newProjectBtn").onclick = action(() => editProject(true));

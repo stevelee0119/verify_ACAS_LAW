@@ -32,8 +32,21 @@ from ..access import project_scoped
 from ..identity import (actor_id, apply_organization_policy, filter_project_query,
                         project_creation_defaults, require_project, project_role)
 
+from packages.common.finding_category_map import CATEGORY_TO_TAB, FINDING_CATEGORY_MAP, get_category_counts
+
 router = APIRouter(tags=["projects"])
 logger = logging.getLogger(__name__)
+
+
+@router.get("/finding-categories")
+def get_finding_categories() -> dict:
+    """97개 FindingType의 화면 배정 매핑 및 탭 분류를 반환합니다 (F1 단일 기준)."""
+    return {
+        "categories": {ft.value: cat.value for ft, cat in FINDING_CATEGORY_MAP.items()},
+        "tabs": {ft.value: CATEGORY_TO_TAB[cat].value for ft, cat in FINDING_CATEGORY_MAP.items()},
+        "counts": get_category_counts(),
+    }
+
 
 
 def _project_out(session: Session, project: Project) -> ProjectOut:
