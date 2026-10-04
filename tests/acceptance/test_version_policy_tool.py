@@ -127,6 +127,45 @@ def test_unreadable_base_is_unmeasured(monkeypatch):
     assert tool.main(["--base", "BASE"]) == 2
 
 
+def _fake_git_with_parents(monkeypatch, versions, parents):
+    """parents: {rev: [부모 rev ...]}. rev-list는 parents의 키 순서."""
+    def fake(*args):
+        if args[0] == "rev-list":
+            return "\n".join(parents) + "\n"
+        if args[0] == "log":
+            return " ".join(parents.get(args[-1], [])) + "\n"
+        if args[0] == "show":
+            version = versions.get(args[1].split(":")[0])
+            return None if version is None else f'    version: str = "{version}"\n'
+        return None
+    monkeypatch.setattr(tool, "git", fake)
+
+
+def test_branch_started_before_a_bump_and_merged_with_the_bumped_base_passes(monkeypatch, capsys):
+    """기준(0.10.0) 이전에 갈라진 브랜치(0.9.13)에 기준을 병합한 후보: 내려감으로 보지 않는다(2026-10-04 F1 병합 후보)."""
+    versions = {"BASE": "0.10.0", "OLD": "0.9.13", "b1": "0.9.13", "b2": "0.9.13", "m": "0.10.0"}
+    _fake_git_with_parents(monkeypatch, versions, {"b1": ["OLD"], "b2": ["b1"], "m": ["b2", "BASE"]})
+    monkeypatch.setattr(tool, "load_verdicts", lambda: [])
+    assert tool.main(["--base", "BASE"]) == 0
+    assert "버전 변경 없음" in capsys.readouterr().out
+
+
+def test_real_downgrade_on_a_branch_is_still_caught(monkeypatch, capsys):
+    versions = {"BASE": "0.10.0", "OLD": "0.9.13", "b1": "0.9.12", "m": "0.10.0"}
+    _fake_git_with_parents(monkeypatch, versions, {"b1": ["OLD"], "m": ["b1", "BASE"]})
+    monkeypatch.setattr(tool, "load_verdicts", lambda: [])
+    assert tool.main(["--base", "BASE"]) == 1
+    assert "b1" in capsys.readouterr().out
+
+
+def test_unverdicted_bump_on_a_branch_is_still_caught(monkeypatch, capsys):
+    versions = {"BASE": "0.10.0", "b1": "0.10.1"}
+    _fake_git_with_parents(monkeypatch, versions, {"b1": ["BASE"]})
+    monkeypatch.setattr(tool, "load_verdicts", lambda: [])
+    assert tool.main(["--base", "BASE"]) == 1
+    assert "판정서가 없다" in capsys.readouterr().out
+
+
 def test_committed_verdict_file_is_valid_json_list():
     path = ROOT / "docs" / "scorecards" / "version_verdicts.json"
     data = json.loads(path.read_text(encoding="utf-8"))
