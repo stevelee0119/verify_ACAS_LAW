@@ -17,7 +17,7 @@
 |---|---|---|
 | **1. `review_items` 필드** | 조건부 승인 (필수 6건) | 모델 위치 `packages/common/schemas.py`로 정정, 배열 위치 `documents[].review_items` 단일화, 근거 사다리 2축(`official_status`, `reference_status`) 분리, 단일 심각도 기존 불변 및 파생 규칙 명시, `item_id` 실행 단위 및 결정적 생성 규칙 정의, 실제 사유값 기반 사람 말 변환표 갱신 |
 | **2. 행별 검토 상태 저장** | 조건부 승인 (안 (b)) | 1단계(F2)는 finding 있는 행 기존 API 사용, 없는 행 '저장 불가(정보)' 표시(안 (a) 준용). 2단계 확장은 기존 `finding_workflows` 불변 새 테이블 분리로 단계화 |
-| **3. 유형→화면 배정** | 승인 (재배정 2건) | 요약 수치(AI·보안 49 / 검토 48) 일치, `MODEL_FACT_REMARK`→검토 항목(사실관계), `OCR_LOW_QUALITY`→검토 항목(처리 상태) 재배정, `packages/common/finding_category_map.py` 단일 모듈화 |
+| **3. 유형→화면 배정** | 승인 (재배정 2건) | 요약 수치(AI·보안 47 / 검토 50) 일치, `MODEL_FACT_REMARK`→검토 항목(사실관계), `OCR_LOW_QUALITY`→검토 항목(처리 상태) 재배정, `packages/common/finding_category_map.py` 단일 모듈화 |
 | **4. F3 주장 단위 대조** | 조건부 승인 | 기존 `packages/rag_engine/review.py` 확장으로 명시, 대조 기준 모델 송신 텍스트(`_contains_flexible`), Drive 본문 검색(한글 단어만 사용, 연락처·주민번호 미포함), 문서당 주장 수(10건) 및 발췌 글자 수(4,000자) 상한 설정 |
 | **5. 자유 텍스트 스키마 고정** | 신규 필수 (TK-55) | 허용 목록 키 화이트리스트 고정, 인명/당사자 키 배제, `fail-closed` 전송 차단 |
 | **6. FT 설계 보충** | 신규 필수 | 목 단위 본문 대조(TK-34), 동일 시행일 복수 버전 병기·대조, 개정 성격 구분, 오탐 대조군, `rule_id` 충분성 |
@@ -144,7 +144,7 @@ class ReviewItem(BaseModel):
 회신서 2절 조건부 승인에 따라 다음과 같이 2단계로 분리합니다:
 
 1. **1단계 (F2 구현 범위)**:
-   - `finding_id`가 연결된 행은 기존 `FindingWorkflow` API (`/api/workspace/projects/{p_id}/findings/{finding_id}/workflow`)를 그대로 재사용합니다.
+   - `finding_id`가 연결된 행은 기존 `FindingWorkflow` API (`/api/findings/{finding_id}/workflow`)를 그대로 재사용합니다.
    - Finding이 연결되지 않은 순수 인용 행이나 처리 상태 행은 화면에서 **'저장 불가(정보)'** 상태로 표시하고 체크/수정 인터페이스를 비활성화합니다.
    - 기존 테이블이나 API 수정 없이 안전하게 F2 UI를 완성합니다.
 
@@ -160,15 +160,15 @@ class ReviewItem(BaseModel):
 
 ### 4.1 배정 요약 수치
 - **전체 FindingType 수**: 97개
-- **AI·보안 탭 배정**: **49개** (적대적 인젝션 16개 + MM4 권고 5개 + 포렌식/위변조 28개)
-- **검토 항목 탭 배정**: **48개** (법률/인용 9개 + 사실/모순 26개 + 시점/연표 11개 + 처리 상태 2개)
-- 요약 수치와 상세 표의 총합이 97개로 완벽히 일치합니다.
+- **AI·보안 탭 배정**: **47개** (AI 진단 5개 + 프롬프트 인젝션 17개 + 보안 25개)
+- **검토 항목 탭 배정**: **50개** (사실관계 27개 + 법률·판례 인용 11개 + MM4 권고 5개 + 시점·연표 4개 + 처리 품질 3개)
+- 요약 수치와 코드 기준(`packages/common/finding_category_map.py`)의 총합이 97개로 완벽히 일치합니다.
 
 ### 4.2 필수 재배정 내역 (회신서 3절 반영)
 1. **`MODEL_FACT_REMARK` → 검토 항목 (사실관계, 참고 표시)**:
-   - 생성 코드(`packages/ai_document_detector/detector.py`의 `_fact_remark_finding`)에서 "AI 작성 근거가 아니라 내용 검증 대상"으로 명시하고 `advisory_only=True`이므로, T4(AI 탭 배타성) 준수를 위해 검토 항목 탭으로 재배정합니다.
+   - 생성 코드(`packages/verification_engine/ai_document_detector.py`의 `_fact_remark_finding`)에서 "AI 작성 근거가 아니라 내용 검증 대상"으로 명시하고 `advisory_only=True`이므로, T4(AI 탭 배타성) 준수를 위해 검토 항목 탭으로 재배정합니다.
 2. **`OCR_LOW_QUALITY` → 검토 항목 ('처리 상태')**:
-   - `pipeline.py`가 쪽 단위 OCR 품질로부터 생성하는 처리 품질 신호이므로 위·변조 징후가 아닌 검토 항목의 '처리 상태'로 재배정합니다.
+   - `packages/verification_engine/pipeline.py`가 쪽 단위 OCR 품질로부터 생성하는 처리 품질 신호이므로 위·변조 징후가 아닌 검토 항목의 '처리 상태'로 재배정합니다.
 3. **`AI_HALLUCINATED_CONTENT`·`PLACEHOLDER_IDENTIFIER`·`INVALID_IDENTIFIER`**:
    - `AI_HALLUCINATED_CONTENT`: 환각 모델 이상 탐지 카테고리로 AI·보안 탭에 배정하되, 현재 a04826f 코드에서는 미생성(enum만 존재).
    - `PLACEHOLDER_IDENTIFIER`, `INVALID_IDENTIFIER`: `packages/forensic_engine/specimen.py`에서 서식 조작/식별자 위변조 징후를 탐지하므로 보안 카드에 배정. 판례 인용 검증과 충돌하지 않음을 확인.
@@ -222,7 +222,7 @@ STRUCTURED_REQUEST_ALLOWED_KEYS = {
 ```
 - **Fail-Closed 원칙**: 화이트리스트 외의 키가 포함된 요청 객체는 `LLMRouter.run` 진입 전 즉시 차단(거절)합니다.
 - **인명/당사자 키 배제**: `client_name`, `party_name`, `suspect`, `victim` 등 인명을 가리키는 키는 스키마에 일체 두지 않습니다.
-- **자유 텍스트 키 집중 검사**: 자유 텍스트를 허용하는 키(`claim_text`, `reference_sources[].text`)에 대해서만 전송 전 검사(`inspect_request`)를 수행합니다.
+- **요청 전체 검사 유지**: 전송 전 검사(`inspect_request`)는 자유 텍스트 키뿐만 아니라 요청 전체를 현행과 동일하게 검사하며, 화이트리스트 스키마 검증은 그 앞단의 추가 보안 관문으로 동작합니다.
 - **응답 스키마와의 대응**: 기존 `ITEM_SCHEMA` 및 `ENVELOPE_SCHEMA`의 `claim_quote`, `source_quote`, `explanation`과 1:1로 정확히 대응합니다.
 
 ---
@@ -233,18 +233,19 @@ STRUCTURED_REQUEST_ALLOWED_KEYS = {
 
 ### 7.1 목 단위 본문 대조 방식 (TK-34 해결)
 - 현행 `packages/source_adapters/legal_history.py`의 조문 파싱 로직(`parse_law_body`)을 확장하여, 조(Article) 단위뿐만 아니라 **호(Item) 및 목(Sub-item)** 단위까지 분할 파싱합니다.
-- 행위일자 당시 시행되던 규정과 현행 규정 간에 조 번호가 같더라도 하위 호·목이 신설/삭제/개정된 경우를 감지하여 정밀 대조합니다.
+- 조 번호가 같더라도 하위 호·목이 신설/삭제/개정된 경우를 감지하여, 인용한 목의 문언이 행위 당시 시행본과 맞는지 정밀 대조합니다.
 
 ### 7.2 동일 시행일 복수 버전 병기 및 대조 (요청 16)
 - 현행 코드 `packages/source_adapters/legal_history.py:106`의 `raise ValueError("Multiple versions share the requested effective boundary")` 예외 경로를 다음과 같이 안전하게 대체합니다:
-  - 동일 시행일을 공유하는 복수 법령 개정판(예: 법률 제12345호, 제12346호 동시 시행)이 존재할 경우, 예외를 던지는 대신 **두 버전을 모두 추출하여 병기(Both Versions Presented)**합니다.
-  - 두 버전의 조문을 대조하여 차이점을 `FT_MULTI_VERSION_AMBIGUITY` 안내 신호와 함께 사용자 화면에 표시합니다.
+  - 동일 시행일을 공유하는 복수 법령 개정판이 존재할 경우, 예외를 던지는 대신 **두 버전을 모두 추출하여 병기(Both Versions Presented)**하고 각각 대조합니다.
+  - 두 버전의 대조 결과가 갈리면 어느 하나로 임의 확정하지 않고 **'확인 요청'**으로 처리합니다.
 
-### 7.3 번호만 바뀐 개정 vs 내용이 바뀐 개정 구분
-- 조문 번호만 자구 이동(예: 제3조 -> 제4조)되고 본문 실질 내용이 동일한 경우(`_clean_str(text1) == _clean_str(text2)`):
-  - 심각도: `INFO` (단순 조문 이동 안내)
-- 조문 번호 유지 여부와 무관하게 구성요건이나 법정형 등 본문 실질 내용이 변경된 경우:
-  - 심각도: `HIGH` (실질 법리 변경 경고)
+### 7.3 FT 판정 기준 및 개정 성격 분류
+- **판정 기준 (TK-34 준수)**: 개정의 성격(번호 이동·내용 변경)만으로 HIGH를 내지 않으며, 판정의 본질적 기준은 **인용한 목의 문언이 행위 당시 시행본과 맞는지**입니다.
+  - 행위 당시 시행본의 문언과 부합하는 경우: 적법/정상 인용으로 판정.
+  - 행위 당시 시행본과 불일치하고 개정 후 규정 문언과 일치하는 경우: `TEMPORAL_LAW_MISMATCH` 판정.
+- **개정 분류는 설명용**: 번호만 바뀐 개정과 내용이 바뀐 개정의 구분은 사용자 안내 문구(설명용)로 활용되며, 단독으로 심각도를 결정하지 않습니다.
+- **갈리면 확인 요청**: 동일 시행일 복수 버전 등으로 대조 결과가 갈리거나 시행본 문언이 불명확한 경우 하나로 확정하지 않고 **'확인 요청'**으로 둡니다.
 
 ### 7.4 오탐 대조군 계획
 - 법령명만 언급되고 특정 조문이 인용되지 않은 일반 서술문 5건.
@@ -252,8 +253,9 @@ STRUCTURED_REQUEST_ALLOWED_KEYS = {
 - 시행일 이전 행위에 대해 유리한 신법을 명시적으로 원용하는 정당한 소급효 주장 서면 5건.
 - 위 15건의 대조군에 대해 불필요한 행위시법 경고가 발생하지 않는지 검증합니다.
 
-### 7.5 기존 `rule_id`의 충분성
-- 기존 `TEMPORAL_LAW_MISMATCH`, `AMBIGUOUS_LAW_VERSION`, `OUTDATED_PROVISION_CITED` 3개 규칙으로 기본 커버리지가 확보되며, 목 단위 변경 안내를 위한 `SUB_PROVISION_AMENDMENT` 1종만 추가 정의하여 충분히 커버 가능합니다.
+### 7.5 기존 `rule_id` 검토 및 신규 `rule_id` 요청 계획
+- 기존 코드에 존재하는 `TEMPORAL_LAW_MISMATCH` 규칙으로 기본 행위시법 시간축 커버리지를 제공합니다. (기존 가상으로 언급되었던 `AMBIGUOUS_LAW_VERSION`, `OUTDATED_PROVISION_CITED`는 코드에 부존재하므로 삭제)
+- 향후 목 단위 세부 변경 안내를 위한 `SUB_PROVISION_AMENDMENT` 및 동일 시행일 복수 버전 병기/갈림 처리를 위한 `FT_MULTI_VERSION_AMBIGUITY` 등 신규 `rule_id`가 필요한 경우, 임의로 코드를 수정하지 않고 요청서를 통해 평가 측 검토 및 승인을 거쳐 추가합니다.
 
 ---
 

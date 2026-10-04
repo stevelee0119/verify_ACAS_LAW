@@ -75,7 +75,7 @@ def test_findings_from_one_citation_are_grouped(tmp_path):
             grouped.locator(".derived-findings summary").click()
             expect(grouped.locator(".derived-findings")).to_contain_text("공식 DB에서 확인되지 않은 판례에 기댄 주장")
             expect(rows.filter(has_text="다른 인용의 항목").locator(".derived-findings")).to_have_count(0)
-            page.locator("[data-tab='ai-verification']").click()
+            page.locator("[data-tab='review']").click()
             references = page.locator(".reference-section")
             expect(references.locator("h3")).to_have_text("주요 참고문헌 검토 결과(RAG)")
             expect(references).to_contain_text("부분 처리·제한 있음")

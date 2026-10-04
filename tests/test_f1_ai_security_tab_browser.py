@@ -177,8 +177,12 @@ def f1_browser_page():
             return
         if path == "/api/finding-categories":
             # 배정표 모듈의 실제 응답 반환
-            from common.finding_category_map import get_all_categories_api_response
-            route.fulfill(json=get_all_categories_api_response())
+            from packages.common.finding_category_map import CATEGORY_TO_TAB, FINDING_CATEGORY_MAP, get_category_counts
+            route.fulfill(json={
+                "categories": {ft.value: cat.value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "tabs": {ft.value: CATEGORY_TO_TAB[cat].value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "counts": get_category_counts(),
+            })
             return
 
         route.fulfill(status=200, json=[])
