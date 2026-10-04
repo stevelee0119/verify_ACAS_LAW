@@ -32,7 +32,7 @@
  ...ame_key_coverage_and_english_label_overreach.md |  69 +++++++++++
  ...55_round8d_overblock_and_key_head_regression.md |  51 ++++++++
  docs/handoff/requests/34_round8e_design.md         |  13 ++
- docs/handoff/requests/35_round8e_completion.md    |  67 +++++++++++
+ docs/handoff/requests/35_round8e_completion.md    |  88 +++++++++++++++
  docs/scorecards/DAILY_TREND.md                     |  32 +++++
  docs/scorecards/HISTORY.md                         |  14 +++
  docs/scorecards/RELEASE_PROCEDURE.md               |  70 +++++++++++
@@ -41,7 +41,7 @@
  packages/llm_router/privacy.py                     | 132 ++++++++++++---------
  .../test_round8_known_open_key_signal.py           |  59 +++++++++
  tests/regression/test_r8e_key_context.py           |  94 ++++++++++++++
- 17 files changed, 835 insertions(+), 57 deletions(-)
+ 17 files changed, 852 insertions(+), 57 deletions(-)
 ```
 
 `git diff a7bd8bd HEAD --stat -- tests/`:
