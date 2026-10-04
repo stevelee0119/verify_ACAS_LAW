@@ -103,3 +103,31 @@ def test_approval_covers_only_listed_test(repo):
     _commit(repo, BASE_TESTS.replace("def test_will_be_removed", "@pytest.mark.xfail\ndef test_will_be_removed"), "implementer")
     r = _run(repo, base)
     assert r.returncode == 1 and "test_will_be_removed" in r.stdout
+
+
+def _write_delete_approval(repo: Path, agent: str) -> None:
+    (repo / "docs" / "scorecards").mkdir(parents=True, exist_ok=True)
+    (repo / "docs" / "scorecards" / "approved_test_marks.json").write_text(
+        '{"approved": [{"test": "tests/test_x.py::test_will_be_removed", "mark": "delete"}]}', encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", f"approvals\n\nAgent: {agent}")
+
+
+def test_evaluator_approved_deletion_passes_and_only_for_listed_test(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _write_delete_approval(repo, "evaluator")
+    _commit(repo, BASE_TESTS.replace("def test_will_be_removed():\n    assert True\n", ""), "implementer")
+    r = _run(repo, base)
+    assert r.returncode == 0 and "(삭제)" in r.stdout
+    base2 = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "import pytest\n", "implementer")
+    r2 = _run(repo, base2)
+    assert r2.returncode == 1 and "test_keeps_asserting" in r2.stdout
+
+
+def test_deletion_approval_written_by_implementer_is_ignored(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _write_delete_approval(repo, "implementer")
+    _commit(repo, BASE_TESTS.replace("def test_will_be_removed():\n    assert True\n", ""), "implementer")
+    r = _run(repo, base)
+    assert r.returncode == 1 and "test_will_be_removed" in r.stdout
