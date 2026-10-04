@@ -4,6 +4,7 @@
 - **일자**: 2026-10-04
 - **브랜치**: `antigravity/f2-review-items`
 - **시작 커밋**: `0848e69` (PR #13 병합 커밋, F1 All Green)
+- **병합 커밋**: `5a99196` (F1 head `2bfb7d1` 병합)
 - **대상**: 기능 라운드 F2 통합 '검토 항목' 탭 — 서버 단일 판정 객체(`documents[].review_items`) 구축 및 보호 시험 T1~T5 전수 통과
 
 ---
@@ -65,18 +66,19 @@
 
 ## 4. 검증 결과 요약
 
-| 검증 항목 | 실행 명령 | 결과 | 상세 내용 |
+| 검증 항목 | 실행 명령 | 결과 | pytest 최종 요약 출력 |
 | :--- | :--- | :---: | :--- |
-| **평가 측 보호 시험 (T1~T5)** | `pytest tests/acceptance/test_f1_protected.py -v` | **PASS (7/7)** | **T1, T2, T3, T4, T5 건너뜀 없이 전수 통과** |
-| **F2 단위 시험** | `pytest tests/test_f2_review_items.py -v` | **PASS (3/3)** | 순수 파생 심각도, 1인용 1행, 손실 0, 배타성, 직렬화 검증 |
-| **미확인 사유 변환 시험** | `pytest tests/test_unverified_reasons.py -v` | **PASS (3/3)** | 사전 등록 사유 9종 매핑 및 fallback 방어 검증 |
-| **배정표 단위 시험** | `pytest tests/test_finding_categories.py -v` | **PASS (8/8)** | 전수 97건 매핑 및 카테고리 무결성 검증 |
-| **기존 브라우저 시험** | `pytest tests/test_f1_ai_security_tab_browser.py ...` | **PASS (15/15)** | AI 탭 배타성, 레이아웃, 모델 의견 브라우저 시험 전수 통과 |
+| **평가 측 보호 시험 (T1~T5)** | `pytest tests/acceptance/test_f1_protected.py -v` | **PASS** | `7 passed in 13.18s` (T1~T5 건너뜀 없이 전수 통과) |
+| **F2 단위 시험** | `pytest tests/test_f2_review_items.py -v` | **PASS** | `3 passed` (순수 파생 심각도, 1인용 1행, 손실 0, 배타성, 직렬화) |
+| **미확인 사유 변환 시험** | `pytest tests/test_unverified_reasons.py -v` | **PASS** | `3 passed` (사전 등록 사유 9종 매핑 및 fallback 방어) |
+| **단위 시험 묶음 요약** | `pytest tests/test_f2_review_items.py tests/test_unverified_reasons.py -v` | **PASS** | `6 passed in 8.01s` |
+| **배정표 단위 시험** | `pytest tests/test_finding_categories.py -v` | **PASS** | `8 passed in 26.75s` (전수 97건 매핑 및 카테고리 일치) |
+| **기존 브라우저 시험** | `pytest tests/test_f1_ai_security_tab_browser.py tests/test_frontend_model_opinions.py tests/test_reasoning_layout.py -v` | **PASS** | `15 passed in 229.27s` (AI 탭 배타성, 레이아웃, 모델 의견) |
 | **사건 고유 값 점검** | `python scripts/check_case_literals.py` | **PASS** | 코드베이스 내 사건 고유 값 및 서면 문구 신규 하드코딩 0건 |
-| **보호 경로 변경 점검** | `python scripts/check_protected_paths.py --base HEAD` | **PASS** | 보호 경로 파일 수정 0건 |
-| **하드코딩 diff 점검** | `python scripts/check_hardcoding_diff.py --base HEAD` | **PASS** | 새 줄에 시험 입력 값/낱말/조문 번호 0건 |
-| **버전 정책 점검** | `python scripts/check_version_policy.py --base HEAD` | **PASS** | 버전 불변 (0.9.13 유지) |
-| **스코어카드 및 점수 게이트** | `python scripts/scorecard.py && scripts/score_gate.py` | **PASS** | dev 81.7 / holdout 79.2 (오탐 0, 인젝션 방어, 점수 하락 없음) |
+| **보호 경로 변경 점검** | `python scripts/check_protected_paths.py --base HEAD~1` | **PASS** | 보호 경로 점검: 바뀐 보호 경로 없음 |
+| **하드코딩 diff 점검** | `python scripts/check_hardcoding_diff.py --base HEAD~1` | **PASS** | 새로 추가된 줄에 시험 입력의 값·낱말·조문 번호 없음 |
+| **버전 정책 점검** | `python scripts/check_version_policy.py --base HEAD~1` | **PASS** | 버전 정책: 위반 없음 (버전 변경 없음) |
+| **스코어카드 및 점수 게이트** | `python scripts/scorecard.py && scripts/score_gate.py` | **PASS** | dev 81.7 / holdout 79.2 (오탐 0, 인젝션 방어, 점수 게이트 통과) |
 
 ---
 
