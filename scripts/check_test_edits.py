@@ -5,17 +5,21 @@
 - 실패(종료 코드 1): 기존 시험에 `skip`·`skipif`·`xfail` 표시가 새로 붙었다(표시 변경은 평가 측 소관).
 - 경고(종료 코드 0): 기존 시험의 `assert` 개수가 줄었다(약화 의심 — 사람이 본다).
 범위의 모든 커밋이 `Agent: evaluator` 꼬리표를 가지면(평가 측이 보호 시험을 고치는 경우) 점검을 건너뛴다.
+평가 측이 표시를 지시하고 구현 측이 붙인 경우(예: 알려진 미해결 strict xfail)는 `docs/scorecards/approved_test_marks.json`에
+적힌 시험·표시만 승인으로 본다. 그 파일을 마지막으로 바꾼 커밋이 `Agent: evaluator`일 때만 목록을 믿는다.
 사용: python scripts/check_test_edits.py --base <기준 커밋>
 """
 from __future__ import annotations
 
 import argparse
 import ast
+import json
 import subprocess
 import sys
 from typing import Dict, List, Optional, Tuple
 
 MARKS = ("skip", "skipif", "xfail")
+APPROVALS = "docs/scorecards/approved_test_marks.json"
 
 
 def _git(*args: str) -> str:
@@ -67,6 +71,22 @@ def all_evaluator_commits(base: str) -> bool:
     return all("Agent: evaluator" in c for c in commits)
 
 
+def approved_marks() -> set:
+    """평가 측이 승인한 (경로::시험, 표시) 쌍. 파일을 마지막으로 바꾼 커밋이 평가 측일 때만 믿는다."""
+    source = _show("HEAD", APPROVALS)
+    if source is None:
+        return set()
+    last = _git("log", "-1", "--format=%B", "HEAD", "--", APPROVALS)
+    if "Agent: evaluator" not in last:
+        print(f"  [주의] {APPROVALS}를 마지막으로 바꾼 커밋이 평가 측이 아니라 승인 목록을 쓰지 않는다")
+        return set()
+    try:
+        entries = json.loads(source).get("approved", [])
+    except (ValueError, AttributeError):
+        return set()
+    return {(e.get("test", ""), e.get("mark", "")) for e in entries if isinstance(e, dict)}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", required=True)
@@ -78,8 +98,10 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     changed = [p for p in _git("diff", "--name-only", args.base, "HEAD", "--", "tests").splitlines()
                if p.endswith(".py")]
+    approvals = approved_marks()
     removed: List[str] = []
     newly_marked: List[str] = []
+    approved_seen: List[str] = []
     weakened: List[str] = []
     for path in changed:
         before = collect(_show(args.base, path))
@@ -89,8 +111,12 @@ def main(argv: Optional[List[str]] = None) -> int:
                 removed.append(f"{path}::{name}")
                 continue
             a_asserts, a_marks = after[name]
-            if a_marks - marks:
-                newly_marked.append(f"{path}::{name} (+{', '.join(sorted(a_marks - marks))})")
+            added = a_marks - marks
+            unapproved = {m for m in added if (f"{path}::{name}", m) not in approvals}
+            if added - unapproved:
+                approved_seen.append(f"{path}::{name} (+{', '.join(sorted(added - unapproved))})")
+            if unapproved:
+                newly_marked.append(f"{path}::{name} (+{', '.join(sorted(unapproved))})")
             if a_asserts < asserts:
                 weakened.append(f"{path}::{name} (assert {asserts} → {a_asserts})")
 
@@ -100,6 +126,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  [실패] {title} {len(items)}개")
             for it in items:
                 print(f"    - {it}")
+    if approved_seen:
+        print(f"  [승인] 평가 측 승인 목록({APPROVALS})에 있는 표시 {len(approved_seen)}개")
+        for it in approved_seen:
+            print(f"    - {it}")
     if weakened:
         print(f"  [경고] assert가 줄어든 시험 {len(weakened)}개(약화 의심, 사람이 확인)")
         for it in weakened:
