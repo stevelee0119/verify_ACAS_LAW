@@ -21,11 +21,11 @@
 
 ```text
 docs/handoff/requests/32_round8d_design.md     |  14 +++
-docs/handoff/requests/33_round8d_completion.md |  71 ++++++++++++
+docs/handoff/requests/33_round8d_completion.md |  72 ++++++++++++
 packages/llm_router/privacy.py                 | 152 +++++++++++++++++++++----
 packages/pii_engine/detector.py                 |  16 ++-
 tests/regression/test_r8d_key_context.py        | 133 ++++++++++++++++++++++
-5 files changed, 360 insertions(+), 26 deletions(-)
+5 files changed, 361 insertions(+), 26 deletions(-)
 ```
 
 `git diff 86bd035 HEAD --stat -- tests/`:
