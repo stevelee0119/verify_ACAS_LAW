@@ -261,3 +261,73 @@ verify_all — HEAD 78ee51c, 기준 a04826f, 모드 full
 - 브라우저 시험 197건 전건 통과, 수용 시험(874건), 회귀 원장(224건), 점수 게이트, 하드코딩·시험 삭제 점검 모두 통과되었습니다.
 - PR #11에 최종 반영을 완료합니다.
 
+---
+
+## 7. 2차 보완 (2026-10-04, 사용자 확정 문구 및 판 1.1 반영)
+
+평가 측 2차 판정 및 지시서 7절에 따라 다음 사항을 완벽히 이행하였습니다:
+
+### 1) 사용자 확정 문구 및 판 1.1 적용 (`packages/common/privacy_notice.py`)
+- **버전 번호 상향**: `PRIVACY_NOTICE_VERSION = "1.1"`
+- **안내문 제목 신설**: `NOTICE_TITLE = "제한적 개인정보 가림 기능 제공 안내"`
+- **상시 안내문 본문 (NOTICE_BULLETS, 3문장)**:
+  1. "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다."
+  2. "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다."
+  3. "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요."
+- **확인 체크박스 라벨**: `ACK_LABEL = "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다."`
+- **보고서 머리 표시 문구**: `REPORT_HEADER_NOTICE = "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리"`
+- **거절 메시지 (422 및 화면 공통)**: `PRIVACY_ACK_ERROR_MESSAGE = "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다."`
+
+### 2) 화면 및 API 구현 보완
+- **`/api/privacy-notice` 응답에 `title` 추가**: `apps/api/routers/projects.py`의 `get_privacy_notice` 엔드포인트에 `title: NOTICE_TITLE` 추가.
+- **HTML 하드코딩 문구 제거 및 동적 제목 렌더링 (`apps/web/index.html`, `apps/web/static/app.js`)**:
+  - HTML 내 하드코딩 문구를 제거하고 `<strong id="privacyNoticeTitle">안내를 불러오는 중</strong>`으로 변경.
+  - API 응답의 `title` 필드를 받아 화면 제목으로 동적 렌더링.
+- **대체 문구(1.0 하드코딩) 제거 및 안내 미로드 시 업로드 원천 차단**:
+  - `app.js`에서 초기 하드코딩 1.0 문구 객체를 제거.
+  - 안내를 불러오기 전에는 '안내를 불러오는 중'만 노출되고 업로드(파일 선택 및 드래그 앤 드롭)를 원천 차단.
+  - 안내 불러오기 실패(5xx 오류 등) 시 '안내 불러오기 실패' 및 사유를 화면에 노출하고 업로드를 차단하며 토스트 알림을 제공.
+- **보고서 머리(화면, DOCX, PDF) 자동 적용**: 새 `REPORT_HEADER_NOTICE` 상수가 모든 보고서 머리에 일관되게 출력됨을 확인.
+
+### 3) 시험 갱신 및 추가 시험 구현 (100% 통과)
+- **API 시험 (`tests/test_upload_privacy_notice_api.py`)** — **4 passed**:
+  - `NOTICE_TITLE` 및 판 `1.1` 반환 단언 갱신.
+  - 사용자 확정 3대 불릿, 체크박스 라벨, 보고서 머리 단언 갱신.
+  - 감사 기록(AuditEvent)의 `notice_version`이 정확히 `1.1`로 기록됨을 명시적 단언으로 검증.
+- **브라우저 시험 (`tests/test_upload_privacy_notice_browser.py`)** — **5 passed**:
+  - 제목(`#privacyNoticeTitle`), 버전(`(v1.1)`), 3대 확정 문구, 라벨 노출 단언 갱신.
+  - **추가 시험**: `test_upload_blocked_when_notice_loading_or_failed` 구현 — 안내 불러오기 실패 시 화면 실패 표시, `fileInput` disabled 및 파일 선택 시도시 POST 전송 차단 및 토스트 알림 검증.
+- **기존 업로드 시험 (`tests/test_frontend_upload.py`)** — **8 passed** (회귀 0건).
+
+### 4) 바꾼 파일 및 Diff Stat (2차 보완 분)
+
+```
+ apps/api/routers/projects.py                |   2 +
+ apps/web/index.html                         |   2 +-
+ apps/web/static/app.js                      | 146 ++++++++++++++++++++++++----
+ packages/common/privacy_notice.py           |  21 ++--
+ tests/test_upload_privacy_notice_api.py     |  27 +++--
+ tests/test_upload_privacy_notice_browser.py | 113 +++++++++++++++++++--
+ 6 files changed, 263 insertions(+), 48 deletions(-)
+```
+
+### 5) 검증 결과 (`verify_all.py --base a04826f --quick --allow-env-mismatch`)
+
+```
+verify_all — HEAD 4ac038e, 기준 a04826f, 모드 quick
+  환경: python 3.14.6, tesseract None, Windows-11-10.0.26340-SP0  [주의] CI 환경(python 3.11, tesseract 5.3.4)과 다름
+  [통과] environment: python 3.14.6, tesseract None — CI와 다름 (--allow-env-mismatch)
+  [통과] acceptance: 통과 924, 실제 실패 0, strict XPASS 0
+  [통과] regression_ledger: 통과 501, 실제 실패 0, strict XPASS 0
+  [통과] score_gate: 점수 게이트 통과
+  [통과] regression_gate: 회귀 없음
+  [통과] hardcoding_diff:   새로 추가된 줄에 시험 입력의 값·낱말·조문 번호 없음
+  [통과] test_edits:   기존 시험의 삭제·표시 변경 없음
+  [통과] protected_paths: 보호 경로 점검: 바뀐 보호 경로 23개 모두 평가 측 커밋 또는 승인
+  [통과] version_policy: 버전 정책: 위반 없음 (버전 변경 없음)
+요약 저장: artifacts/verify_all.json
+```
+
+- **종료 코드 0 (성공)**
+- **CI 링크**: PR #11 (`https://github.com/stevelee0119/verify_ACAS_LAW/pull/11`)
+
