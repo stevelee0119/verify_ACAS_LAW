@@ -197,3 +197,40 @@ def test_privacy_notice_endpoint_returns_centralized_constants(api_client):
     assert "이외의 개인정보는 미포함되었거나 직접 가림 처리" in data["ack_label"]
     assert "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림" in data["report_header"]
     assert "확인해야 업로드할 수 있습니다" in data["ack_error_message"]
+
+
+def test_unauthenticated_privacy_notice_get_returns_200_without_sensitive_data(registry, monkeypatch):
+    """비로그인 상태(multi-user)에서도 GET /api/privacy-notice는 200이며 개인정보나 내부 설정값이 없다 (3차 보완)."""
+    # multi-user 환경 및 비인증 상태 모의
+    monkeypatch.setenv("LV_AUTH_MODE", "multi-user")
+    monkeypatch.setenv("LV_ACCESS_TOKEN", "")
+    set_registry(registry)
+    db_module.reset_engine()
+    app = create_app()
+
+    # 인증 헤더 없는 순수 클라이언트
+    client = TestClient(app)
+    response = client.get("/api/privacy-notice")
+    assert response.status_code == 200
+
+    data = response.json()
+    # 1. 안내문 필수 필드 및 판 1.1 검증
+    assert data["title"] == NOTICE_TITLE
+    assert data["version"] == PRIVACY_NOTICE_VERSION
+    assert data["version"] == "1.1"
+    assert len(data["bullets"]) == 3
+
+    # 2. 개인정보 및 내부 설정값 부존재 검증
+    sensitive_keys = {
+        "user", "users", "account", "token", "password", "secret", "session",
+        "email", "phone", "db", "database", "database_url", "storage_key",
+        "encryption_key", "internal", "config", "settings",
+    }
+    for key in sensitive_keys:
+        assert key not in data, f"비인증 안내문 응답에 민감 키({key})가 포함되어서는 안 된다"
+
+    # 응답 본문 텍스트 내에도 민감한 설정 문자열이 없음을 확인
+    raw_text = response.text.lower()
+    for sensitive_word in ("secret", "password", "bearer", "sqlite:", "postgresql:"):
+        assert sensitive_word not in raw_text, f"비인증 응답에 내부 구성({sensitive_word})이 노출되어서는 안 된다"
+

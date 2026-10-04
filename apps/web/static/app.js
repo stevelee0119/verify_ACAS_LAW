@@ -405,28 +405,10 @@ function renderPrivacyNoticeElements() {
 }
 
 async function loadPrivacyNotice() {
+  // 개인정보 처리 안내문 로드 (401·404를 포함한 모든 응답 실패 시 정상적으로 오류 처리)
   try {
     const res = await fetch("/api/privacy-notice");
     if (!res.ok) {
-      if (res.status === 401 || res.status === 404) {
-        // 모의 브라우저 테스트 환경 등에서 라우트가 모의되지 않은 경우 호환성 지원
-        privacyNoticeConfig = {
-          loaded: true,
-          error: null,
-          title: "제한적 개인정보 가림 기능 제공 안내",
-          version: "1.1",
-          bullets: [
-            "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.",
-            "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다.",
-            "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요.",
-          ],
-          ack_label: "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.",
-          report_header: "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리",
-          ack_error_message: "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.",
-        };
-        renderPrivacyNoticeElements();
-        return;
-      }
       throw new Error(`서버 응답 오류(${res.status})`);
     }
     const data = await res.json();
@@ -2053,6 +2035,10 @@ async function init() {
   try {
     const health = await api("/health");
     const identity = await operationsUI.refreshIdentity();
+    if (!privacyNoticeConfig.loaded) {
+      // 신원 확인 후 개인정보 처리 안내가 로드되지 않은 상태면 재호출
+      await loadPrivacyNotice();
+    }
     projectTools.start();
     $("connection").textContent = `${identity.authentication === "local" ? "로컬" : "조직"} 작업 공간 · v${health.version}`;
     await loadProjects();

@@ -285,3 +285,80 @@ def test_upload_blocked_when_notice_loading_or_failed():
             expect(toast_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
         finally:
             browser.close()
+
+
+def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
+    """3차 보완 새 시험: 401(로그인 전/인증 만료)이면 안내를 불러오지 못해 업로드가 막힌다."""
+    static = ROOT / "apps/web/static"
+    files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
+    files["/"] = ROOT / "apps/web/index.html"
+    project = {
+        "id": "proj_401_test",
+        "name": "401 미인증 업로드 차단 시험 프로젝트",
+        "external_ai_policy": "LOCAL_ONLY",
+        "document_count": 0,
+        "scope_revision": 1,
+    }
+    control = {"posts": 0}
+
+    def unauth_respond(route):
+        path = urlsplit(route.request.url).path
+        if path in files:
+            route.fulfill(path=str(files[path]))
+        elif path == "/api/health":
+            route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        elif path == "/api/projects":
+            route.fulfill(json=[project])
+        elif path == f"/api/projects/{project['id']}":
+            route.fulfill(json=project)
+        elif path == f"/api/projects/{project['id']}/documents":
+            control["posts"] += 1
+            route.fulfill(status=201, json={"id": "doc1"})
+        elif path == "/api/privacy-notice":
+            # 401 비인증/로그인 전 응답 모의
+            route.fulfill(status=401, json={"detail": "Authentication required"})
+        else:
+            route.fulfill(status=401, json={"detail": "Unauthorized"})
+
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        channel = os.getenv("LV_TEST_BROWSER_CHANNEL") or ("chrome" if os.name == "nt" else None)
+        if channel:
+            options["channel"] = channel
+        browser = playwright.chromium.launch(**options)
+        try:
+            page = browser.new_page()
+            page.route("**/*", unauth_respond)
+            page.goto("https://uploads.test/")
+            page.evaluate("""project => {
+                state.project = project;
+                document.getElementById('emptyState').hidden = true;
+                document.getElementById('projectView').hidden = false;
+                renderProject();
+            }""", project)
+
+            # 1. 401 응답 시 제품 코드가 임의 문구 사본으로 우회하지 않고 정상적으로 실패 처리됨을 확인
+            title_el = page.locator("#privacyNoticeTitle")
+            expect(title_el).to_have_text("안내 불러오기 실패")
+
+            bullets_el = page.locator("#privacyNoticeBullets")
+            expect(bullets_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
+
+            # 2. 파일 추가 input이 disabled 상태로 차단되었는지 확인
+            expect(page.locator("#fileInput")).to_be_disabled()
+
+            # 3. 파일 선택을 시도해도 업로드가 진행되지 않고 POST가 0건임을 검증
+            page.locator("#fileInput").set_input_files({
+                "name": "차단문서.pdf",
+                "mimeType": "application/pdf",
+                "buffer": PAYLOAD,
+            })
+            assert control["posts"] == 0, "401 응답 시 업로드가 막혀야 한다"
+
+            # 4. 토스트 알림으로 안내 로드 실패 사유가 공지됨을 확인
+            toast_el = page.locator("#toast")
+            expect(toast_el).to_be_visible()
+            expect(toast_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
+        finally:
+            browser.close()
+
