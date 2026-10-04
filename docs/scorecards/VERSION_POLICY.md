@@ -41,6 +41,10 @@
 - **상향 없음:** 점수·미해결 해소가 없는 변경(리팩터·문서·시험 추가·측정 도구·회귀 복구로 직전 수준으로만 돌아온 경우). 이 경우도 판정 결과("상향 없음")와 근거 수치를 HISTORY에 남긴다.
 - 임계값을 사용자가 바꾸면 이 표만 고친다(보호 경로). 구현 측은 임계값을 정하지 않는다.
 
+## 5.1 배포와의 관계(2026-10-04 사용자 결정)
+- 버전 상향은 배포 조건이 아니다. 배포(`main` 병합)는 [RELEASE_PROCEDURE](RELEASE_PROCEDURE.md) 2절 조건으로만 하고, 이 정책의 상향 요건을 채우지 못하면 버전을 유지한 채 배포한다.
+- 상향 판정이 나면 판정서와 버전 커밋이 `Steve_ACASiaLAW`에 들어간 뒤 릴리스 PR을 연다.
+
 ## 6. 절차
 1. **구현:** 작업 커밋에서 `version`·`docs/releases.json`·README 변경표를 건드리지 않는다.
 2. **평가:** 묶음(라운드) 완료 뒤 같은 조건으로 측정하고, 상향 요건을 채우면 `docs/scorecards/version_verdicts.json`에 **판정서**를 추가한다(`version`·`from`·`level`(major|minor|patch)·`measured_commit`·`conditions`·`evidence`(수치)·`decided_by`·`decided_at`, 정수는 `user_approved: true`). 근거는 HISTORY에도 적는다.
