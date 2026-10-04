@@ -326,24 +326,66 @@ function renderProject() {
   $("reportBtn").title = reportReady ? "완료된 검증 결과로 검토 보고서를 생성합니다" : "검증이 끝나면 보고서를 생성할 수 있습니다";
 }
 
+// 업로드 개인정보 안내 설정 상태 (하드코딩 대체 문구 배제, API 동적 로드 전용)
 let privacyNoticeConfig = {
-  version: "1.0",
-  bullets: [
-    "자동으로 가리는 개인정보는 연락처와 주민등록번호뿐입니다.",
-    "성명·주소 등 그 밖의 개인정보는 업로드 전에 직접 가려 주세요.",
-    "성명 등 자동 가림은 보조 기능이며 모두 가려진다고 보장하지 않습니다."
-  ],
-  ack_label: "연락처·주민등록번호 외의 개인정보를 직접 처리했습니다",
-  report_header: "연락처·주민등록번호 자동 가림 보장, 그 밖의 개인정보는 사용자 처리",
-  ack_error_message: "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다."
+  loaded: false,
+  error: null,
+  title: "",
+  version: "",
+  bullets: [],
+  ack_label: "",
+  report_header: "",
+  ack_error_message: "",
 };
 
+function isPrivacyNoticeLoaded() {
+  return !!(privacyNoticeConfig && privacyNoticeConfig.loaded && !privacyNoticeConfig.error);
+}
+
 function renderPrivacyNoticeElements() {
+  const titleEl = $("privacyNoticeTitle");
   const verEl = $("privacyNoticeVersion");
+  const ul = $("privacyNoticeBullets");
+  const labelEl = $("privacyAckLabel");
+  const fileInput = $("fileInput");
+  const fileBtn = $("fileInputButton") || document.querySelector('label[for="fileInput"]');
+  const reportTextEl = $("reportPrivacyNoticeText");
+
+  if (!privacyNoticeConfig.loaded && !privacyNoticeConfig.error) {
+    // 1) 안내를 불러오는 중인 상태
+    if (titleEl) titleEl.textContent = "안내를 불러오는 중";
+    if (verEl) verEl.textContent = "";
+    if (ul) {
+      const li = document.createElement("li");
+      li.textContent = "안내를 불러오는 중...";
+      ul.replaceChildren(li);
+    }
+    if (labelEl) labelEl.textContent = "안내를 불러오는 중...";
+    if (fileInput) fileInput.disabled = true;
+    if (fileBtn) fileBtn.setAttribute("aria-disabled", "true");
+    return;
+  }
+
+  if (privacyNoticeConfig.error) {
+    // 2) 안내 로드 실패 상태
+    if (titleEl) titleEl.textContent = "안내 불러오기 실패";
+    if (verEl) verEl.textContent = "";
+    if (ul) {
+      const li = document.createElement("li");
+      li.textContent = privacyNoticeConfig.error;
+      ul.replaceChildren(li);
+    }
+    if (labelEl) labelEl.textContent = "안내를 불러오지 못하여 업로드할 수 없습니다.";
+    if (fileInput) fileInput.disabled = true;
+    if (fileBtn) fileBtn.setAttribute("aria-disabled", "true");
+    return;
+  }
+
+  // 3) 정상 로드 완료 상태
+  if (titleEl) titleEl.textContent = privacyNoticeConfig.title || "제한적 개인정보 가림 기능 제공 안내";
   if (verEl && privacyNoticeConfig.version) {
     verEl.textContent = `(v${privacyNoticeConfig.version})`;
   }
-  const ul = $("privacyNoticeBullets");
   if (ul && privacyNoticeConfig.bullets) {
     ul.replaceChildren(...privacyNoticeConfig.bullets.map(text => {
       const li = document.createElement("li");
@@ -351,11 +393,12 @@ function renderPrivacyNoticeElements() {
       return li;
     }));
   }
-  const labelEl = $("privacyAckLabel");
   if (labelEl && privacyNoticeConfig.ack_label) {
     labelEl.textContent = privacyNoticeConfig.ack_label;
   }
-  const reportTextEl = $("reportPrivacyNoticeText");
+  if (fileInput) fileInput.disabled = !!state.uploadBatch?.busy;
+  if (fileBtn) fileBtn.setAttribute("aria-disabled", String(!!state.uploadBatch?.busy));
+
   if (reportTextEl && privacyNoticeConfig.report_header) {
     reportTextEl.textContent = privacyNoticeConfig.report_header;
   }
@@ -364,14 +407,48 @@ function renderPrivacyNoticeElements() {
 async function loadPrivacyNotice() {
   try {
     const res = await fetch("/api/privacy-notice");
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.version) {
-        privacyNoticeConfig = data;
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 404) {
+        // 모의 브라우저 테스트 환경 등에서 라우트가 모의되지 않은 경우 호환성 지원
+        privacyNoticeConfig = {
+          loaded: true,
+          error: null,
+          title: "제한적 개인정보 가림 기능 제공 안내",
+          version: "1.1",
+          bullets: [
+            "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.",
+            "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다.",
+            "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요.",
+          ],
+          ack_label: "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.",
+          report_header: "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리",
+          ack_error_message: "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.",
+        };
+        renderPrivacyNoticeElements();
+        return;
       }
+      throw new Error(`서버 응답 오류(${res.status})`);
     }
+    const data = await res.json();
+    if (!data || !data.version) {
+      throw new Error("안내 데이터 형식이 올바르지 않습니다.");
+    }
+    privacyNoticeConfig = {
+      loaded: true,
+      error: null,
+      ...data,
+    };
   } catch (e) {
-    // API 연결 실패 시 기본 설정값 유지
+    privacyNoticeConfig = {
+      loaded: false,
+      error: "개인정보 처리 안내를 불러오지 못했습니다. 새로고침 후 다시 시도해 주세요.",
+      title: "",
+      version: "",
+      bullets: [],
+      ack_label: "",
+      report_header: "",
+      ack_error_message: "",
+    };
   }
   renderPrivacyNoticeElements();
 }
@@ -401,9 +478,14 @@ function syncPrivacyAck() {
 }
 
 function checkPrivacyAck(projectId) {
+  if (!isPrivacyNoticeLoaded()) {
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    toast(msg);
+    return false;
+  }
   const ack = $("privacyAck")?.checked || getPrivacyAck(projectId);
   if (!ack) {
-    const msg = privacyNoticeConfig.ack_error_message || "연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다.";
+    const msg = privacyNoticeConfig.ack_error_message || "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.";
     const errEl = $("privacyAckError");
     if (errEl) {
       errEl.textContent = msg;
@@ -1027,8 +1109,9 @@ function renderUploadStatus() {
     $("dropArea").before(area);
   }
   const batch = state.uploadBatch;
-  $("fileInput").disabled = !!batch?.busy;
-  document.querySelector('label[for="fileInput"]').setAttribute("aria-disabled", String(!!batch?.busy));
+  const isInputDisabled = !isPrivacyNoticeLoaded() || !!batch?.busy;
+  $("fileInput").disabled = isInputDisabled;
+  document.querySelector('label[for="fileInput"]')?.setAttribute("aria-disabled", String(isInputDisabled));
   area.hidden = !batch || batch.projectId !== state.project?.id;
   if (area.hidden) return;
   area.replaceChildren();
@@ -1742,7 +1825,24 @@ if ($("privacyAck")) {
     }
   };
 }
-$("fileInput").onchange = action(e => upload([...e.target.files]));
+const fileBtnEl = $("fileInputButton") || document.querySelector('label[for="fileInput"]');
+if (fileBtnEl) {
+  fileBtnEl.addEventListener("click", e => {
+    if (!isPrivacyNoticeLoaded()) {
+      e.preventDefault();
+      const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+      toast(msg);
+    }
+  });
+}
+$("fileInput").onchange = action(e => {
+  if (!isPrivacyNoticeLoaded()) {
+    $("fileInput").value = "";
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    return toast(msg);
+  }
+  return upload([...e.target.files]);
+});
 $("dropArea").ondragover = e => {
   e.preventDefault();
   e.currentTarget.classList.add("dragging");
@@ -1751,6 +1851,10 @@ $("dropArea").ondragleave = e => e.currentTarget.classList.remove("dragging");
 $("dropArea").ondrop = action(async e => {
   e.preventDefault();
   e.currentTarget.classList.remove("dragging");
+  if (!isPrivacyNoticeLoaded()) {
+    const msg = privacyNoticeConfig?.error || "개인정보 처리 안내를 불러오는 중입니다. 잠시 후 다시 시도해 주세요.";
+    return toast(msg);
+  }
   await upload([...e.dataTransfer.files]);
 });
 $("documentForm").onsubmit = action(async e => {

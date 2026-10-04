@@ -62,6 +62,19 @@ def browser_test_page():
             route.fulfill(status=201, json=document)
         elif path == f"/api/projects/{project['id']}/reports":
             route.fulfill(json=[])
+        elif path == "/api/privacy-notice":
+            route.fulfill(json={
+                "title": "제한적 개인정보 가림 기능 제공 안내",
+                "version": "1.1",
+                "bullets": [
+                    "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.",
+                    "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다.",
+                    "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요.",
+                ],
+                "ack_label": "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.",
+                "report_header": "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리",
+                "ack_error_message": "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.",
+            })
         else:
             route.fulfill(status=401, json={"detail": "Login required"})
 
@@ -100,16 +113,24 @@ def browser_test_page():
 
 
 def test_privacy_notice_and_checkbox_visible_on_documents_panel(browser_test_page):
-    """자료 패널에 상시 안내문 3대 문구와 확인 체크박스(라벨 연결)가 상시 표시된다."""
+    """자료 패널에 제목(새 상수), 판 번호(1.1), 상시 안내문 3대 문구와 확인 체크박스(라벨 연결)가 상시 표시된다."""
     page, _ = browser_test_page
 
     notice = page.locator(".privacy-notice")
     expect(notice).to_be_visible()
 
-    # 상시 안내 3대 문구 검증
-    expect(notice).to_contain_text("자동으로 가리는 개인정보는 연락처와 주민등록번호뿐입니다.")
-    expect(notice).to_contain_text("성명·주소 등 그 밖의 개인정보는 업로드 전에 직접 가려 주세요.")
-    expect(notice).to_contain_text("성명 등 자동 가림은 보조 기능이며 모두 가려진다고 보장하지 않습니다.")
+    # 제목 및 판 번호(1.1) 검증 (4절 추가 시험: 제목이 화면에 보인다)
+    title = page.locator("#privacyNoticeTitle")
+    expect(title).to_be_visible()
+    expect(title).to_have_text("제한적 개인정보 가림 기능 제공 안내")
+
+    version = page.locator("#privacyNoticeVersion")
+    expect(version).to_have_text("(v1.1)")
+
+    # 상시 안내 3대 확정 문구 검증
+    expect(notice).to_contain_text("본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.")
+    expect(notice).to_contain_text("개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만")
+    expect(notice).to_contain_text("그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고")
 
     # 체크박스 및 라벨 검증
     checkbox = page.locator("#privacyAck")
@@ -117,7 +138,7 @@ def test_privacy_notice_and_checkbox_visible_on_documents_panel(browser_test_pag
     expect(checkbox).not_to_be_checked()
 
     label = page.locator("label.privacy-ack-label")
-    expect(label).to_contain_text("연락처·주민등록번호 외의 개인정보를 직접 처리했습니다")
+    expect(label).to_contain_text("연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.")
 
 
 def test_upload_blocked_without_check_and_shows_accessible_error(browser_test_page):
@@ -137,7 +158,7 @@ def test_upload_blocked_without_check_and_shows_accessible_error(browser_test_pa
     # 에러 메시지 표시 및 접근성 속성 검증
     error_el = page.locator("#privacyAckError")
     expect(error_el).to_be_visible()
-    expect(error_el).to_contain_text("연락처·주민등록번호 외의 개인정보를 직접 처리했음을 확인해야 업로드할 수 있습니다.")
+    expect(error_el).to_contain_text("연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.")
     assert error_el.get_attribute("role") == "status"
     assert error_el.get_attribute("aria-live") == "polite"
 
@@ -187,4 +208,80 @@ def test_report_header_shows_privacy_guarantee_scope(browser_test_page):
 
     report_notice = page.locator(".report-privacy-notice")
     expect(report_notice).to_be_visible()
-    expect(report_notice).to_contain_text("연락처·주민등록번호 자동 가림 보장, 그 밖의 개인정보는 사용자 처리")
+    expect(report_notice).to_contain_text("제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리")
+
+
+def test_upload_blocked_when_notice_loading_or_failed():
+    """4절 추가 시험: 안내를 불러오기 전과 불러오기 실패 시 업로드가 막힌다."""
+    static = ROOT / "apps/web/static"
+    files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
+    files["/"] = ROOT / "apps/web/index.html"
+    project = {
+        "id": "proj_fail_test",
+        "name": "안내 로드 실패 시험 프로젝트",
+        "external_ai_policy": "LOCAL_ONLY",
+        "document_count": 0,
+        "scope_revision": 1,
+    }
+    control = {"posts": 0}
+
+    def failing_respond(route):
+        path = urlsplit(route.request.url).path
+        if path in files:
+            route.fulfill(path=str(files[path]))
+        elif path == "/api/health":
+            route.fulfill(json={"status": "ok", "version": "0.5.0"})
+        elif path == "/api/projects":
+            route.fulfill(json=[project])
+        elif path == f"/api/projects/{project['id']}":
+            route.fulfill(json=project)
+        elif path == f"/api/projects/{project['id']}/documents":
+            control["posts"] += 1
+            route.fulfill(status=201, json={"id": "doc1"})
+        elif path == "/api/privacy-notice":
+            # 500 서버 오류 모의 (안내 불러오기 실패)
+            route.fulfill(status=500, json={"detail": "Internal Server Error"})
+        else:
+            route.fulfill(status=401, json={"detail": "Unauthorized"})
+
+    with sync_playwright() as playwright:
+        options = {"headless": True}
+        channel = os.getenv("LV_TEST_BROWSER_CHANNEL") or ("chrome" if os.name == "nt" else None)
+        if channel:
+            options["channel"] = channel
+        browser = playwright.chromium.launch(**options)
+        try:
+            page = browser.new_page()
+            page.route("**/*", failing_respond)
+            page.goto("https://uploads.test/")
+            page.evaluate("""project => {
+                state.project = project;
+                document.getElementById('emptyState').hidden = true;
+                document.getElementById('projectView').hidden = false;
+                renderProject();
+            }""", project)
+
+            # 1. 화면에 안내 불러오기 실패 메시지 표시 확인
+            title_el = page.locator("#privacyNoticeTitle")
+            expect(title_el).to_have_text("안내 불러오기 실패")
+
+            bullets_el = page.locator("#privacyNoticeBullets")
+            expect(bullets_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
+
+            # 2. 파일 추가 input이 disabled 상태인지 확인
+            expect(page.locator("#fileInput")).to_be_disabled()
+
+            # 3. 파일 선택 시도 시 업로드가 차단되고 POST가 전송되지 않음을 검증
+            page.locator("#fileInput").set_input_files({
+                "name": "업로드차단문서.pdf",
+                "mimeType": "application/pdf",
+                "buffer": PAYLOAD,
+            })
+            assert control["posts"] == 0, "안내 로드 실패 시 업로드가 차단되어야 한다"
+
+            # 4. 토스트 알림으로 실패 이유가 공지되는지 확인
+            toast_el = page.locator("#toast")
+            expect(toast_el).to_be_visible()
+            expect(toast_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
+        finally:
+            browser.close()

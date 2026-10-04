@@ -18,6 +18,7 @@ from packages.common.enums import AuditEventType
 from packages.common.privacy_notice import (
     ACK_LABEL,
     NOTICE_BULLETS,
+    NOTICE_TITLE,
     PRIVACY_ACK_ERROR_MESSAGE,
     PRIVACY_NOTICE_VERSION,
     REPORT_HEADER_NOTICE,
@@ -127,6 +128,7 @@ def project_defaults():
 def get_privacy_notice():
     """업로드 개인정보 처리 안내 및 판 번호(상수 단일 관리)."""
     return {
+        "title": NOTICE_TITLE,
         "version": PRIVACY_NOTICE_VERSION,
         "bullets": NOTICE_BULLETS,
         "ack_label": ACK_LABEL,

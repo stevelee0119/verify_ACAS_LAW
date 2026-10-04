@@ -14,7 +14,11 @@ from sqlalchemy import select
 from fastapi.testclient import TestClient
 
 from packages.common.enums import AuditEventType
-from packages.common.privacy_notice import PRIVACY_ACK_ERROR_MESSAGE, PRIVACY_NOTICE_VERSION
+from packages.common.privacy_notice import (
+    NOTICE_TITLE,
+    PRIVACY_ACK_ERROR_MESSAGE,
+    PRIVACY_NOTICE_VERSION,
+)
 from apps.api import db as db_module
 from apps.api.auth import ROLE_ADMIN, hash_password, issue_session
 from apps.api.db import AuditEventRow, Document, Organization, Project, User, get_session_factory
@@ -152,7 +156,7 @@ def test_upload_with_privacy_ack_succeeds_and_creates_audit(api_client, test_pro
     ).all()
     assert len(audit_events) > 0, "업로드 시 감사 기록이 생성되어야 한다"
 
-    # 1. UPLOAD 이벤트에서 privacy_ack 및 notice_version 기록 확인
+    # 1. UPLOAD 이벤트에서 privacy_ack 및 notice_version 기록 확인 (판 1.1 검증)
     upload_event = next((e for e in audit_events if e.event_type == AuditEventType.UPLOAD), None)
     assert upload_event is not None
     assert upload_event.actor is not None, "사용자(actor)가 기록되어야 한다"
@@ -160,31 +164,36 @@ def test_upload_with_privacy_ack_succeeds_and_creates_audit(api_client, test_pro
     assert upload_event.document_id == document_id
     assert upload_event.payload.get("privacy_ack") is True
     assert upload_event.payload.get("notice_version") == PRIVACY_NOTICE_VERSION
+    assert upload_event.payload.get("notice_version") == "1.1", "감사 기록의 notice_version이 1.1이어야 한다"
 
     # 2. USER_OVERRIDE 이벤트에서 확인 사실 기록 확인
     ack_event = next((e for e in audit_events if e.event_type == AuditEventType.USER_OVERRIDE), None)
     assert ack_event is not None
     assert ack_event.payload.get("action") == "PRIVACY_NOTICE_ACKNOWLEDGED"
     assert ack_event.payload.get("notice_version") == PRIVACY_NOTICE_VERSION
+    assert ack_event.payload.get("notice_version") == "1.1"
 
     # 3. 원문 개인정보 배제 검증: 감사 기록 payload에 파일 메타데이터 외에 원문 개인정보가 없어야 함
     for ev in audit_events:
         payload_str = str(ev.payload)
-        assert "주민" not in payload_str or "직접 처리 확인" in payload_str
+        assert "주민" not in payload_str or "직접 처리 확인" in payload_str or "이외의 개인정보" in payload_str
         assert "010-" not in payload_str
         assert "주소" not in payload_str
 
 
 def test_privacy_notice_endpoint_returns_centralized_constants(api_client):
-    """안내 문구와 판 번호가 /api/privacy-notice에서 올바르게 제공되는지 검증."""
+    """안내 문구와 판 번호가 /api/privacy-notice에서 올바르게 제공되는지 검증 (제목 포함)."""
     response = api_client.get("/api/privacy-notice")
     assert response.status_code == 200
     data = response.json()
+    assert data["title"] == NOTICE_TITLE
+    assert data["title"] == "제한적 개인정보 가림 기능 제공 안내"
+    assert data["version"] == "1.1"
     assert data["version"] == PRIVACY_NOTICE_VERSION
     assert len(data["bullets"]) == 3
-    assert "연락처와 주민등록번호" in data["bullets"][0]
-    assert "직접 가려" in data["bullets"][1]
-    assert "보조 기능" in data["bullets"][2]
-    assert "직접 처리했습니다" in data["ack_label"]
-    assert "자동 가림 보장" in data["report_header"]
+    assert "제한적으로 적용됩니다" in data["bullets"][0]
+    assert "필수기능으로 제공되지만" in data["bullets"][1]
+    assert "직접 가림 처리 하시고" in data["bullets"][2]
+    assert "이외의 개인정보는 미포함되었거나 직접 가림 처리" in data["ack_label"]
+    assert "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림" in data["report_header"]
     assert "확인해야 업로드할 수 있습니다" in data["ack_error_message"]
