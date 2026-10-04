@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from packages.common.enums import MM4_ADVISORY_TYPES, Severity
+from packages.common.privacy_notice import REPORT_HEADER_NOTICE
 from packages.legal_engine.reasoning_format import row_cell_text, format_context_review
 from .snapshot import json_lines, technical_payload, xml_text
 from .summary import (FULL_RECORD_NOTE, SUMMARY, assessed_claims, component_line, detail_level, evidence_summary,
@@ -137,6 +138,7 @@ def build_report_pdf(
     # --- 표지 / 1. 검증개요 ------------------------------------------------
     story.append(Paragraph("ACASia_LAW 법률문서 검증시스템", styles["title"]))
     story.append(Paragraph("법률문서 검증보고서", styles["h1"]))
+    story.append(Paragraph(_escape(f"개인정보 보장 범위: {REPORT_HEADER_NOTICE}"), styles["small"]))
     metadata = getattr(run_result, "report_metadata", {})
     if metadata:
         story.append(Paragraph(_escape(metadata["label"]), styles["h1"]))
@@ -148,6 +150,7 @@ def build_report_pdf(
     story.append(Paragraph(_escape("1. 검증개요·대상문서·방법론"), styles["h1"]))
     overview = [
         ["항목", "내용"],
+        ["보장 범위", REPORT_HEADER_NOTICE],
         ["프로젝트", f"{project.get('name', '-')} / 사건번호 {project.get('case_number', '-')}"],
         ["법원·기관", str(project.get("court", "-"))],
         ["검증 Run", run_result.run_id],

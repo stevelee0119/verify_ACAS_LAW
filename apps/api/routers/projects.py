@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from packages.common.config import get_settings
 from packages.common.enums import AuditEventType
+from packages.common.privacy_notice import PRIVACY_ACK_ERROR_MESSAGE, PRIVACY_NOTICE_VERSION
 from packages.common.storage import get_storage, sha256_bytes
 from packages.document_engine import ALLOWED_EXTENSIONS, guess_mime
 
@@ -303,8 +304,12 @@ def upload_document(
     file: UploadFile = File(...),
     document_kind: str = Form(""),
     is_own_document: bool = Form(False),
+    privacy_ack: bool = Form(False),
     session: Session = Depends(get_db),
 ) -> DocumentOut:
+    if not privacy_ack:
+        # 개인정보 직접 처리 미확인 시 422 거절 (화면과 동일한 사유 반환)
+        raise HTTPException(422, PRIVACY_ACK_ERROR_MESSAGE)
     # FastAPI runs this blocking file/DB work in its thread pool, not the event loop.
     request_id = uuid4().hex
     response.headers["X-Request-ID"] = request_id
@@ -409,7 +414,25 @@ def _store_document(project_id: str, file: UploadFile, document_kind: str,
     audit = make_audit(session)
     audit.record(
         AuditEventType.UPLOAD,
-        {"filename": filename, "size": len(data), "mime": document.mime_type, "storage_key": storage_key},
+        {
+            "filename": filename,
+            "size": len(data),
+            "mime": document.mime_type,
+            "storage_key": storage_key,
+            "privacy_ack": True,
+            "notice_version": PRIVACY_NOTICE_VERSION,
+        },
+        project_id=project_id,
+        document_id=document.id,
+        actor=actor_id(),
+    )
+    audit.record(
+        AuditEventType.USER_OVERRIDE,
+        {
+            "action": "PRIVACY_NOTICE_ACKNOWLEDGED",
+            "notice_version": PRIVACY_NOTICE_VERSION,
+            "scope": "연락처·주민등록번호 외 개인정보 직접 처리 확인",
+        },
         project_id=project_id,
         document_id=document.id,
         actor=actor_id(),
