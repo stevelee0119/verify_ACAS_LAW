@@ -114,6 +114,10 @@ SINGLE_SURNAMES = {
 
 # 당사자, 소송관계인, 대표자, 직책, 성명/서명, 변호사 라벨 어휘군
 PARTY_AND_TITLE_LABELS = [
+    # 영문 구조화 필드에서도 전송 전 이름 문맥을 복원한다.
+    "person", "name", "full name", "person name", "contact name", "plaintiff", "defendant",
+    "witness", "applicant", "claimant", "petitioner", "respondent", "attorney", "counsel",
+    "representative", "employee", "employer",
     # 변호사 및 소송대리인
     "소송대리인변호사", "소송대리인", "담당변호사", "대리인변호사", "변호인", "변호사",
     # 대표자 및 직책
