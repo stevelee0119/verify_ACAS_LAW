@@ -155,8 +155,8 @@ def _authorize(session, request, principal, route, params, payload):
         raise HTTPException(403, "Administrator required")
     if read and template.endswith("/diagnostics/sources"):
         return
-    # 정적 안내문(/privacy-notice) 및 헬스체크 등은 인증된 사용자에게 읽기 허용
-    if read and template.endswith(("/health", "/diagnostics", "/project-defaults", "/privacy-notice")):
+    # 정적 안내문(/privacy-notice), 배정표(/finding-categories) 및 헬스체크 등은 인증된 사용자에게 읽기 허용
+    if read and template.endswith(("/health", "/diagnostics", "/project-defaults", "/privacy-notice", "/finding-categories")):
         return
     if template.endswith("/calculations/interest") and principal.role in {"MEMBER", "ADMIN"}:
         return

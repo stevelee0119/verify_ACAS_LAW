@@ -642,7 +642,7 @@ const INJECTION_CHECKS = ["본문·숨김 글자의 지시형 문구(AI에게 �
   "보이지 않는 유니코드 문자", "Base64 등으로 감춘 문자열", "화면 글자와 내부 글자 층의 불일치", "이미지·OCR 층의 지시문"];
 
 // 프롬프트 인젝션 판정 근거: 무엇을 검사했고, 무엇이 나왔고, 왜 그 결론인지 문서별로 보인다.
-function injectionCard(docs, hasQuarantine) {
+function injectionCard(docs, hasQuarantine, findings) {
   const card = node("div", null, "summary-card summary-card-wide");
   card.append(node("h3", "프롬프트 인젝션 속임수 검증"));
   if (!state.run || !docs.length) {
@@ -675,6 +675,24 @@ function injectionCard(docs, hasQuarantine) {
     basis.append(block);
   }
   card.append(basis);
+
+  // P1: 프롬프트 인젝션(INJECTION_DEFENSE) 범주의 finding 목록도 카드가 하나씩 보여준다
+  const injFindings = (findings || state.findings || []).filter(isInjectionDefenseFinding);
+  if (injFindings.length > 0) {
+    card.append(node("h4", "프롬프트 인젝션 탐지 세부 항목"));
+    const list = node("ul", null, "security-finding-list injection-finding-list");
+    for (const f of injFindings) {
+      const item = node("li", null, "security-finding-item");
+      const titleBtn = button(null, () => openFinding(f), "link-button");
+      titleBtn.append(
+        node("span", label(f.severity), `badge ${f.severity}`),
+        node("strong", ` ${friendlyText(f.title)}`)
+      );
+      item.append(titleBtn, node("small", friendlyText(f.detail), "muted"));
+      list.append(item);
+    }
+    card.append(list);
+  }
   return card;
 }
 
@@ -1415,6 +1433,22 @@ function isAISecurityFinding(f) {
   return state.findingCategories.tabs?.[type] === "AI_SECURITY";
 }
 
+function isAIDiagnosisFinding(f) {
+  if (!state.findingCategories || state.findingCategories.error) {
+    return false;
+  }
+  const type = f.finding_type || f.type;
+  return state.findingCategories.categories?.[type] === "AI_DIAGNOSIS";
+}
+
+function isInjectionDefenseFinding(f) {
+  if (!state.findingCategories || state.findingCategories.error) {
+    return false;
+  }
+  const type = f.finding_type || f.type;
+  return state.findingCategories.categories?.[type] === "INJECTION_DEFENSE";
+}
+
 function isSecurityCardFinding(f) {
   if (!state.findingCategories || state.findingCategories.error) {
     return false;
@@ -1556,8 +1590,26 @@ function renderAIVerification() {
     card1.append(node("p", state.run ? "검증 완료 후 분석 결과를 표시합니다." : "검증을 시작하면 AI 작성 여부를 진단합니다.", "muted"));
   }
 
+  // P1: AI 진단(AI_DIAGNOSIS) 범주의 finding 목록도 카드가 하나씩 보여준다
+  const aiFindings = (state.findings || []).filter(isAIDiagnosisFinding);
+  if (aiFindings.length > 0) {
+    card1.append(node("h4", "AI 작성 진단 세부 항목"));
+    const list = node("ul", null, "security-finding-list ai-finding-list");
+    for (const f of aiFindings) {
+      const item = node("li", null, "security-finding-item");
+      const titleBtn = button(null, () => openFinding(f), "link-button");
+      titleBtn.append(
+        node("span", label(f.severity), `badge ${f.severity}`),
+        node("strong", ` ${friendlyText(f.title)}`)
+      );
+      item.append(titleBtn, node("small", friendlyText(f.detail), "muted"));
+      list.append(item);
+    }
+    card1.append(list);
+  }
+
   // 2) 프롬프트 인젝션 검증 카드 & 3) 보안 카드
-  cardsContainer.append(card1, injectionCard(docs, hasQuarantine), securityCard(docs, state.findings));
+  cardsContainer.append(card1, injectionCard(docs, hasQuarantine, state.findings), securityCard(docs, state.findings));
 }
 
 function renderTemporaryCitationSection() {
