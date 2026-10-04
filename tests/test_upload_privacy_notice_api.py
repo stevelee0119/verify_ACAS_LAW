@@ -199,38 +199,59 @@ def test_privacy_notice_endpoint_returns_centralized_constants(api_client):
     assert "확인해야 업로드할 수 있습니다" in data["ack_error_message"]
 
 
-def test_unauthenticated_privacy_notice_get_returns_200_without_sensitive_data(registry, monkeypatch):
-    """비로그인 상태(multi-user)에서도 GET /api/privacy-notice는 200이며 개인정보나 내부 설정값이 없다 (3차 보완)."""
-    # multi-user 환경 및 비인증 상태 모의
+def test_unauthenticated_privacy_notice_blocked_and_allowed_after_login(registry, monkeypatch):
+    """로그인 전(401)에는 안내 조회가 차단되고, 로그인 뒤에는 API 문구를 정상 반환한다 (4차 보완)."""
     monkeypatch.setenv("LV_AUTH_MODE", "multi-user")
     monkeypatch.setenv("LV_ACCESS_TOKEN", "")
     set_registry(registry)
     db_module.reset_engine()
     app = create_app()
 
-    # 인증 헤더 없는 순수 클라이언트
-    client = TestClient(app)
-    response = client.get("/api/privacy-notice")
-    assert response.status_code == 200
+    # 1. 로그인 전(비인증) 상태: GET /api/privacy-notice는 401 거절
+    unauth_client = TestClient(app)
+    unauth_resp = unauth_client.get("/api/privacy-notice")
+    assert unauth_resp.status_code == 401, "로그인 전에는 401 Authentication required이어야 한다"
 
-    data = response.json()
-    # 1. 안내문 필수 필드 및 판 1.1 검증
+    # 비인증 상태에서 업로드 시도 시에도 401 거절 (API 우회 불가)
+    dummy_file = io.BytesIO(b"%PDF-1.4 unauth test")
+    upload_resp = unauth_client.post(
+        "/api/projects/proj-123/documents",
+        files={"file": ("test.pdf", dummy_file, "application/pdf")},
+        data={"privacy_ack": "true"},
+    )
+    assert upload_resp.status_code == 401
+
+    # 2. 로그인 수행 (유저 생성 및 세션 발급)
+    session = get_session_factory()()
+    try:
+        organization = session.query(Organization).first()
+        if organization is None:
+            organization = Organization(name="테스트 기관")
+            session.add(organization)
+            session.flush()
+        user = User(
+            email=f"auth-tester-{uuid.uuid4().hex[:8]}@example.com",
+            display_name="인증 테스트 사용자",
+            role=ROLE_ADMIN,
+            organization_id=organization.id,
+            password_hash=hash_password("test-pass-1234"),
+        )
+        session.add(user)
+        session.commit()
+        token = issue_session(session, user)
+    finally:
+        session.close()
+
+    # 3. 로그인 후 (인증 토큰 첨부): GET /api/privacy-notice 200 성공 및 확정 문구 확인
+    auth_client = TestClient(app)
+    auth_client.headers.update({"Authorization": f"Bearer {token}"})
+    login_resp = auth_client.get("/api/privacy-notice")
+    assert login_resp.status_code == 200
+
+    data = login_resp.json()
     assert data["title"] == NOTICE_TITLE
     assert data["version"] == PRIVACY_NOTICE_VERSION
     assert data["version"] == "1.1"
     assert len(data["bullets"]) == 3
 
-    # 2. 개인정보 및 내부 설정값 부존재 검증
-    sensitive_keys = {
-        "user", "users", "account", "token", "password", "secret", "session",
-        "email", "phone", "db", "database", "database_url", "storage_key",
-        "encryption_key", "internal", "config", "settings",
-    }
-    for key in sensitive_keys:
-        assert key not in data, f"비인증 안내문 응답에 민감 키({key})가 포함되어서는 안 된다"
-
-    # 응답 본문 텍스트 내에도 민감한 설정 문자열이 없음을 확인
-    raw_text = response.text.lower()
-    for sensitive_word in ("secret", "password", "bearer", "sqlite:", "postgresql:"):
-        assert sensitive_word not in raw_text, f"비인증 응답에 내부 구성({sensitive_word})이 노출되어서는 안 된다"
 

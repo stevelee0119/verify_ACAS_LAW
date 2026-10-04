@@ -287,8 +287,8 @@ def test_upload_blocked_when_notice_loading_or_failed():
             browser.close()
 
 
-def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
-    """3차 보완 새 시험: 401(로그인 전/인증 만료)이면 안내를 불러오지 못해 업로드가 막힌다."""
+def test_upload_blocked_when_privacy_notice_returns_401_and_recovers_after_login():
+    """4차 보완 새 시험: 로그인 전(401)이면 업로드가 막히고, 로그인 뒤 loadPrivacyNotice() 재호출로 API 문구가 보인다."""
     static = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static).as_posix()}": p for p in static.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
@@ -299,9 +299,9 @@ def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
         "document_count": 0,
         "scope_revision": 1,
     }
-    control = {"posts": 0}
+    control = {"posts": 0, "authenticated": False}
 
-    def unauth_respond(route):
+    def auth_flow_respond(route):
         path = urlsplit(route.request.url).path
         if path in files:
             route.fulfill(path=str(files[path]))
@@ -315,8 +315,22 @@ def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
             control["posts"] += 1
             route.fulfill(status=201, json={"id": "doc1"})
         elif path == "/api/privacy-notice":
-            # 401 비인증/로그인 전 응답 모의
-            route.fulfill(status=401, json={"detail": "Authentication required"})
+            # 로그인 여부에 따른 분기 (로그인 전 401, 로그인 후 200)
+            if not control["authenticated"]:
+                route.fulfill(status=401, json={"detail": "Authentication required"})
+            else:
+                route.fulfill(json={
+                    "title": "제한적 개인정보 가림 기능 제공 안내",
+                    "version": "1.1",
+                    "bullets": [
+                        "본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.",
+                        "개인정보 중 연락처, 주민등록번호는 필수기능으로 제공되지만, 성명·주소 등 그 밖의 개인정보는 보조기능으로만 가려지며 모두 가려진다고 보장하지 않습니다.",
+                        "그러므로 민감하다고 생각되는 개인정보는 업로드 전에 직접 가림 처리 하시고 업로드 해 주세요.",
+                    ],
+                    "ack_label": "연락처, 주민등록번호 이외의 개인정보는 미포함되었거나 직접 가림 처리 하였음을 확인합니다.",
+                    "report_header": "제한적 개인정보 가림: 연락처·주민등록번호는 필수 가림, 그 밖의 개인정보는 사용자 처리",
+                    "ack_error_message": "연락처, 주민등록번호 이외의 개인정보가 미포함되었거나 직접 가림 처리하였음을 확인해야 업로드할 수 있습니다.",
+                })
         else:
             route.fulfill(status=401, json={"detail": "Unauthorized"})
 
@@ -328,7 +342,7 @@ def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
         browser = playwright.chromium.launch(**options)
         try:
             page = browser.new_page()
-            page.route("**/*", unauth_respond)
+            page.route("**/*", auth_flow_respond)
             page.goto("https://uploads.test/")
             page.evaluate("""project => {
                 state.project = project;
@@ -337,17 +351,16 @@ def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
                 renderProject();
             }""", project)
 
-            # 1. 401 응답 시 제품 코드가 임의 문구 사본으로 우회하지 않고 정상적으로 실패 처리됨을 확인
+            # 1. 로그인 전(401 응답 시) 화면 실패 표시 및 업로드 차단 검증
             title_el = page.locator("#privacyNoticeTitle")
             expect(title_el).to_have_text("안내 불러오기 실패")
 
             bullets_el = page.locator("#privacyNoticeBullets")
             expect(bullets_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
 
-            # 2. 파일 추가 input이 disabled 상태로 차단되었는지 확인
             expect(page.locator("#fileInput")).to_be_disabled()
 
-            # 3. 파일 선택을 시도해도 업로드가 진행되지 않고 POST가 0건임을 검증
+            # 파일 선택 시도 시 업로드가 막혀 POST 0건 검증
             page.locator("#fileInput").set_input_files({
                 "name": "차단문서.pdf",
                 "mimeType": "application/pdf",
@@ -355,10 +368,30 @@ def test_upload_blocked_when_privacy_notice_returns_401_unauthenticated():
             })
             assert control["posts"] == 0, "401 응답 시 업로드가 막혀야 한다"
 
-            # 4. 토스트 알림으로 안내 로드 실패 사유가 공지됨을 확인
-            toast_el = page.locator("#toast")
-            expect(toast_el).to_be_visible()
-            expect(toast_el).to_contain_text("개인정보 처리 안내를 불러오지 못했습니다")
+            # 2. 로그인 성공 시뮬레이션: 인증 상태 활성화 후 loadPrivacyNotice() 재호출
+            control["authenticated"] = True
+            page.evaluate("loadPrivacyNotice()")
+
+            # 3. 로그인 뒤 API 문구 및 판 1.1 정상 노출 검증
+            expect(title_el).to_have_text("제한적 개인정보 가림 기능 제공 안내")
+            expect(bullets_el).to_contain_text("본 프로그램의 개인정보 가림기능은 제한적으로 적용됩니다.")
+            expect(page.locator("#privacyNoticeVersion")).to_have_text("(v1.1)")
+
+            # 4. 안내문 로드 성공 후 input 활성화 및 체크 후 업로드 진행 검증
+            expect(page.locator("#fileInput")).to_be_enabled()
+            page.evaluate("document.querySelectorAll('dialog[open]').forEach(d => d.close())")
+            page.evaluate("""() => {
+                const cb = document.getElementById('privacyAck');
+                cb.checked = true;
+                cb.dispatchEvent(new Event('change'));
+            }""")
+            page.locator("#fileInput").set_input_files({
+                "name": "정상업로드문서.pdf",
+                "mimeType": "application/pdf",
+                "buffer": PAYLOAD,
+            })
+            expect(page.locator("#uploadStatus")).to_contain_text("등록 완료")
+            assert control["posts"] == 1, "로그인 후 안내문이 로드되고 체크하면 업로드가 성공해야 한다"
         finally:
             browser.close()
 

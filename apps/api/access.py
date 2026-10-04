@@ -315,8 +315,8 @@ async def workspace_access(request, call_next):
         mode = auth_mode()
         if mode == "multi-user" and _public_shell(request):
             return await forward(request)
-        if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path in {"/api/health", "/api/privacy-notice"}:
-            # 준비 상태 점검 및 정적 개인정보 처리 안내문은 비인증 공개 (개인정보나 내부 설정값 없음)
+        if mode == "multi-user" and request.method in {"GET", "HEAD"} and request.url.path == "/api/health":
+            # 준비 상태 점검(Readiness probe)은 비인증 공개, 설정이나 개인정보 없음
             response = await forward(request)
             response.headers["Cache-Control"] = "no-store"
             return response
