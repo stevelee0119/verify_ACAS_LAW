@@ -1,9 +1,9 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-04 평가 측(F1 병합 뒤). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-04 평가 측(F1 병합, F2 c64754a CI 실패 판정 뒤). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-04 (6)]
+[Antigravity 작업 — 통합 지시 2026-10-04 (7)]
 
 0. 규칙(AGENTS.md): 커밋 전에는 바꾼 부분의 시험만 돌린다. 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청'). 리베이스·강제 푸시 금지(병합 커밋).
    보고서의 시험 건수·버전은 실제 출력 그대로 적는다(pytest 마지막 요약 줄, config.py의 version).
@@ -23,6 +23,10 @@
     - HIGH 이상 보안 안내 배너(F1)는 유지한다. 주장 행은 켜지 않는다(TK-22 전). 화면이 배정표를 하드코딩하지 않는다(T4).
     - 기존 브라우저 시험이 표 구조 때문에 깨지면 찾는 위치만 바꾼다(내용 단언 변경·삭제 금지). 새 화면은 브라우저 시험을 추가한다.
  3) 로컬: tests/acceptance/test_f1_protected.py, tests/test_f2_review_items.py, 바꾼 화면의 브라우저 시험만. 푸시 뒤 PR #17에 '검토 요청'.
+ 5) (c64754a CI 실패 2건 — 이 PR의 화면 변경 때문) 찾는 위치·호출 함수 이름만 새 구조에 맞춘다. 내용 단언은 그대로 둔다.
+    - tests/test_drive_rag_relevance.py::test_web_shows_drive_health_selection_and_duplicates (renderTemporaryCitationSection 없음)
+    - tests/test_frontend_citation_groups.py::test_findings_from_one_citation_are_grouped (#findings > article.row-item 0개 — '같은 인용 파생 항목 묶음' 기능은 유지해야 한다)
+    - 로컬에서 기존 브라우저 시험 전부(tests/test_*browser*.py, tests/test_frontend_*.py, tests/test_drive_rag_relevance.py, tests/test_reasoning_layout.py)를 돌린다.
  4) 지금: PR #17의 base를 Steve_ACASiaLAW로 바꾸고, F2 브랜치에 `git merge upstream/Steve_ACASiaLAW`(7f5399f 이후, 병합 커밋)를 받아 푸시한다.
     평가 측이 그 head(화면 포함 c64754a 이후)를 판정한다.
 
