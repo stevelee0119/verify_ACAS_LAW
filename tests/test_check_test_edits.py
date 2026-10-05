@@ -131,3 +131,26 @@ def test_deletion_approval_written_by_implementer_is_ignored(repo):
     _commit(repo, BASE_TESTS.replace("def test_will_be_removed():\n    assert True\n", ""), "implementer")
     r = _run(repo, base)
     assert r.returncode == 1 and "test_will_be_removed" in r.stdout
+
+
+def test_pure_rename_is_reported_not_failed(repo):
+    """본문·표시가 같고 이름만 바뀐 시험은 삭제가 아니다(2026-10-05 PR #17 push 비교 거짓 실패)."""
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, BASE_TESTS.replace("def test_will_be_removed():", "def test_renamed():"), "implementer")
+    r = _run(repo, base)
+    assert r.returncode == 0 and "이름 변경" in r.stdout and "test_will_be_removed → test_renamed" in r.stdout
+
+
+def test_rename_with_weaker_body_still_fails(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, BASE_TESTS.replace("def test_keeps_asserting():\n    assert 1 == 1\n    assert 2 == 2\n",
+                                     "def test_other_name():\n    assert 1 == 1\n"), "implementer")
+    r = _run(repo, base)
+    assert r.returncode == 1 and "test_keeps_asserting" in r.stdout
+
+
+def test_rename_that_adds_xfail_still_fails(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, BASE_TESTS.replace("def test_will_be_removed():", "@pytest.mark.xfail\ndef test_renamed():"), "implementer")
+    r = _run(repo, base)
+    assert r.returncode == 1 and "test_will_be_removed" in r.stdout
