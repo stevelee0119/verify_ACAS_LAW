@@ -1,34 +1,49 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-04 평가 측(F1 병합, F2 c64754a CI 실패 판정 뒤). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-05 평가 측(F2 158d6d4 2차 판정 뒤). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-04 (7)]
+[Antigravity 작업 — 통합 지시 2026-10-05 (8)]
 
-0. 규칙(AGENTS.md): 커밋 전에는 바꾼 부분의 시험만 돌린다. 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청'). 리베이스·강제 푸시 금지(병합 커밋).
-   보고서의 시험 건수·버전은 실제 출력 그대로 적는다(pytest 마지막 요약 줄, config.py의 version).
+0. 규칙(AGENTS.md)
+   - 커밋 전에는 바꾼 부분의 시험만 돌린다.
+   - 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청')를 단다.
+   - 리베이스·강제 푸시 금지(병합 커밋).
+   - 보고서의 시험 건수·버전은 실제 출력 그대로 적는다(pytest 마지막 요약 줄, config.py의 version).
+     예: 이번 보고서의 '20 passed'는 실제 25, '70 passed'는 실제 73이었다.
 
 [A] PR #13 F1 — 병합 완료(Steve_ACASiaLAW 7f5399f). 할 일 없음.
 
-[B] PR #17 F2 — 서버 1단계(review_items) 내용 수용(조건부). 브랜치 antigravity/f2-review-items.
- 1) 보고서 정정 — docs/handoff/requests/41_f2_completion.md
-    - '버전 상태: 변경 없음 (0.9.13)' → '변경 없음 (0.10.0)'
-    - 5절의 'Playwright로 레이아웃과 DOM 구조를 검증' 문장 삭제(이 PR에 화면 변경 없음)
-    - 6절 '남은 것'에 'F2 화면(통합 검토 항목 탭) 미구현'을 추가
- 2) F2 화면(2단계) — 같은 브랜치에서 이어서 한다. 범위는 docs/handoff/PROMPT_FOR_FEATURE_ROUND_F1.md 1절 F2:
-    - '확인할 항목' 탭을 review_items 기반 통합 표로 바꾼다: 위치 / 문서 주장·인용 내용 / 근거 확인 결과 / 법리 타당성·반박·대응 4열.
-    - 검토 상태(확인 전·수용·오탐·조치 완료)·우선순위·담당자 조작은 행 안에 둔다(finding이 연결된 행은 기존 /api/findings/{finding_id}/workflow 재사용).
-    - 현행 검색·중요도·검토 상태 필터, 같은 인용에서 파생된 항목 묶음, 상세 보기(문서 쪽 보기·강조)를 유지한다.
-    - F1의 임시 섹션(#temporaryCitationSection)은 통합 표가 같은 정보를 모두 보이면 없앤다. 인용표·RAG·추가 관련 법조문 정보가 화면에서 사라지면 안 된다.
-    - HIGH 이상 보안 안내 배너(F1)는 유지한다. 주장 행은 켜지 않는다(TK-22 전). 화면이 배정표를 하드코딩하지 않는다(T4).
-    - 기존 브라우저 시험이 표 구조 때문에 깨지면 찾는 위치만 바꾼다(내용 단언 변경·삭제 금지). 새 화면은 브라우저 시험을 추가한다.
- 3) 로컬: tests/acceptance/test_f1_protected.py, tests/test_f2_review_items.py, 바꾼 화면의 브라우저 시험만. 푸시 뒤 PR #17에 '검토 요청'.
- 5) (c64754a CI 실패 2건 — 이 PR의 화면 변경 때문) 찾는 위치·호출 함수 이름만 새 구조에 맞춘다. 내용 단언은 그대로 둔다.
-    - tests/test_drive_rag_relevance.py::test_web_shows_drive_health_selection_and_duplicates (renderTemporaryCitationSection 없음)
-    - tests/test_frontend_citation_groups.py::test_findings_from_one_citation_are_grouped (#findings > article.row-item 0개 — '같은 인용 파생 항목 묶음' 기능은 유지해야 한다)
-    - 로컬에서 기존 브라우저 시험 전부(tests/test_*browser*.py, tests/test_frontend_*.py, tests/test_drive_rag_relevance.py, tests/test_reasoning_layout.py)를 돌린다.
- 4) 지금: PR #17의 base를 Steve_ACASiaLAW로 바꾸고, F2 브랜치에 `git merge upstream/Steve_ACASiaLAW`(7f5399f 이후, 병합 커밋)를 받아 푸시한다.
-    평가 측이 그 head(화면 포함 c64754a 이후)를 판정한다.
+[B] PR #17 F2 — 158d6d4 불승인(보완 필요). 브랜치 antigravity/f2-review-items.
+    서버 review_items, 4열 표, 임시 섹션 제거와 정보 보존, 보안 배너는 확인됐다. 그대로 둔다.
+ 0) CI 실패 1건(T2r)은 평가 측 시험의 대기 결함이었다. 제품 탓이 아니다.
+    - 평가 측이 tests/acceptance/test_f1_screen_protected.py를 보강해 Steve_ACASiaLAW에 넣는다(평가 측 PR).
+    - 그 PR이 병합되면 `git merge upstream/Steve_ACASiaLAW`(병합 커밋)로 받는다. 이 파일은 고치지 않는다.
+ 1) TK-60 보완 — docs/handoff/TK-60_f2_row_workflow_broken_and_workflow_controls_lost.md 4절 전부.
+    a. 행 안 저장: 기존 계약을 쓴다. API는 바꾸지 않는다.
+       - 지금 값과 revision을 읽고, 바꾼 칸만 덮어 PUT한다(메모·담당자·우선순위 보존).
+       - 상태 대응: 확인 전 = NOT_STARTED/UNDECIDED, 지적 수용 = COMPLETED/AGREED,
+         오탐 = COMPLETED/FALSE_POSITIVE, 조치 완료 = COMPLETED/UNDECIDED.
+       - 409면 알리고 다시 읽는다. 성공 안내는 응답을 받은 뒤에만 띄운다.
+    b. finding이 여럿인 행은 연결 finding 전부에 적용한다. 기존 POST /api/projects/{id}/reviews를 쓴다.
+    c. 행 안에 우선순위(1~3)·담당자 조작을 둔다.
+    d. 기존 진행 상태·담당자 필터, 행 선택 체크박스(일괄 검토), 우선순위 정렬을 통합 표에 다시 연결한다.
+       - 지금 F2는 필터가 무반응이고 체크박스가 0개다.
+ 2) 시험
+    - test_f2_inline_workflow_manipulation의 본문 단언을 실제 계약(workflow_state·decision·revision)으로 고친다.
+    - 실제 API(TestClient)로 '오탐 저장 → /findings의 review_status = FALSE_POSITIVE' 시험을 추가한다.
+    - 브라우저 시험을 추가한다: 필터 행 수, 체크박스 일괄 검토, review_items 경로에서 연결 finding 2건 행의 묶음 표시.
+    - 기존 시험의 내용 단언은 바꾸지 않는다.
+ 3) 보고서 정정 — docs/handoff/requests/41_f2_completion.md
+    - 시험 건수를 실제 출력으로 고친다.
+    - '수정 파일 7개'를 실제 개수로 고친다.
+    - '남은 것'을 실제대로 적는다.
+ 4) 로컬에서 돌릴 것
+    - 보호 시험: tests/acceptance/test_f1_protected.py, tests/acceptance/test_f1_screen_protected.py
+    - tests/test_f2_review_items.py, tests/test_f2_review_screen_browser.py
+    - tests/test_workspace.py
+    - 기존 브라우저 시험 전부: tests/test_*browser*.py, tests/test_frontend_*.py, tests/test_drive_rag_relevance.py, tests/test_reasoning_layout.py
+    - 푸시 뒤 PR #17에 '검토 요청'을 단다.
 
-[C] FT·F3 — 아직 착수하지 않는다. F2(화면 포함) 수용 뒤 평가 측이 T10·T11(FT)을 고정하고 알린다.
+[C] FT·F3 — 아직 착수하지 않는다. F2 수용 뒤 평가 측이 T10·T11(FT)을 고정하고 알린다.
 ```
