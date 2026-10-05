@@ -92,8 +92,8 @@
 
 | 검증 항목 | 실행 명령 | 결과 | pytest 최종 요약 출력 |
 | :--- | :--- | :---: | :--- |
-| **단위 및 보호 시험 묶음** | `pytest tests/test_workspace.py tests/test_f2_review_items.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `21 passed in 48.45s` |
-| **F2 화면 브라우저 시험** | `pytest tests/test_f2_review_screen_browser.py -v` | **PASS** | `7 passed in 73.93s (0:01:13)` |
+| **단위 및 보호 시험 묶음** | `pytest tests/test_workspace.py tests/test_f2_review_items.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `21 passed in 67.29s (0:01:07)` |
+| **F2 화면 브라우저 시험** | `pytest tests/test_f2_review_screen_browser.py -v` | **PASS** | `7 passed in 102.69s (0:01:42)` |
 | **미확인 사유 단위 시험** | `pytest tests/test_unverified_reasons.py -v` | **PASS** | `3 passed in 5.73s` |
 | **기존 브라우저 시험 전수 묶음** | `pytest tests/test_f1_ai_security_tab_browser.py tests/test_frontend_model_opinions.py tests/test_reasoning_layout.py tests/test_frontend_citation_groups.py tests/test_drive_rag_relevance.py tests/test_upload_privacy_notice_browser.py tests/test_frontend_upload.py -v` | **PASS** | `77 passed in 323.22s (0:05:23)` |
 | **사건 고유 값 점검** | `python scripts/check_case_literals.py` | **PASS** | 코드베이스 내 사건 고유 값 및 서면 문구 신규 하드코딩 0건 (종료 코드 0) |
