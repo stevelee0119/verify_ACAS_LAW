@@ -169,3 +169,6 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - 6차 병합·F1 기준값·CodeQL 위협 모델: **결정 완료(2026-10-03)** — 위 결정 표 참조. 오탐 65건은 사용자가 처리했고 평가 측이 64건 닫힘·**`#103` 1건 열림**을 확인했다(`GITHUB_ACCESS.md` 9절). 남은 사용자 조치는 **`#103` 닫기**와 7차 완료 뒤 **F1 착수 승인**이다.
 - **F1 G6·G9 충족(2026-10-04, d73a8ea) — 남은 G8.** **F2 1차 판정(PR #17 7ab5f2c): 서버 1단계 내용 수용(조건부), 화면 미구현·보고서 정정 필요, 병합은 F1 뒤.** → [판정서](../scorecards/f1_gate_verdict.md)
 - **F1 G8 미충족(2026-10-04, Codex 감사 d73a8ea): P1·P2 → [TK-59](TK-59_f1_ai_findings_unreachable_and_category_api_403.md), 보호 시험 T2r·T6a 신설, 병합 보류.**
+- **F1 병합(2026-10-04, PR #13 4afb29a → Steve 7f5399f): G1~G10 충족, Codex 재감사 통과.** 다음: F2(PR #17) base 전환 뒤 판정.
+- **F2 2차 판정(2026-10-05, PR #17 158d6d4): 불승인 → [TK-60](TK-60_f2_row_workflow_broken_and_workflow_controls_lost.md)** (행 안 상태 저장 거짓 성공, 기존 필터·일괄 검토 선택 회귀, 우선순위·담당자 조작 없음). CI 실패 1(T2r)은 평가 측 시험 대기 결함 — 평가 측 PR로 보강.
+- **F2 3차 판정(2026-10-05, b7dfb0a): 불승인(잔여 2) — 복수 finding 행 저장이 다른 finding의 검토 기록을 덮어씀(평가 측 지시 오류, TK-60 7절에서 정정), push CI 시험 이름 변경 감지.**
