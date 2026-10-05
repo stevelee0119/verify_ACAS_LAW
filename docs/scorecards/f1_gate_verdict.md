@@ -809,3 +809,7 @@
   - 태그 `release-20261005`(사용자 부착).
   - 배포 확인(`/api/health`의 commit = 67a87ba).
   - 배포 직후 온라인 점검(서면9 PDF, 직전 19/23과 같은 조건).
+- **배포 직후 온라인 점검(2026-10-05, 사용자 실행, 보고서 manifest commit 67a87ba 확인): 서면9 19/23.**
+  - 실패 4(LEG-2·RAG-1·RAG-2·PII-K6)는 직전 릴리스(22ca134) 19/23과 같은 항목이다. 10-04에 통과한 19항목 중 새 실패 0 → **정상.**
+  - `first_touch_log.jsonl`에 기록했다.
+- 같은 결과로 사용자가 화면 배치를 보고했다 → [TK-61](../handoff/TK-61_review_table_whitespace_and_finding_list_layout.md)(P3, 표시).
