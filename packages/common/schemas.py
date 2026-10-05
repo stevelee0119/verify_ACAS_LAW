@@ -27,6 +27,7 @@ from .enums import (
     MetaMessageType,
     ReviewStatus,
     Severity,
+    StrEnum,
     VerificationStatus,
 )
 
@@ -566,3 +567,86 @@ class EngineResult:
         for k, v in other.data.items():
             self.data.setdefault(k, v)
         return self
+
+
+# ---------------------------------------------------------------------------
+# F2 통합 검토 항목 (ReviewItem)
+# ---------------------------------------------------------------------------
+class OfficialConfirmationStatus(StrEnum):
+    """공식 DB(대법원 종합법률정보, 국가법령정보센터) 확인 상태 (축 1)."""
+
+    OFFICIAL_CONFIRMED = "OFFICIAL_CONFIRMED"    # 공식 원문에서 실존 및 내용 일치 확인됨
+    OFFICIAL_NOT_FOUND = "OFFICIAL_NOT_FOUND"    # 공식 조회 범위 내 미발견 (부존재 확정 아님, T6 보호)
+    UNVERIFIED_SCOPE = "UNVERIFIED_SCOPE"        # 조회 불가/형식 불일치/버전 모호 등 미확인 범위
+    NOT_ASSESSED = "NOT_ASSESSED"                # 공식 확인 대상 아님 (예: 일반 사실관계)
+
+
+class ReferenceSupportStatus(StrEnum):
+    """Drive 참고자료(RAG) 대조 부합성 상태 (축 2, 승격 없는 보조 의견)."""
+
+    SUPPORTED = "SUPPORTED"                      # 참고자료 본문에서 지지 구절 확인됨
+    CONTRADICTED = "CONTRADICTED"                # 참고자료 본문과 상충 구절 확인됨
+    NOT_MENTIONED = "NOT_MENTIONED"              # 참고자료 본문에 언급 없음
+    NOT_CHECKED = "NOT_CHECKED"                  # 참고자료 대조 미실시 또는 대상 아님
+
+
+class ReviewItemKind(StrEnum):
+    """통합 검토 항목 종류."""
+
+    CITATION = "CITATION"                        # 법령·판례·행정규칙 인용 검토 행
+    CLAIM = "CLAIM"                              # 서면의 핵심 사실/법리 주장 (TK-22 해결 후)
+    TEMPORAL = "TEMPORAL"                        # 행위시법·시점 모순·연표 불일치 검토 행
+    FACT = "FACT"                                # 사실관계·서증 대조·수치 모순 행
+    REFERENCE_OBSERVATION = "REFERENCE_OBSERVATION"  # 순수 참고자료 관찰의견 행 (D4)
+    UNVERIFIED_SCOPE = "UNVERIFIED_SCOPE"        # 미확인 범위 (사유 사람 말 변환 적용)
+    PROCESSING_QUALITY = "PROCESSING_QUALITY"    # 처리 품질 신호 (예: OCR_LOW_QUALITY)
+
+
+@dataclass
+class ReviewItem:
+    """통합 검토 탭용 단일 판정 검토 항목 도메인 객체."""
+
+    item_id: str                                 # 실행 단위 결정적 고유 식별자 (예: "doc1_CITATION_cit_123")
+    kind: ReviewItemKind                         # 항목 종류
+    document_id: str                             # 소속 문서 ID
+    claim_text: str                              # 본문 주장 또는 인용 원문 구절
+    official_status: OfficialConfirmationStatus  # 공식 확인 상태 (근거 사다리 축 1)
+    reference_status: ReferenceSupportStatus    # 참고자료 지지 상태 (근거 사다리 축 2)
+    verdict_label: str                           # 사용자 노출용 단일 판정 문구
+    severity: Severity                           # 기존 findings로부터 순수 파생된 최고 심각도
+    location: Optional[Dict[str, Any]] = None    # {page, span} 등 위치 정보
+    cited_authority: Optional[str] = None        # 인용 대상 권위 (예: 판례 사건번호 또는 법령 조문)
+    evidence_sources: List[str] = field(default_factory=list)  # 근거 출처 목록
+    finding_ids: List[str] = field(default_factory=list)       # 연동된 기존 Finding ID 목록
+    citation_id: Optional[str] = None            # 연동된 Citation ID
+    claim_id: Optional[str] = None               # 연동된 Claim ID
+    issue_ids: List[str] = field(default_factory=list)         # 연동된 쟁점 ID 목록 (통합 탭 쟁점 필터용)
+    review: Optional[Dict[str, Any]] = None      # 행별 검토 상태 (F2 1단계: finding 있는 행만)
+    advisory_only: bool = False                  # 참고의견 여부 (True면 심각도 승격 없음)
+    reasoning_sections: Optional[Dict[str, str]] = None  # {validity, counter_argument, strategy}
+    counteraction: Optional[str] = None          # 권고 대응 방향
+
+    def to_dict(self) -> Dict[str, Any]:
+        """직렬화 사전 반환 (Enum은 문자열로 변환)."""
+        return {
+            "item_id": self.item_id,
+            "kind": str(self.kind),
+            "document_id": self.document_id,
+            "location": self.location,
+            "claim_text": self.claim_text,
+            "cited_authority": self.cited_authority,
+            "official_status": str(self.official_status),
+            "reference_status": str(self.reference_status),
+            "evidence_sources": self.evidence_sources,
+            "verdict_label": self.verdict_label,
+            "severity": str(self.severity),
+            "finding_ids": self.finding_ids,
+            "citation_id": self.citation_id,
+            "claim_id": self.claim_id,
+            "issue_ids": self.issue_ids,
+            "review": self.review,
+            "advisory_only": self.advisory_only,
+            "reasoning_sections": self.reasoning_sections,
+            "counteraction": self.counteraction,
+        }
+

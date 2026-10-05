@@ -150,6 +150,8 @@ class DocumentResult:
     warnings: List[str] = field(default_factory=list)
     engine_data: Dict[str, Any] = field(default_factory=dict)
     role: Optional[str] = None
+    # F2: 통합 검토 항목 목록 (ReviewItem)
+    review_items: List[Any] = field(default_factory=list)
 
 
 @dataclass
@@ -453,6 +455,10 @@ class VerificationPipeline:
 
         # --- AGGREGATING ----------------------------------------------------
         emit(JobState.AGGREGATING, "결과 집계", 0.95)
+        # F2: 후행 검증(RAG 승격 등)으로 추가된 findings를 반영하여 review_items 최종 갱신
+        from .review_items import build_document_review_items
+        for d in result.documents:
+            d.review_items = build_document_review_items(d, d.normalized, context)
         result.unavailable_sources = annotate_unavailable_sources(self.registry.unavailable(), result.documents)
         result.unverified_items = [item for d in result.documents for item in d.unverified_items]
         if self.settings.rag_drive_folder_id and references.summary["status"] != "READY":
@@ -1009,6 +1015,9 @@ class VerificationPipeline:
                 stage.skip_reason = "AI 모델의 사실 모순 지적이 없음"
         statuses = {v.get("citation_id"): v.get("status") for v in result.engine_data.get("legal_verdicts", [])}
         result.findings = finalize_document_findings(result.findings, doc, document.document_id, statuses)
+        # F2: 통합 검토 항목(review_items) 생성 (단일 판정 및 Finding 누락 0 보장)
+        from .review_items import build_document_review_items
+        result.review_items = build_document_review_items(result, doc, context)
         emit(JobState.VERIFYING, f"{document.filename} 문서 분석 완료", base + span)
         return result
 

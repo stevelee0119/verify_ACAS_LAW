@@ -461,7 +461,7 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
               r.selection.coverage = 'INCOMPLETE_COVERAGE';
               r.selection.unreviewed_candidates = [{name: '학교폭력 가이드북.pdf', folder_path: '분야별 업무편람',
                 status: 'SELECTED_PENDING', reason: 'SYNC_BUDGET_EXHAUSTED'}];
-              renderTemporaryCitationSection();
+              renderFindings();
               switchTab('review');
             }""")
             expect(section).to_contain_text("관련 자료 검토 범위 미완결")
