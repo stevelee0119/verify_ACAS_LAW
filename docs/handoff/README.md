@@ -175,3 +175,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **PR #20 병합(2026-10-05, Steve e45772b): T2r 보강이 Steve에 들어갔다.** PR #17은 Steve를 병합 커밋으로 받으면 T2r 대기 실패가 없어진다(전달문 (9) [B] 3).
 - **F2 4차 판정(2026-10-05, 5dca58c): 내용 수용.** 병합은 push 실행 '점수 하락 게이트' 거짓 실패(시험 이름 복원 지시로 생김)로 막혀 있다 — 판정서 'F2 4차 판정'. 평가 측 과제: `check_test_edits.py` push 비교 보완.
 - **F2 병합(2026-10-05, PR #17 → Steve 8b70497).** 다음: 평가 측이 FT 보호 시험 T10·T11을 고정한 뒤 FT 지시서를 낸다.
+- **FT 준비(2026-10-05):** 보호 시험 T10·T11 고정(`tests/acceptance/test_ft_protected.py`), [FT 지시서](PROMPT_FOR_FT.md)(1단계 설계 보충). 사전 점검: FT 모듈 관련 기존 시험 669 통과, `resolve_statute` fail-closed 시험과의 충돌은 범위 한정으로 해소.

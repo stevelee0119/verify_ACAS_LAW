@@ -423,3 +423,8 @@
 - PR #21 병합(Steve e693e00, 2026-10-05, 사용자 지시): `check_test_edits.py` 이름 변경 인식·F2 4차 판정 기록. 병합 전 CI(head 54bcad2) 6개 잡 성공. 다음: Antigravity가 PR #17에 Steve 병합만 푸시(전달문 (11)).
 - PR #17 28989e1(Steve 병합만): 판정 승계, CI 6개 잡 성공, 병합 가능(`clean`).
 - **F2 병합(PR #17 28989e1 → Steve 8b70497, 2026-10-05, 사용자 지시).** 다음: FT 착수 전 평가 측 보호 시험 T10·T11 고정. F1·F2 묶음 릴리스는 봉인 시험 필요.
+
+## 35. FT 준비 — T10·T11 고정, FT 지시서 (2026-10-05)
+- `tests/acceptance/test_ft_protected.py`: T10 오탐 대조 4(통과), T11 구조 확인 1(통과)·같은 시행일 두 버전 3(strict xfail, 사유: `select_version` ValueError로 조회 전체 미검증). T10 양성은 기존 TK-34 strict xfail.
+- 입력: 공식 원문 미러 본문. T11의 같은 시행일 배열은 평가 측 합성(실제 사례 원문은 국가법령정보센터 접속 불가로 확보 못 함).
+- 지시 사전 점검(8b70497): FT 모듈 관련 기존 시험 16개 파일 + 보호 시험 669 통과·xfail 5. `resolve_statute`의 같은 시행일 fail-closed 시험과 맞닿아 FT-b 범위를 행위시법 검토 경로로 한정했다.
