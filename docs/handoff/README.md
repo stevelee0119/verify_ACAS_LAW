@@ -174,3 +174,8 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **F2 3차 판정(2026-10-05, b7dfb0a): 불승인(잔여 2) — 복수 finding 행 저장이 다른 finding의 검토 기록을 덮어씀(평가 측 지시 오류, TK-60 7절에서 정정), push CI 시험 이름 변경 감지.**
 - **PR #20 병합(2026-10-05, Steve e45772b): T2r 보강이 Steve에 들어갔다.** PR #17은 Steve를 병합 커밋으로 받으면 T2r 대기 실패가 없어진다(전달문 (9) [B] 3).
 - **F2 4차 판정(2026-10-05, 5dca58c): 내용 수용.** 병합은 push 실행 '점수 하락 게이트' 거짓 실패(시험 이름 복원 지시로 생김)로 막혀 있다 — 판정서 'F2 4차 판정'. 평가 측 과제: `check_test_edits.py` push 비교 보완.
+- **F2 병합(2026-10-05, PR #17 → Steve 8b70497).** 다음: 평가 측이 FT 보호 시험 T10·T11을 고정한 뒤 FT 지시서를 낸다.
+- **FT 준비(2026-10-05):** 보호 시험 T10·T11 고정(`tests/acceptance/test_ft_protected.py`), [FT 지시서](PROMPT_FOR_FT.md)(1단계 설계 보충). 사전 점검: FT 모듈 관련 기존 시험 669 통과, `resolve_statute` fail-closed 시험과의 충돌은 범위 한정으로 해소.
+- **릴리스 후보 8b70497(F1·F2) 측정(2026-10-05): `verify_all` 종료 0, 고정 81.7/79.2/0, 필수 보장 세트 기존과 같음, 버전 상향 없음.** 남은 것: 봉인 시험(사용자), 릴리스 PR.
+- **릴리스 F1·F2(2026-10-05): PR #23 병합, `main` 67a87ba, 0.10.0 유지.** 남은 것: 태그 `release-20261005`, 배포 확인, 온라인 점검.
+- **배포 직후 온라인 점검(67a87ba): 19/23, 새 실패 0.** 화면 배치 보고 → [TK-61](TK-61_review_table_whitespace_and_finding_list_layout.md)(표 공백, 세부 항목 위·아래 배치 권고).
