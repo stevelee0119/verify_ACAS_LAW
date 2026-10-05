@@ -1480,12 +1480,92 @@ function securityCard(docs, findings) {
   return card;
 }
 
+// 검토 상태 -> 워크플로우 상태/판단 매핑
+const STATUS_TO_WORKFLOW = {
+  NEEDS_REVIEW: { workflow_state: "NOT_STARTED", decision: "UNDECIDED" },
+  ACCEPTED: { workflow_state: "COMPLETED", decision: "AGREED" },
+  FALSE_POSITIVE: { workflow_state: "COMPLETED", decision: "FALSE_POSITIVE" },
+  RESOLVED: { workflow_state: "COMPLETED", decision: "UNDECIDED" },
+};
+
+// 행 안 워크플로우 저장 (TK-60 7절: 각 finding마다 GET으로 현재 값·revision을 읽고 바꾼 칸만 덮어 PUT 전송)
+async function saveRowWorkflow(item, patch) {
+  if (!item || !item.finding_ids || !item.finding_ids.length) return;
+  const fids = item.finding_ids;
+  let failCount = 0;
+
+  for (const fid of fids) {
+    try {
+      // a. finding마다 GET /findings/{id}/workflow로 현재 값과 revision을 읽는다
+      let current = null;
+      try {
+        current = await api(`/findings/${fid}/workflow`);
+      } catch (e) {
+        current = workflowUI?.workflows?.get(fid) || { revision: 0, priority: 2, assignee: "", note: "" };
+      }
+
+      // b. 바꾼 칸만 덮어 PUT /findings/{id}/workflow로 보낸다 (메모·담당자·우선순위 각자 보존)
+      const payload = {
+        workflow_state: current.workflow_state || "NOT_STARTED",
+        decision: current.decision || "UNDECIDED",
+        priority: current.priority ?? 2,
+        assignee: current.assignee || "",
+        note: current.note || "",
+        revision: current.revision || 0,
+      };
+
+      if (patch.review_status !== undefined) {
+        const mapped = STATUS_TO_WORKFLOW[patch.review_status] || STATUS_TO_WORKFLOW.NEEDS_REVIEW;
+        payload.workflow_state = mapped.workflow_state;
+        payload.decision = mapped.decision;
+      }
+      if (patch.priority !== undefined) {
+        payload.priority = Number(patch.priority);
+      }
+      if (patch.assignee !== undefined) {
+        payload.assignee = String(patch.assignee).trim();
+      }
+      if (patch.note !== undefined) {
+        payload.note = String(patch.note);
+      }
+
+      const updated = await api(`/findings/${fid}/workflow`, {
+        method: "PUT",
+        body: payload,
+      });
+
+      // 로컬 finding 및 캐시 동기화
+      const f = (state.findings || []).find(x => (x.id || x.finding_id) === fid);
+      if (f) {
+        if (patch.review_status !== undefined) f.review_status = patch.review_status;
+        if (patch.priority !== undefined) f.priority = payload.priority;
+        if (patch.assignee !== undefined) f.assignee = payload.assignee;
+      }
+      if (workflowUI?.workflows && updated) {
+        workflowUI.workflows.set(fid, updated);
+      }
+    } catch (err) {
+      failCount++;
+    }
+  }
+
+  // c. 일부 409·오류면 실패 건수를 알리고 다시 읽는다. 성공 안내는 전부 성공했을 때만.
+  if (failCount > 0) {
+    toast(`저장 중 ${failCount}건의 충돌 또는 오류가 발생했습니다. 최신 데이터를 다시 불러옵니다.`, "error");
+    await loadResults(state.generation);
+  } else {
+    toast("검토 상태가 저장되었습니다.");
+    await loadResults(state.generation);
+  }
+}
+
+
 function renderFindings() {
-  const query = $("findingSearch").value.toLowerCase();
-  // F1: AI·보안 유형은 확인할 항목에서 제외하고 AI·보안 탭에 모은다
-  const findings = state.findings.filter(f => !isAISecurityFinding(f) && workflowUI.matches(f) && (!$("reviewFilter").value || f.review_status === $("reviewFilter").value) && (!$("severityFilter").value || f.severity === $("severityFilter").value) && `${f.title} ${f.detail}`.toLowerCase().includes(query)).sort((a,b) => workflowUI.priority(a) - workflowUI.priority(b));
-  
-  // D2: HIGH 이상 AI·보안 항목 존재 시 최상단 한 줄 고정 안내 배너
+  const query = ($("findingSearch")?.value || "").toLowerCase();
+  const revFilter = $("reviewFilter")?.value || "";
+  const sevFilter = $("severityFilter")?.value || "";
+
+  // D2: HIGH 이상 AI·보안 항목 존재 시 최상단 한 줄 고정 안내 배너 유지
   const highSecFindings = (state.findings || []).filter(f => isAISecurityFinding(f) && (f.severity === "HIGH" || f.severity === "CRITICAL"));
   const alertBanner = $("highSecurityAlertBanner");
   const alertText = $("highSecurityAlertText");
@@ -1498,40 +1578,479 @@ function renderFindings() {
     }
   }
 
-  $("findings").replaceChildren();
-  if (!findings.length) empty($("findings"), state.run ? "표시할 확인 항목이 없습니다. 미확인 범위는 보고서에서 별도로 확인할 수 있습니다." : "검증 결과가 없습니다.");
-  // 같은 인용에서 나온 항목(예: 조회 범위 내 미발견 + 그 판례에 기댄 주장)은 한 줄로 묶고
-  // 하위 근거로 보인다. 서로 다른 경고가 여러 건인 것처럼 보이지 않게 한다.
-  const groups = new Map();
-  for (const f of findings) {
-    const key = f.citation_id;
-    if (key) groups.set(key, [...(groups.get(key) || []), f]);
-  }
-  for (const f of findings) {
-    const members = groups.get(f.citation_id) || [f];
-    if (members[0] !== f) continue;
-    const row = node("article", null, "row-item");
-    const title = button(null, () => openFinding(f), "row-title");
-    workflowUI.decorateFinding(f, row);
-    title.append(node("span", label(f.severity), `badge ${f.severity}`), node("strong", friendlyText(f.title)));
-    row.append(title, node("p", friendlyText(f.detail)), node("div", `${state.documents.find(d=>d.id===f.document_id)?.filename||"프로젝트 전체"}${f.page?` · ${f.page}쪽`:""} · ${label(f.status)} · ${label(f.review_status)}${f.advisory_only?" · 참고 의견":""}`, "row-meta"));
-    if (members.length > 1) {
-      const derived = node("details", null, "derived-findings");
-      derived.append(node("summary", `같은 인용에서 파생된 항목 ${members.length - 1}건`));
-      for (const m of members.slice(1)) derived.append(button(`${label(m.severity)} · ${friendlyText(m.title)}`, () => openFinding(m), "link-button"));
-      row.append(derived);
+  const docs = state.result?.documents || [];
+  const findingsMap = new Map((state.findings || []).map(f => [f.id || f.finding_id, f]));
+
+  // 1. review_items 수집 (문서별 하위 배열)
+  let allReviewItems = [];
+  for (const d of docs) {
+    const items = d.review_items || [];
+    for (const item of items) {
+      // TK-22 전: CLAIM(주장) 행은 켜지 않음 (지시사항)
+      if (item.kind === "CLAIM") continue;
+      allReviewItems.push({ doc: d, ...item });
     }
-    $("findings").append(row);
-  }
-  if (state.run?.unverified_items.length) {
-    const details = node("details", null, "detail-section");
-    details.append(node("summary", `미확인 범위 ${state.run.unverified_items.length}건`));
-    for (const item of state.run.unverified_items) details.append(node("p", friendlyText(`${item.raw_text || item.document_id || ""} ${item.page ? `· ${item.page}쪽` : ""}: ${item.reason || "확인하지 못함"}`)));
-    $("findings").append(details);
   }
 
-  // F1 임시 보존: 판례 인용 검토표 및 RAG/법조문 섹션을 확인할 항목 하단에 보존 (정보 손실 0)
-  renderTemporaryCitationSection();
+  // 하위 호환 폴백: 만약 review_items가 없는 데이터라면 ai_hallucination_table 및 findings로부터 합성
+  if (!allReviewItems.length && docs.length) {
+    const nonAIFindings = (state.findings || []).filter(f => !isAISecurityFinding(f));
+    const attachedFindingIds = new Set();
+
+    for (const d of docs) {
+      const docId = d.id || d.document_id || "";
+      if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
+        for (const row of d.ai_hallucination_table) {
+          const matchedFids = [];
+          for (const f of nonAIFindings) {
+            const fid = f.id || f.finding_id;
+            if (attachedFindingIds.has(fid)) continue;
+            const sameDoc = !f.document_id || !docId || f.document_id === docId;
+            if (!sameDoc) continue;
+
+            const citMatch = (row.citation_id && f.citation_id === row.citation_id);
+            const authMatch = row.cited_authority && (
+              (f.detail && f.detail.includes(row.cited_authority)) ||
+              (f.title && f.title.includes(row.cited_authority))
+            );
+            const pageMatch = row.location && f.page && String(row.location).includes(String(f.page));
+
+            if (citMatch || authMatch || pageMatch) {
+              matchedFids.push(fid);
+              attachedFindingIds.add(fid);
+            }
+          }
+
+          // 만약 인용 행이 1개이고 남은 비-AI finding도 1개라면 인용에 결합
+          if (!matchedFids.length && d.ai_hallucination_table.length === 1 && nonAIFindings.length === 1) {
+            const onlyF = nonAIFindings[0];
+            const onlyFid = onlyF.id || onlyF.finding_id;
+            if (!attachedFindingIds.has(onlyFid)) {
+              matchedFids.push(onlyFid);
+              attachedFindingIds.add(onlyFid);
+            }
+          }
+
+          allReviewItems.push({
+            doc: d,
+            item_id: `${docId}_CITATION_${row.citation_id || row.location}`,
+            kind: "CITATION",
+            document_id: docId,
+            location: { display: row.location },
+            claim_text: row.claim_text,
+            cited_authority: row.cited_authority,
+            official_status: row.basis === "OFFICIAL_CONFIRMED" ? "OFFICIAL_CONFIRMED" : "OFFICIAL_NOT_FOUND",
+            reference_status: "NOT_CHECKED",
+            verdict_label: row.validity_verdict,
+            severity: (String(row.validity_verdict).includes("부당") || String(row.validity_verdict).includes("결여")) ? "CRITICAL" : "HIGH",
+            finding_ids: matchedFids,
+            reasoning_sections: row.reasoning_sections,
+            counteraction: row.recommended_counteraction,
+            ai_generation_basis: row.ai_generation_basis,
+            context_review: row.context_review,
+            basis: row.basis,
+          });
+        }
+      }
+
+      // 인용에 결합되지 않은 나머지 비-AI/보안 finding 처리
+      // 1) citation_id가 있는 finding들은 같은 인용별로 한 행으로 묶음
+      const remainingByCitation = new Map();
+      for (const f of nonAIFindings) {
+        const fid = f.id || f.finding_id;
+        if (attachedFindingIds.has(fid)) continue;
+        if (f.document_id && docId && f.document_id !== docId) continue;
+        if (f.citation_id) {
+          if (!remainingByCitation.has(f.citation_id)) remainingByCitation.set(f.citation_id, []);
+          remainingByCitation.get(f.citation_id).push(f);
+        }
+      }
+
+      for (const [cid, group] of remainingByCitation.entries()) {
+        const lead = group[0];
+        const groupFids = group.map(x => x.id || x.finding_id);
+        for (const fid of groupFids) attachedFindingIds.add(fid);
+
+        allReviewItems.push({
+          doc: d,
+          item_id: `${docId}_CITATION_${cid}`,
+          kind: "CITATION",
+          document_id: docId,
+          location: { page: lead.page },
+          claim_text: lead.detail || lead.title,
+          cited_authority: lead.title,
+          official_status: lead.status === "CONFIRMED" ? "OFFICIAL_CONFIRMED" : "OFFICIAL_NOT_FOUND",
+          reference_status: "NOT_CHECKED",
+          verdict_label: lead.title,
+          severity: lead.severity,
+          finding_ids: groupFids,
+          reasoning_sections: null,
+          counteraction: lead.recommendation,
+        });
+      }
+
+      // 2) citation_id가 없는 나머지 finding은 독립 행으로 추가
+      for (const f of nonAIFindings) {
+        const fid = f.id || f.finding_id;
+        if (attachedFindingIds.has(fid)) continue;
+        if (f.document_id && docId && f.document_id !== docId) continue;
+        attachedFindingIds.add(fid);
+        allReviewItems.push({
+          doc: d,
+          item_id: `${docId}_FINDING_${fid}`,
+          kind: "FACT",
+          document_id: docId,
+          location: { page: f.page },
+          claim_text: f.detail || f.title,
+          cited_authority: null,
+          official_status: "NOT_ASSESSED",
+          reference_status: "NOT_CHECKED",
+          verdict_label: f.title,
+          severity: f.severity,
+          finding_ids: [fid],
+          reasoning_sections: null,
+          counteraction: f.recommendation,
+        });
+      }
+    }
+  }
+
+  // 판례 통계 요약 갱신
+  let hallucinationRows = [];
+  for (const d of docs) {
+    if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
+      for (const r of d.ai_hallucination_table) hallucinationRows.push(r);
+    }
+  }
+  renderHallucinationSummary(hallucinationRows);
+
+  const stageFilter = $("workflowFilter")?.value || "";
+  const assigneeFilter = ($("assigneeFilter")?.value || "").trim().toLowerCase();
+
+  // 2. 필터링 (검색어, 심각도, 검토 상태, 진행 상태, 담당자)
+  const filteredItems = allReviewItems.filter(item => {
+    if (sevFilter && item.severity !== sevFilter) return false;
+
+    // 검토 상태 필터 (reviewFilter: NEEDS_REVIEW, ACCEPTED, FALSE_POSITIVE, RESOLVED)
+    if (revFilter) {
+      if (!item.finding_ids || !item.finding_ids.length) {
+        if (revFilter !== "NEEDS_REVIEW") return false;
+      } else {
+        const matchRev = item.finding_ids.some(fid => {
+          const f = findingsMap.get(fid);
+          const wf = workflowUI?.workflows?.get(fid);
+          let st = f?.review_status || "NEEDS_REVIEW";
+          if (wf && wf.workflow_state === "COMPLETED") {
+            st = wf.decision === "FALSE_POSITIVE" ? "FALSE_POSITIVE" : (wf.decision === "AGREED" ? "ACCEPTED" : "RESOLVED");
+          }
+          return st === revFilter;
+        });
+        if (!matchRev) return false;
+      }
+    }
+
+    // 진행 상태 필터 (workflowFilter: NOT_STARTED, IN_PROGRESS, ACTION_REQUIRED, COMPLETED, DEFERRED)
+    if (stageFilter) {
+      if (!item.finding_ids || !item.finding_ids.length) {
+        if (stageFilter !== "NOT_STARTED") return false;
+      } else {
+        const matchStage = item.finding_ids.some(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          let st = wf?.workflow_state;
+          if (!st) {
+            st = (f?.review_status && f.review_status !== "NEEDS_REVIEW") ? "COMPLETED" : "NOT_STARTED";
+          }
+          return st === stageFilter;
+        });
+        if (!matchStage) return false;
+      }
+    }
+
+    // 담당자 필터 (assigneeFilter)
+    if (assigneeFilter) {
+      if (!item.finding_ids || !item.finding_ids.length) return false;
+      const matchAssignee = item.finding_ids.some(fid => {
+        const f = findingsMap.get(fid);
+        const wf = workflowUI?.workflows?.get(fid);
+        const ass = (wf?.assignee || f?.assignee || "").toLowerCase();
+        return ass.includes(assigneeFilter);
+      });
+      if (!matchAssignee) return false;
+    }
+
+    if (query) {
+      const texts = [
+        item.claim_text,
+        item.cited_authority,
+        item.verdict_label,
+        item.doc?.filename,
+        item.counteraction,
+      ];
+      for (const fid of item.finding_ids || []) {
+        const f = findingsMap.get(fid);
+        if (f) texts.push(f.title, f.detail);
+      }
+      const match = texts.filter(Boolean).some(t => String(t).toLowerCase().includes(query));
+      if (!match) return false;
+    }
+    return true;
+  });
+
+  const rankMap = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1 };
+  filteredItems.sort((a, b) => {
+    const prioA = (a.finding_ids && a.finding_ids.length)
+      ? Math.min(...a.finding_ids.map(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          return wf?.priority || f?.priority || 2;
+        }))
+      : 2;
+    const prioB = (b.finding_ids && b.finding_ids.length)
+      ? Math.min(...b.finding_ids.map(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          return wf?.priority || f?.priority || 2;
+        }))
+      : 2;
+    if (prioA !== prioB) return prioA - prioB;
+    return (rankMap[b.severity] || 0) - (rankMap[a.severity] || 0);
+  });
+
+  // 전체 선택 체크박스 동기화
+  const selectAllBox = $("selectAllFindings");
+  if (selectAllBox) {
+    const selectableFids = filteredItems.flatMap(it => it.finding_ids || []);
+    selectAllBox.checked = selectableFids.length > 0 && selectableFids.every(fid => workflowUI?.selected?.has(fid));
+    selectAllBox.onchange = (e) => {
+      for (const fid of selectableFids) {
+        if (e.target.checked) workflowUI?.selected?.add(fid);
+        else workflowUI?.selected?.delete(fid);
+      }
+      workflowUI?.renderReviewCount?.();
+      renderFindings();
+    };
+  }
+
+  // 3. 4열 통합 검토 표 렌더링
+  const rowsContainer = $("aiVerificationRows");
+  const emptyMsg = $("aiVerificationEmpty");
+  if (rowsContainer) {
+    rowsContainer.replaceChildren();
+    if (!filteredItems.length) {
+      if (emptyMsg) {
+        emptyMsg.hidden = false;
+        emptyMsg.textContent = state.run ? "표시할 확인 항목이 없습니다." : "검증 결과가 없습니다.";
+      }
+    } else {
+      if (emptyMsg) emptyMsg.hidden = true;
+      for (const item of filteredItems) {
+        const tr = node("tr");
+
+        // 1열: 위치 + 행 선택 체크박스
+        const tdLoc = node("td");
+        if (item.finding_ids && item.finding_ids.length > 0) {
+          const rowCheck = node("input");
+          rowCheck.type = "checkbox";
+          rowCheck.className = "row-checkbox";
+          rowCheck.setAttribute("aria-label", "행 선택");
+          rowCheck.checked = item.finding_ids.every(fid => workflowUI?.selected?.has(fid));
+          rowCheck.onchange = (e) => {
+            for (const fid of item.finding_ids) {
+              if (e.target.checked) workflowUI?.selected?.add(fid);
+              else workflowUI?.selected?.delete(fid);
+            }
+            workflowUI?.renderReviewCount?.();
+            if (selectAllBox) {
+              const selectableFids = filteredItems.flatMap(it => it.finding_ids || []);
+              selectAllBox.checked = selectableFids.length > 0 && selectableFids.every(fid => workflowUI?.selected?.has(fid));
+            }
+          };
+          tdLoc.append(rowCheck);
+        }
+        tdLoc.append(node("strong", item.doc?.filename || "문서"));
+        const locText = item.location?.display || (item.location?.page ? `${item.location.page}쪽` : "");
+        if (locText) {
+          tdLoc.append(node("p", locText, "muted small"));
+        }
+        if (item.location?.page) {
+          tdLoc.append(button(`${item.location.page}쪽 보기`, () => viewDocument(item.document_id, item.location.page), "link-button small"));
+        }
+        if (item.kind) {
+          tdLoc.append(node("span", label(item.kind), "badge info small"));
+        }
+
+        // 2열: 문서 주장 및 인용 내용
+        const tdClaim = node("td");
+        if (item.cited_authority) {
+          tdClaim.append(node("strong", item.cited_authority));
+        }
+        if (item.claim_text) {
+          tdClaim.append(node("p", friendlyText(item.claim_text), "claim-text"));
+        }
+        if (item.finding_ids && item.finding_ids.length > 0) {
+          const firstFinding = findingsMap.get(item.finding_ids[0]);
+          if (firstFinding) {
+            tdClaim.append(button(`상세 보기: ${friendlyText(firstFinding.title)}`, () => openFinding(firstFinding), "link-button small"));
+          }
+          if (item.finding_ids.length > 1) {
+            const derived = node("details", null, "derived-findings");
+            derived.append(node("summary", `같은 인용에서 파생된 항목 ${item.finding_ids.length - 1}건`));
+            for (const fid of item.finding_ids.slice(1)) {
+              const m = findingsMap.get(fid);
+              if (m) {
+                derived.append(button(`${label(m.severity)} · ${friendlyText(m.title)}`, () => openFinding(m), "link-button"));
+              }
+            }
+            tdClaim.append(derived);
+          }
+        }
+
+        // 3열: 근거 확인 결과
+        const tdBasis = node("td");
+        let verdictCls = "badge HIGH";
+        if (item.official_status === "OFFICIAL_CONFIRMED" || item.verdict_label?.includes("일치")) {
+          verdictCls = "badge SUCCESS";
+        } else if (String(item.verdict_label).includes("부당") || String(item.verdict_label).includes("결여")) {
+          verdictCls = "badge CRITICAL";
+        }
+        tdBasis.append(
+          node("span", label(item.severity), `badge ${item.severity}`),
+          node("span", item.verdict_label || "확인 필요", `${verdictCls} validity-verdict`)
+        );
+        const basisText = item.ai_generation_basis || (item.official_status ? label(item.official_status) : "");
+        if (basisText) {
+          tdBasis.append(node("p", basisText, "basis-text"));
+        }
+        if (item.context_review?.reason) {
+          const review = item.context_review;
+          const context = node("div", null, "citation-context-review");
+          context.append(node("strong", "인용 취지·맥락 검토 (AI 참고 의견)"), node("p", review.reason || "판단 유보"));
+          for (const opinion of review.opinions || []) {
+            const stage = {primary: "1차 검토", critic: "독립 교차검토", grounder: "근거 대조"}[opinion.stage] || opinion.stage;
+            context.append(node("p", `${stage}: ${opinion.rationale}`));
+            const evidence = node("details");
+            evidence.append(node("summary", "공식 원문 근거"));
+            for (const quote of opinion.evidence_quotes || []) evidence.append(node("blockquote", quote));
+            context.append(evidence);
+          }
+          if (review.source_truncated) context.append(node("p", "공식 원문 일부 범위에 대한 의견입니다.", "muted"));
+          context.append(node("small", "문구 일치, 법리 취지, 구체적 사안 적용은 별개이며 작성 주체 판정에는 사용하지 않습니다.", "muted"));
+          tdBasis.append(context);
+        }
+
+        // 4열: 법리적 타당성 검토 및 반박 근거 & 행 안 워크플로우 조작
+        const tdReason = node("td");
+        tdReason.append(
+          reasoningBlock(item),
+          node("div", `대응 방안: ${item.counteraction || ""}`, "counteraction-box")
+        );
+        if (item.finding_ids && item.finding_ids.length > 0) {
+          const leadF = findingsMap.get(item.finding_ids[0]);
+          const leadWf = workflowUI?.workflows?.get(leadF?.id) || {};
+          let currentStatus = leadF?.review_status || "NEEDS_REVIEW";
+          if (leadWf.workflow_state === "COMPLETED") {
+            currentStatus = leadWf.decision === "FALSE_POSITIVE" ? "FALSE_POSITIVE" : (leadWf.decision === "AGREED" ? "ACCEPTED" : "RESOLVED");
+          }
+          const currentPrio = leadWf.priority || leadF?.priority || 2;
+          const currentAssignee = leadWf.assignee || leadF?.assignee || "";
+
+          const wfBox = node("div", null, "inline-workflow-box");
+          const controls = node("div", null, "inline-workflow-controls");
+
+          // 1) 검토 상태 (확인 전/지적 수용/오탐/조치 완료)
+          const stLabel = node("label", null, "inline-field");
+          stLabel.append(node("strong", "검토 상태: "));
+          const sel = node("select", null, "inline-workflow-select");
+          sel.setAttribute("aria-label", "행 검토 상태");
+          for (const [val, text] of [
+            ["NEEDS_REVIEW", "확인 전"],
+            ["ACCEPTED", "지적 수용"],
+            ["FALSE_POSITIVE", "오탐"],
+            ["RESOLVED", "조치 완료"],
+          ]) {
+            const opt = node("option", text);
+            opt.value = val;
+            if (currentStatus === val) opt.selected = true;
+            sel.append(opt);
+          }
+          sel.addEventListener("change", () => saveRowWorkflow(item, { review_status: sel.value }));
+          stLabel.append(sel);
+
+          // 2) 우선순위 (1: 우선 검토 / 2: 보통 / 3: 후순위)
+          const prioLabel = node("label", null, "inline-field");
+          prioLabel.append(node("strong", "우선순위: "));
+          const prioSel = node("select", null, "inline-priority-select");
+          prioSel.setAttribute("aria-label", "행 우선순위");
+          for (const [val, text] of [
+            ["1", "우선 검토"],
+            ["2", "보통"],
+            ["3", "후순위"],
+          ]) {
+            const opt = node("option", text);
+            opt.value = val;
+            if (String(currentPrio) === String(val)) opt.selected = true;
+            prioSel.append(opt);
+          }
+          prioSel.addEventListener("change", () => saveRowWorkflow(item, { priority: prioSel.value }));
+          prioLabel.append(prioSel);
+
+          // 3) 담당자
+          const assLabel = node("label", null, "inline-field");
+          assLabel.append(node("strong", "담당자: "));
+          const assInput = node("input", null, "inline-assignee-input");
+          assInput.type = "text";
+          assInput.placeholder = "담당자";
+          assInput.value = currentAssignee;
+          assInput.setAttribute("aria-label", "행 담당자");
+          assInput.addEventListener("change", () => saveRowWorkflow(item, { assignee: assInput.value }));
+          assLabel.append(assInput);
+
+          controls.append(stLabel, prioLabel, assLabel);
+          wfBox.append(controls);
+          tdReason.append(wfBox);
+        } else {
+          tdReason.append(node("div", "검토 상태: 저장 불가 (정보 전용)", "inline-workflow-note"));
+        }
+
+        tr.append(tdLoc, tdClaim, tdBasis, tdReason);
+        rowsContainer.append(tr);
+      }
+    }
+  }
+
+  // 4. 하단 미확인 범위 및 RAG/추가 법조문 보존 (정보 손실 0 유지)
+  const unverifiedContainer = $("unverifiedScopeContainer");
+  if (unverifiedContainer) {
+    unverifiedContainer.replaceChildren();
+    if (state.run?.unverified_items?.length) {
+      const details = node("details", null, "detail-section");
+      details.append(node("summary", `미확인 범위 ${state.run.unverified_items.length}건`));
+      for (const item of state.run.unverified_items) {
+        details.append(node("p", friendlyText(`${item.raw_text || item.document_id || ""} ${item.page ? `· ${item.page}쪽` : ""}: ${item.reason || "확인하지 못함"}`)));
+      }
+      unverifiedContainer.append(details);
+    }
+  }
+
+  const refContainer = $("reviewReferencesContainer");
+  if (refContainer) {
+    refContainer.replaceChildren();
+    const references = referenceSection(docs);
+    if (references) refContainer.append(references);
+    for (const d of docs) {
+      const related = d.engine_data?.related_authorities;
+      if (!related) continue;
+      const section = node("details", null, "detail-section");
+      section.append(node("summary", `${d.filename}: 추가 관련 법조문 검토`),
+        node("p", related.note || related.reason || "추가 확인 필요"));
+      for (const candidate of related.candidates || []) {
+        const verdict = (related.verdicts || []).find(v => v.citation_id === candidate.citation_id);
+        section.append(node("p", `${candidate.raw_text} · 출처 조회: ${label(verdict?.status || "NOT_ASSESSED")} · 사건 당시 적용·주장 타당성: 별도 검토 필요`));
+      }
+      refContainer.append(section);
+    }
+  }
 }
 
 function renderAIVerification() {
@@ -1610,105 +2129,6 @@ function renderAIVerification() {
 
   // 2) 프롬프트 인젝션 검증 카드 & 3) 보안 카드
   cardsContainer.append(card1, injectionCard(docs, hasQuarantine, state.findings), securityCard(docs, state.findings));
-}
-
-function renderTemporaryCitationSection() {
-  const container = $("aiVerificationRows");
-  const emptyMsg = $("aiVerificationEmpty");
-  if (!container) return;
-
-  container.replaceChildren();
-
-  const docs = state.result?.documents || [];
-  let allRows = [];
-
-  for (const d of docs) {
-    if (d.ai_hallucination_table && Array.isArray(d.ai_hallucination_table)) {
-      for (const row of d.ai_hallucination_table) {
-        allRows.push({ filename: d.filename, ...row });
-      }
-    }
-  }
-
-  renderHallucinationSummary(allRows);
-
-  if (allRows.length === 0) {
-    if (emptyMsg) emptyMsg.hidden = false;
-  } else {
-    if (emptyMsg) emptyMsg.hidden = true;
-
-    for (const r of allRows) {
-      const tr = node("tr");
-      const tdLoc = node("td", `${r.filename}\n${r.location || ""}`);
-      const tdClaim = node("td");
-      tdClaim.append(
-        node("strong", r.cited_authority || "인용 판례"),
-        node("p", r.claim_text || "", "claim-text")
-      );
-      const tdBasis = node("td");
-      let verdictCls = "badge HIGH";
-      if (r.basis === "OFFICIAL_CONFIRMED") {
-        verdictCls = "badge SUCCESS";
-      } else if (String(r.validity_verdict).includes("부당") || String(r.validity_verdict).includes("결여")) {
-        verdictCls = "badge CRITICAL";
-      }
-      tdBasis.append(
-        node("span", r.validity_verdict || "확인 필요", `${verdictCls} validity-verdict`),
-        node("p", r.ai_generation_basis || "공식 소스 미존재", "basis-text")
-      );
-      if (r.context_review?.reason) {
-        const review = r.context_review;
-        const context = node("div", null, "citation-context-review");
-        context.append(node("strong", "인용 취지·맥락 검토 (AI 참고 의견)"), node("p", review.reason || "판단 유보"));
-        for (const opinion of review.opinions || []) {
-          const stage = {primary: "1차 검토", critic: "독립 교차검토", grounder: "근거 대조"}[opinion.stage] || opinion.stage;
-          context.append(node("p", `${stage}: ${opinion.rationale}`));
-          const evidence = node("details");
-          evidence.append(node("summary", "공식 원문 근거"));
-          for (const quote of opinion.evidence_quotes || []) evidence.append(node("blockquote", quote));
-          context.append(evidence);
-        }
-        if (review.source_truncated) context.append(node("p", "공식 원문 일부 범위에 대한 의견입니다.", "muted"));
-        context.append(node("small", "문구 일치, 법리 취지, 구체적 사안 적용은 별개이며 작성 주체 판정에는 사용하지 않습니다.", "muted"));
-        tdBasis.append(context);
-      }
-      const tdReason = node("td");
-      tdReason.append(
-        reasoningBlock(r),
-        node("div", `대응 방안: ${r.recommended_counteraction || ""}`, "counteraction-box")
-      );
-
-      tr.append(tdLoc, tdClaim, tdBasis, tdReason);
-      container.append(tr);
-    }
-  }
-
-  // 주요 참고문헌 검토(RAG) 및 추가 관련 법조문 검토 섹션을 임시 섹션 하단에 렌더링 (F1 보완)
-  const tempSection = $("temporaryCitationSection");
-  if (tempSection) {
-    let refContainer = $("temporaryReferencesContainer");
-    if (!refContainer) {
-      refContainer = node("div", null, "temporary-references-wrap");
-      refContainer.id = "temporaryReferencesContainer";
-      tempSection.append(refContainer);
-    }
-    refContainer.replaceChildren();
-
-    const references = referenceSection(docs);
-    if (references) refContainer.append(references);
-    for (const d of docs) {
-      const related = d.engine_data?.related_authorities;
-      if (!related) continue;
-      const section = node("details", null, "detail-section");
-      section.append(node("summary", `${d.filename}: 추가 관련 법조문 검토`),
-        node("p", related.note || related.reason || "추가 확인 필요"));
-      for (const candidate of related.candidates || []) {
-        const verdict = (related.verdicts || []).find(v => v.citation_id === candidate.citation_id);
-        section.append(node("p", `${candidate.raw_text} · 출처 조회: ${label(verdict?.status || "NOT_ASSESSED")} · 사건 당시 적용·주장 타당성: 별도 검토 필요`));
-      }
-      refContainer.append(section);
-    }
-  }
 }
 
 // '법리적 타당성 검토 및 반박 근거' 칸: 검토 결과 / AI 교차검증 요약 / 모델별 판정·근거를 줄마다 나눈다.

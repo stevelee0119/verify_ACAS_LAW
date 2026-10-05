@@ -52,6 +52,13 @@ def test_findings_from_one_citation_are_grouped(tmp_path):
                         "text": "Drive reference text"}]}}}]})
         if path.endswith("/case-matrix"):
             return route.fulfill(body="null", content_type="application/json")
+        if path == "/api/finding-categories":
+            from packages.common.finding_category_map import CATEGORY_TO_TAB, FINDING_CATEGORY_MAP, get_category_counts
+            return route.fulfill(json={
+                "categories": {ft.value: cat.value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "tabs": {ft.value: CATEGORY_TO_TAB[cat].value for ft, cat in FINDING_CATEGORY_MAP.items()},
+                "counts": get_category_counts(),
+            })
         return route.fulfill(json=[])
 
     with sync_playwright() as playwright:
@@ -68,7 +75,7 @@ def test_findings_from_one_citation_are_grouped(tmp_path):
             select_first_project(page)
             page.get_by_role("button", name="검증·검토", exact=True).click()
             page.locator("[data-tab='review']").click()
-            rows = page.locator("#findings > article.row-item")
+            rows = page.locator("#aiVerificationRows tr")
             expect(rows).to_have_count(2)
             grouped = rows.filter(has_text="대법원 2019다1")
             expect(grouped.locator(".derived-findings summary")).to_have_text("같은 인용에서 파생된 항목 1건")
