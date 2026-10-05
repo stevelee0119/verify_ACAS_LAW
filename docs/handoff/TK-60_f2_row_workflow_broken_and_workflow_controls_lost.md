@@ -41,7 +41,7 @@ F1(7f5399f)과 F2(158d6d4)를 같은 입력과 같은 모의 API로 비교했다
      | 오탐 | COMPLETED | FALSE_POSITIVE |
      | 조치 완료 | COMPLETED | UNDECIDED |
    - 409가 오면 '다른 검토자가 바꿨다'고 알리고 다시 읽는다. 성공 안내는 응답을 받은 뒤에만 띄운다.
-2. 행에 finding이 여럿이면 행 조작이 연결 finding 전부에 적용되어야 한다. 기존 일괄 API `POST /api/projects/{id}/reviews`(`expected_revisions` 원자 처리)를 쓴다.
+2. 행에 finding이 여럿이면 행 조작이 연결 finding 전부에 적용되어야 한다. ~~기존 일괄 API `POST /api/projects/{id}/reviews`를 쓴다.~~ **(7절에서 정정)** 연결 finding마다 각자의 현재 값과 `revision`으로 `PUT /api/findings/{id}/workflow`를 보낸다.
 3. 행 안에 우선순위(1~3)와 담당자 조작을 둔다. 같은 저장 경로를 쓴다.
 4. 통합 표에 기존 기능을 다시 연결한다.
    - 진행 상태·담당자 필터: 행의 연결 finding 중 하나라도 맞으면 표시한다.
@@ -61,3 +61,33 @@ F1(7f5399f)과 F2(158d6d4)를 같은 입력과 같은 모의 API로 비교했다
 - 위 시험과 보호 시험(T1~T5, T2r, T6a) 통과.
 - 기존 브라우저 시험 전부 통과: `tests/test_*browser*.py`, `tests/test_frontend_*.py`, `tests/test_drive_rag_relevance.py`, `tests/test_reasoning_layout.py`.
 - 평가 측이 같은 비교(F1 대비 필터·선택·정렬, 실제 API 저장)를 다시 돌려 확인한다.
+
+## 7. 추기(2026-10-05) — b7dfb0a 확인 결과와 평가 측 지시 정정
+**해소(평가 측 재실행)**
+- 단일 finding 행
+  - 화면이 보낸 저장 요청을 실제 API·DB로 흘려 확인했다.
+  - 지적 수용 → 조치 완료 → 우선순위 1을 차례로 저장했다. 상태 ACCEPTED → RESOLVED, revision 2 → 4이고 409는 없었다.
+  - 기존 메모·담당자가 보존됐다.
+- 기존 기능 복구(서면9·서면8 PDF 처리 결과)
+  - 담당자·진행 상태 필터: F1과 같이 1행으로 줄어든다.
+  - 행 선택 체크박스 9개, 선택하면 '선택 항목 검토 (1)'로 바뀐다.
+  - 우선순위 정렬: 우선순위 1인 행이 맨 위다.
+- 행 안 우선순위·담당자 조작이 생겼다.
+
+**남은 결함 1(P2) — 복수 finding 행 저장이 다른 finding의 검토 기록을 덮어쓴다**
+- 재현(실제 API): 연결 finding A(메모 'A', 담당 A, 우선순위 1)와 B(메모 'B', 담당 B, 우선순위 3)가 있는 행에서 상태를 '오탐'으로 바꿨다.
+- 결과: 두 건 모두 FALSE_POSITIVE가 됐지만, B의 메모·담당자·우선순위가 A의 값으로 바뀌었다.
+- 원인: 일괄 API는 연결 finding 전부에 같은 `values`를 덮어쓴다.
+- **평가 측 자기 정정:** 이 경로는 위 4절 2의 평가 측 지시(일괄 API 사용)를 따른 것이다. 지시 사전 점검에서 단일 finding 보존만 확인하고, 복수 finding 보존은 확인하지 않았다. 지시를 다음으로 바꾼다.
+  - 연결 finding마다 각자의 현재 값(GET)과 `revision`으로 바꾼 칸만 덮어 `PUT`한다. API는 바꾸지 않는다.
+  - 일부가 409·오류면 실패한 항목 수를 알리고 다시 읽는다. 성공 안내는 전부 성공했을 때만 띄운다.
+- 사전 점검: 단일 경로 `PUT`이 각 finding의 메모·담당자·우선순위를 보존함을 위 e2e로 확인했다. 복수 행은 그 경로를 finding마다 반복하는 것이다.
+
+**남은 결함 2(CI) — push 실행의 '점수 하락 게이트' 실패**
+- `check_test_edits`(기준 158d6d4)가 `tests/test_f2_review_screen_browser.py::test_f2_filters_search_severity_review_status`를 '삭제'로 잡았다.
+- 실제로는 이 PR이 만든 시험의 이름을 `test_f2_filters_and_row_counts`로 바꾼 것이다. 새 시험은 옛 단언을 모두 포함하고 더 넓다.
+- 조치: 옛 이름으로 되돌린다(내용은 새 것 유지).
+
+**시험 요구(추가)**
+- 메모·담당자·우선순위가 서로 다른 finding 2건이 연결된 행에서 상태를 바꾼 뒤, 실제 API로 각자의 값이 보존되는지 확인하는 시험을 넣는다.
+- 지금 시험의 모의 데이터는 두 finding의 메모가 같아서 이 결함을 잡지 못한다.
