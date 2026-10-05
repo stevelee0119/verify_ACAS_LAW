@@ -173,3 +173,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **F2 2차 판정(2026-10-05, PR #17 158d6d4): 불승인 → [TK-60](TK-60_f2_row_workflow_broken_and_workflow_controls_lost.md)** (행 안 상태 저장 거짓 성공, 기존 필터·일괄 검토 선택 회귀, 우선순위·담당자 조작 없음). CI 실패 1(T2r)은 평가 측 시험 대기 결함 — 평가 측 PR로 보강.
 - **F2 3차 판정(2026-10-05, b7dfb0a): 불승인(잔여 2) — 복수 finding 행 저장이 다른 finding의 검토 기록을 덮어씀(평가 측 지시 오류, TK-60 7절에서 정정), push CI 시험 이름 변경 감지.**
 - **PR #20 병합(2026-10-05, Steve e45772b): T2r 보강이 Steve에 들어갔다.** PR #17은 Steve를 병합 커밋으로 받으면 T2r 대기 실패가 없어진다(전달문 (9) [B] 3).
+- **F2 4차 판정(2026-10-05, 5dca58c): 내용 수용.** 병합은 push 실행 '점수 하락 게이트' 거짓 실패(시험 이름 복원 지시로 생김)로 막혀 있다 — 판정서 'F2 4차 판정'. 평가 측 과제: `check_test_edits.py` push 비교 보완.
