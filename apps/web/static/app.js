@@ -1488,15 +1488,15 @@ const STATUS_TO_WORKFLOW = {
   RESOLVED: { workflow_state: "COMPLETED", decision: "UNDECIDED" },
 };
 
-// 행 안 워크플로우 저장 (단일 finding: PUT /findings/{id}/workflow, 복수 finding: POST /projects/{id}/reviews)
+// 행 안 워크플로우 저장 (TK-60 7절: 각 finding마다 GET으로 현재 값·revision을 읽고 바꾼 칸만 덮어 PUT 전송)
 async function saveRowWorkflow(item, patch) {
   if (!item || !item.finding_ids || !item.finding_ids.length) return;
-  const projectId = state.project?.id;
+  const fids = item.finding_ids;
+  let failCount = 0;
 
-  try {
-    if (item.finding_ids.length === 1) {
-      const fid = item.finding_ids[0];
-      // 현재 값과 revision 읽기 (메모·담당자·우선순위 보존)
+  for (const fid of fids) {
+    try {
+      // a. finding마다 GET /findings/{id}/workflow로 현재 값과 revision을 읽는다
       let current = null;
       try {
         current = await api(`/findings/${fid}/workflow`);
@@ -1504,6 +1504,7 @@ async function saveRowWorkflow(item, patch) {
         current = workflowUI?.workflows?.get(fid) || { revision: 0, priority: 2, assignee: "", note: "" };
       }
 
+      // b. 바꾼 칸만 덮어 PUT /findings/{id}/workflow로 보낸다 (메모·담당자·우선순위 각자 보존)
       const payload = {
         workflow_state: current.workflow_state || "NOT_STARTED",
         decision: current.decision || "UNDECIDED",
@@ -1533,94 +1534,31 @@ async function saveRowWorkflow(item, patch) {
         body: payload,
       });
 
-      // 로컬 finding 및 workflowUI 캐시 동기화
+      // 로컬 finding 및 캐시 동기화
       const f = (state.findings || []).find(x => (x.id || x.finding_id) === fid);
       if (f) {
         if (patch.review_status !== undefined) f.review_status = patch.review_status;
-        if (patch.priority !== undefined) f.priority = Number(patch.priority);
-        if (patch.assignee !== undefined) f.assignee = String(patch.assignee).trim();
+        if (patch.priority !== undefined) f.priority = payload.priority;
+        if (patch.assignee !== undefined) f.assignee = payload.assignee;
       }
       if (workflowUI?.workflows && updated) {
         workflowUI.workflows.set(fid, updated);
       }
-    } else {
-      // 복수 finding 연결 행: 연결 finding 전부에 적용 (POST /api/projects/{id}/reviews)
-      const fids = item.finding_ids;
-      const currentList = await Promise.all(
-        fids.map(async fid => {
-          try {
-            return await api(`/findings/${fid}/workflow`);
-          } catch (e) {
-            return workflowUI?.workflows?.get(fid) || { finding_id: fid, revision: 0, priority: 2, assignee: "", note: "" };
-          }
-        })
-      );
-      const lead = currentList[0] || {};
-      const expectedRevisions = Object.fromEntries(
-        currentList.map((c, idx) => [c.finding_id || fids[idx], c.revision || 0])
-      );
-
-      const values = {
-        workflow_state: lead.workflow_state || "NOT_STARTED",
-        decision: lead.decision || "UNDECIDED",
-        priority: lead.priority ?? 2,
-        assignee: lead.assignee || "",
-        note: lead.note || "",
-        revision: 0,
-      };
-
-      if (patch.review_status !== undefined) {
-        const mapped = STATUS_TO_WORKFLOW[patch.review_status] || STATUS_TO_WORKFLOW.NEEDS_REVIEW;
-        values.workflow_state = mapped.workflow_state;
-        values.decision = mapped.decision;
-      }
-      if (patch.priority !== undefined) {
-        values.priority = Number(patch.priority);
-      }
-      if (patch.assignee !== undefined) {
-        values.assignee = String(patch.assignee).trim();
-      }
-      if (patch.note !== undefined) {
-        values.note = String(patch.note);
-      }
-
-      const results = await api(`/projects/${projectId}/reviews`, {
-        method: "POST",
-        body: {
-          finding_ids: fids,
-          expected_revisions: expectedRevisions,
-          values,
-        },
-      });
-
-      // 로컬 finding 및 workflowUI 캐시 동기화
-      for (const fid of fids) {
-        const f = (state.findings || []).find(x => (x.id || x.finding_id) === fid);
-        if (f) {
-          if (patch.review_status !== undefined) f.review_status = patch.review_status;
-          if (patch.priority !== undefined) f.priority = Number(patch.priority);
-          if (patch.assignee !== undefined) f.assignee = String(patch.assignee).trim();
-        }
-      }
-      if (workflowUI?.workflows && Array.isArray(results)) {
-        for (const res of results) {
-          if (res?.finding_id) workflowUI.workflows.set(res.finding_id, res);
-        }
-      }
-    }
-
-    // 성공 안내는 응답을 받은 뒤에만 띄운다
-    toast("검토 상태가 저장되었습니다.");
-    await loadResults(state.generation);
-  } catch (err) {
-    if (err.status === 409) {
-      toast("다른 사용자가 변경하여 저장할 수 없습니다. 최신 데이터를 다시 불러옵니다.", "error");
-      await loadResults(state.generation);
-    } else {
-      toast("검토 상태 저장 실패: " + err.message, "error");
+    } catch (err) {
+      failCount++;
     }
   }
+
+  // c. 일부 409·오류면 실패 건수를 알리고 다시 읽는다. 성공 안내는 전부 성공했을 때만.
+  if (failCount > 0) {
+    toast(`저장 중 ${failCount}건의 충돌 또는 오류가 발생했습니다. 최신 데이터를 다시 불러옵니다.`, "error");
+    await loadResults(state.generation);
+  } else {
+    toast("검토 상태가 저장되었습니다.");
+    await loadResults(state.generation);
+  }
 }
+
 
 function renderFindings() {
   const query = ($("findingSearch")?.value || "").toLowerCase();

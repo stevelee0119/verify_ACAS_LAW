@@ -11,7 +11,7 @@
 ## 1. 원인·목적 및 변경 요약
 
 ### 1.1 목적 (한 줄 요약)
-인용별 불일치를 해소하고 화면 간 단일 판정(Single Verdict) 및 순수 파생 심각도를 보장하기 위해 서버 `documents[].review_items` 단일 판정 배열을 생성하고, '확인할 항목' 탭을 4열 통합 표(위치/주장·인용/근거 확인/법리 타당성·대응)로 개편하여 실제 워크플로우 계약(`workflow_state`, `decision`, `priority`, `assignee`, `note`, `revision`)과 연동되는 행 안 워크플로우 조작(단일 PUT, 복수 POST 벌크) 및 필터·우선순위 정렬·체크박스를 구현함.
+인용별 불일치를 해소하고 화면 간 단일 판정(Single Verdict) 및 순수 파생 심각도를 보장하기 위해 서버 `documents[].review_items` 단일 판정 배열을 생성하고, '확인할 항목' 탭을 4열 통합 표(위치/주장·인용/근거 확인/법리 타당성·대응)로 개편하여 실제 워크플로우 계약(`workflow_state`, `decision`, `priority`, `assignee`, `note`, `revision`)과 연동되는 행 안 워크플로우 조작(단일·복수 finding 개별 GET/PUT 저장 및 메타데이터 독립 보존) 및 필터·우선순위 정렬·체크박스를 구현함.
 
 ### 1.2 바꾼 파일 및 신규 파일 (총 16개 파일)
 - **수정 파일 (12개)**:
@@ -24,8 +24,8 @@
     - 행 안 인라인 워크플로우 컨트롤(검토 상태, 우선순위, 담당자) 배치
     - 실제 백엔드 워크플로우 계약 연동(`saveRowWorkflow`): 기존 메모·담당자·우선순위·revision 보존 및 바꾼 칸만 PUT `/findings/{id}/workflow`
     - 상태 매핑: 확인 전(`NOT_STARTED`/`UNDECIDED`), 지적 수용(`COMPLETED`/`AGREED`), 오탐(`COMPLETED`/`FALSE_POSITIVE`), 조치 완료(`COMPLETED`/`UNDECIDED`)
-    - 복수 finding 연결 행은 `POST /api/projects/{id}/reviews` 벌크 API로 전부에 적용
-    - 409 충돌 시 사용자 안내 및 `loadResults` 재조회, 성공 토스트는 응답 완료 후에만 노출
+    - 복수 finding 연결 행은 각 finding마다 GET으로 현재 값·revision 조회 후 바꾼 칸만 덮어 개별 PUT 전송 (타 finding의 메모·담당자·우선순위 덮어쓰기 방지 및 100% 독립 보존, TK-60 7절)
+    - 409 충돌/오류 발생 시 실패 건수 안내 및 `loadResults` 재조회, 성공 토스트는 전체 성공 시에만 노출
     - 필터(진행 상태 `workflowFilter`, 담당자 `assigneeFilter`, 중요도, 검토 상태, 검색어) 및 우선순위 정렬, 행 체크박스(`.row-checkbox`)·전체선택(`#selectAllFindings`)·일괄 검토(`#batchReview`) 재연결
     - RAG 참고문헌 및 추가 관련 법조문, 미확인 범위 하단 렌더링 보존 (정보 손실 0)
   - `apps/web/static/styles.css`: `.review-items-table`, `.inline-workflow-box`, `.inline-workflow-controls`, `.inline-field`, `.inline-workflow-select`, `.inline-priority-select`, `.inline-assignee-input`, `.inline-workflow-note`, `.row-checkbox`, `.review-references-wrap` 스타일 추가
@@ -37,9 +37,9 @@
   - `docs/handoff/requests/41_f2_completion.md`: 완료 보고서 작성 및 정정
 - **신규 파일 (4개)**:
   - `packages/verification_engine/review_items.py`: 단일 판정 객체 생성 모듈 (`build_document_review_items`, 순수 파생 심각도 `derive_item_severity`, 사람 말 사유 변환 `humanize_unverified_reason`)
-  - `tests/test_f2_review_items.py`: F2 핵심 불변 조건 단위 시험 (T1 단일 판정, T2 손실 없음, T4 배타성, 근거 사다리 2축 분리, 직렬화) 및 실제 API 기반 '오탐 저장 → FALSE_POSITIVE' 워크플로우 계약 검증 시험
+  - `tests/test_f2_review_items.py`: F2 핵심 불변 조건 단위 시험 (T1 단일 판정, T2 손실 없음, T4 배타성, 근거 사다리 2축 분리, 직렬화), 실제 API 기반 '오탐 저장 → FALSE_POSITIVE' 워크플로우 계약 검증 및 복수 finding 행 조작 시 각 finding별 개별 메타데이터(메모·담당자·우선순위) 보존 검증 시험 (TK-60 7절)
   - `tests/test_unverified_reasons.py`: 미확인 사유 사람 말 변환 단위 시험
-  - `tests/test_f2_review_screen_browser.py`: F2 4열 표 화면, 행 안 실제 계약 조작(단일 PUT, 복수 POST 벌크), 필터별 행 수 검증, 행/전체 체크박스 및 일괄 검토 검증, 파생 항목 묶음(`.derived-findings`) 검증, RAG/법조문 보존 검증 브라우저 시험
+  - `tests/test_f2_review_screen_browser.py`: F2 4열 표 화면, 행 안 실제 계약 조작(단일·복수 finding 개별 GET/PUT), 필터별 행 수 검증, 행/전체 체크박스 및 일괄 검토 검증, 파생 항목 묶음(`.derived-findings`) 검증, RAG/법조문 보존 검증 브라우저 시험
 
 ---
 
@@ -62,11 +62,10 @@
   4. `법리적 타당성 검토 및 반박 근거` (40% - 최대 너비): 법리 검토 상세 섹션(`reasoningBlock`), 대응 방안 박스, **행 안 인라인 워크플로우 컨트롤**
 - **행 안 실제 워크플로우 계약 연동 (`saveRowWorkflow`)**:
   - 현재 값과 `revision`을 조회하여 바꾼 칸만 덮어쓰고 기존 메모·담당자·우선순위 보존.
-  - 단일 finding 행: `PUT /api/findings/{id}/workflow`
-  - 복수 finding 연결 행: `POST /api/projects/{id}/reviews` (벌크 API)로 전부에 적용.
+  - 단일 및 복수 finding 연결 행: 각 finding마다 `GET /api/findings/{id}/workflow`로 현재 값과 revision을 읽고 바꾼 칸만 덮어 개별 `PUT /api/findings/{id}/workflow` 전송 (TK-60 7절, 일괄 API의 타 finding 메타데이터 덮어쓰기 문제 원천 해소).
   - 상태 매핑: 확인 전(`NOT_STARTED`/`UNDECIDED`), 지적 수용(`COMPLETED`/`AGREED`), 오탐(`COMPLETED`/`FALSE_POSITIVE`), 조치 완료(`COMPLETED`/`UNDECIDED`).
-  - 409 Conflict 감지 시 사용자 안내 후 최신 데이터 재조회(`loadResults`).
-  - 성공 안내 토스트는 서버 응답 완료 후에만 노출.
+  - 일부 409 Conflict 또는 오류 발생 시 실패 건수를 안내하고 최신 데이터 재조회(`loadResults`).
+  - 성공 안내 토스트는 모든 finding 저장이 성공했을 때만 노출.
 - **필터·우선순위 정렬·체크박스 재연결**:
   - 진행 상태(`workflowFilter`), 담당자(`assigneeFilter`), 중요도, 검토 상태, 검색어 필터 즉각 반영.
   - 우선순위(1순위 우선 검토 -> 2순위 보통 -> 3순위 후순위) 및 심각도 역순 정렬.
@@ -93,13 +92,13 @@
 
 | 검증 항목 | 실행 명령 | 결과 | pytest 최종 요약 출력 |
 | :--- | :--- | :---: | :--- |
-| **단위 및 보호 시험 묶음** | `pytest tests/test_workspace.py tests/test_f2_review_items.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `20 passed in 39.55s` |
-| **F2 화면 브라우저 시험** | `pytest tests/test_f2_review_screen_browser.py -v` | **PASS** | `7 passed in 61.11s (0:01:01)` |
+| **단위 및 보호 시험 묶음** | `pytest tests/test_workspace.py tests/test_f2_review_items.py tests/acceptance/test_f1_protected.py tests/acceptance/test_f1_screen_protected.py -v` | **PASS** | `21 passed in 48.45s` |
+| **F2 화면 브라우저 시험** | `pytest tests/test_f2_review_screen_browser.py -v` | **PASS** | `7 passed in 73.93s (0:01:13)` |
 | **미확인 사유 단위 시험** | `pytest tests/test_unverified_reasons.py -v` | **PASS** | `3 passed in 5.73s` |
 | **기존 브라우저 시험 전수 묶음** | `pytest tests/test_f1_ai_security_tab_browser.py tests/test_frontend_model_opinions.py tests/test_reasoning_layout.py tests/test_frontend_citation_groups.py tests/test_drive_rag_relevance.py tests/test_upload_privacy_notice_browser.py tests/test_frontend_upload.py -v` | **PASS** | `77 passed in 323.22s (0:05:23)` |
 | **사건 고유 값 점검** | `python scripts/check_case_literals.py` | **PASS** | 코드베이스 내 사건 고유 값 및 서면 문구 신규 하드코딩 0건 (종료 코드 0) |
 | **보호 경로 변경 점검** | `python scripts/check_protected_paths.py --base upstream/Steve_ACASiaLAW` | **PASS** | 보호 경로 점검: 바뀐 보호 경로 없음 (종료 코드 0) |
-| **시험 삭제·약화 점검** | `python scripts/check_test_edits.py --base upstream/Steve_ACASiaLAW` | **PASS** | 시험 삭제·약화 점검 — 기준 upstream/Steve_ACASiaLAW, 변경된 시험 파일 7개: 기존 시험의 삭제·표시 변경 없음 (종료 코드 0) |
+| **시험 삭제·약화 점검** | `python scripts/check_test_edits.py --base 158d6d4` | **PASS** | 시험 삭제·약화 점검 — 기준 158d6d4: 기존 시험의 삭제·표시 변경 없음 (종료 코드 0) |
 | **버전 정책 점검** | `python scripts/check_version_policy.py --base upstream/Steve_ACASiaLAW` | **PASS** | 버전 정책: 위반 없음 (버전 변경 없음, 종료 코드 0) |
 
 ---

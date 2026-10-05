@@ -447,7 +447,7 @@ def test_f2_inline_workflow_agreed_manipulation(f2_browser_page):
     assert call["payload"]["decision"] == "UNDECIDED"
 
 
-def test_f2_filters_and_row_counts(f2_browser_page):
+def test_f2_filters_search_severity_review_status(f2_browser_page):
     """검색어, 중요도, 검토 상태, 진행 상태, 담당자 필터 동작 시 표시 행 수가 올바르게 갱신되어야 합니다."""
     page = f2_browser_page
     page.goto("http://localhost/")
@@ -549,7 +549,7 @@ def test_f2_checkboxes_and_batch_review(f2_browser_page):
 
 
 def test_f2_derived_findings_bundle_and_multi_save(f2_browser_page):
-    """복수 finding이 연결된 행은 파생 항목 묶음(.derived-findings)이 노출되고, 행 안 검토 상태 조작 시 벌크 API로 전부에 적용되어야 합니다."""
+    """복수 finding이 연결된 행은 파생 항목 묶음(.derived-findings)이 노출되고, 행 안 검토 상태 조작 시 각 finding별 개별 PUT으로 전부에 적용되어야 합니다."""
     page = f2_browser_page
     page.goto("http://localhost/")
     select_first_project(page)
@@ -574,12 +574,14 @@ def test_f2_derived_findings_bundle_and_multi_save(f2_browser_page):
 
     expect(page.locator("#toast")).to_contain_text("검토 상태가 저장되었습니다.")
 
-    # 복수 finding 행이므로 POST /api/projects/p1/reviews 벌크 API가 호출되어야 함
-    assert len(page._bulk_review_calls) == 1
-    call = page._bulk_review_calls[0]
-    assert call["payload"]["finding_ids"] == ["f_cit_1", "f_cit_2"]
-    assert call["payload"]["values"]["workflow_state"] == "COMPLETED"
-    assert call["payload"]["values"]["decision"] == "AGREED"
+    # 복수 finding 행이므로 각 finding별 개별 PUT /findings/{id}/workflow가 호출되어 메타데이터가 각자 보존되어야 함 (TK-60 7절)
+    put_fids = [call["path"].split("/")[3] for call in page._workflow_put_calls]
+    assert "f_cit_1" in put_fids
+    assert "f_cit_2" in put_fids
+    for call in page._workflow_put_calls:
+        if "f_cit_1" in call["path"] or "f_cit_2" in call["path"]:
+            assert call["payload"]["workflow_state"] == "COMPLETED"
+            assert call["payload"]["decision"] == "AGREED"
 
 
 def test_f2_references_and_unverified_scope_rendered(f2_browser_page):

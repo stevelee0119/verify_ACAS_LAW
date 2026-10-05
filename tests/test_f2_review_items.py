@@ -232,3 +232,95 @@ def test_api_save_false_positive_workflow(client, project):
     assert f_data["review_status"] == "FALSE_POSITIVE"
     assert f_data["review_note"] == "오탐 사유 검토 완료"
 
+
+def test_api_multi_finding_row_preserves_individual_metadata(client, project):
+    """메모·담당자·우선순위가 서로 다른 2건 행에서 상태를 바꾼 뒤 실제 API로 각자 값이 보존되는지 검증 (TK-60 7절)."""
+    from uuid import uuid4
+    from apps.api.db import Document, FindingRow, VerificationRun, get_session_factory
+
+    project_id = project["id"]
+    prefix = uuid4().hex[:8]
+    doc_id = f"doc_{prefix}"
+    run_id = f"run_{prefix}"
+    fid_1 = f"f_{prefix}_1"
+    fid_2 = f"f_{prefix}_2"
+
+    with get_session_factory()() as session:
+        session.add(Document(id=doc_id, project_id=project_id, filename="test.pdf",
+                             sha256="0" * 64, storage_key=f"test/{doc_id}", included_in_verification=True))
+        session.flush()
+        session.add(VerificationRun(id=run_id, project_id=project_id, state="COMPLETED",
+                                    document_ids=[doc_id], verification_key=prefix,
+                                    input_snapshot={"scope_revision": 0}))
+        session.flush()
+        session.add(FindingRow(id=fid_1, run_id=run_id, project_id=project_id, document_id=doc_id,
+                               type="LEGAL_CITATION", status="UNVERIFIED", severity="HIGH",
+                               evidence_grade="C", title="테스트 판례 지적 1", engine="legal", page=1,
+                               review_status="NEEDS_REVIEW"))
+        session.add(FindingRow(id=fid_2, run_id=run_id, project_id=project_id, document_id=doc_id,
+                               type="CASE_HOLDING_DISTORTION", status="UNVERIFIED", severity="CRITICAL",
+                               evidence_grade="B", title="테스트 판례 지적 2", engine="legal", page=1,
+                               review_status="NEEDS_REVIEW"))
+        session.commit()
+
+    # 1. 두 finding에 메모·담당자·우선순위를 서로 다르게 초기 저장
+    # fid_1: priority=1 (우선 검토), assignee="변호사A", note="메모1"
+    res1 = client.put(f"/api/findings/{fid_1}/workflow", json={
+        "workflow_state": "NOT_STARTED",
+        "decision": "UNDECIDED",
+        "priority": 1,
+        "assignee": "변호사A",
+        "note": "메모1",
+        "revision": 0,
+    })
+    assert res1.status_code == 200
+
+    # fid_2: priority=3 (후순위), assignee="변호사B", note="메모2"
+    res2 = client.put(f"/api/findings/{fid_2}/workflow", json={
+        "workflow_state": "NOT_STARTED",
+        "decision": "UNDECIDED",
+        "priority": 3,
+        "assignee": "변호사B",
+        "note": "메모2",
+        "revision": 0,
+    })
+    assert res2.status_code == 200
+
+    # 2. 행 안 저장 로직 시뮬레이션:
+    # 2개 finding이 연결된 행에서 검토 상태를 '지적 수용'(COMPLETED / AGREED)으로 변경
+    # 각 finding마다 GET으로 현재 값과 revision을 읽고, 바꾼 칸(workflow_state, decision)만 덮어 PUT 전송
+    for fid in [fid_1, fid_2]:
+        cur = client.get(f"/api/findings/{fid}/workflow").json()
+        payload = {
+            "workflow_state": "COMPLETED",
+            "decision": "AGREED",
+            "priority": cur["priority"],
+            "assignee": cur["assignee"],
+            "note": cur["note"],
+            "revision": cur["revision"],
+        }
+        saved = client.put(f"/api/findings/{fid}/workflow", json=payload)
+        assert saved.status_code == 200
+
+    # 3. 각 finding의 메모·담당자·우선순위가 서로 덮어써지지 않고 각자 보존되었는지 단언
+    wf_1 = client.get(f"/api/findings/{fid_1}/workflow").json()
+    assert wf_1["workflow_state"] == "COMPLETED"
+    assert wf_1["decision"] == "AGREED"
+    assert wf_1["priority"] == 1
+    assert wf_1["assignee"] == "변호사A"
+    assert wf_1["note"] == "메모1"
+    assert wf_1["revision"] == 2
+
+    wf_2 = client.get(f"/api/findings/{fid_2}/workflow").json()
+    assert wf_2["workflow_state"] == "COMPLETED"
+    assert wf_2["decision"] == "AGREED"
+    assert wf_2["priority"] == 3
+    assert wf_2["assignee"] == "변호사B"
+    assert wf_2["note"] == "메모2"
+    assert wf_2["revision"] == 2
+
+    # finding row의 review_status도 둘 다 ACCEPTED로 정상 동기화됨 확인
+    assert client.get(f"/api/findings/{fid_1}").json()["review_status"] == "ACCEPTED"
+    assert client.get(f"/api/findings/{fid_2}").json()["review_status"] == "ACCEPTED"
+
+
