@@ -171,3 +171,64 @@ def test_review_item_to_dict_structure():
     assert d["reference_status"] == "NOT_CHECKED"
     assert d["severity"] == "INFO"
     assert d["citation_id"] == "cit1"
+
+
+from test_api import client, project
+
+
+def test_api_save_false_positive_workflow(client, project):
+    """실제 API 기반 '오탐 저장 -> FALSE_POSITIVE' 워크플로우 계약 검증 (TK-60)."""
+    from uuid import uuid4
+    from apps.api.db import Document, FindingRow, VerificationRun, get_session_factory
+
+    project_id = project["id"]
+    prefix = uuid4().hex[:8]
+    doc_id = f"doc_{prefix}"
+    run_id = f"run_{prefix}"
+    fid = f"fid_{prefix}"
+
+    with get_session_factory()() as session:
+        session.add(Document(id=doc_id, project_id=project_id, filename="test.pdf",
+                             sha256="0" * 64, storage_key=f"test/{doc_id}", included_in_verification=True))
+        session.flush()
+        session.add(VerificationRun(id=run_id, project_id=project_id, state="COMPLETED",
+                                    document_ids=[doc_id], verification_key=prefix,
+                                    input_snapshot={"scope_revision": 0}))
+        session.flush()
+        session.add(FindingRow(id=fid, run_id=run_id, project_id=project_id, document_id=doc_id,
+                               type="LEGAL_CITATION", status="UNVERIFIED", severity="HIGH",
+                               evidence_grade="C", title="테스트 판례 지적", engine="legal", page=1,
+                               review_status="NEEDS_REVIEW"))
+        session.commit()
+
+    # 1. 초기 워크플로우 조회 (revision 0, NOT_STARTED, UNDECIDED)
+    wf_url = f"/api/findings/{fid}/workflow"
+    init_res = client.get(wf_url)
+    assert init_res.status_code == 200
+    init_wf = init_res.json()
+    assert init_wf["revision"] == 0
+    assert init_wf["workflow_state"] == "NOT_STARTED"
+    assert init_wf["decision"] == "UNDECIDED"
+
+    # 2. 오탐 저장 (COMPLETED, FALSE_POSITIVE)
+    put_res = client.put(wf_url, json={
+        "workflow_state": "COMPLETED",
+        "decision": "FALSE_POSITIVE",
+        "priority": 1,
+        "assignee": "테스트담당자",
+        "note": "오탐 사유 검토 완료",
+        "revision": 0,
+    })
+    assert put_res.status_code == 200, put_res.text
+    saved = put_res.json()
+    assert saved["revision"] == 1
+    assert saved["workflow_state"] == "COMPLETED"
+    assert saved["decision"] == "FALSE_POSITIVE"
+
+    # 3. finding row의 review_status가 FALSE_POSITIVE로 동기화되었는지 확인
+    f_res = client.get(f"/api/findings/{fid}")
+    assert f_res.status_code == 200
+    f_data = f_res.json()
+    assert f_data["review_status"] == "FALSE_POSITIVE"
+    assert f_data["review_note"] == "오탐 사유 검토 완료"
+

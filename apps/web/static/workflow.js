@@ -394,5 +394,5 @@ const workflowUI = (() => {
     initNavigation();
     const submitted=field("submitted_on","제출일","","date");$("documentForm").querySelector(".form-grid").append(submitted);
   }
-  return {init,refresh,activate,syncNavigation,matches,priority,decorateFinding,enhanceFinding,field,modal,table,located};
+  return {init,refresh,activate,syncNavigation,matches,priority,decorateFinding,enhanceFinding,field,modal,table,located,selected,bulkEditor,renderReviewCount,get workflows(){return workflows;}};
 })();

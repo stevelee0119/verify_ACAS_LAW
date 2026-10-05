@@ -2,11 +2,14 @@
 
 수용 기준 검증:
 1. 4열 통합 표(위치 / 문서 주장·인용 내용 / 근거 확인 결과 / 법리 타당성·반박·대응) 렌더링
-2. 검색어, 심각도, 검토 상태 필터 동작
-3. 행 안 검토 상태 조작:
-   - finding 연결 행은 select 조작 시 /api/findings/{id}/workflow PUT 호출 및 저장 성공
-   - 순수 인용 행은 저장 불가 안내(정보 전용) 표시
-4. RAG 참고문헌 및 추가 관련 법조문 섹션 하단 표시 (정보 손실 0)
+2. 행 안 검토 상태 조작 (실제 계약 workflow_state, decision, revision, priority, assignee, note 보존):
+   - 단일 finding 연결 행: PUT /api/findings/{id}/workflow 호출
+   - 복수 finding 연결 행: POST /api/projects/{id}/reviews 호출
+   - 순수 인용 행: 저장 불가 안내(정보 전용) 표시
+3. 검색어, 심각도, 검토 상태, 진행 상태, 담당자 필터 동작 및 행 수 검증
+4. 행 체크박스, 전체 선택 체크박스, 일괄 검토(batchReview) 동작 검증
+5. 복수 finding 연결 행의 파생 항목 묶음(.derived-findings) 노출 검증
+6. RAG 참고문헌 및 추가 관련 법조문, 미확인 범위 섹션 하단 표시 (정보 손실 0)
 """
 from __future__ import annotations
 
@@ -57,7 +60,7 @@ def f2_browser_page():
     }
 
     synthetic_findings = [
-        # 행 1에 연결된 법리 finding (CRITICAL)
+        # 행 1에 연결된 법리 finding 1 (CRITICAL)
         {
             "id": "f_cit_1",
             "finding_id": "f_cit_1",
@@ -68,6 +71,25 @@ def f2_browser_page():
             "severity": "CRITICAL",
             "status": "UNCONFIRMED",
             "review_status": "NEEDS_REVIEW",
+            "priority": 2,
+            "assignee": "변호사A",
+            "document_id": "d1",
+            "page": 3,
+            "citation_id": "cit_1",
+        },
+        # 행 1에 함께 연결된 법리 finding 2 (HIGH - 복수 finding 묶음)
+        {
+            "id": "f_cit_2",
+            "finding_id": "f_cit_2",
+            "finding_type": "CASE_HOLDING_DISTORTION",
+            "type": "CASE_HOLDING_DISTORTION",
+            "title": "판시사항 왜곡 의심",
+            "detail": "판시사항의 핵심 요지가 원문과 상이합니다.",
+            "severity": "HIGH",
+            "status": "UNCONFIRMED",
+            "review_status": "NEEDS_REVIEW",
+            "priority": 2,
+            "assignee": "변호사A",
             "document_id": "d1",
             "page": 3,
             "citation_id": "cit_1",
@@ -83,6 +105,8 @@ def f2_browser_page():
             "severity": "MEDIUM",
             "status": "FLAGGED",
             "review_status": "ACCEPTED",
+            "priority": 1,
+            "assignee": "홍길동",
             "document_id": "d1",
             "page": 5,
         },
@@ -90,7 +114,7 @@ def f2_browser_page():
 
     # F2 단일 판정 review_items
     synthetic_review_items = [
-        # 행 1: finding이 연결된 인용 행
+        # 행 1: 복수 finding(f_cit_1, f_cit_2)이 연결된 인용 행
         {
             "item_id": "d1_CITATION_cit_1",
             "kind": "CITATION",
@@ -102,7 +126,7 @@ def f2_browser_page():
             "reference_status": "NOT_CHECKED",
             "verdict_label": "공식 DB 미확인",
             "severity": "CRITICAL",
-            "finding_ids": ["f_cit_1"],
+            "finding_ids": ["f_cit_1", "f_cit_2"],
             "citation_id": "cit_1",
             "reasoning_sections": {
                 "review": "타당성 검토 결과: 해당 판례 미존재",
@@ -111,7 +135,7 @@ def f2_browser_page():
             },
             "counteraction": "원문 확인 요청",
         },
-        # 행 2: finding이 연결된 사실관계 행
+        # 행 2: 단일 finding(f_fact_1)이 연결된 사실관계 행
         {
             "item_id": "d1_FINDING_f_fact_1",
             "kind": "FACT",
@@ -185,11 +209,42 @@ def f2_browser_page():
         ],
     }
 
+    workflow_store = {
+        "f_cit_1": {
+            "finding_id": "f_cit_1",
+            "revision": 1,
+            "workflow_state": "NOT_STARTED",
+            "decision": "UNDECIDED",
+            "priority": 2,
+            "assignee": "변호사A",
+            "note": "초기메모",
+        },
+        "f_cit_2": {
+            "finding_id": "f_cit_2",
+            "revision": 1,
+            "workflow_state": "NOT_STARTED",
+            "decision": "UNDECIDED",
+            "priority": 2,
+            "assignee": "변호사A",
+            "note": "초기메모",
+        },
+        "f_fact_1": {
+            "finding_id": "f_fact_1",
+            "revision": 1,
+            "workflow_state": "COMPLETED",
+            "decision": "AGREED",
+            "priority": 1,
+            "assignee": "홍길동",
+            "note": "초기메모",
+        },
+    }
+
     static_dir = ROOT / "apps/web/static"
     files = {f"/static/{p.relative_to(static_dir).as_posix()}": p for p in static_dir.rglob("*") if p.is_file()}
     files["/"] = ROOT / "apps/web/index.html"
 
     workflow_put_calls = []
+    bulk_review_calls = []
 
     def route_handler(route):
         req = route.request
@@ -239,10 +294,52 @@ def f2_browser_page():
                 "counts": get_category_counts(),
             })
             return
-        if "/workflow" in path and req.method == "PUT":
+        if path.startswith("/api/findings/") and path.endswith("/workflow"):
+            fid = path.split("/")[3]
+            if req.method == "GET":
+                data = workflow_store.get(fid, {
+                    "finding_id": fid, "revision": 1, "workflow_state": "NOT_STARTED",
+                    "decision": "UNDECIDED", "priority": 2, "assignee": "변호사A", "note": "초기메모",
+                })
+                route.fulfill(json=data)
+                return
+            if req.method == "PUT":
+                payload = json.loads(req.post_data)
+                workflow_put_calls.append({"path": path, "payload": payload})
+                updated = {
+                    "finding_id": fid,
+                    "revision": payload.get("revision", 0) + 1,
+                    "workflow_state": payload.get("workflow_state", "NOT_STARTED"),
+                    "decision": payload.get("decision", "UNDECIDED"),
+                    "priority": payload.get("priority", 2),
+                    "assignee": payload.get("assignee", ""),
+                    "note": payload.get("note", ""),
+                }
+                workflow_store[fid] = updated
+                route.fulfill(json=updated)
+                return
+        if path == "/api/projects/p1/reviews" and req.method == "POST":
             payload = json.loads(req.post_data)
-            workflow_put_calls.append({"path": path, "payload": payload})
-            route.fulfill(json={"ok": True, "status": payload.get("review_status")})
+            bulk_review_calls.append({"path": path, "payload": payload})
+            results = []
+            vals = payload.get("values", {})
+            for fid in payload.get("finding_ids", []):
+                rev = payload.get("expected_revisions", {}).get(fid, 0) + 1
+                item_res = {
+                    "finding_id": fid,
+                    "revision": rev,
+                    "workflow_state": vals.get("workflow_state", "NOT_STARTED"),
+                    "decision": vals.get("decision", "UNDECIDED"),
+                    "priority": vals.get("priority", 2),
+                    "assignee": vals.get("assignee", ""),
+                    "note": vals.get("note", ""),
+                }
+                workflow_store[fid] = item_res
+                results.append(item_res)
+            route.fulfill(json=results)
+            return
+        if path == "/api/projects/p1/review-workflows":
+            route.fulfill(json=list(workflow_store.values()))
             return
         if path.endswith("/case-matrix"):
             route.fulfill(body="null", content_type="application/json")
@@ -255,6 +352,7 @@ def f2_browser_page():
         page = browser.new_page(viewport={"width": 1280, "height": 900})
         page.route("**/*", route_handler)
         page._workflow_put_calls = workflow_put_calls
+        page._bulk_review_calls = bulk_review_calls
         yield page
         browser.close()
 
@@ -285,7 +383,7 @@ def test_f2_review_table_renders_four_columns(f2_browser_page):
 
 
 def test_f2_inline_workflow_manipulation(f2_browser_page):
-    """finding이 연결된 행은 인라인 select로 검토 상태를 변경할 수 있고, 순수 인용 행은 저장 불가 안내가 노출되어야 합니다."""
+    """단일 finding 연결 행은 인라인 select 조작 시 실제 계약(workflow_state, decision, revision 등)으로 PUT 저장되어야 합니다."""
     page = f2_browser_page
     page.goto("http://localhost/")
     select_first_project(page)
@@ -296,31 +394,61 @@ def test_f2_inline_workflow_manipulation(f2_browser_page):
     panel = page.locator('section[data-panel="review"]')
     rows = panel.locator("#aiVerificationRows tr")
 
-    # 1번째 행 (CRITICAL finding 연결 행): 인라인 select 조작
-    row1 = rows.nth(0)
-    select1 = row1.locator(".inline-workflow-select")
-    expect(select1).to_be_visible()
-    expect(select1).to_have_value("NEEDS_REVIEW")
+    # 1번째 행 (단일 finding 연결 행: f_fact_1, 우선순위 1로 상단 정렬, 초기상태 ACCEPTED)
+    row_single = rows.nth(0)
+    select_single = row_single.locator(".inline-workflow-select")
+    expect(select_single).to_be_visible()
+    expect(select_single).to_have_value("ACCEPTED")
 
-    # 지적 수용(ACCEPTED)으로 상태 변경
-    select1.select_option("ACCEPTED")
+    # 오탐(FALSE_POSITIVE)으로 상태 변경
+    select_single.select_option("FALSE_POSITIVE")
 
     # 저장이 완료되어 토스트가 뜰 때까지 대기
     expect(page.locator("#toast")).to_contain_text("검토 상태가 저장되었습니다.")
 
-    # API PUT 호출 확인
+    # 실제 계약 필드 단언 (workflow_state: COMPLETED, decision: FALSE_POSITIVE, revision: 1, 담당자·우선순위·메모 보존)
     assert len(page._workflow_put_calls) == 1
-    assert "f_cit_1" in page._workflow_put_calls[0]["path"]
-    assert page._workflow_put_calls[0]["payload"]["review_status"] == "ACCEPTED"
+    call = page._workflow_put_calls[0]
+    assert "f_fact_1" in call["path"]
+    assert call["payload"]["workflow_state"] == "COMPLETED"
+    assert call["payload"]["decision"] == "FALSE_POSITIVE"
+    assert call["payload"]["revision"] == 1
+    assert call["payload"]["priority"] == 1
+    assert call["payload"]["assignee"] == "홍길동"
+    assert call["payload"]["note"] == "초기메모"
 
     # 3번째 행 (순수 인용 행): 저장 불가 안내 확인
-    row3 = rows.nth(2)
-    expect(row3.locator(".inline-workflow-note")).to_contain_text("검토 상태: 저장 불가 (정보 전용)")
-    expect(row3.locator(".inline-workflow-select")).to_have_count(0)
+    row_pure = rows.nth(2)
+    expect(row_pure.locator(".inline-workflow-note")).to_contain_text("검토 상태: 저장 불가 (정보 전용)")
+    expect(row_pure.locator(".inline-workflow-select")).to_have_count(0)
 
 
-def test_f2_filters_search_severity_review_status(f2_browser_page):
-    """검색어, 중요도, 검토 상태 필터가 통합 표에 정상 반영되어야 합니다."""
+def test_f2_inline_workflow_agreed_manipulation(f2_browser_page):
+    """행 안에서 확인 전(NEEDS_REVIEW) 선택 시 workflow_state=NOT_STARTED, decision=UNDECIDED로 저장되어야 합니다."""
+    page = f2_browser_page
+    page.goto("http://localhost/")
+    select_first_project(page)
+
+    page.get_by_role("button", name="검증·검토", exact=True).click()
+    page.locator('.tabs button[data-tab="review"]').click()
+
+    panel = page.locator('section[data-panel="review"]')
+    rows = panel.locator("#aiVerificationRows tr")
+
+    # 1번째 행 (단일 finding: f_fact_1, 초기상태 ACCEPTED)에서 확인 전으로 변경
+    row_single = rows.nth(0)
+    select_single = row_single.locator(".inline-workflow-select")
+    select_single.select_option("NEEDS_REVIEW")
+
+    expect(page.locator("#toast")).to_contain_text("검토 상태가 저장되었습니다.")
+    assert len(page._workflow_put_calls) == 1
+    call = page._workflow_put_calls[0]
+    assert call["payload"]["workflow_state"] == "NOT_STARTED"
+    assert call["payload"]["decision"] == "UNDECIDED"
+
+
+def test_f2_filters_and_row_counts(f2_browser_page):
+    """검색어, 중요도, 검토 상태, 진행 상태, 담당자 필터 동작 시 표시 행 수가 올바르게 갱신되어야 합니다."""
     page = f2_browser_page
     page.goto("http://localhost/")
     select_first_project(page)
@@ -332,31 +460,126 @@ def test_f2_filters_search_severity_review_status(f2_browser_page):
     rows = panel.locator("#aiVerificationRows tr")
     expect(rows).to_have_count(3)
 
-    # 1. 중요도 필터: CRITICAL 선택 -> 1개 행만 노출
+    # 1. 중요도 필터: CRITICAL 선택 -> 1개 행 노출
     sev_select = panel.locator("#severityFilter")
     sev_select.select_option("CRITICAL")
     expect(rows).to_have_count(1)
     expect(rows.first).to_contain_text("대법원 2022다99999 판결")
-
-    # 중요도 필터 초기화
     sev_select.select_option("")
     expect(rows).to_have_count(3)
 
-    # 2. 검색어 필터: '선후 모순' 검색 -> 1개 행 노출
-    search_input = panel.locator("#findingSearch")
-    search_input.fill("선후 모순")
+    # 2. 진행 상태 필터: NOT_STARTED 선택 -> 행 1, 행 3(순수 인용) 총 2개 행 노출
+    wf_select = panel.locator("#workflowFilter")
+    wf_select.select_option("NOT_STARTED")
+    expect(rows).to_have_count(2)
+
+    # 진행 상태 필터: COMPLETED 선택 -> 행 2(1개 행) 노출
+    wf_select.select_option("COMPLETED")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_contain_text("일자 선후 모순")
+    wf_select.select_option("")
+    expect(rows).to_have_count(3)
+
+    # 3. 담당자 필터: '홍길동' 입력 -> 1개 행 노출
+    ass_input = panel.locator("#assigneeFilter")
+    ass_input.fill("홍길동")
     expect(rows).to_have_count(1)
     expect(rows.first).to_contain_text("일자 선후 모순")
 
-    # 검색어 초기화
-    search_input.fill("")
+    ass_input.fill("변호사A")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_contain_text("대법원 2022다99999 판결")
+    ass_input.fill("")
     expect(rows).to_have_count(3)
 
-    # 3. 검토 상태 필터: 'ACCEPTED' 선택 -> 1개 행 노출 (f_fact_1)
+    # 4. 검토 상태 필터: 'ACCEPTED' 선택 -> 1개 행 노출
     rev_select = panel.locator("#reviewFilter")
     rev_select.select_option("ACCEPTED")
     expect(rows).to_have_count(1)
     expect(rows.first).to_contain_text("일자 선후 모순")
+    rev_select.select_option("")
+    expect(rows).to_have_count(3)
+
+    # 5. 검색어 필터: '선후 모순' 검색 -> 1개 행 노출
+    search_input = panel.locator("#findingSearch")
+    search_input.fill("선후 모순")
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_contain_text("일자 선후 모순")
+    search_input.fill("")
+    expect(rows).to_have_count(3)
+
+
+def test_f2_checkboxes_and_batch_review(f2_browser_page):
+    """행 체크박스 및 전체 선택 체크박스 조작 시 선택 수가 동기화되고 일괄 검토가 동작해야 합니다."""
+    page = f2_browser_page
+    page.goto("http://localhost/")
+    select_first_project(page)
+
+    page.get_by_role("button", name="검증·검토", exact=True).click()
+    page.locator('.tabs button[data-tab="review"]').click()
+
+    panel = page.locator('section[data-panel="review"]')
+    batch_btn = panel.locator("#batchReview")
+    expect(batch_btn).to_have_text("선택 항목 검토 (0)")
+
+    # 1. 1번째 행(f_fact_1, 1건) 체크박스 클릭 -> 1개 선택
+    row_checks = panel.locator(".row-checkbox")
+    expect(row_checks).to_have_count(2)  # finding_ids가 있는 2개 행에만 체크박스 존재
+    row_checks.nth(0).check()
+    expect(batch_btn).to_have_text("선택 항목 검토 (1)")
+
+    # 2. 전체 선택 체크박스 클릭 -> 3개 finding 전체 선택 (f_cit_1, f_cit_2, f_fact_1)
+    select_all = panel.locator("#selectAllFindings")
+    select_all.check()
+    expect(batch_btn).to_have_text("선택 항목 검토 (3)")
+
+    # 3. 일괄 검토 버튼 클릭 -> 모달 오픈
+    batch_btn.click()
+    dialog = page.locator("dialog.workflow-dialog")
+    expect(dialog).to_be_visible()
+
+    # 모달 내 검토 저장 클릭
+    dialog.locator("button[type='submit']").click()
+    expect(page.locator("#toast")).to_contain_text("선택 항목을 저장했습니다.")
+
+    # POST /api/projects/p1/reviews 벌크 호출 검증
+    assert len(page._bulk_review_calls) == 1
+    call = page._bulk_review_calls[0]
+    assert set(call["payload"]["finding_ids"]) == {"f_cit_1", "f_cit_2", "f_fact_1"}
+
+
+def test_f2_derived_findings_bundle_and_multi_save(f2_browser_page):
+    """복수 finding이 연결된 행은 파생 항목 묶음(.derived-findings)이 노출되고, 행 안 검토 상태 조작 시 벌크 API로 전부에 적용되어야 합니다."""
+    page = f2_browser_page
+    page.goto("http://localhost/")
+    select_first_project(page)
+
+    page.get_by_role("button", name="검증·검토", exact=True).click()
+    page.locator('.tabs button[data-tab="review"]').click()
+
+    panel = page.locator('section[data-panel="review"]')
+    rows = panel.locator("#aiVerificationRows tr")
+
+    # 2번째 행: 복수 finding (f_cit_1, f_cit_2) 연결 행
+    row_multi = rows.nth(1)
+
+    # 2열 파생 항목 묶음 details 확인
+    derived = row_multi.locator(".derived-findings")
+    expect(derived).to_be_visible()
+    expect(derived.locator("summary")).to_contain_text("같은 인용에서 파생된 항목 1건")
+
+    # 행 안 워크플로우 조작: 지적 수용(ACCEPTED) 선택
+    select_multi = row_multi.locator(".inline-workflow-select")
+    select_multi.select_option("ACCEPTED")
+
+    expect(page.locator("#toast")).to_contain_text("검토 상태가 저장되었습니다.")
+
+    # 복수 finding 행이므로 POST /api/projects/p1/reviews 벌크 API가 호출되어야 함
+    assert len(page._bulk_review_calls) == 1
+    call = page._bulk_review_calls[0]
+    assert call["payload"]["finding_ids"] == ["f_cit_1", "f_cit_2"]
+    assert call["payload"]["values"]["workflow_state"] == "COMPLETED"
+    assert call["payload"]["values"]["decision"] == "AGREED"
 
 
 def test_f2_references_and_unverified_scope_rendered(f2_browser_page):

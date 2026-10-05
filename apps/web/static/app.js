@@ -1480,6 +1480,148 @@ function securityCard(docs, findings) {
   return card;
 }
 
+// 검토 상태 -> 워크플로우 상태/판단 매핑
+const STATUS_TO_WORKFLOW = {
+  NEEDS_REVIEW: { workflow_state: "NOT_STARTED", decision: "UNDECIDED" },
+  ACCEPTED: { workflow_state: "COMPLETED", decision: "AGREED" },
+  FALSE_POSITIVE: { workflow_state: "COMPLETED", decision: "FALSE_POSITIVE" },
+  RESOLVED: { workflow_state: "COMPLETED", decision: "UNDECIDED" },
+};
+
+// 행 안 워크플로우 저장 (단일 finding: PUT /findings/{id}/workflow, 복수 finding: POST /projects/{id}/reviews)
+async function saveRowWorkflow(item, patch) {
+  if (!item || !item.finding_ids || !item.finding_ids.length) return;
+  const projectId = state.project?.id;
+
+  try {
+    if (item.finding_ids.length === 1) {
+      const fid = item.finding_ids[0];
+      // 현재 값과 revision 읽기 (메모·담당자·우선순위 보존)
+      let current = null;
+      try {
+        current = await api(`/findings/${fid}/workflow`);
+      } catch (e) {
+        current = workflowUI?.workflows?.get(fid) || { revision: 0, priority: 2, assignee: "", note: "" };
+      }
+
+      const payload = {
+        workflow_state: current.workflow_state || "NOT_STARTED",
+        decision: current.decision || "UNDECIDED",
+        priority: current.priority ?? 2,
+        assignee: current.assignee || "",
+        note: current.note || "",
+        revision: current.revision || 0,
+      };
+
+      if (patch.review_status !== undefined) {
+        const mapped = STATUS_TO_WORKFLOW[patch.review_status] || STATUS_TO_WORKFLOW.NEEDS_REVIEW;
+        payload.workflow_state = mapped.workflow_state;
+        payload.decision = mapped.decision;
+      }
+      if (patch.priority !== undefined) {
+        payload.priority = Number(patch.priority);
+      }
+      if (patch.assignee !== undefined) {
+        payload.assignee = String(patch.assignee).trim();
+      }
+      if (patch.note !== undefined) {
+        payload.note = String(patch.note);
+      }
+
+      const updated = await api(`/findings/${fid}/workflow`, {
+        method: "PUT",
+        body: payload,
+      });
+
+      // 로컬 finding 및 workflowUI 캐시 동기화
+      const f = (state.findings || []).find(x => (x.id || x.finding_id) === fid);
+      if (f) {
+        if (patch.review_status !== undefined) f.review_status = patch.review_status;
+        if (patch.priority !== undefined) f.priority = Number(patch.priority);
+        if (patch.assignee !== undefined) f.assignee = String(patch.assignee).trim();
+      }
+      if (workflowUI?.workflows && updated) {
+        workflowUI.workflows.set(fid, updated);
+      }
+    } else {
+      // 복수 finding 연결 행: 연결 finding 전부에 적용 (POST /api/projects/{id}/reviews)
+      const fids = item.finding_ids;
+      const currentList = await Promise.all(
+        fids.map(async fid => {
+          try {
+            return await api(`/findings/${fid}/workflow`);
+          } catch (e) {
+            return workflowUI?.workflows?.get(fid) || { finding_id: fid, revision: 0, priority: 2, assignee: "", note: "" };
+          }
+        })
+      );
+      const lead = currentList[0] || {};
+      const expectedRevisions = Object.fromEntries(
+        currentList.map((c, idx) => [c.finding_id || fids[idx], c.revision || 0])
+      );
+
+      const values = {
+        workflow_state: lead.workflow_state || "NOT_STARTED",
+        decision: lead.decision || "UNDECIDED",
+        priority: lead.priority ?? 2,
+        assignee: lead.assignee || "",
+        note: lead.note || "",
+        revision: 0,
+      };
+
+      if (patch.review_status !== undefined) {
+        const mapped = STATUS_TO_WORKFLOW[patch.review_status] || STATUS_TO_WORKFLOW.NEEDS_REVIEW;
+        values.workflow_state = mapped.workflow_state;
+        values.decision = mapped.decision;
+      }
+      if (patch.priority !== undefined) {
+        values.priority = Number(patch.priority);
+      }
+      if (patch.assignee !== undefined) {
+        values.assignee = String(patch.assignee).trim();
+      }
+      if (patch.note !== undefined) {
+        values.note = String(patch.note);
+      }
+
+      const results = await api(`/projects/${projectId}/reviews`, {
+        method: "POST",
+        body: {
+          finding_ids: fids,
+          expected_revisions: expectedRevisions,
+          values,
+        },
+      });
+
+      // 로컬 finding 및 workflowUI 캐시 동기화
+      for (const fid of fids) {
+        const f = (state.findings || []).find(x => (x.id || x.finding_id) === fid);
+        if (f) {
+          if (patch.review_status !== undefined) f.review_status = patch.review_status;
+          if (patch.priority !== undefined) f.priority = Number(patch.priority);
+          if (patch.assignee !== undefined) f.assignee = String(patch.assignee).trim();
+        }
+      }
+      if (workflowUI?.workflows && Array.isArray(results)) {
+        for (const res of results) {
+          if (res?.finding_id) workflowUI.workflows.set(res.finding_id, res);
+        }
+      }
+    }
+
+    // 성공 안내는 응답을 받은 뒤에만 띄운다
+    toast("검토 상태가 저장되었습니다.");
+    await loadResults(state.generation);
+  } catch (err) {
+    if (err.status === 409) {
+      toast("다른 사용자가 변경하여 저장할 수 없습니다. 최신 데이터를 다시 불러옵니다.", "error");
+      await loadResults(state.generation);
+    } else {
+      toast("검토 상태 저장 실패: " + err.message, "error");
+    }
+  }
+}
+
 function renderFindings() {
   const query = ($("findingSearch")?.value || "").toLowerCase();
   const revFilter = $("reviewFilter")?.value || "";
@@ -1644,17 +1786,61 @@ function renderFindings() {
   }
   renderHallucinationSummary(hallucinationRows);
 
-  // 2. 필터링 (검색어, 심각도, 검토 상태)
+  const stageFilter = $("workflowFilter")?.value || "";
+  const assigneeFilter = ($("assigneeFilter")?.value || "").trim().toLowerCase();
+
+  // 2. 필터링 (검색어, 심각도, 검토 상태, 진행 상태, 담당자)
   const filteredItems = allReviewItems.filter(item => {
     if (sevFilter && item.severity !== sevFilter) return false;
+
+    // 검토 상태 필터 (reviewFilter: NEEDS_REVIEW, ACCEPTED, FALSE_POSITIVE, RESOLVED)
     if (revFilter) {
-      if (!item.finding_ids || !item.finding_ids.length) return false;
-      const hasMatchingStatus = item.finding_ids.some(fid => {
-        const f = findingsMap.get(fid);
-        return f && f.review_status === revFilter;
-      });
-      if (!hasMatchingStatus) return false;
+      if (!item.finding_ids || !item.finding_ids.length) {
+        if (revFilter !== "NEEDS_REVIEW") return false;
+      } else {
+        const matchRev = item.finding_ids.some(fid => {
+          const f = findingsMap.get(fid);
+          const wf = workflowUI?.workflows?.get(fid);
+          let st = f?.review_status || "NEEDS_REVIEW";
+          if (wf && wf.workflow_state === "COMPLETED") {
+            st = wf.decision === "FALSE_POSITIVE" ? "FALSE_POSITIVE" : (wf.decision === "AGREED" ? "ACCEPTED" : "RESOLVED");
+          }
+          return st === revFilter;
+        });
+        if (!matchRev) return false;
+      }
     }
+
+    // 진행 상태 필터 (workflowFilter: NOT_STARTED, IN_PROGRESS, ACTION_REQUIRED, COMPLETED, DEFERRED)
+    if (stageFilter) {
+      if (!item.finding_ids || !item.finding_ids.length) {
+        if (stageFilter !== "NOT_STARTED") return false;
+      } else {
+        const matchStage = item.finding_ids.some(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          let st = wf?.workflow_state;
+          if (!st) {
+            st = (f?.review_status && f.review_status !== "NEEDS_REVIEW") ? "COMPLETED" : "NOT_STARTED";
+          }
+          return st === stageFilter;
+        });
+        if (!matchStage) return false;
+      }
+    }
+
+    // 담당자 필터 (assigneeFilter)
+    if (assigneeFilter) {
+      if (!item.finding_ids || !item.finding_ids.length) return false;
+      const matchAssignee = item.finding_ids.some(fid => {
+        const f = findingsMap.get(fid);
+        const wf = workflowUI?.workflows?.get(fid);
+        const ass = (wf?.assignee || f?.assignee || "").toLowerCase();
+        return ass.includes(assigneeFilter);
+      });
+      if (!matchAssignee) return false;
+    }
+
     if (query) {
       const texts = [
         item.claim_text,
@@ -1674,7 +1860,39 @@ function renderFindings() {
   });
 
   const rankMap = { CRITICAL: 5, HIGH: 4, MEDIUM: 3, LOW: 2, INFO: 1 };
-  filteredItems.sort((a, b) => (rankMap[b.severity] || 0) - (rankMap[a.severity] || 0));
+  filteredItems.sort((a, b) => {
+    const prioA = (a.finding_ids && a.finding_ids.length)
+      ? Math.min(...a.finding_ids.map(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          return wf?.priority || f?.priority || 2;
+        }))
+      : 2;
+    const prioB = (b.finding_ids && b.finding_ids.length)
+      ? Math.min(...b.finding_ids.map(fid => {
+          const wf = workflowUI?.workflows?.get(fid);
+          const f = findingsMap.get(fid);
+          return wf?.priority || f?.priority || 2;
+        }))
+      : 2;
+    if (prioA !== prioB) return prioA - prioB;
+    return (rankMap[b.severity] || 0) - (rankMap[a.severity] || 0);
+  });
+
+  // 전체 선택 체크박스 동기화
+  const selectAllBox = $("selectAllFindings");
+  if (selectAllBox) {
+    const selectableFids = filteredItems.flatMap(it => it.finding_ids || []);
+    selectAllBox.checked = selectableFids.length > 0 && selectableFids.every(fid => workflowUI?.selected?.has(fid));
+    selectAllBox.onchange = (e) => {
+      for (const fid of selectableFids) {
+        if (e.target.checked) workflowUI?.selected?.add(fid);
+        else workflowUI?.selected?.delete(fid);
+      }
+      workflowUI?.renderReviewCount?.();
+      renderFindings();
+    };
+  }
 
   // 3. 4열 통합 검토 표 렌더링
   const rowsContainer = $("aiVerificationRows");
@@ -1691,8 +1909,27 @@ function renderFindings() {
       for (const item of filteredItems) {
         const tr = node("tr");
 
-        // 1열: 위치
+        // 1열: 위치 + 행 선택 체크박스
         const tdLoc = node("td");
+        if (item.finding_ids && item.finding_ids.length > 0) {
+          const rowCheck = node("input");
+          rowCheck.type = "checkbox";
+          rowCheck.className = "row-checkbox";
+          rowCheck.setAttribute("aria-label", "행 선택");
+          rowCheck.checked = item.finding_ids.every(fid => workflowUI?.selected?.has(fid));
+          rowCheck.onchange = (e) => {
+            for (const fid of item.finding_ids) {
+              if (e.target.checked) workflowUI?.selected?.add(fid);
+              else workflowUI?.selected?.delete(fid);
+            }
+            workflowUI?.renderReviewCount?.();
+            if (selectAllBox) {
+              const selectableFids = filteredItems.flatMap(it => it.finding_ids || []);
+              selectAllBox.checked = selectableFids.length > 0 && selectableFids.every(fid => workflowUI?.selected?.has(fid));
+            }
+          };
+          tdLoc.append(rowCheck);
+        }
         tdLoc.append(node("strong", item.doc?.filename || "문서"));
         const locText = item.location?.display || (item.location?.page ? `${item.location.page}쪽` : "");
         if (locText) {
@@ -1771,46 +2008,69 @@ function renderFindings() {
           node("div", `대응 방안: ${item.counteraction || ""}`, "counteraction-box")
         );
         if (item.finding_ids && item.finding_ids.length > 0) {
-          const f = findingsMap.get(item.finding_ids[0]);
-          if (f) {
-            const wfBox = node("div", null, "inline-workflow-box");
-            wfBox.append(node("strong", "검토 상태: "));
-            const sel = node("select", null, "inline-workflow-select");
-            sel.setAttribute("aria-label", "행 검토 상태");
-            for (const [val, text] of [
-              ["NEEDS_REVIEW", "확인 전"],
-              ["ACCEPTED", "지적 수용"],
-              ["FALSE_POSITIVE", "오탐"],
-              ["RESOLVED", "조치 완료"],
-            ]) {
-              const opt = node("option", text);
-              opt.value = val;
-              if ((f.review_status || "NEEDS_REVIEW") === val) opt.selected = true;
-              sel.append(opt);
-            }
-            sel.addEventListener("change", async (e) => {
-              const newStatus = e.target.value;
-              try {
-                await api(`/findings/${f.id || f.finding_id}/workflow`, {
-                  method: "PUT",
-                  body: { review_status: newStatus },
-                });
-                f.review_status = newStatus;
-                toast("검토 상태가 저장되었습니다.");
-              } catch (err) {
-                toast("검토 상태 저장 실패: " + err.message, "error");
-                sel.value = f.review_status || "NEEDS_REVIEW";
-              }
-            });
-            wfBox.append(sel);
-            if (f.priority) {
-              wfBox.append(node("span", `우선순위: ${label(f.priority)}`, "muted small"));
-            }
-            if (f.assignee) {
-              wfBox.append(node("span", `담당자: ${f.assignee}`, "muted small"));
-            }
-            tdReason.append(wfBox);
+          const leadF = findingsMap.get(item.finding_ids[0]);
+          const leadWf = workflowUI?.workflows?.get(leadF?.id) || {};
+          let currentStatus = leadF?.review_status || "NEEDS_REVIEW";
+          if (leadWf.workflow_state === "COMPLETED") {
+            currentStatus = leadWf.decision === "FALSE_POSITIVE" ? "FALSE_POSITIVE" : (leadWf.decision === "AGREED" ? "ACCEPTED" : "RESOLVED");
           }
+          const currentPrio = leadWf.priority || leadF?.priority || 2;
+          const currentAssignee = leadWf.assignee || leadF?.assignee || "";
+
+          const wfBox = node("div", null, "inline-workflow-box");
+          const controls = node("div", null, "inline-workflow-controls");
+
+          // 1) 검토 상태 (확인 전/지적 수용/오탐/조치 완료)
+          const stLabel = node("label", null, "inline-field");
+          stLabel.append(node("strong", "검토 상태: "));
+          const sel = node("select", null, "inline-workflow-select");
+          sel.setAttribute("aria-label", "행 검토 상태");
+          for (const [val, text] of [
+            ["NEEDS_REVIEW", "확인 전"],
+            ["ACCEPTED", "지적 수용"],
+            ["FALSE_POSITIVE", "오탐"],
+            ["RESOLVED", "조치 완료"],
+          ]) {
+            const opt = node("option", text);
+            opt.value = val;
+            if (currentStatus === val) opt.selected = true;
+            sel.append(opt);
+          }
+          sel.addEventListener("change", () => saveRowWorkflow(item, { review_status: sel.value }));
+          stLabel.append(sel);
+
+          // 2) 우선순위 (1: 우선 검토 / 2: 보통 / 3: 후순위)
+          const prioLabel = node("label", null, "inline-field");
+          prioLabel.append(node("strong", "우선순위: "));
+          const prioSel = node("select", null, "inline-priority-select");
+          prioSel.setAttribute("aria-label", "행 우선순위");
+          for (const [val, text] of [
+            ["1", "우선 검토"],
+            ["2", "보통"],
+            ["3", "후순위"],
+          ]) {
+            const opt = node("option", text);
+            opt.value = val;
+            if (String(currentPrio) === String(val)) opt.selected = true;
+            prioSel.append(opt);
+          }
+          prioSel.addEventListener("change", () => saveRowWorkflow(item, { priority: prioSel.value }));
+          prioLabel.append(prioSel);
+
+          // 3) 담당자
+          const assLabel = node("label", null, "inline-field");
+          assLabel.append(node("strong", "담당자: "));
+          const assInput = node("input", null, "inline-assignee-input");
+          assInput.type = "text";
+          assInput.placeholder = "담당자";
+          assInput.value = currentAssignee;
+          assInput.setAttribute("aria-label", "행 담당자");
+          assInput.addEventListener("change", () => saveRowWorkflow(item, { assignee: assInput.value }));
+          assLabel.append(assInput);
+
+          controls.append(stLabel, prioLabel, assLabel);
+          wfBox.append(controls);
+          tdReason.append(wfBox);
         } else {
           tdReason.append(node("div", "검토 상태: 저장 불가 (정보 전용)", "inline-workflow-note"));
         }
