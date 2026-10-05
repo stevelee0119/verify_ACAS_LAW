@@ -180,3 +180,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **릴리스 F1·F2(2026-10-05): PR #23 병합, `main` 67a87ba, 0.10.0 유지.** 남은 것: 태그 `release-20261005`, 배포 확인, 온라인 점검.
 - **배포 직후 온라인 점검(67a87ba): 19/23, 새 실패 0.** 화면 배치 보고 → [TK-61](TK-61_review_table_whitespace_and_finding_list_layout.md)(표 공백, 세부 항목 위·아래 배치 권고).
 - **봉인 세트 형식 안내서(2026-10-05):** [SEALED_SET_FORMAT_GUIDE](SEALED_SET_FORMAT_GUIDE.md). 작성은 Codex 별도 세션(저장소 미연결, 사용자 결정). 탐지 기능(F1·F2·FT)은 Antigravity가 구현했으므로 출제를 분리한다. 평가 측 확인: 자체 점검 스크립트가 홀드아웃 사본에서 오류 0을 냈고, 일부러 넣은 결함 5종을 모두 잡았다. 8절 채점 명령을 홀드아웃 사본으로 실행해 홀드아웃과 같은 79.2를 얻었다(d1d5761, 오프라인). 이 안내서는 구현 측 통합 전달문에 넣지 않는다(구현 세션과 분리).
+- **FT 설계 보충(PR #24 bce4bbf, 2026-10-06): 보완 요구.** 없는 rule_id 기재, 목 정규식 오인식, 같은 시행일 버전 순서 의존, 추가 대조군 없음. 평가 측 결정: `TEMPORAL.REVIEW_NEEDED` 재사용. **TK-61(PR #26 df6571c): 수용**(열 비율 10/25/25/40%, 최대 행 높이 2486 → 863px, 브라우저 시험 150 passed). 전달문 (15).
