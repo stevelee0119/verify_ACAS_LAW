@@ -88,6 +88,7 @@ def to_payload(run_result: Any, *, reveal_sealed: bool = False) -> dict:
                           else getattr(d, "pages", [])),
                 "page_coverage": d.engine_data.get("page_coverage", []),
                 "findings": [f.to_dict(reveal_sealed=reveal_sealed) for f in d.findings],
+                "review_items": [i.to_dict() if hasattr(i, "to_dict") else dict(i) for i in getattr(d, "review_items", [])],
             }
             for d in run_result.documents
         ],

@@ -4,6 +4,8 @@
 - 실패(종료 코드 1): 기존 시험 함수가 사라졌다(파일 삭제 포함). 시험을 지워서 통과시키는 것은 허용하지 않는다.
 - 실패(종료 코드 1): 기존 시험에 `skip`·`skipif`·`xfail` 표시가 새로 붙었다(표시 변경은 평가 측 소관).
 - 경고(종료 코드 0): 기존 시험의 `assert` 개수가 줄었다(약화 의심 — 사람이 본다).
+- 이름만 바뀐 시험(같은 파일에 본문·표시·인자가 똑같은 새 이름 시험이 있음)은 삭제로 세지 않고 '이름 변경'으로 적는다
+  (2026-10-05: PR 안에서 새로 만든 시험의 이름을 바꾸면 push 비교에서 거짓 '삭제'가 났다 — PR #17 b7dfb0a·5dca58c).
 범위의 모든 커밋이 `Agent: evaluator` 꼬리표를 가지면(평가 측이 보호 시험을 고치는 경우) 점검을 건너뛴다.
 평가 측이 표시를 지시하고 구현 측이 붙인 경우(예: 알려진 미해결 strict xfail)는 `docs/scorecards/approved_test_marks.json`에
 적힌 시험·표시만 승인으로 본다. 평가 측이 지시한 시험 교체(삭제)는 `"mark": "delete"`로 적는다(2026-10-04).
@@ -64,6 +66,27 @@ def collect(source: Optional[str]) -> Dict[str, Tuple[int, set]]:
     return out
 
 
+def signatures(source: Optional[str]) -> Dict[str, str]:
+    """시험 함수 이름 -> 이름을 뺀 정의(표시·인자·본문) 문자열. 이름만 바뀐 시험을 알아보는 데 쓴다."""
+    if source is None:
+        return {}
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return {}
+    out: Dict[str, str] = {}
+
+    def visit(body, prefix=""):
+        for node in body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test"):
+                out[prefix + node.name] = ast.dump(ast.Module(body=[*node.decorator_list, node.args, *node.body], type_ignores=[]))
+            elif isinstance(node, ast.ClassDef):
+                visit(node.body, prefix + node.name + ".")
+
+    visit(tree.body)
+    return out
+
+
 def all_evaluator_commits(base: str) -> bool:
     log = _git("log", f"{base}..HEAD", "--format=%H%x00%B%x01")
     commits = [c for c in log.split("\x01") if c.strip()]
@@ -104,11 +127,20 @@ def main(argv: Optional[List[str]] = None) -> int:
     newly_marked: List[str] = []
     approved_seen: List[str] = []
     weakened: List[str] = []
+    renamed: List[str] = []
     for path in changed:
-        before = collect(_show(args.base, path))
-        after = collect(_show("HEAD", path))
+        before_src, after_src = _show(args.base, path), _show("HEAD", path)
+        before = collect(before_src)
+        after = collect(after_src)
+        before_sig, after_sig = signatures(before_src), signatures(after_src)
+        new_names = [n for n in after if n not in before]
         for name, (asserts, marks) in before.items():
             if name not in after:
+                twin = next((n for n in new_names if after_sig.get(n) == before_sig.get(name)), None)
+                if twin is not None:
+                    new_names.remove(twin)
+                    renamed.append(f"{path}::{name} → {twin}")
+                    continue
                 if (f"{path}::{name}", "delete") in approvals:
                     approved_seen.append(f"{path}::{name} (삭제)")
                 else:
@@ -130,6 +162,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             print(f"  [실패] {title} {len(items)}개")
             for it in items:
                 print(f"    - {it}")
+    if renamed:
+        print(f"  [이름 변경] 본문·표시가 같은 시험 {len(renamed)}개(삭제로 세지 않음)")
+        for it in renamed:
+            print(f"    - {it}")
     if approved_seen:
         print(f"  [승인] 평가 측 승인 목록({APPROVALS})에 있는 표시 {len(approved_seen)}개")
         for it in approved_seen:

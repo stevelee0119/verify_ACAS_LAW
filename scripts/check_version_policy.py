@@ -101,6 +101,19 @@ def version_at(rev: str) -> Optional[Tuple[int, int, int]]:
     return parse_version(git("show", f"{rev}:{CONFIG}") or "")
 
 
+def parent_versions(sha: str) -> Optional[List[Optional[Tuple[int, int, int]]]]:
+    """커밋의 부모들의 버전. 부모를 읽지 못하면 None(이때는 범위 순서로 앞 커밋과 비교한다).
+
+    2026-10-04 보완: 버전 상향 전에 갈라진 브랜치를 상향 뒤 기준과 비교하면, 범위 순서로는 기준(새 버전) 다음에
+    옛 버전 커밋이 와서 '내려감'으로 잘못 잡혔다(F1 병합 후보). 각 커밋은 자기 부모와 비교하고,
+    병합 커밋이 어느 부모의 버전을 그대로 가져오면 변경으로 보지 않는다.
+    """
+    out = git("log", "--format=%P", "-n", "1", sha)
+    if not out or not out.strip():
+        return None
+    return [version_at(parent) for parent in out.split()]
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base", default="HEAD~1", help="이 커밋 이후(제외) HEAD까지의 모든 커밋을 본다")
@@ -120,9 +133,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         if current is None:
             print(f"측정하지 못했다: {sha[:7]}에서 버전을 읽지 못했다", file=sys.stderr)
             return 2
-        found = check_bump(previous, current, verdicts, used)
-        if current != previous:
-            steps.append(f"{sha[:7]} {fmt(previous)} → {fmt(current)}")
+        parents = parent_versions(sha)
+        if parents and all(v is not None for v in parents):
+            if current in parents:  # 부모의 버전을 그대로 가져옴(브랜치 커밋·병합) — 변경 아님
+                previous = current
+                continue
+            reference = parents[0]
+        else:
+            reference = previous
+        found = check_bump(reference, current, verdicts, used)
+        if current != reference:
+            steps.append(f"{sha[:7]} {fmt(reference)} → {fmt(current)}")
         problems.extend(f"{sha[:7]} {p}" for p in found)
         previous = current
     if problems:

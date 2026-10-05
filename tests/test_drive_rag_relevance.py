@@ -443,7 +443,7 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
             page.goto("http://drive.test/")
             select_first_project(page)
             page.wait_for_function("state.result && state.result.documents && state.result.documents.length === 1")
-            page.evaluate("switchTab('ai-verification')")
+            page.evaluate("switchTab('review')")
             section = page.locator(".reference-section")
             expect(section.locator("h3")).to_have_text("주요 참고문헌 검토 결과(RAG)")
             expect(section.locator("p", has_text="부분색인.pdf")).to_have_count(1)
@@ -461,8 +461,8 @@ def test_web_shows_drive_health_selection_and_duplicates(tmp_path):
               r.selection.coverage = 'INCOMPLETE_COVERAGE';
               r.selection.unreviewed_candidates = [{name: '학교폭력 가이드북.pdf', folder_path: '분야별 업무편람',
                 status: 'SELECTED_PENDING', reason: 'SYNC_BUDGET_EXHAUSTED'}];
-              renderAIVerification();
-              switchTab('ai-verification');
+              renderFindings();
+              switchTab('review');
             }""")
             expect(section).to_contain_text("관련 자료 검토 범위 미완결")
             expect(section).to_contain_text("학교폭력 가이드북.pdf")
