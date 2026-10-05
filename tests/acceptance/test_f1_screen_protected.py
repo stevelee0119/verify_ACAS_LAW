@@ -15,6 +15,7 @@ from __future__ import annotations
 import importlib
 import os
 import sys
+import time
 import uuid
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -110,16 +111,28 @@ def test_t2r_every_finding_title_is_visible_in_ai_tab_or_review_tab():
         select_first_project(page)
         page.wait_for_function("state.findings && state.findings.length === %d" % len(SYNTHETIC))
         page.wait_for_function("state.findingCategories && !state.findingCategories.error")
-        missing = []
-        for _, title, _ in SYNTHETIC:
-            seen = False
-            for tab in ("ai-verification", "review"):
-                page.evaluate(f"switchTab('{tab}')")
-                if page.locator(f"[data-panel='{tab}']").get_by_text(title).count() > 0:
-                    seen = True
-                    break
-            if not seen:
-                missing.append(title)
+
+        def unseen():
+            out = []
+            for _, title, _ in SYNTHETIC:
+                seen = False
+                for tab in ("ai-verification", "review"):
+                    page.evaluate(f"switchTab('{tab}')")
+                    if page.locator(f"[data-panel='{tab}']").get_by_text(title).count() > 0:
+                        seen = True
+                        break
+                if not seen:
+                    out.append(title)
+            return out
+
+        # state가 채워진 뒤에도 화면 그리기는 다른 요청(/issues 등)을 기다린 다음에 일어난다(loadResults).
+        # 그 사이에 한 번만 세면 느린 실행 환경에서 거짓 실패가 난다(2026-10-04 CI, 응답 지연으로 재현).
+        # 단언은 그대로 두고, 제한 시간 안에서 다시 센다.
+        deadline = time.monotonic() + 15
+        missing = unseen()
+        while missing and time.monotonic() < deadline:
+            page.wait_for_timeout(250)
+            missing = unseen()
         browser.close()
     assert not missing, f"어느 탭에도 제목이 보이지 않는 finding(정보 손실): {missing}"
 
