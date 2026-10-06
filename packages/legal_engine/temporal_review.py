@@ -76,7 +76,9 @@ SUBITEM_LETTERS = "가나다라마바사아자차카타파하"
 SUBITEM_LETTER_SET = frozenset(SUBITEM_LETTERS)
 
 # 목 인식 정규식: 호 표기(제N호 또는 N호)가 반드시 선행해야 함
-ITEM_SUBITEM_RE = re.compile(rf"(?:제?\s*(?P<item>\d+)호)\s*(?:제?\s*(?P<subitem>[{SUBITEM_LETTERS}])목)")
+# '제3호 다목적'의 '다'처럼 목 뒤에 낱말이 이어지는 경우를 배제하고 조사·문장부호·공백 등으로 한정
+SUBITEM_TAIL_RE = r"(?=\s|[.,()，。:;\-]|$|의|에|에서|에게|을|를|은|는|이|가|과|와|도|만|부터|까지|로|으로|등)"
+ITEM_SUBITEM_RE = re.compile(rf"(?:제?\s*(?P<item>\d+)호)\s*(?:제?\s*(?P<subitem>[{SUBITEM_LETTERS}])목){SUBITEM_TAIL_RE}")
 
 # 목 분할 정규식: 호 본문 내부에서 목 열거 글자만을 대상으로 분할
 SUBITEM_SPLIT_RE = re.compile(rf"\n\s*(?P<letter>[{SUBITEM_LETTERS}])\.\s*")
@@ -144,53 +146,68 @@ def version_outcomes(citation, versions: List[Dict[str, Any]]) -> List[Dict[str,
 
     # 목 단위 특정 여부 확인 (조건 ①: [가나다라마바사아자차카타파하] 명시 집합 & 호 선행 필수)
     item_num, subitem_letter = extract_subitem_info(citation)
+    has_subitem_context = bool(item_num and subitem_letter and claim and claim.strip())
 
-    out = []
+    # 1단계: 각 판본별 기본 조·항 대조 결과 및 목 단위 대조 정보 수집 (TK-62)
+    parsed_versions = []
     for version in versions:
         article_text = version.get("text") or ""
         para_text = paragraph_text(article_text, citation.paragraph)
+        base_outcome = compare_claim_to_provision(claim, para_text, numbers_only=numbers_only, subject=subject)
 
-        # 목 단위 대조 대상인 경우 (주장 문언이 있을 때만 목 단위 부존재 판정 적용)
-        if item_num and subitem_letter and claim and claim.strip():
+        subitem_verified_outcome = None
+        subitem_absent = False
+
+        if has_subitem_context:
             item_body = extract_item_body(para_text, item_num)
             subitems = split_subitems(item_body) if item_body else {}
 
             if subitems:
                 # 목 분할이 정상적으로 된 경우
                 # 1) 인용된 목 본문과 직접 대조
-                cited_outcome = None
                 if subitem_letter in subitems:
-                    cited_outcome = compare_claim_to_provision(
+                    res = compare_claim_to_provision(
                         claim, subitems[subitem_letter], numbers_only=numbers_only, subject=subject
                     )
+                    if res.get("status") == "VERIFIED":
+                        subitem_verified_outcome = res
 
-                if cited_outcome and cited_outcome["status"] == "VERIFIED":
-                    out.append({"version": version, "outcome": cited_outcome})
-                    continue
+                # 2) 다른 목 본문 대조 (번호만 바뀐 개정 오탐 방지)
+                if not subitem_verified_outcome:
+                    for ltr, text in subitems.items():
+                        res = compare_claim_to_provision(claim, text, numbers_only=numbers_only, subject=subject)
+                        if res.get("status") == "VERIFIED":
+                            outcome = dict(res)
+                            matched_items = list(outcome.get("matched") or [])
+                            matched_items.append(f"{ltr}목(내용 일치)")
+                            outcome["matched"] = matched_items
+                            subitem_verified_outcome = outcome
+                            break
 
-                # 2) 인용된 목과 불일치하거나 인용된 목이 없는 경우:
-                # 해당 버전의 다른 목들 중 내용이 일치하는 목이 있는지 확인 (번호만 바뀐 개정 오탐 방지)
-                matching_letter = None
-                matching_outcome = None
-                for ltr, text in subitems.items():
-                    res = compare_claim_to_provision(claim, text, numbers_only=numbers_only, subject=subject)
-                    if res["status"] == "VERIFIED":
-                        matching_letter = ltr
-                        matching_outcome = res
-                        break
+                # 3) 어느 목에도 일치하지 않는 경우
+                if not subitem_verified_outcome:
+                    subitem_absent = True
 
-                if matching_letter and matching_outcome:
-                    # 다른 목에 내용이 존재하므로 실질 규범 일치로 판정
-                    outcome = dict(matching_outcome)
-                    matched_items = list(outcome.get("matched") or [])
-                    matched_items.append(f"{matching_letter}목(내용 일치)")
-                    outcome["matched"] = matched_items
-                    out.append({"version": version, "outcome": outcome})
-                    continue
+        parsed_versions.append({
+            "version": version,
+            "base_outcome": base_outcome,
+            "subitem_verified_outcome": subitem_verified_outcome,
+            "subitem_absent": subitem_absent,
+        })
 
-                # 3) 해당 버전의 어느 목에도 내용이 부합하지 않는 경우 (신설 목의 부존재, 진성 소급 오류 근거)
+    # 2단계: 판본 전체에서 목 단위 VERIFIED가 하나라도 존재하는지 확인 (TK-62 요구 규칙)
+    any_subitem_verified = any(p["subitem_verified_outcome"] is not None for p in parsed_versions)
+
+    # 3단계: 최종 결과 도출
+    out = []
+    for p in parsed_versions:
+        if any_subitem_verified:
+            # 어느 판본에서든 목 단위 일치가 존재하는 경우(신설 목 소급 또는 목 이동 개정)에만 부존재를 CONTRADICTED로 둠
+            if p["subitem_verified_outcome"] is not None:
+                out.append({"version": p["version"], "outcome": p["subitem_verified_outcome"]})
+            elif p["subitem_absent"]:
                 out.append({
-                    "version": version,
+                    "version": p["version"],
                     "outcome": {
                         "status": "CONTRADICTED",
                         "basis": "SUBITEM_NOT_EXIST",
@@ -198,13 +215,12 @@ def version_outcomes(citation, versions: List[Dict[str, Any]]) -> List[Dict[str,
                         "matched": [],
                     }
                 })
-                continue
-
-            # 호·목 분할에 실패한 경우: 기존 조·항 단위 경로의 결과를 그대로 유지 (새 finding 생성 없음)
-
-        # 일반 조·항 대조 경로
-        outcome = compare_claim_to_provision(claim, para_text, numbers_only=numbers_only, subject=subject)
-        out.append({"version": version, "outcome": outcome})
+            else:
+                out.append({"version": p["version"], "outcome": p["base_outcome"]})
+        else:
+            # 어느 판본에서도 목 단위 VERIFIED가 나타나지 않은 경우(호 머리글 주장 등):
+            # 모든 판본을 FT 전과 같은 기본 조·항 단위 비교 결과로 둠
+            out.append({"version": p["version"], "outcome": p["base_outcome"]})
 
     return out
 

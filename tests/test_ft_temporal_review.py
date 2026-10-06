@@ -178,3 +178,54 @@ def test_contrast_4_same_day_versions_at_current_boundary(monkeypatch):
     assert "RETROACTIVE_APPLICATION_ERROR" not in (finding.tags or [])
     assert finding.confidence_features.get("human_review") is True
     assert finding.confidence_features.get("ambiguity") == "SAME_EFFECTIVE_DATE"
+
+
+# --------------------------------------------------------------------------- 대조군 5 (TK-62)
+def test_contrast_5_claim_in_item_header_not_in_subitems_preserves_base_outcome():
+    """대조군 5 (TK-62): 호 머리글에 주장이 있고 목에는 없으며 두 판본 내용이 같은 경우(합성 조문).
+
+    공식 원문 미러에는 이 구조의 조문이 없어 합성 조문(synthetic provision)을 사용합니다.
+    어느 판본에서도 목 단위 VERIFIED가 없으므로 목 부존재 CONTRADICTED를 강제하지 않고,
+    기존 조·항 단위 비교 결과(VERIFIED)를 유지하여 NO_VERSION_MATCH(A등급 오탐)를 방지합니다.
+    """
+    # 합성 조문: 호 머리글에 "손해액의 3배 이내"가 명시되어 있고 목에는 없음 (두 판본 내용 동일)
+    synthetic_text = (
+        "제50조(손해배상의무) 법원은 다음 각 호의 구분에 따라 손해액의 3배 이내에서 배상액을 정할 수 있다.\n"
+        "1. 고의로 타인의 권리를 침해한 경우 다음 각 목의 행위:\n"
+        "가. 영업비밀을 취득하여 사용하는 행위\n"
+        "나. 영업비밀을 제3자에게 누설하는 행위\n"
+        "2. 과실로 타인의 권리를 침해한 경우"
+    )
+    synthetic_versions = [
+        {"version_id": "1", "effective_from": "2020-01-01", "effective_to": "2024-12-31", "text": synthetic_text},
+        {"version_id": "2", "effective_from": "2025-01-01", "effective_to": None, "text": synthetic_text},
+    ]
+
+    # 서면이 '제1호 가목'으로 인용하고 호 머리글의 '손해액의 3배 이내'를 주장
+    citation = Citation(
+        citation_id="c_synth", document_id="doc1", block_id="b1", page=1, span=(0, 30),
+        raw_text="부정경쟁방지법 제50조 제1호 가목", type=CitationType.STATUTE, law_name="부정경쟁방지법",
+        article="50", item="1", attributes={"claim_text": "손해액의 3배 이내에서 배상액을 정할 수 있다"})
+
+    finding = review_temporal_application(
+        citation, synthetic_versions, {"date": "2022-05-12", "basis": "FACT_DATE"})
+
+    # FT 전과 동일하게 REFERENCE_VERSION_MATCH (VERIFIED, Severity.INFO)로 판정되어야 하며,
+    # NO_VERSION_MATCH (CONTRADICTED, Severity.HIGH) 오탐이 발생하지 않아야 함
+    assert finding is not None
+    assert finding.status == VerificationStatus.VERIFIED
+    assert finding.severity == Severity.INFO
+    assert finding.confidence_features.get("rule_id") == "TEMPORAL.REFERENCE_VERSION_MATCH"
+    assert "RETROACTIVE_APPLICATION_ERROR" not in (finding.tags or [])
+
+
+# --------------------------------------------------------------------------- 대조군 6 (선택 점검)
+def test_contrast_6_subitem_regex_boundary_rejects_multi_purpose():
+    """선택 점검: '제3호 다목적'처럼 목 뒤에 낱말이 이어지는 경우 목으로 오인식하지 않음."""
+    citation = Citation(
+        citation_id="c_multi", document_id="doc1", block_id="b1", page=1, span=(0, 30),
+        raw_text="부정경쟁방지법 제3조 제3호 다목적 시설의 설치", type=CitationType.STATUTE, law_name="부정경쟁방지법",
+        article="3", attributes={"claim_text": "다목적 시설 설치"})
+    item, subitem = extract_subitem_info(citation)
+    assert subitem is None, f"'다목적'의 '다'가 목으로 오인식됨: subitem={subitem}"
+
