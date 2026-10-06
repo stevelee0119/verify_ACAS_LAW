@@ -851,3 +851,17 @@
   - 추가 대조군 4건을 넣는다.
   - 전후 scorecard 값을 실제 출력으로 보고한다.
   - 평가 측이 수용 SHA에서 `verify_all` 전체 모드를 돌린다.
+
+# FT 구현 — PR #27 ca0067b (2026-10-06) · **불승인(보완 1건 필수, TK-62)**
+- 근거: CI 결과 인용(push·PR 완료) + 평가 측 재실행(코드 대조, 재현, 지시 사전 점검).
+- 충족
+  - CI 실패는 strict XPASS 4건(T10 양성·T11 3개)뿐이다. acceptance 943 passed, 전체(SQLite) 4,396 passed.
+  - 점수 dev 81.7·holdout 79.2(같음), 회귀 게이트 12/12 회귀 없음, 하드코딩·시험 삭제·보호 경로·버전 점검 통과.
+  - 조건 ①(목 글자 명시 집합)·②(예외 문구 파싱 안 함) 반영. 추가 대조군 4건.
+- 미충족(TK-62, P1)
+  - 목 분할에 성공했는데 주장이 어느 목과도 일치하지 않으면, 판본을 무조건 CONTRADICTED로 둔다(판단 보류 포함).
+  - 합성 재현(호 머리글에 주장, 판본 내용 같음): c206386 `REFERENCE_VERSION_MATCH` VERIFIED·INFO → ca0067b **`NO_VERSION_MATCH` CONTRADICTED·HIGH·A**.
+  - 요구: 목 단위 VERIFIED가 어느 판본에든 있을 때만 '부존재'를 근거로 쓴다.
+  - 사전 점검(임시 패치): 재현이 해소됐고 T10·T11은 유지됐다. 관련 시험 134 passed.
+- 측정 못 함: CI의 PostgreSQL 단계(SQLite 단계의 strict XPASS 4건으로 멈춤), 실제 법령에서 같은 구조의 사례(미러에 없음).
+- 보고 형식: 전후 scorecard 출력 원문 누락.
