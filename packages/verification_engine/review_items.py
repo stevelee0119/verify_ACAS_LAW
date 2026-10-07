@@ -270,7 +270,10 @@ def build_document_review_items(
         if ref_status == ReferenceSupportStatus.SUPPORTED and match_info:
             file_id = match_info.get("file_id") or ""
             source_title = match_info.get("source_title") or "참고자료"
-            evidence_sources.append(f"참고자료(공식 법령·판례 아님): {source_title} ({file_id})")
+            # 승인 설계(1.2·2.1)에 따라 Drive URL 형식으로 출처 링크 구성 (한국어 주석 포함)
+            evidence_sources.append(
+                f"참고자료(공식 법령·판례 아님): {source_title} (https://drive.google.com/file/d/{file_id}/view)"
+            )
 
         reasoning = h_row.get("reasoning_sections")
         counteraction = h_row.get("recommended_counteraction")

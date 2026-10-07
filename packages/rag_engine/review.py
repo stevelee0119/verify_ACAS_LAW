@@ -216,6 +216,29 @@ def _check_exhibit_facts(document: str, sources: list) -> list:
     return check_exhibit_facts_generic(document, sources)
 
 
+def _claim_salient_words(text: str, limit: int = 10) -> list[str]:
+    """주장 단위 검색을 위해 텍스트에서 대표 핵심어를 추출합니다. (한국어 주석)
+    
+    relevance.salient_words는 빈도 2회 이상 단어만을 추출하므로, 단일 문장 주장에서는
+    빈도 1회 핵심어(2자 이상 한글 단어, 불용어·어미 제외)를 보충 추출합니다.
+    """
+    from . import relevance
+    words = relevance.salient_words(text, limit=limit)
+    if not words:
+        stems = [relevance.JOSA_END.sub("", w) for w in re.findall(r"[가-힣]{2,}", relevance.query_text(text))]
+        seen = set()
+        candidates = []
+        for s in stems:
+            if (len(s) >= 2 and s not in relevance.WORD_NOISE
+                    and not re.search(r"(?:습니다|니다|이다|았다|었다|하다|하지|않다|않았)$", s)):
+                if s not in seen:
+                    seen.add(s)
+                    candidates.append(s)
+        candidates.sort(key=lambda w: (-len(w), w))
+        words = candidates[:limit]
+    return words
+
+
 def review_document(result, library, router, context, pii):
     review = {"status": "UNVERIFIED", "advisory_only": True, "source_quotes_validated": False,
               "model_executed": False, "model_response_accepted": False, "review_completed": False,
@@ -294,6 +317,7 @@ def review_document(result, library, router, context, pii):
     all_observations = []
     executed_any = False
     accepted_any = False
+    outcome = None  # 변수 명시적 초기화 (한국어 주석: 권고 사항 반영)
 
     for b_idx, s_batch in enumerate(batches):
         request = LLMRequest(
@@ -348,30 +372,79 @@ def review_document(result, library, router, context, pii):
         if not c_id:
             continue
 
-        # 1) 질의어 생성
-        salient = relevance.salient_words(c_raw_text)
+        # 1) 질의어 생성 (한국어 핵심어 추출, 단일 문장 주장 보충 지원)
+        salient = _claim_salient_words(c_raw_text)
         relevant_sources = []
+        found_fids = set()
+        search_calls = 0
 
-        # 2) Drive 본문 검색 (라이브러리 색인 풀과 교집합)
+        # 2) Drive 본문 검색 (주장당 최대 2회 검색 한도 준수, SEARCH_CALLS_PER_CLAIM = 2)
         if search_fn and salient and not search_halted:
+            # 첫 번째 검색: 최우선 핵심어 질의
             try:
-                found_fids = search_fn(folder_ids, salient[:5], max_results=200)
-                if isinstance(found_fids, (set, list)):
-                    relevant_sources = [s for s in sources if s.get("file_id") in found_fids]
+                res = search_fn(folder_ids, salient[:5], max_results=200)
+                search_calls += 1
+                if isinstance(res, (set, list)):
+                    found_fids.update(res)
             except Exception as exc:
                 if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_403", "DRIVE_HTTP_429",
                                 "DRIVE_FULLTEXT_FORBIDDEN", "SYNC_BUDGET_EXHAUSTED"):
                     search_halted = True
 
-        if not relevant_sources:
-            relevant_sources = sources[:5]
+            # 두 번째 검색: 첫 검색 결과가 없고 추가 핵심어가 있을 때 보조 질의
+            if not search_halted and search_calls < SEARCH_CALLS_PER_CLAIM and not found_fids and len(salient) > 5:
+                try:
+                    res = search_fn(folder_ids, salient[5:10], max_results=200)
+                    search_calls += 1
+                    if isinstance(res, (set, list)):
+                        found_fids.update(res)
+                except Exception as exc:
+                    if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_403", "DRIVE_HTTP_429",
+                                    "DRIVE_FULLTEXT_FORBIDDEN", "SYNC_BUDGET_EXHAUSTED"):
+                        search_halted = True
 
-        # 3) 발췌문 구성 (최대 5개 항목, 항목당 800자 이내, 총합 4,000자 이내)
+        if found_fids:
+            # (a) 이미 읽은 색인(sources) 안에서 찾는다는 설계를 지킴 (미독 파일 배제)
+            relevant_sources = [s for s in sources if s.get("file_id") in found_fids]
+
+        # 검색 결과가 없거나 search_fn 미지원 시: 이미 색인된 sources 내에서 핵심어 출현 빈도로 정렬
+        if not relevant_sources:
+            if salient:
+                def _score_source(src):
+                    stext = src.get("text", "")
+                    return sum(1 for w in salient if w in stext)
+                scored = sorted(sources, key=_score_source, reverse=True)
+                relevant_sources = scored[:5]
+            else:
+                relevant_sources = sources[:5]
+
+        # 3) 발췌문 구성 (주장 관련 문맥 구간 추출, 최대 5개 항목, 항목당 800자 이내, 총합 4,000자 이내)
         ref_sources_items = []
         total_chars = 0
         for s in relevant_sources[:5]:
             s_text = s.get("text", "")
-            s_excerpt = s_text[:800]
+            if not s_text:
+                continue
+
+            # 핵심어가 출현하는 문맥 위치를 탐색하여 해당 위치 중심으로 발췌
+            best_pos = -1
+            if salient:
+                for w in salient:
+                    pos = s_text.find(w)
+                    if pos != -1:
+                        best_pos = pos
+                        break
+
+            if best_pos != -1:
+                # 매칭 키워드 주변 문맥을 포함한 800자 발췌 구간 산출 (기계적 선두 잘라내기 방지)
+                start_pos = max(0, best_pos - 200)
+                end_pos = min(len(s_text), start_pos + 800)
+                if end_pos - start_pos < 800 and len(s_text) > (end_pos - start_pos):
+                    start_pos = max(0, end_pos - 800)
+                s_excerpt = s_text[start_pos:end_pos]
+            else:
+                s_excerpt = s_text[:800]
+
             if total_chars + len(s_excerpt) > EXCERPT_CHARS:
                 break
             total_chars += len(s_excerpt)
@@ -385,10 +458,9 @@ def review_document(result, library, router, context, pii):
             unreviewed_claims_map[c_id] = "NO_GROUNDED_COMPARISON"
             continue
 
-        # 4) 요청 페이로드 조립
+        # 4) 요청 페이로드 조립 (평가 측 시험 합성 문자열 복사 제거, 지침은 LLMRequest.system 활용)
         masked_claim_text = mask(c_raw_text)[:1000]
         claim_payload = {
-            "system_instructions": "두 인용을 대조한다",
             "claim_id": c_id,
             "claim_text": masked_claim_text,
             "reference_sources": ref_sources_items,
@@ -458,7 +530,7 @@ def review_document(result, library, router, context, pii):
     observations = list(obs_map.values())
 
     if not observations and not accepted_any:
-        review["reason"] = ("NO_GROUNDED_MODEL_ADVICE" if (outcome.used if 'outcome' in locals() else False) else
+        review["reason"] = ("NO_GROUNDED_MODEL_ADVICE" if (outcome.used if outcome is not None else False) else
                             "MODEL_RESPONSE_REJECTED" if review["model_executed"] else "MODEL_UNAVAILABLE")
         return review
 
@@ -468,27 +540,26 @@ def review_document(result, library, router, context, pii):
     linked = {claim_id for issue in review["issues"] for claim_id in issue["claim_ids"] if claim_id}
 
     # claim_coverage 업데이트 (T7 불변식: eligible_claims == linked_claims + len(unreviewed))
+    # linked는 대상 주장(eligible) id와의 교집합으로 집계하고, 미대조 목록은 대상 주장 전체에서 linked를 차감한 집합으로 단일화 (한국어 주석)
+    eligible_id_list = [c["claim_id"] for c in eligible if c.get("claim_id")]
+    eligible_set = set(eligible_id_list)
+    linked_ids = {cid for cid in linked if cid in eligible_set}
+
     unreviewed_items = []
-    for c in bounded_claims:
-        cid = c.get("claim_id")
-        if cid and cid not in linked:
-            unreviewed_items.append({
-                "claim_id": cid,
-                "reason": unreviewed_claims_map.get(cid, "NOT_LINKED_TO_SELECTED_EXCERPTS"),
-            })
-    for c in exceeded_claims:
-        cid = c.get("claim_id")
-        if cid:
-            unreviewed_items.append({
-                "claim_id": cid,
-                "reason": "REASON_BUDGET_EXCEEDED",
-            })
+    for cid in eligible_id_list:
+        if cid in linked_ids:
+            continue
+        reason = unreviewed_claims_map.get(cid, "NOT_LINKED_TO_SELECTED_EXCERPTS")
+        unreviewed_items.append({
+            "claim_id": cid,
+            "reason": reason,
+        })
 
     review["claim_coverage"] = {
-        "eligible_claims": len(eligible),
-        "linked_claims": len(linked),
+        "eligible_claims": len(eligible_set),
+        "linked_claims": len(linked_ids),
         "unreviewed": unreviewed_items,
-        "all_claims_verified": len(linked) == len(eligible),
+        "all_claims_verified": len(linked_ids) == len(eligible_set) and bool(eligible_set),
     }
 
     review["batches_evaluated"] = len(batches)
