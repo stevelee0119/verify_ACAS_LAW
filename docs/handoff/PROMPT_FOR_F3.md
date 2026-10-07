@@ -84,7 +84,7 @@
   - 하네스: 실제 `VerificationPipeline`·`LLMRouter.run`에 가짜 Drive·가짜 공급자만 붙인다. 공식 판례 조회는 '조회 성공·결과 없음'으로 대역한다.
   - 가짜 공급자는 참고자료 대조 요청에 빈 의견을 준다. 그래서 SUPPORTED는 인용 동일성 대조(3절 1)에서 와야 한다.
   - 시험이 쓰는 이름은 이미 정해진 것뿐이다: `reference_status` 값, `claim_coverage` 키, `REASON_BUDGET_EXCEEDED`·허용 키 4개(19b 5.2·6.1), 화면 'N건 중 M건'(또는 'M/N').
-  - 허용 목록 밖 키의 fail-closed 단위 시험은 설계 보충이 검사 함수 위치를 정한 뒤 회신 때 더한다.
+  - 허용 목록 밖 키의 fail-closed 단위 시험: 설계 메모(PR #32) 5.2의 `validate_claim_request_payload`(review.py, bool 반환) 대상 strict xfail 10건(2026-10-07 추가).
 - T1~T5(F1·F2), T2r·T6a(F1 화면), T10·T11(FT)은 계속 통과해야 한다.
 
 ## 5. 구현 수용 기준(회신 뒤 구현 PR에서 평가 측이 확인)

@@ -10,7 +10,7 @@
 - T9 외부 호출: `LOCAL_ONLY`면 공급자 호출 0, QUICK이면 참고자료 발췌를 실은 호출 0. 참고자료 발췌의 연락처·주민등록번호는
   공급자에 도달하지 않고, 공급자에 간 모든 요청은 `inspect_request`를 지난다. 주장 단위 경로도 같다(상한 포함).
 - 요청 본문 스키마(19b 6.1, TK-55): 주장 단위 요청의 키는 허용 목록 안에 있고, 사람을 가리키는 키가 없다.
-  허용 목록 밖 키의 fail-closed 단위 시험은 설계 보충이 검사 함수의 위치를 정한 뒤(설계 회신 때) 이 파일에 더한다.
+  허용 목록 밖 키의 fail-closed 단위 시험: `validate_claim_request_payload`(설계 메모 5.2) 대상, bool 반환 계약(2026-10-07 회신 때 추가).
 
 하네스: 실제 `VerificationPipeline`·`LLMRouter.run`에 가짜 Drive(`ReferenceLibrary`의 client_factory)와 가짜 공급자만 붙인다.
 외부 네트워크는 쓰지 않는다. 공식 판례 조회는 '조회 성공·결과 없음'으로 대역한다(실재 여부와 무관한 합성 조건이다).
@@ -126,6 +126,12 @@ class _Drive:
         return {"id": file_id, "name": name, "mimeType": "text/plain", "version": "1",
                 "modifiedTime": "2026-09-26T01:00:00Z", "parents": [FOLDER], "size": str(len(body)),
                 "capabilities": {"canDownload": True}, "md5Checksum": hashlib.md5(body).hexdigest(), **extra}
+
+    def search_fulltext(self, folder_ids, terms, *, max_results=200):
+        """Drive 본문 검색 대역: 모든 단어를 본문에 가진 파일(읽기 실패 대역 포함)의 ID."""
+        words = [t for t in terms if t][:5]
+        return {file_id for file_id, (_, text, _) in self.files.items()
+                if words and all(w in (text or "읽기 실패 대역") for w in words)}
 
     def download(self, item, **kwargs):
         name, text, _ = self.files[item["id"]]
@@ -480,3 +486,41 @@ def test_schema_claim_level_request_keys_are_allowlisted_and_name_no_person(monk
         assert set(body) <= ALLOWED_REQUEST_KEYS, sorted(set(body) - ALLOWED_REQUEST_KEYS)
         person = [key for key in _keys(body) if PERSON_KEY.search(str(key))]
         assert not person, person
+
+
+# 설계 메모(PR #32 96a4f47) 5.2: `packages/rag_engine/review.py` `validate_claim_request_payload(payload) -> bool`.
+# 계약(평가 측 조건부 승인 조건): 위치는 review.py 하나, 예외를 내지 않고 bool만 돌려준다. 최상위 허용 키 4개, 항목 키 {source_id, text, page},
+# claim_text ≤ 1,000자, reference_sources ≤ 5개, 항목 text ≤ 800자. 하나라도 어기면 False(fail-closed).
+_VALID_ITEM = {"source_id": "R1", "text": "현장 점검 기준 발췌", "page": 1}
+_VALID_BODY = {"system_instructions": "두 인용을 대조한다", "claim_id": "CLM_1", "claim_text": "합성 주장 문장",
+               "reference_sources": [_VALID_ITEM]}
+_INVALID_BODIES = {
+    "extra-top-key": {**_VALID_BODY, "note": "허용 목록 밖"},
+    "person-top-key": {**_VALID_BODY, "party_name": "합성"},
+    "item-title": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "title": "합성 파일명"}]},
+    "item-owner": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "owner": "합성"}]},
+    "claim-text-too-long": {**_VALID_BODY, "claim_text": "가" * 1001},
+    "too-many-sources": {**_VALID_BODY, "reference_sources": [dict(_VALID_ITEM, source_id=f"R{i}") for i in range(6)]},
+    "item-text-too-long": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "text": "가" * 801}]},
+    "sources-not-list": {**_VALID_BODY, "reference_sources": "R1"},
+    "body-not-dict": [_VALID_BODY],
+}
+
+
+def _validator():
+    from packages.rag_engine import review
+
+    validate = getattr(review, "validate_claim_request_payload", None)
+    assert callable(validate), "validate_claim_request_payload가 없다(설계 메모 5.2)"
+    return validate
+
+
+@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_claim_request_payload가 없다(설계 메모 5.2)")
+def test_schema_validator_accepts_an_allowlisted_body():
+    assert _validator()(json.loads(json.dumps(_VALID_BODY))) is True
+
+
+@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_claim_request_payload가 없다(설계 메모 5.2)")
+@pytest.mark.parametrize("case", sorted(_INVALID_BODIES))
+def test_schema_validator_fails_closed_without_raising(case):
+    assert _validator()(json.loads(json.dumps(_INVALID_BODIES[case], ensure_ascii=False))) is False, case
