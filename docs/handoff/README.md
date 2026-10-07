@@ -183,3 +183,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **FT 설계 보충(PR #24 bce4bbf, 2026-10-06): 보완 요구.** 없는 rule_id 기재, 목 정규식 오인식, 같은 시행일 버전 순서 의존, 추가 대조군 없음. 평가 측 결정: `TEMPORAL.REVIEW_NEEDED` 재사용. **TK-61(PR #26 df6571c): 수용**(열 비율 10/25/25/40%, 최대 행 높이 2486 → 863px, 브라우저 시험 150 passed). 전달문 (15).
 - **FT 설계 보충 개정 1(PR #24 ffe5d47, 2026-10-06): 조건부 승인.** 구현 조건 2건(목 글자 명시 집합, 예외 문구 파싱 금지). 전달문 (16): PR #24 병합 뒤 구현 착수.
 - **FT 구현(PR #27 ca0067b, 2026-10-06): 불승인.** [TK-62](TK-62_ft_subitem_absence_forced_contradiction.md)(P1: 목 단위 경로가 판본 대비 없이 CONTRADICTED를 만들어 새 A등급 오탐). 전달문 (17). 사용자 결정: TK-61만 먼저 배포(후보 c206386).
+- **FT 보완(PR #27 ed8d7d1, 2026-10-07): 내용 수용**(TK-62 해소, 승격 85e6378, `verify_all` 종료 0). 병합은 #28(TK-61 릴리스) 뒤 평가 측 PR로 한다. 전달문 (18).
