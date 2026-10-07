@@ -931,3 +931,22 @@
   - TMP-1 통과 유지.
   - 온라인 조건에서 FT 고유 효과(목 단위·같은 시행일 판본)를 재는 항목은 이 명세에 없다. 측정 못 함.
 - 태그(사용자 결정 2026-10-07): F3 종료 뒤 일괄 부착. `release-20261007` → 43d3132.
+
+# F3 설계 보충 — PR #32 3398943 (2026-10-07) · **보완 요구(승인 보류)**
+- 근거: CI 결과 인용(필수 3개 성공), 평가 측이 코드를 대조하고 관련 시험을 재실행했다(코드 = Steve 7110273). F3 보호 시험, T1~T5, TK-29 가드, 구조화 요청, Drive RAG 시험: 122 passed, 6 xfailed.
+- 맞게 된 것
+  - 2절을 다시 설계하지 않았다.
+  - 두 축이 독립이고, 문서 단위 경로를 유지한다.
+  - 보호 시험의 이름('N건 중 M건', `REASON_BUDGET_EXCEEDED`, 허용 키 4개)과 일치한다.
+- 필수 보완 1~8(PR 코멘트 원문)
+  1. 호출 수 단위: `router.run` 1회가 공급자 호출 최대 3회다(`router.py:421`). 주장당 3회와 문서 총량을 '공급자로 나간 요청 수'로 다시 센다.
+  2. 인용 행 SUPPORTED는 동일성 대조에서만 온다. CONTRADICTED가 가려지지 않게 우선순위를 둔다. CONTEXT를 NOT_MENTIONED로 바꾸지 않는다. 의견과 인용은 `link_observations`로 연결한다.
+  3. 동일성 대조 규칙: 사건번호 경계 일치, 법령명+조 근접 기준, 마스킹 본문 기준. LOCAL_ONLY·QUICK에서도 돈다.
+  4. `evidence_sources`에 Drive 링크를 넣는다. 없는 필드 `ReviewItem.authority_limitation`은 정리한다.
+  5. LOCAL_ONLY·QUICK 분기는 진입부가 아니라 현행 위치(`review.py:146`)에 둔다. 진입부에 두면 평가 측 통과 시험 T9 QUICK이 실패한다.
+  6. fail-closed 검사 함수의 위치·이름·실패 신호, `reference_sources` 항목 키, 19b 6.1 길이 한도를 적는다(`title` 제외 권고).
+  7. 주장 단위 Drive 검색 결과 중 읽지 않은 파일의 처리(색인 안 검색, 또는 기존 읽기 경로)와 거절 시 중단을 적는다.
+  8. finding이 없는 참고 의견 행의 검토 상태 저장 위치를 적는다(F2는 finding 단위 저장).
+- 사실 정정 5건: 함수명 `build_document_review_items`, `inspect_request`는 `router.run` 안, `incremental_findings_count` 이름, 상수 위치·매니페스트 키, 오프라인 CI에서는 `review_document`가 호출되지 않음.
+- 평가 측: 하네스의 가짜 Drive에 `search_fulltext` 대역을 더했다(결과 불변).
+- 다음: 메모를 고쳐 같은 PR에 다시 '검토 요청' → 평가 측 회신(승인이면 fail-closed 단위 시험 추가) → PR #32 병합 → 구현.

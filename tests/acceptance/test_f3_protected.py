@@ -127,6 +127,12 @@ class _Drive:
                 "modifiedTime": "2026-09-26T01:00:00Z", "parents": [FOLDER], "size": str(len(body)),
                 "capabilities": {"canDownload": True}, "md5Checksum": hashlib.md5(body).hexdigest(), **extra}
 
+    def search_fulltext(self, folder_ids, terms, *, max_results=200):
+        """Drive 본문 검색 대역: 모든 단어를 본문에 가진 파일(읽기 실패 대역 포함)의 ID."""
+        words = [t for t in terms if t][:5]
+        return {file_id for file_id, (_, text, _) in self.files.items()
+                if words and all(w in (text or "읽기 실패 대역") for w in words)}
+
     def download(self, item, **kwargs):
         name, text, _ = self.files[item["id"]]
         if text is None:
