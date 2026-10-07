@@ -193,8 +193,37 @@ def build_document_review_items(
             else:
                 off_status = OfficialConfirmationStatus.NOT_ASSESSED
 
-        # 참고자료 지지 상태(reference_status) - F3 전 기본값
-        ref_status = ReferenceSupportStatus.NOT_CHECKED
+        # 참고자료 지지 상태(reference_status) 및 출처 반영 (F3)
+        rag_data = getattr(doc_result, "engine_data", {}).get("rag", {})
+        drive_used = rag_data.get("drive_used", False)
+        ref_matches = rag_data.get("reference_matches", {})
+        issues = rag_data.get("issues", [])
+
+        # 인용과 연결된 Claim 확인: Claim.citation_ids에 cid가 포함된 주장들
+        claims_list = getattr(doc_result, "claims", []) or []
+        cit_claim_ids = {
+            getattr(c, "claim_id", None) or (c.get("claim_id") if isinstance(c, dict) else None)
+            for c in claims_list
+            if cid in (getattr(c, "citation_ids", None) or (c.get("citation_ids") if isinstance(c, dict) else []) or [])
+        }
+        # 또는 관찰의견 이슈 중 claim_ids 매칭
+        linked_issues = [
+            issue for issue in issues
+            if any(claim_id in cit_claim_ids for claim_id in issue.get("claim_ids", []))
+        ]
+
+        has_contradicted = any(issue.get("relationship") == "CONTRADICTS" for issue in linked_issues)
+        match_info = ref_matches.get(cid)
+
+        # 상태 우선순위: CONTRADICTED > SUPPORTED > NOT_MENTIONED > NOT_CHECKED
+        if has_contradicted:
+            ref_status = ReferenceSupportStatus.CONTRADICTED
+        elif match_info and match_info.get("status") == "SUPPORTED":
+            ref_status = ReferenceSupportStatus.SUPPORTED
+        elif drive_used or rag_data.get("sources"):
+            ref_status = ReferenceSupportStatus.NOT_MENTIONED
+        else:
+            ref_status = ReferenceSupportStatus.NOT_CHECKED
 
         # 판정 라벨(verdict_label)
         verdict_label = h_row.get("validity_verdict")
@@ -238,6 +267,10 @@ def build_document_review_items(
         evidence_sources: List[str] = []
         if v_row.get("source"):
             evidence_sources.append(str(v_row["source"]))
+        if ref_status == ReferenceSupportStatus.SUPPORTED and match_info:
+            file_id = match_info.get("file_id") or ""
+            source_title = match_info.get("source_title") or "참고자료"
+            evidence_sources.append(f"참고자료(공식 법령·판례 아님): {source_title} ({file_id})")
 
         reasoning = h_row.get("reasoning_sections")
         counteraction = h_row.get("recommended_counteraction")
