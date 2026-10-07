@@ -1576,13 +1576,20 @@ dialog.admin-detail[open] {display:flex; flex-direction:column;}
   padding: 0;
   margin: 8px 0 0;
 }
+/* TK-61: AI·보안 세부 항목 위·아래 배치 (버튼 상단, 설명 하단 수직 배치) */
 .security-finding-item {
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
+}
+.security-finding-item > .link-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 4px;
+}
+.security-finding-item > small {
+  display: block;
 }
 .security-finding-item:last-child {
   border-bottom: 0;
@@ -1656,11 +1663,22 @@ dialog.admin-detail[open] {display:flex; flex-direction:column;}
   border-radius: 0 4px 4px 0;
 }
 
-/* F2: 통합 검토 항목 표 및 행별 워크플로우 조작 스타일 */
+/* F2/TK-61: 통합 검토 항목 표 레이아웃 및 행별 워크플로우 조작 스타일 */
 .review-items-table {
   width: 100%;
   border-collapse: collapse;
   margin-top: 12px;
+}
+#reviewTable {
+  table-layout: fixed;
+}
+#reviewTable td {
+  overflow-wrap: anywhere;
+}
+#reviewTable .validity-verdict {
+  white-space: normal;
+  display: inline-block;
+  max-width: 100%;
 }
 .inline-workflow-box {
   margin-top: 10px;
