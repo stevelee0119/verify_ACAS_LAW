@@ -493,3 +493,4 @@
 - **PR #31 병합(Steve 7110273, 2026-10-07, 사용자 지시)**: F3 지시서·F3 보호 시험·기록이 통합 브랜치에 반영됐다. 같은 SHA(2924b84) CI 필수 3개 성공. 다음: 전달문 (19) 전달(사용자) → Antigravity F3 설계 보충 PR 판정.
 - 전달문 (19) 전달 완료(사용자, 2026-10-07). Antigravity F3 1단계(설계 보충 `requests/43_f3_design.md`, 브랜치 `antigravity/f3-reference-review`) 착수 대기.
 - **F3 설계 보충(PR #32 3398943) 판정: 보완 요구(승인 보류)**(2026-10-07). CI 인용과 평가 측 재실행(관련 시험 122 passed, 6 xfailed)을 근거로 했다. 필수 보완 8건: 호출 수 단위, 인용 행 상태의 근거·우선순위, 동일성 대조 규칙, 출처 링크, QUICK 분기 위치, fail-closed 함수·항목 스키마, Drive 검색 결과 처리, 참고 의견 행 검토 상태. 사실 정정은 5건이다. 하네스에 `search_fulltext` 대역을 더했다.
+- **F3 설계 보충 개정(PR #32 96a4f47) 판정: 조건부 승인(구현 착수 가능)**(2026-10-07, CI 인용과 코드 대조). 1차 필수 8건이 반영됐다. 구현 조건은 3건이다: 검사 함수 하나(`validate_claim_request_payload`, review.py, bool), `Claim.citation_ids` 연결, 마스킹 근거 경로. 평가 측은 fail-closed 단위 시험 10건을 strict xfail로 고정했다. 구현 선행요건: PR #32 병합과, 평가 측 시험을 Steve에 반영하는 평가 측 PR 병합.

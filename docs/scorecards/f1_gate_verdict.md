@@ -950,3 +950,13 @@
 - 사실 정정 5건: 함수명 `build_document_review_items`, `inspect_request`는 `router.run` 안, `incremental_findings_count` 이름, 상수 위치·매니페스트 키, 오프라인 CI에서는 `review_document`가 호출되지 않음.
 - 평가 측: 하네스의 가짜 Drive에 `search_fulltext` 대역을 더했다(결과 불변).
 - 다음: 메모를 고쳐 같은 PR에 다시 '검토 요청' → 평가 측 회신(승인이면 fail-closed 단위 시험 추가) → PR #32 병합 → 구현.
+
+# F3 설계 보충 개정 — PR #32 96a4f47 (2026-10-07) · **조건부 승인(구현 착수 가능)**
+- 근거: CI 결과 인용(필수 3개 성공)과 평가 측 코드 대조. 평가 측이 마스킹이 사건번호·조문 번호를 보존하는지 실행해 확인했다(`PIIEngine.mask_text`).
+- 1차 필수 보완 8건 반영. 로컬 경로 링크 제거(60e8266의 17곳 → 0). 주장당 Drive 검색 2회 재기재.
+- 구현 조건 3건(메모 재개정 불요, 구현 PR에서 확인)
+  1. 검사 함수는 `packages/rag_engine/review.py`의 `validate_claim_request_payload(payload) -> bool` 하나다. 예외를 내지 않고 어떤 위반이든 False다(평가 측 결정). 메모에 위치·실패 신호가 둘씩 적혀 있었고, 이름이 개정 사이에 바뀌었다.
+  2. 주장–인용 연결은 `Claim.citation_ids`(`schemas.py:395`)로 한다. 메모의 '`Citation.claim_id`'는 없는 필드다.
+  3. 마스킹 근거 경로를 `packages/pii_engine`으로 정정한다. 메모는 `llm_router/privacy.py`로 적었다.
+- 평가 측 시험: fail-closed 단위 시험 10건(strict xfail)을 위 계약으로 고정했다. `test_f3_protected.py`는 통과 9, xfail 16이다.
+- 구현 수용 기준: PROMPT_FOR_F3 5절 그대로. T6~T9·스키마·fail-closed가 XPASS여야 하고, 점수·rule_id·FindingType에 변화가 없어야 한다. 평가 측은 PII 게이트를 재측정하고 `verify_all`을 전체 모드로 돌린다.
