@@ -486,3 +486,41 @@ def test_schema_claim_level_request_keys_are_allowlisted_and_name_no_person(monk
         assert set(body) <= ALLOWED_REQUEST_KEYS, sorted(set(body) - ALLOWED_REQUEST_KEYS)
         person = [key for key in _keys(body) if PERSON_KEY.search(str(key))]
         assert not person, person
+
+
+# 설계 개정 1(PR #32 60e8266) 5.2: `packages/rag_engine/review.py` `validate_structured_claim_request(body) -> bool`.
+# 계약(평가 측 조건부 승인 조건 2): 예외를 내지 않고 bool만 돌려준다. 최상위 허용 키 4개, 항목 키 {source_id, text, page},
+# claim_text ≤ 1,000자, reference_sources ≤ 5개, 항목 text ≤ 800자. 하나라도 어기면 False(fail-closed).
+_VALID_ITEM = {"source_id": "R1", "text": "현장 점검 기준 발췌", "page": 1}
+_VALID_BODY = {"system_instructions": "두 인용을 대조한다", "claim_id": "CLM_1", "claim_text": "합성 주장 문장",
+               "reference_sources": [_VALID_ITEM]}
+_INVALID_BODIES = {
+    "extra-top-key": {**_VALID_BODY, "note": "허용 목록 밖"},
+    "person-top-key": {**_VALID_BODY, "party_name": "합성"},
+    "item-title": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "title": "합성 파일명"}]},
+    "item-owner": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "owner": "합성"}]},
+    "claim-text-too-long": {**_VALID_BODY, "claim_text": "가" * 1001},
+    "too-many-sources": {**_VALID_BODY, "reference_sources": [dict(_VALID_ITEM, source_id=f"R{i}") for i in range(6)]},
+    "item-text-too-long": {**_VALID_BODY, "reference_sources": [{**_VALID_ITEM, "text": "가" * 801}]},
+    "sources-not-list": {**_VALID_BODY, "reference_sources": "R1"},
+    "body-not-dict": [_VALID_BODY],
+}
+
+
+def _validator():
+    from packages.rag_engine import review
+
+    validate = getattr(review, "validate_structured_claim_request", None)
+    assert callable(validate), "validate_structured_claim_request가 없다(설계 개정 1 5.2)"
+    return validate
+
+
+@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_structured_claim_request가 없다(설계 개정 1 5.2)")
+def test_schema_validator_accepts_an_allowlisted_body():
+    assert _validator()(json.loads(json.dumps(_VALID_BODY))) is True
+
+
+@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_structured_claim_request가 없다(설계 개정 1 5.2)")
+@pytest.mark.parametrize("case", sorted(_INVALID_BODIES))
+def test_schema_validator_fails_closed_without_raising(case):
+    assert _validator()(json.loads(json.dumps(_INVALID_BODIES[case], ensure_ascii=False))) is False, case
