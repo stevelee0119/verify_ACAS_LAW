@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import re
 from datetime import date
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.enums import EvidenceGrade, FindingType, Severity, VerificationStatus
 from packages.common.schemas import Evidence, Finding
@@ -71,15 +71,157 @@ def paragraph_text(article_text: str, paragraph: Optional[str]) -> str:
     return article_text[start:end if end > 0 else None]
 
 
+# 한글 법령 목 열거 글자 명시 집합 (유니코드 [가-하] 10,585자 대신 정확한 14자 명시 집합 사용)
+SUBITEM_LETTERS = "가나다라마바사아자차카타파하"
+SUBITEM_LETTER_SET = frozenset(SUBITEM_LETTERS)
+
+# 목 인식 정규식: 호 표기(제N호 또는 N호)가 반드시 선행해야 함
+# '제3호 다목적'의 '다'처럼 목 뒤에 낱말이 이어지는 경우를 배제하고 조사·문장부호·공백 등으로 한정
+SUBITEM_TAIL_RE = r"(?=\s|[.,()，。:;\-]|$|의|에|에서|에게|을|를|은|는|이|가|과|와|도|만|부터|까지|로|으로|등)"
+ITEM_SUBITEM_RE = re.compile(rf"(?:제?\s*(?P<item>\d+)호)\s*(?:제?\s*(?P<subitem>[{SUBITEM_LETTERS}])목){SUBITEM_TAIL_RE}")
+
+# 목 분할 정규식: 호 본문 내부에서 목 열거 글자만을 대상으로 분할
+SUBITEM_SPLIT_RE = re.compile(rf"\n\s*(?P<letter>[{SUBITEM_LETTERS}])\.\s*")
+
+
+def extract_subitem_info(citation) -> Tuple[Optional[str], Optional[str]]:
+    """citation에서 호(item)와 목(subitem)을 추출한다.
+
+    목 글자는 명시 집합 [가나다라마바사아자차카타파하]로 한정하며,
+    반드시 호 표기(제N호 또는 N호)가 선행하는 경우에만 인정한다.
+    '항목'·'품목'·'교과목' 등 일반 명사는 제외된다.
+    """
+    raw = getattr(citation, "raw_text", "") or ""
+    item = getattr(citation, "item", None)
+    attributes = citation.attributes or {}
+    subitem = attributes.get("subitem")
+
+    m = ITEM_SUBITEM_RE.search(raw)
+    if m:
+        if not item:
+            item = m.group("item")
+        if not subitem:
+            subitem = m.group("subitem")
+
+    if subitem and subitem in SUBITEM_LETTER_SET and item:
+        return str(item), subitem
+    return None, None
+
+
+def extract_item_body(article_text: str, item: str) -> Optional[str]:
+    """조문/항 본문에서 특정 호('N.')의 본문을 추출한다."""
+    if not item or not str(item).isdigit():
+        return None
+    n = int(item)
+    # 시작: (시작 또는 개행) + n + "."
+    # 끝: 다음 호 (\n\s*\d+\.) 또는 다음 항 (\n\s*[①-⑳]) 또는 텍스트 끝
+    pattern = re.compile(rf"(?:^|\n)\s*{n}\.\s*(?P<body>.*?)(?=(?:\n\s*\d+\.\s*)|(?:\n\s*[{CIRCLED}])|\Z)", re.DOTALL)
+    m = pattern.search(article_text or "")
+    if m:
+        return m.group("body")
+    return None
+
+
+def split_subitems(item_body: str) -> Dict[str, str]:
+    """호 본문에서 [가나다라마바사아자차카타파하] 목들을 분할하여 {목글자: 목본문} 반환."""
+    if not item_body:
+        return {}
+    matches = list(SUBITEM_SPLIT_RE.finditer(item_body))
+    if not matches:
+        return {}
+    subitems: Dict[str, str] = {}
+    for i, m in enumerate(matches):
+        letter = m.group("letter")
+        start = m.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(item_body)
+        subitems[letter] = item_body[start:end].strip()
+    return subitems
+
+
 def version_outcomes(citation, versions: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     attributes = citation.attributes or {}
     claim = attributes.get("claim_text")
-    out = []
+    numbers_only = attributes.get("claim_mode") == "PARENTHETICAL_BASIS"
+    subject = attributes.get("claim_subject")
+
+    # 목 단위 특정 여부 확인 (조건 ①: [가나다라마바사아자차카타파하] 명시 집합 & 호 선행 필수)
+    item_num, subitem_letter = extract_subitem_info(citation)
+    has_subitem_context = bool(item_num and subitem_letter and claim and claim.strip())
+
+    # 1단계: 각 판본별 기본 조·항 대조 결과 및 목 단위 대조 정보 수집 (TK-62)
+    parsed_versions = []
     for version in versions:
-        outcome = compare_claim_to_provision(
-            claim, paragraph_text(version.get("text") or "", citation.paragraph),
-            numbers_only=attributes.get("claim_mode") == "PARENTHETICAL_BASIS", subject=attributes.get("claim_subject"))
-        out.append({"version": version, "outcome": outcome})
+        article_text = version.get("text") or ""
+        para_text = paragraph_text(article_text, citation.paragraph)
+        base_outcome = compare_claim_to_provision(claim, para_text, numbers_only=numbers_only, subject=subject)
+
+        subitem_verified_outcome = None
+        subitem_absent = False
+
+        if has_subitem_context:
+            item_body = extract_item_body(para_text, item_num)
+            subitems = split_subitems(item_body) if item_body else {}
+
+            if subitems:
+                # 목 분할이 정상적으로 된 경우
+                # 1) 인용된 목 본문과 직접 대조
+                if subitem_letter in subitems:
+                    res = compare_claim_to_provision(
+                        claim, subitems[subitem_letter], numbers_only=numbers_only, subject=subject
+                    )
+                    if res.get("status") == "VERIFIED":
+                        subitem_verified_outcome = res
+
+                # 2) 다른 목 본문 대조 (번호만 바뀐 개정 오탐 방지)
+                if not subitem_verified_outcome:
+                    for ltr, text in subitems.items():
+                        res = compare_claim_to_provision(claim, text, numbers_only=numbers_only, subject=subject)
+                        if res.get("status") == "VERIFIED":
+                            outcome = dict(res)
+                            matched_items = list(outcome.get("matched") or [])
+                            matched_items.append(f"{ltr}목(내용 일치)")
+                            outcome["matched"] = matched_items
+                            subitem_verified_outcome = outcome
+                            break
+
+                # 3) 어느 목에도 일치하지 않는 경우
+                if not subitem_verified_outcome:
+                    subitem_absent = True
+
+        parsed_versions.append({
+            "version": version,
+            "base_outcome": base_outcome,
+            "subitem_verified_outcome": subitem_verified_outcome,
+            "subitem_absent": subitem_absent,
+        })
+
+    # 2단계: 판본 전체에서 목 단위 VERIFIED가 하나라도 존재하는지 확인 (TK-62 요구 규칙)
+    any_subitem_verified = any(p["subitem_verified_outcome"] is not None for p in parsed_versions)
+
+    # 3단계: 최종 결과 도출
+    out = []
+    for p in parsed_versions:
+        if any_subitem_verified:
+            # 어느 판본에서든 목 단위 일치가 존재하는 경우(신설 목 소급 또는 목 이동 개정)에만 부존재를 CONTRADICTED로 둠
+            if p["subitem_verified_outcome"] is not None:
+                out.append({"version": p["version"], "outcome": p["subitem_verified_outcome"]})
+            elif p["subitem_absent"]:
+                out.append({
+                    "version": p["version"],
+                    "outcome": {
+                        "status": "CONTRADICTED",
+                        "basis": "SUBITEM_NOT_EXIST",
+                        "mismatches": [{"official": f"제{item_num}호 내 일치하는 목 규정 부존재", "claim": claim}],
+                        "matched": [],
+                    }
+                })
+            else:
+                out.append({"version": p["version"], "outcome": p["base_outcome"]})
+        else:
+            # 어느 판본에서도 목 단위 VERIFIED가 나타나지 않은 경우(호 머리글 주장 등):
+            # 모든 판본을 FT 전과 같은 기본 조·항 단위 비교 결과로 둠
+            out.append({"version": p["version"], "outcome": p["base_outcome"]})
+
     return out
 
 
@@ -243,31 +385,51 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
     results = [r for r in version_outcomes(citation, versions) if r["outcome"]["status"] in ("VERIFIED", "CONTRADICTED")]
     if len(results) < 2 and not is_not_yet_enacted:
         return None
+    # 기준일 및 현행 버전 집합 도출
+    ref_versions = [r for r in results if when and _covers(r["version"], when)]
+    current_versions = [r for r in results if not r["version"].get("effective_to")]
+    if not current_versions and results:
+        max_eff = max(r["version"].get("effective_from") or "" for r in results)
+        current_versions = [r for r in results if (r["version"].get("effective_from") or "") == max_eff]
+
+    # 동일 시행일 복수 버전 내 대조 결과 갈림 여부 검사 (선행 분기)
+    ref_split = len({r["outcome"]["status"] for r in ref_versions}) > 1
+    current_split = len({r["outcome"]["status"] for r in current_versions}) > 1
+    has_same_day_split = ref_split or current_split
+
     matching = [r for r in results if r["outcome"]["status"] == "VERIFIED"]
-    current = next((r for r in results if not r["version"].get("effective_to")), results[-1] if results else {"version": versions[-1], "outcome": {}})
-    ref = next((r for r in results if when and _covers(r["version"], when)), None)
     claim = (citation.attributes or {}).get("claim_text") or ""
     values = "; ".join(f"{_label(r['version'])}: {_official_values(r['outcome'])}" for r in results) or (f"{_label(versions[0])} (신설 조항)" if versions else "")
     base_detail = f"문서의 주장 '{claim.strip()[:80]}'을 시행 버전별 조문과 대조했다({values})."
     basis_note = reference.get("note") or ""
     legal_basis = [CRIMINAL_BASIS] if criminal else []
+    ambiguity_reason = None
 
     if is_not_yet_enacted:
         rule, status, severity = "TEMPORAL.STATUTE_NOT_YET_ENACTED", VerificationStatus.CONTRADICTED, Severity.HIGH
         title_tail = (f"행위 당시({when}) 부존재하던 신설 조항 소급 적용 (최초 시행일 {earliest_start}) — "
                       f"행위시법 원칙 위반(RETROACTIVE_APPLICATION_ERROR)")
-    elif when and ref is None:
+    elif has_same_day_split:
+        # 동일 시행일 복수 버전 결과 불일치: 기존 분기보다 선행하여 확인 요청으로 처리 (FT-b)
+        rule, status, severity = "TEMPORAL.REVIEW_NEEDED", VerificationStatus.UNVERIFIED, Severity.INFO
+        ambiguity_reason = "SAME_EFFECTIVE_DATE"
+        title_tail = "동일 시행일 복수 개정 버전 간 대조 결과 불일치(사람 확인 필요)"
+    elif when and not ref_versions:
         rule, status, severity, title_tail = ("TEMPORAL.REVIEW_NEEDED", VerificationStatus.UNVERIFIED, Severity.INFO,
                                               f"기준일 {when}에 시행된 버전을 확보하지 못했다")
-    elif when and ref in matching:
-        differs = ref is not current and current not in matching
+    elif when and ref_versions and all(r in matching for r in ref_versions):
+        ref_sample = ref_versions[0]
+        current_sample = current_versions[0] if current_versions else ref_sample
+        differs = current_versions and not any(r in matching for r in current_versions)
         rule, status, severity = "TEMPORAL.REFERENCE_VERSION_MATCH", VerificationStatus.VERIFIED, Severity.INFO
-        title_tail = f"기준일 {when} 시행 버전({_label(ref['version'])})과 일치" + (
-            f" — 현행과 다름(현행 {_official_values(current['outcome'])})" if differs else "")
-    elif when and current in matching:
+        title_tail = f"기준일 {when} 시행 버전({_label(ref_sample['version'])})과 일치" + (
+            f" — 현행과 다름(현행 {_official_values(current_sample['outcome'])})" if differs else "")
+    elif when and current_versions and all(r in matching for r in current_versions) and ref_versions and not any(r in matching for r in ref_versions):
+        ref_sample = ref_versions[0]
+        current_sample = current_versions[0]
         rule, status, severity = "TEMPORAL.CURRENT_ONLY_MATCH", VerificationStatus.SUSPICIOUS, Severity.HIGH
-        title_tail = (f"증액·개정 규정 소급 적용 오류 — 기준일 {when} 당시 법정 규정은 {_official_values(ref['outcome'])}"
-                      f"(현행 {_official_values(current['outcome'])}, RETROACTIVE_APPLICATION_ERROR)")
+        title_tail = (f"증액·개정 규정 소급 적용 오류 — 기준일 {when} 당시 법정 규정은 {_official_values(ref_sample['outcome'])}"
+                      f"(현행 {_official_values(current_sample['outcome'])}, RETROACTIVE_APPLICATION_ERROR)")
     elif not matching:
         rule, status, severity = "TEMPORAL.NO_VERSION_MATCH", VerificationStatus.CONTRADICTED, Severity.HIGH
         title_tail = f"어느 시행 버전과도 다르다({values})"
@@ -292,6 +454,8 @@ def review_temporal_application(citation, versions: List[Dict[str, Any]], refere
                               "status": r["outcome"].get("status"), "values": _official_values(r["outcome"])}
                              for r in (results or [{"version": v, "outcome": {}} for v in versions])],
                 "legal_basis": legal_basis, "human_review": True}
+    if ambiguity_reason:
+        features["ambiguity"] = ambiguity_reason
     detail = " ".join(x for x in (base_detail, basis_note, *(f"{b}." for b in legal_basis),
                                   "어느 버전이 사건에 적용되는지는 법률 판단이므로 결론을 내리지 않는다.") if x)
     return Finding.create(
@@ -320,6 +484,61 @@ def _day_before(value: str) -> Optional[str]:
         return None
 
 
+def select_versions(records: list[dict], as_of: str) -> list[dict]:
+    """지정 시점(as_of)에 시행 중인 법령 버전을 구한다.
+
+    legal_history.select_version의 검증 규칙(법령 식별 모호, 공포일>기준일, 폐지 경계, 중복 충돌)을
+    후보마다 엄격히 유지하되, 동일 시행일 복수 버전(len(choices) > 1)은 에러를 내지 않고 모두 반환한다.
+    """
+    from packages.source_adapters.legal_history import legal_date
+
+    when = legal_date(as_of)
+    if not when:
+        raise ValueError("A valid explicit reference date is required")
+    if not records:
+        raise ValueError("No historical versions were returned")
+    identities = {str(r.get("law_id") or "").lstrip("0") for r in records}
+    if len(identities) != 1 or "" in identities:
+        raise ValueError("Ambiguous or missing law identity")
+    unique: dict[tuple, dict] = {}
+    for row in records:
+        start = legal_date(row.get("effective_from"))
+        promulgated = legal_date(row.get("promulgation_date"))
+        mst = str(row.get("version_id") or "")
+        if not start or not promulgated or not mst.isdigit():
+            raise ValueError("History contains missing or invalid version dates/identifiers")
+        key = (mst, start)
+        if key in unique and unique[key] != row:
+            raise ValueError("Conflicting duplicate historical version")
+        unique[key] = row
+    eligible = [r for r in unique.values() if r["effective_from"] <= when]
+    if not eligible:
+        raise ValueError("No effective version covers the requested date")
+    latest = max(r["effective_from"] for r in eligible)
+    choices = [r for r in eligible if r["effective_from"] == latest]
+
+    # 각 후보에 대해 차단 규칙 검사
+    for chosen in choices:
+        if chosen["promulgation_date"] > when:
+            raise ValueError("Retroactive commencement requires legal review")
+        if "폐지" in str(chosen.get("amendment_type") or ""):
+            raise ValueError("Repeal boundary requires legal review")
+
+    next_dates = [r["effective_from"] for r in unique.values() if r["effective_from"] > latest]
+    out = []
+    for chosen in choices:
+        item = dict(chosen)
+        item.update(
+            requested_as_of=when, effective_until=min(next_dates) if next_dates else None,
+            version_selection="EXACT", history_complete=True,
+            version_history=[{k: r.get(k) for k in (
+                "law_id", "version_id", "effective_from", "promulgation_date", "amendment_type"
+            )} for r in sorted(unique.values(), key=lambda r: r["effective_from"])],
+        )
+        out.append(item)
+    return out
+
+
 def official_versions(adapter, citation, reference_date: Optional[str], today: str,
                       cache: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """국가법령정보 법령 연혁(eflaw)에서 기준일 시행본(구법)과 현행본을 받아 조문 버전 목록을 만든다.
@@ -327,7 +546,7 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
     기준일이 없으면 현행본과 직전 시행본을 받는다. 조회 실패는 이유와 함께 돌려주고, 버전을 지어내지 않는다.
     반환: {"status": READY|UNAVAILABLE, "versions": [...], "reason": str, "source_urls": [...]}.
     """
-    from packages.source_adapters.legal_history import legal_date, select_provision, select_version
+    from packages.source_adapters.legal_history import legal_date, select_provision
 
     law_name = getattr(citation, "law_name", None)
     if not law_name or not getattr(citation, "article", None):
@@ -348,20 +567,22 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
     earliest_start = legal_date(rows[0].get("effective_from")) if rows else None
     is_not_yet_enacted = bool(reference_date and earliest_start and earliest_start > reference_date)
     try:
-        current = select_version(rows, today)
+        current_choices = select_versions(rows, today)
         if is_not_yet_enacted:
             # 기준일 당시 아직 법률이 제정/시행되지 않은 신설 법령인 경우: 최초 시행 버전을 wanted에 포함
             wanted = [rows[0]]
         else:
-            wanted = [select_version(rows, reference_date)] if reference_date else []
+            wanted = select_versions(rows, reference_date) if reference_date else []
     except ValueError as exc:
         return {"status": "UNAVAILABLE", "versions": [], "reason": f"시행 버전을 고르지 못함({exc})"}
     if not reference_date:
         # 기준일이 없으면 현행 직전 시행본(구법)을 함께 받아 개정으로 결과가 갈리는지 본다
-        earlier = [r for r in rows if (legal_date(r.get("effective_from")) or "") < (current.get("effective_from") or "")]
+        current_start = current_choices[0].get("effective_from") or ""
+        earlier = [r for r in rows if (legal_date(r.get("effective_from")) or "") < current_start]
         if earlier:
-            wanted.append(earlier[-1])
-    wanted.append(current)
+            earlier_latest = max(legal_date(r.get("effective_from")) or "" for r in earlier)
+            wanted.extend([r for r in earlier if (legal_date(r.get("effective_from")) or "") == earlier_latest])
+    wanted.extend(current_choices)
     starts = [legal_date(r.get("effective_from")) for r in rows]
     versions, urls, seen = [], [], set()
     for selected in wanted:
@@ -385,7 +606,7 @@ def official_versions(adapter, citation, reference_date: Optional[str], today: s
         versions.append({"text": provision.get("text") or "", "effective_from": start,
                          "effective_to": _day_before(min(later)) if later else None,
                          "version_id": selected.get("version_id"), "source": "OFFICIAL_HISTORY", "source_url": url})
-    versions.sort(key=lambda v: v["effective_from"] or "")
+    versions.sort(key=lambda v: (v["effective_from"] or "", str(v.get("version_id") or "")))
     return {"status": "READY", "versions": versions, "reason": "", "source_urls": urls}
 
 
