@@ -7,8 +7,8 @@
 - 사용자 결정(2026-10-03): 공식 데이터베이스에서 확인되지 않은 2018도15313을 확인된 판례(대법원 2020다268807 판결)로 바꾼다.
   확인되지 않은 사건번호는 미러에 넣지 않는다(아래 시험이 막는다).
 - 공식 원문상 2020. 5. 12.에 카목(성과 도용)이 이미 있었으므로 원 시험의 "카목 부존재" 기대는 거두었다.
-  신설된 카목(데이터 부정사용)을 2020년 행위에 인용하는 경우의 검출은 현재 엔진이 못 한다(조 단위 버전만 비교).
-  이는 `test_new_data_ka_cited_for_2020_act_is_flagged`가 strict xfail로 고정한다(TK-34, 6차 이후 라운드).
+  신설된 카목(데이터 부정사용)을 2020년 행위에 인용하는 경우의 검출은 FT(PR #27, 목 단위 대조)로 구현됐다.
+  `test_new_data_ka_cited_for_2020_act_is_flagged`가 고정한다(TK-34, 2026-10-06 승격 — strict xfail 표시 제거).
 """
 from __future__ import annotations
 
@@ -166,7 +166,6 @@ def test_performance_misappropriation_cited_as_ka_for_2020_act_is_not_flagged():
     assert finding is None or (finding.severity != Severity.HIGH and "RETROACTIVE_APPLICATION_ERROR" not in finding.tags)
 
 
-@pytest.mark.xfail(strict=True, reason="TK-34: 목 단위 신설·이동 시점 검토 미구현 — 엔진은 조 단위 버전만 비교한다(6차 이후 라운드)")
 def test_new_data_ka_cited_for_2020_act_is_flagged():
     """신설된 카목(데이터 부정사용, 2022. 4. 20. 시행)을 2020. 5. 12. 행위에 인용하면 소급 적용 오류다.
 

@@ -10,9 +10,9 @@
   이 세션에서 국가법령정보센터에 접속할 수 없어 실제 동일 시행일 사례(예: 국가재정법 제96조)의 원문을 확보하지 못했다.
 
 표시
-- strict xfail = FT가 아직 하지 못하는 것. FT가 들어오면 XPASS가 되고, 표시는 평가 측이 지운다(구현 측은 고치지 않는다).
+- (승격 2026-10-06) FT(PR #27 ed8d7d1)에서 XPASS가 되어 평가 측이 strict xfail 표시를 지웠다. 이제 모두 통과해야 하는 시험이다.
 - 표시 없는 시험 = 지금도 통과하고 FT 뒤에도 통과해야 하는 오탐 대조·기존 동작.
-- T10의 양성 사례(신설 카목을 2020년 행위에 인용)는 기존 strict xfail
+- T10의 양성 사례(신설 카목을 2020년 행위에 인용)는 (승격된) 시험
   `tests/acceptance/test_prepared_brief_mirror_official.py::test_new_data_ka_cited_for_2020_act_is_flagged`가 맡는다.
 """
 from __future__ import annotations
@@ -157,7 +157,6 @@ def test_t11_fixture_plumbing_distinct_dates_still_flags_current_only_match(hist
     assert _is_retroactive_error(finding)
 
 
-@pytest.mark.xfail(strict=True, reason="FT-b(요청 16) 미구현: 같은 시행일 버전이 둘이면 select_version이 ValueError로 조회 전체를 미검증 처리한다")
 def test_t11_same_day_versions_disagree_both_shown_and_left_for_review(history_adapter):
     """같은 시행일 두 버전의 대조 결과가 갈리면(5배본 일치, 3배본 불일치) 하나로 확정하지 않고 확인 요청으로 둔다."""
     three, five = _versions_14_2()
@@ -174,7 +173,6 @@ def test_t11_same_day_versions_disagree_both_shown_and_left_for_review(history_a
     assert len(shown) == 2 and {v.get("status") for v in shown} == {"VERIFIED", "CONTRADICTED"}
 
 
-@pytest.mark.xfail(strict=True, reason="FT-b(요청 16) 미구현: 같은 시행일 버전이 둘이면 조회 전체가 미검증 처리된다")
 def test_t11_same_day_versions_agree_is_not_left_unverified(history_adapter):
     """같은 시행일 두 버전이 모두 주장과 맞으면 확인 요청으로 남기지 않는다(오류도 아니다)."""
     three, five = _versions_14_2()
@@ -185,7 +183,6 @@ def test_t11_same_day_versions_agree_is_not_left_unverified(history_adapter):
     assert finding is None or (finding.status == VerificationStatus.VERIFIED and not _is_retroactive_error(finding))
 
 
-@pytest.mark.xfail(strict=True, reason="FT-b(요청 16) 미구현: 같은 시행일 버전이 둘이면 조회 전체가 미검증 처리된다")
 def test_t11_result_does_not_depend_on_version_order(history_adapter):
     """한 버전을 골라 확정하지 않는다(공포일·개정 번호·응답 순서 우선 금지): 연혁 순서를 바꿔도 결과가 같다."""
     three, five = _versions_14_2()
