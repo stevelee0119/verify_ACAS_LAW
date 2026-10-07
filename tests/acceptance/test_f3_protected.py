@@ -157,7 +157,7 @@ class _Ledger:
 
 
 def _run(monkeypatch, tmp_path, brief, files, *, profile=VerificationProfile.STANDARD,
-         policy=ExternalAIPolicy.MASKED, absent_cases=()):
+         policy=ExternalAIPolicy.MASKED, absent_cases=(), batch_observations=None):
     """합성 서면 하나를 전체 파이프라인으로 돌린다. 반환: 문서 결과, 직렬화 문서, 공급자에 간 요청, 검사를 지난 요청 본문."""
     settings = replace(get_settings(), storage_root=tmp_path, rag_drive_folder_id=FOLDER, allow_network=True)
     monkeypatch.setattr(library_module, "ReferenceLibrary", lambda _settings, **kwargs: REAL_LIBRARY(
@@ -180,7 +180,8 @@ def _run(monkeypatch, tmp_path, brief, files, *, profile=VerificationProfile.STA
             sent.append(request)
             required = (request.schema or {}).get("required") or []
             if "observations" in required:
-                body = {"observations": []}
+                stage = (request.metadata or {}).get("stage")
+                body = {"observations": list(batch_observations or []) if stage == "drive_rag_advisory" else []}
                 return LLMResponse(True, text=json.dumps(body), parsed=body, provider="anthropic", model="fake")
             return LLMResponse(False, error="HTTP 400")
 
@@ -306,6 +307,28 @@ def test_t7_fixture_has_more_eligible_claims_than_the_document_limit(monkeypatch
                            {"refmany000000001": ("현장 안전점검 기준.txt",
                                                  "현장 점검에서는 난간, 안전망, 작업발판, 비계 연결 상태를 확인한다.", {})})
     assert len(_eligible(result)) > CLAIM_LIMIT_PER_DOCUMENT
+
+
+def test_t7_claim_linked_by_document_level_review_is_not_also_unreviewed(monkeypatch, tmp_path):
+    """문서 단위 대조로 연결된 주장(상한 밖 주장 포함)은 미대조 목록에 다시 들어가지 않는다: 대조 + 미대조 = 분모.
+
+    F3 구현 PR #34(5abb84e)에서 상한 밖 주장이 연결되면 linked 1 + unreviewed 14 = 15 ≠ 14로 깨졌다(평가 측 재현, 2026-10-07).
+    문서 단위 대조 단계에서만 근거 있는 합성 의견 1건을 돌려준다. 그 의견은 상한(10) 밖의 12번째 주장을 가리킨다.
+    """
+    reference = "현장 점검에서는 출입 통제 확인 의무를 매월 이행한다. 난간과 안전망은 매주 확인한다."
+    observation = {"claim_quote": "현장 점검에서 출입 통제 확인 의무를 이행하지", "source_id": "R1",
+                   "source_quote": "출입 통제 확인 의무를 매월 이행한다", "relationship": "CONTRADICTS",
+                   "explanation": "합성 의견"}
+    result, _, _, _ = _run(monkeypatch, tmp_path, MANY_CLAIMS_BRIEF,
+                           {"reflinked0000001": ("현장 안전점검 기준.txt", reference, {})},
+                           batch_observations=[observation])
+    eligible = {c["claim_id"] for c in _eligible(result)}
+    coverage = result.engine_data["rag"]["claim_coverage"]
+    ids = [item["claim_id"] for item in coverage["unreviewed"]]
+    assert coverage["linked_claims"] >= 1, "합성 의견이 주장에 연결되지 않아 시험이 성립하지 않는다"
+    assert coverage["eligible_claims"] == len(eligible)
+    assert coverage["linked_claims"] + len(ids) == len(eligible), (coverage["linked_claims"], len(ids), len(eligible))
+    assert len(ids) == len(set(ids)) and set(ids) <= eligible
 
 
 @pytest.mark.xfail(strict=True, reason="F3 미구현: 문서당 주장 상한과 REASON_BUDGET_EXCEEDED 사유가 없다(19b 5.2)")
