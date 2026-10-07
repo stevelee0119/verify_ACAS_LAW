@@ -20,7 +20,7 @@
 | 조건 | 상태 |
 |---|---|
 | (i) 개인정보: 연락처·주민등록번호 필수 게이트(누락·도달·오탐 0) | 8F-1에서 충족. **F3 측정 SHA에서 평가 측이 다시 잰다** |
-| (ii) 참고자료 발췌가 서면과 같은 마스킹·전송 전 검사를 지나는 경로의 평가 측 시험(T9 포함) | 미충족. 설계 회신 전에 평가 측이 고정한다 |
+| (ii) 참고자료 발췌가 서면과 같은 마스킹·전송 전 검사를 지나는 경로의 평가 측 시험(T9 포함) | 고정 완료(`tests/acceptance/test_f3_protected.py`, 2026-10-07). 현행 경로는 통과, 주장 단위 경로는 strict xfail |
 | (iii) F2 완료, TK-29 해소 | 충족(F2 Steve 8b70497, TK-29 5차 해소) |
 
 ## 2. 이미 정해진 것(다시 설계하지 않는다)
@@ -80,6 +80,11 @@
 | T9 `LOCAL_ONLY` 외부 호출 0 | `LOCAL_ONLY`·QUICK에서 주장 단위 경로를 포함해 공급자 호출 0. 참고자료 발췌도 서면과 같은 마스킹·`inspect_request`를 지남 | 지금 통과해야 하는 부분은 통과, 새 경로 부분은 strict xfail |
 | 요청 본문 스키마 | 허용 키 밖이면 전송 안 함(fail-closed), 사람 키 없음 — 가짜 공급자로 `LLMRouter.run` 경로에서 확인 | strict xfail |
 
+- **고정 완료(2026-10-07):** `tests/acceptance/test_f3_protected.py` — 통과 9(지금도 맞아야 하는 대조·하네스 전제), strict xfail 6(T6 SUPPORTED, T7 상한 사유·화면 표시, T8 두 분야 SUPPORTED, T9 주장 단위 경로, 스키마).
+  - 하네스: 실제 `VerificationPipeline`·`LLMRouter.run`에 가짜 Drive·가짜 공급자만 붙인다. 공식 판례 조회는 '조회 성공·결과 없음'으로 대역한다.
+  - 가짜 공급자는 참고자료 대조 요청에 빈 의견을 준다. 그래서 SUPPORTED는 인용 동일성 대조(3절 1)에서 와야 한다.
+  - 시험이 쓰는 이름은 이미 정해진 것뿐이다: `reference_status` 값, `claim_coverage` 키, `REASON_BUDGET_EXCEEDED`·허용 키 4개(19b 5.2·6.1), 화면 'N건 중 M건'(또는 'M/N').
+  - 허용 목록 밖 키의 fail-closed 단위 시험은 설계 보충이 검사 함수 위치를 정한 뒤 회신 때 더한다.
 - T1~T5(F1·F2), T2r·T6a(F1 화면), T10·T11(FT)은 계속 통과해야 한다.
 
 ## 5. 구현 수용 기준(회신 뒤 구현 PR에서 평가 측이 확인)
