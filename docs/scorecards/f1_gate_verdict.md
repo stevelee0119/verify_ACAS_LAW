@@ -960,3 +960,21 @@
   3. 마스킹 근거 경로를 `packages/pii_engine`으로 정정한다. 메모는 `llm_router/privacy.py`로 적었다.
 - 평가 측 시험: fail-closed 단위 시험 10건(strict xfail)을 위 계약으로 고정했다. `test_f3_protected.py`는 통과 9, xfail 16이다.
 - 구현 수용 기준: PROMPT_FOR_F3 5절 그대로. T6~T9·스키마·fail-closed가 XPASS여야 하고, 점수·rule_id·FindingType에 변화가 없어야 한다. 평가 측은 PII 게이트를 재측정하고 `verify_all`을 전체 모드로 돌린다.
+
+# F3 구현 — PR #34 5abb84e (2026-10-07) · **불승인(필수 보완 6건)**
+- 근거: CI 결과 인용(점수 하락 게이트·테스트 실패, Docker 성공) + 평가 측 재실행(같은 SHA, Python 3.11.15, tesseract 5.3.4).
+- 충족
+  - scorecard: dev 81.7 / holdout 79.2 / 오탐 0으로 기준선과 같다. `score_gate --strict-env` 통과.
+  - acceptance: 16 failed(전부 XPASS(strict)), 956 passed. `--runxfail`이면 F3 보호 시험 25 passed.
+  - regression 501 passed. acceptance 밖 전체 3456 passed·11 skipped·22 xfailed, 실패 0. CI 실패는 예정된 XPASS뿐이다.
+  - 구현 조건 a(검사 함수 bool)·b(`Claim.citation_ids`)를 지켰다. QUICK·LOCAL_ONLY 분기 위치가 맞다. 주장당 `router.run`은 1회다.
+- 미충족(필수)
+  1. `claim_coverage` 불변식 회귀: 상한 밖 주장이 문서 단위 대조로 연결되면 대조와 미대조에 이중으로 들어간다.
+     - 합성 재현: Steve b5d9000 1+13=14 → 5abb84e 1+14=15≠14.
+     - 보호 시험 `test_t7_claim_linked_by_document_level_review_is_not_also_unreviewed`를 추가했다(Steve 통과, 5abb84e 실패).
+  2. 주장 단위 Drive 검색 미실행: `library.client` 속성이 없어 `search_fulltext`가 호출되지 않는다. 모든 주장이 같은 `sources[:5]` 앞 800자를 받는다.
+  3. `evidence_sources`에 Drive URL이 없다(설계 1.2·2.1).
+  4. TK-09 차단 미구현: pipeline 승격 필터가 그대로라, 플래그를 켜면 주장 단위 의견이 승격 후보가 된다(기본값 꺼짐, 잠재 결함).
+  5. 평가 측 시험의 합성 문자열 '두 인용을 대조한다'를 제품 코드에 복사했다.
+  6. 보고 부정확: '83.5/81.0 유지'라고 적었으나 표준 조건 측정값은 81.7/79.2다. 출력 원문이 없다.
+- 측정 못 함: 실제 Drive·모델 대조 품질. PII 게이트 재측정과 `verify_all`은 수용 SHA에서 한다.
