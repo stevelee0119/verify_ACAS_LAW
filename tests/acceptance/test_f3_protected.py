@@ -40,6 +40,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 
+from packages.common import config as config_module  # noqa: E402
 from packages.common.config import get_settings  # noqa: E402
 from packages.common.enums import ExternalAIPolicy, VerificationProfile  # noqa: E402
 from packages.common.storage import sha256_file  # noqa: E402
@@ -63,6 +64,9 @@ ALLOWED_REQUEST_KEYS = {"system_instructions", "claim_id", "claim_text", "refere
 PERSON_KEY = re.compile(r"name|party|client|suspect|victim|owner|author|user|email|이름|성명|당사자|피해자|의뢰인",
                         re.IGNORECASE)
 CLAIM_LIMIT_PER_DOCUMENT, MODEL_CALLS_PER_CLAIM, EXCERPT_CHARS = 10, 3, 4000  # 19b 5.2
+# TK-63(나): 문서당 주장 상한은 설정값이다. 이 시험은 상한 10, 시간 예산 넉넉히, 비용 예산 끔으로 고정해 잰다.
+CLAIM_BUDGET_ENV = {"LV_RAG_CLAIM_MAX_PER_DOCUMENT": str(CLAIM_LIMIT_PER_DOCUMENT),
+                    "LV_RAG_CLAIM_BUDGET_SECONDS": "600", "LV_RAG_CLAIM_BUDGET_USD": "0"}
 
 # 분야 A(산업안전·손해배상)와 분야 B(주택임대차·보증금). 사건번호는 형식만 맞춘 합성 값이다.
 DOMAINS = {
@@ -160,6 +164,9 @@ class _Ledger:
 def _run(monkeypatch, tmp_path, brief, files, *, profile=VerificationProfile.STANDARD,
          policy=ExternalAIPolicy.MASKED, absent_cases=(), batch_observations=None):
     """합성 서면 하나를 전체 파이프라인으로 돌린다. 반환: 문서 결과, 직렬화 문서, 공급자에 간 요청, 검사를 지난 요청 본문."""
+    for key, value in CLAIM_BUDGET_ENV.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr(config_module, "_settings", None)  # 위 설정값을 읽은 Settings로 다시 만든다
     settings = replace(get_settings(), storage_root=tmp_path, rag_drive_folder_id=FOLDER, allow_network=True)
     monkeypatch.setattr(library_module, "ReferenceLibrary", lambda _settings, **kwargs: REAL_LIBRARY(
         settings, client_factory=_Drive(files), extractor=_extract, **kwargs))
