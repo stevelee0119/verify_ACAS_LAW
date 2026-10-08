@@ -230,6 +230,36 @@
    - **인명 키 원천 배제**:
      - `PERSON_KEY = re.compile(r"name|party|client|suspect|victim|owner|author|user|email|이름|성명|당사자|피해자|의뢰인", re.IGNORECASE)`에 매칭되는 키를 본문 전체에서 원천 배제합니다.
 
+### 5.2 개정(TK-63): 주장 선별 규칙 및 예산형 상한 (사용자 결정 (나)안)
+
+기존 설계 5.2의 고정 10개 상한(`CLAIM_LIMIT_PER_DOCUMENT = 10`)은 문서 앞쪽의 형식적 문장이 상한을 소진하여 후반부의 중요 인용 주장이 누락되는 한계(TK-63)가 확인되어, 아래와 같이 **결정적 선별 규칙**과 **예산형 상한(개수·시간·비용)**으로 개정합니다.
+
+1. **선별 규칙(결정적 우선순위)**:
+   - 대상 주장(`DOCUMENT_META`·`ADVERSARIAL_INSTRUCTION` 제외)을 다음 5단계 순위로 정렬하며, 동일 순위 내에서는 원래 문서 순서를 유지(stable sort)합니다:
+     - ① **인용 연결 주장**: `citation_ids`가 존재하는 주장 (최우선 대조)
+     - ② **법률효과·요건 주장**: `type`이 `LEGAL_RULE`·`LEGAL_ARGUMENT`이거나 요건사실 값(`amount` 또는 `asserted_date`)이 존재하는 주장
+     - ③ **사실 주장**: `type == "FACT"`인 주장 (공백 제외 15자 이상)
+     - ④ **그 밖의 주장**: `OPINION` 등 일반 주장 (공백 제외 15자 이상)
+     - ⑤ **형식 문장**: 공백 제외 길이가 15자 미만인 주장(예: '다 음' 등). 단, ①·②에 해당하는 경우 ⑤로 강등하지 않습니다.
+   - 규칙 판 식별자: `"TK63_CITATION_LEGAL_FACT_LENGTH_V1"`
+   - 순위 판정에는 기존 주장의 메타데이터 필드만을 사용하며, 특정 서면이나 개별 규정명에 특화된 하드코딩 규칙을 일절 배제합니다.
+
+2. **예산형 상한(설정값 기반 제어)**:
+   - 고정 상수 `CLAIM_LIMIT_PER_DOCUMENT`를 폐지하고, `Settings` 객체 및 환경변수로 제어되는 동적 예산 상한을 도입합니다:
+     - `rag_claim_max_per_document` (`LV_RAG_CLAIM_MAX_PER_DOCUMENT`): 기본값 30 (허용범위 1~100), 문서당 대조 주장 수의 절대 상한
+     - `rag_claim_budget_seconds` (`LV_RAG_CLAIM_BUDGET_SECONDS`): 기본값 240, 주장 단위 단계의 경과 시간 예산 (초)
+     - `rag_claim_budget_usd` (`LV_RAG_CLAIM_BUDGET_USD`): 기본값 1.00, 주장 단위 단계의 외부 모델 누적 비용 예산 ($) (0이면 비용 한도 비활성화)
+   - **판정 시점**: 진행 중인 호출을 강제 중단하지 않고, **다음 주장을 공급자로 전송하기 직전에** 개수·시간·비용 한도 초과 여부를 사전 검사합니다.
+   - **예산 초과 처리**: 예산 제한으로 대조되지 못한 주장은 분모(`eligible_claims`)에 온전히 보존되며, 사유를 `"REASON_BUDGET_EXCEEDED"`로 기록하여 T7 불변식(`eligible_claims == linked_claims + len(unreviewed)`)을 엄격히 충족합니다.
+   - 주장당 최대 3회 공급자 요청(`MODEL_CALLS_PER_CLAIM = 3`), 최대 4,000자 발췌(`EXCERPT_CHARS = 4000`), 스키마 검증(`validate_claim_request_payload`)은 그대로 유지합니다.
+
+3. **기록 (`claim_coverage`)**:
+   - `claim_coverage`에 `selection_rule`과 `budget` 객체를 추가 기록합니다:
+     - `budget.max_per_document`: 적용된 최대 주장 수 상한
+     - `budget.budget_seconds`: 적용된 시간 예산
+     - `budget.budget_usd`: 적용된 비용 예산
+     - `budget.halt_reason`: 대조 중단 원인 (`"COUNT"`, `"TIME"`, `"COST"`, 또는 정상 완주 시 `None`)
+
 ### 5.3 공급자로 나간 요청 수 단위 엄격 상한 산식
 - **상한 단위 정의**:
   - 19b 5.2에 따라 상한의 기준 단위는 **'공급자로 나간 요청 수'** (일시 장애 재시도 및 대체 포함 합산)입니다.
