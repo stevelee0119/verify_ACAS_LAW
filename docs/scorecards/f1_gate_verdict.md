@@ -1088,3 +1088,21 @@
 - 병합 전 같은 SHA(97d597a)에서 CI 필수 3개와 CodeQL이 성공했다(CI 인용). 봉인 기준 충족, 0.10.0 유지.
 - 남은 것: 배포 확인(`/api/health` commit 1f38751), 배포 직후 온라인 점검(서면9, 직전 19/23; 새 실패 0이면 정상, RAG-1·`claim_coverage.budget`·`selection_rule` 확인), 태그 `release-20261009` → 1f38751.
 
+- 배포 확인(health commit 1f38751·db ok). 배포 직후 온라인 점검 서면9 **19/23**(run_1ed170a0c2e44cd2, 새 실패 0) → 릴리스 정상. 선별·예산 기록 동작 확인, RAG-1은 새 원인(인용 주장 응답 최상위 형식 위반)으로 미달 → TK-65. 태그: 사용자 결정(2026-10-09)으로 버전 유지 릴리스에는 달지 않는다(`release-20261009` 없음).
+
+# TK-65 구현 — PR #44 a54cf40 (2026-10-09) · **수용**
+- 근거: CI 결과 인용(같은 SHA 점수 하락 게이트·테스트·Docker OCR 성공) + 평가 측 재실행(같은 SHA, Python 3.11.15, tesseract 5.3.4 kor, 오프라인).
+- 요구 충족(diff 검토)
+  - 4.1 `RAG_REVIEW_SYSTEM_PROMPT`에 응답 최상위 형식(`observations` 키 객체 하나, 의견 하나여도 배열) 문장과 전체 `SCHEMA`. 등록 프롬프트 검사 통과.
+  - 4.2 요청 스키마 `ENVELOPE_SCHEMA` 유지.
+  - 4.3 `providers.py` 4곳이 `_exc_error`로 빈 예외 메시지 대신 `PROVIDER_EXCEPTION: <예외 형식>`을 남긴다. 라우터 재시도 판정(`^HTTP 429|5xx`)과 겹치지 않아 재시도 동작은 같다.
+  - 4.4 `claim_coverage.budget`에 `spent_usd`(예산 판정에 쓴 합계)·`uncertain_usd`(`RESERVED_UNCERTAIN` 합계). 판정 방식 그대로.
+  - 4.5 합성 시험 6종(`tests/test_tk65_envelope_schema.py`): 프롬프트·등록, 어댑터 4종 빈 예외, 비용 2키.
+- 수용 측정
+  - scorecard 81.7/79.2/오탐 0(기준 131313b와 같음).
+  - `verify_all --base 131313b` 전체 모드 **종료 0**: acceptance 989·원장 501·전체 3,272·브라우저 197, 실제 실패 0, strict XPASS 0. 점수·회귀·하드코딩·시험 편집·보호 경로·버전 정책 통과.
+  - 연락처·주민등록번호 필수 게이트 1·2·3판: RRN 0, PHONE 0·0·1/54(국가번호 괄호, 기존과 같음), 라우터 도달 0, 오탐 0.
+  - 관련 시험(F3·RAG·개인정보 54개 파일 + 신규 + regression + acceptance): 2,131 passed·1 skipped·58 xfailed, 실패 0.
+- 판정에 영향 없는 지적: PR 본문의 티켓 파일 이름이 실제(`TK-65_f3_claim_response_envelope_schema.md`)와 다르다. 구현 측 성적표(83.5/81.0)는 Python 3.14.6·OCR 없음 조건이라 표준 조건과 비교하지 않는다. 비용 합산 한 줄의 조건식이 길다(동작 문제 없음, 선택 정리).
+- 측정 못 함: 온라인 효과(인용 주장 형식 실패 감소, RAG-1). 배포 직후 온라인 점검에서 본다.
+- 병합 경로: strict xfail 승격이 없어 PR #44를 Steve에 바로 병합한다(사용자). 릴리스 전 새 봉인 세트 채점이 필요하다(TK-64 수용 뒤 함께 묶는 것을 제안).
