@@ -178,3 +178,80 @@ def test_fp_elimination_title_with_trailing_words_not_treated_as_section(tmp_pat
     findings = check_document(doc)
     dup_findings = [f for f in findings if f.confidence_features.get("rule_id") == "EVI.EVIDENCE_NUMBER_DUPLICATE"]
     assert len(dup_findings) == 0
+
+
+# ======================================================================================
+# 3. 개정 1 보완 시험 (본문 전용 결함 유지, 괄호 부연 구역 인식 및 대조군 단언)
+# ======================================================================================
+
+def test_positive_duplicate_in_prose_when_no_section_exists(tmp_path):
+    """[합성 보완 1] 목록 구역이 없는 서면의 본문 문장에서 같은 번호를 서로 다른 증거에 붙이면 중복(A)을 계속 잡는다."""
+    doc = _doc(tmp_path, "dup_in_prose_no_section", [
+        ("h", "준 비 서 면"),
+        ("p", "1. 원고의 주장 사실입니다."),
+        ("p", "갑 제1호증 견적서 2026. 1. 10. 기재에 따르면 대금 산정이 확인됩니다."),
+        ("p", "2. 추가 증거 설명입니다."),
+        ("p", "갑 제1호증 발주서 2026. 2. 15. 기재에 따르면 주문이 확정되었습니다."),  # 갑 제1호증 서로 다른 서증명 중복
+        ("p", "2026. 5. 1."),
+        ("p", "원고 소송대리인 변호사 대리 (인)")
+    ])
+    findings = check_document(doc)
+    dup_findings = [f for f in findings if f.confidence_features.get("rule_id") == "EVI.EVIDENCE_NUMBER_DUPLICATE"]
+    assert len(dup_findings) >= 1, f"목록 구역이 없어도 본문 행 간의 중복은 A등급으로 잡아야 함: {[f.title for f in findings]}"
+    assert "갑 제1호증" in dup_findings[0].title
+    assert str(dup_findings[0].evidence_grade) == "A"
+
+
+def test_positive_invalid_date_in_prose_detected(tmp_path):
+    """[합성 보완 2] 본문 문장 속 증거에 기재된 달력에 없는 작성일(2월 30일)을 계속 A등급으로 잡는다."""
+    doc = _doc(tmp_path, "invalid_date_in_prose", [
+        ("h", "답 변 서"),
+        ("p", "1. 피고의 사실관계 설명입니다."),
+        ("p", "을 제2호증 사실확인서 2026. 2. 30. 기재와 같이 피고는 합의를 마쳤습니다."),  # 2월 30일: 존재하지 않는 날짜
+        ("p", "2026. 6. 1."),
+        ("p", "피고 변호인 변호사 법률 (인)")
+    ])
+    findings = check_document(doc)
+    date_findings = [f for f in findings if f.confidence_features.get("rule_id") == "EVI.EVIDENCE_DATE_INVALID"]
+    assert len(date_findings) >= 1, f"본문 행의 달력에 없는 작성일은 A등급으로 잡아야 함: {[f.title for f in findings]}"
+    assert "2026. 2. 30" in date_findings[0].title
+    assert str(date_findings[0].evidence_grade) == "A"
+
+
+def test_fp_elimination_section_with_parenthesis_annotation_ignores_body_mention(tmp_path):
+    """[합성 보완 3] 괄호 부연 제목('입증방법 (추가 제출)') 아래 목록을 구역으로 알아보고, 그 번호의 본문 언급은 중복으로 잡지 않는다."""
+    doc = _doc(tmp_path, "parenthesis_annotation_section", [
+        ("h", "준 비 서 면"),
+        ("p", "1. 원고의 반박 주장입니다."),
+        ("p", "갑 제1호증 물품공급계약서 2026. 3. 1. 내용에 따라 이행을 완료하였습니다."),  # 본문 언급
+        ("p", "입증방법 (추가 제출)"),  # 괄호 부연 제목
+        ("p", "1. 갑 제1호증 물품공급계약서"),
+        ("p", "2. 갑 제2호증 입금확인증"),
+        ("p", "2026. 7. 1."),
+        ("p", "원고 변호사 법무 (인)")
+    ])
+    rows = exhibit_rows(doc)
+    section_rows = [r for r in rows if r.get("in_section")]
+    assert len(section_rows) >= 2, f"괄호 부연 구역 아래의 목록이 in_section으로 파싱되어야 함 (실제 section 행: {len(section_rows)})"
+
+    findings = check_document(doc)
+    dup_findings = [f for f in findings if f.confidence_features.get("rule_id") == "EVI.EVIDENCE_NUMBER_DUPLICATE"]
+    assert len(dup_findings) == 0, f"괄호 부연 구역의 번호와 본문 언급 간 중복 오탐이 없어야 함: {[f.title for f in dup_findings]}"
+
+
+def test_exhibit_section_regex_contrasts():
+    """[합성 보완 4] _EXHIBIT_SECTION_HEAD_RE 정규식 대조군 2가지가 구역 제목이 아님을 단언하고 부연 구역 제목은 허용됨을 확인한다."""
+    from packages.claim_engine.evidence_consistency import _EXHIBIT_SECTION_HEAD_RE
+
+    # 대조군 1: 번호와 제목 사이에 다른 말이 낀 줄은 구역 제목이 아니다.
+    assert not _EXHIBIT_SECTION_HEAD_RE.search("3. 내부 기준과 입증방법")
+
+    # 대조군 2: 제목 뒤에 조사로 이어지는 문장은 구역 제목이 아니다.
+    assert not _EXHIBIT_SECTION_HEAD_RE.search("입증방법에 관하여 본다.")
+
+    # 정상 부연 제목 (종전 동작 허용)
+    assert _EXHIBIT_SECTION_HEAD_RE.search("입증방법 (추가 제출)")
+    assert _EXHIBIT_SECTION_HEAD_RE.search("입증방법: 아래와 같음")
+    assert _EXHIBIT_SECTION_HEAD_RE.search("다. 입증방법")
+    assert _EXHIBIT_SECTION_HEAD_RE.search("(1) 입증방법")
+
