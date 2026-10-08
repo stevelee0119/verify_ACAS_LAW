@@ -8,7 +8,7 @@
 0. 규칙(AGENTS.md): 리베이스·강제 푸시 금지(병합 커밋). 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청').
    푸시 전 python scripts/check_test_edits.py --base origin/Steve_ACASiaLAW 출력을 보고에 붙인다.
 
-[A] TK-63 배포 완료(main 1f38751). TK-65 Steve 병합 완료(a31b561), 릴리스 PR #45 진행 중. 할 일 없음.
+[A] TK-63 배포 완료(main 1f38751). TK-65 릴리스 PR #45 병합(main 4c18528). 할 일 없음.
 
 [B] TK-64 — PR #43(1276504) 불승인(소규모 2). 같은 브랜치 antigravity/tk64-exhibit-rows에서 보완한다.
     티켓: docs/handoff/TK-64_exhibit_list_prose_rows_duplicate_number.md 7절(개정 1). 원인 기준은 평가 측 티켓 예시였다(평가 측 자기 정정).
