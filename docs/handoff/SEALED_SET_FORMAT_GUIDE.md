@@ -262,6 +262,7 @@ print("\n".join(["[오류] " + e for e in errors] + ["[경고] " + w for w in wa
 - 인젝션 항목은 숨긴 위치(메타데이터·첨부·폭 없는 문자 등)에 따라 글 추출로 보이지 않을 수 있다. 그래서 PDF 글 대조에서 뺐다. 숨긴 방식은 PDF 뷰어와 메타데이터 보기로 직접 확인한다.
 - 줄바꿈이나 하이픈으로 토큰이 끊겨 'PDF 글에 없음'이 나오면, 토큰을 끊기지 않는 부분으로 줄인다.
 - 이 점검의 출력은 건수·오류 수만 사용자에게 보고한다. 문서 문장과 토큰은 보고에 쓰지 않는다.
+- F3 회차(2026-10-08)부터는 구성 기준(문서 수·결함 수·문서별 FP-TRAP·인젝션·LAW-MIS)까지 오류로 잡는 판을 쓴다: [PROMPT_FOR_CODEX_SEALED_SET_F3.md](PROMPT_FOR_CODEX_SEALED_SET_F3.md) 6절. 작성 세션은 채점하지 않는다.
 
 ## 7. 전달·보관
 - 폴더 전체를 사용자에게 넘긴다. 사용자는 저장소 밖에 보관한다(예: `~/sealed/sealed_<YYYYMMDD>/`).
@@ -280,6 +281,7 @@ LV_ALLOW_NETWORK=0 python scripts/scorecard.py --sets holdout --sealed-dir ~/sea
 ## 9. 사용 뒤
 - 점수를 확인한 세트는 다시 봉인 시험으로 쓰지 않는다. 개발용으로 옮기고, 다음 탐지 변경 릴리스 전에 새 세트로 교체한다(AGENT_ROLES 4절).
 - 개발용으로 옮길지와 그 시점은 사용자가 정한다. 옮기기 전까지는 계속 저장소 밖에 둔다.
+- 옮기는 위치: `tests/fixtures/retired_sealed/<폴더 이름>/`(PDF·`ground_truth.json`·`match_spec.json`만, `.sealed_out/` 제외). 고정 시험·기준선에는 섞지 않는다([README](../../tests/fixtures/retired_sealed/README.md)).
 
 ## 10. 측정 한계
 - 오프라인(`LV_ALLOW_NETWORK=0`) 채점은 AI 작성 판별(모델), 공식 DB 대조, Drive 대조를 재지 못한다.

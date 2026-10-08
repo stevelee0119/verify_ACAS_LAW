@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 
 from jsonschema import ValidationError, validate
 
@@ -65,7 +66,6 @@ PERSON_KEY = re.compile(
     r"name|party|client|suspect|victim|owner|author|user|email|이름|성명|당사자|피해자|의뢰인",
     re.IGNORECASE,
 )
-CLAIM_LIMIT_PER_DOCUMENT = 10
 MODEL_CALLS_PER_CLAIM = 3
 EXCERPT_CHARS = 4000
 
@@ -238,6 +238,44 @@ def _claim_salient_words(text: str, limit: int = 10) -> list[str]:
     return words
 
 
+def select_claims_for_review(eligible_claims: list[dict]) -> tuple[list[dict], str]:
+    """TK-63(나): 대상 주장을 결정적 선별 규칙(5단계 우선순위)으로 정렬합니다. (한국어 주석)
+
+    우선순위:
+    1. 인용이 연결된 주장 (citation_ids 있음)
+    2. 법률효과·요건 주장 (type이 LEGAL_RULE·LEGAL_ARGUMENT) 또는 요건사실 값 (amount·asserted_date)이 있는 주장
+    3. 사실 주장 (type == "FACT", 공백 제외 15자 이상)
+    4. 그 밖의 주장 (OPINION 등, 공백 제외 15자 이상)
+    5. 공백 제외 15자 미만의 형식 문장 (단, 1·2순위 해당 시 제외되지 않음)
+    같은 순위 내에서는 원래 문서 순서(안정 정렬)를 보존합니다.
+    """
+    rule_name = "TK63_CITATION_LEGAL_FACT_LENGTH_V1"
+
+    def _rank(claim: dict) -> int:
+        has_citation = bool(claim.get("citation_ids"))
+        c_type = claim.get("type")
+        has_legal_or_facts = (
+            c_type in ("LEGAL_RULE", "LEGAL_ARGUMENT")
+            or bool(claim.get("amount"))
+            or bool(claim.get("asserted_date"))
+        )
+        if has_citation:
+            return 1
+        if has_legal_or_facts:
+            return 2
+
+        text = str(claim.get("text") or "")
+        text_no_space = re.sub(r"\s+", "", text)
+        if len(text_no_space) < 15:
+            return 5
+
+        if c_type == "FACT":
+            return 3
+        return 4
+
+    return sorted(eligible_claims, key=_rank), rule_name
+
+
 def review_document(result, library, router, context, pii):
     review = {"status": "UNVERIFIED", "advisory_only": True, "source_quotes_validated": False,
               "model_executed": False, "model_response_accepted": False, "review_completed": False,
@@ -347,17 +385,42 @@ def review_document(result, library, router, context, pii):
             if b_obs:
                 all_observations.extend(b_obs)
 
-    # 5. 주장 단위 검색 및 대조 (F3b, 19b 5.2/6.1)
+    # 5. 주장 단위 검색 및 대조 (F3b, 19b 5.2/6.1, TK-63 개정 1)
+    from packages.common.config import get_settings
+    settings = get_settings()
+    max_claims = getattr(settings, "rag_claim_max_per_document", 30)
+    budget_seconds = getattr(settings, "rag_claim_budget_seconds", 240.0)
+    budget_usd = getattr(settings, "rag_claim_budget_usd", 1.00)
+
     claim_observations = []
     unreviewed_claims_map = {}
 
-    bounded_claims = eligible[:CLAIM_LIMIT_PER_DOCUMENT]
-    exceeded_claims = eligible[CLAIM_LIMIT_PER_DOCUMENT:]
-    for ec in exceeded_claims:
-        ec_id = ec.get("claim_id")
-        if ec_id:
-            unreviewed_claims_map[ec_id] = "REASON_BUDGET_EXCEEDED"
-    for claim_obj in bounded_claims:
+    sorted_claims, selection_rule = select_claims_for_review(eligible)
+
+    bounded_claims = []
+    exceeded_claims = []
+    halt_reason = None
+
+    start_mono = time.monotonic()
+    accumulated_cost_usd = 0.0
+
+    for idx, claim_obj in enumerate(sorted_claims):
+        # 다음 주장을 보내기 전에 개수·시간·비용 예산 확인 (TK-63 3.2절, 한국어 주석)
+        if len(bounded_claims) >= max_claims:
+            halt_reason = "COUNT"
+            exceeded_claims.extend(sorted_claims[idx:])
+            break
+        if (time.monotonic() - start_mono) >= budget_seconds:
+            halt_reason = "TIME"
+            exceeded_claims.extend(sorted_claims[idx:])
+            break
+        if budget_usd > 0 and accumulated_cost_usd >= budget_usd:
+            halt_reason = "COST"
+            exceeded_claims.extend(sorted_claims[idx:])
+            break
+
+        bounded_claims.append(claim_obj)
+
         c_id = claim_obj.get("claim_id")
         c_raw_text = claim_obj.get("text", "")
         if not c_id:
@@ -444,6 +507,8 @@ def review_document(result, library, router, context, pii):
         ))
         result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in c_outcome.executions)
         executed_any |= bool(c_outcome.executions or c_outcome.used)
+        if c_outcome and c_outcome.executions:
+            accumulated_cost_usd += sum(float(getattr(e, "cost_usd", 0.0) or 0.0) for e in c_outcome.executions)
 
         c_accepted = bool(c_outcome.used and not c_outcome.quarantined)
         accepted_any |= c_accepted
@@ -460,6 +525,11 @@ def review_document(result, library, router, context, pii):
                 unreviewed_claims_map.setdefault(c_id, "NOT_LINKED_TO_SELECTED_EXCERPTS")
         else:
             unreviewed_claims_map.setdefault(c_id, "MODEL_UNAVAILABLE")
+
+    for ec in exceeded_claims:
+        ec_id = ec.get("claim_id")
+        if ec_id:
+            unreviewed_claims_map[ec_id] = "REASON_BUDGET_EXCEEDED"
 
     # 서증 원문 대조 팩트체크 (갑3호증 취업규칙, 갑7호증 조사보고서, 갑10호증 노동위 판정서 등)
     ex_obs = _check_exhibit_facts(document, sources)
@@ -518,6 +588,13 @@ def review_document(result, library, router, context, pii):
         "linked_claims": len(linked_ids),
         "unreviewed": unreviewed_items,
         "all_claims_verified": len(linked_ids) == len(eligible_set) and bool(eligible_set),
+        "selection_rule": selection_rule,
+        "budget": {
+            "max_per_document": max_claims,
+            "budget_seconds": budget_seconds,
+            "budget_usd": budget_usd,
+            "halt_reason": halt_reason,
+        },
     }
 
     review["batches_evaluated"] = len(batches)
