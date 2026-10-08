@@ -117,6 +117,13 @@ def _checked(response: "LLMResponse", *, truncated: bool, limit: int) -> "LLMRes
     return response
 
 
+def _exc_error(exc: Exception) -> str:
+    """예외 메시지가 비어 있으면 예외 형식 이름을 오류 문구로 남긴다 (TK-65)."""
+    msg = str(exc).strip()
+    return msg if msg else f"PROVIDER_EXCEPTION: {type(exc).__name__}"
+
+
+
 class NullProvider(LLMProvider):
     """Provider가 없거나 LOCAL_ONLY 정책에서 사용 가능한 모델이 없을 때 사용한다."""
 
@@ -193,7 +200,7 @@ class OpenAIProvider(LLMProvider):
                                    error=f"HTTP {response.status_code}: {response.text[:200]}")
             data = response.json()
         except Exception as exc:
-            return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
+            return LLMResponse(False, provider=self.name, model=self.config.model, error=_exc_error(exc))
         usage = data.get("usage", {})
         choice = data["choices"][0]
         return _checked(LLMResponse(
@@ -257,7 +264,7 @@ class AnthropicProvider(LLMProvider):
                                    error=f"HTTP {response.status_code}: {response.text[:200]}")
             data = response.json()
         except Exception as exc:
-            return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
+            return LLMResponse(False, provider=self.name, model=self.config.model, error=_exc_error(exc))
         text = "".join(block.get("text", "") for block in data.get("content", []))
         usage = data.get("usage", {})
         return _checked(LLMResponse(
@@ -304,7 +311,7 @@ class GeminiProvider(LLMProvider):
                                    error=f"HTTP {response.status_code}: {response.text[:200]}")
             data = response.json()
         except Exception as exc:
-            return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
+            return LLMResponse(False, provider=self.name, model=self.config.model, error=_exc_error(exc))
         candidates = data.get("candidates") or []
         text = ""
         if candidates:
@@ -370,7 +377,7 @@ class LocalLLMProvider(LLMProvider):
                                    error=f"HTTP {response.status_code}")
             data = response.json()
         except Exception as exc:
-            return LLMResponse(False, provider=self.name, model=self.config.model, error=str(exc))
+            return LLMResponse(False, provider=self.name, model=self.config.model, error=_exc_error(exc))
         return LLMResponse(
             ok=True,
             text=data["choices"][0]["message"]["content"],
