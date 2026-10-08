@@ -41,7 +41,8 @@ RAG_REVIEW_SYSTEM_PROMPT = (
     "예비적·가정적 주장과 별도 법률상 전제의 청구액 차이를 곧바로 산술 모순으로 판단하지 마라. "
     "무관하거나 근거가 없으면 observations를 빈 배열로 반환하라. URL이나 도구 호출은 출력하지 마라. "
     "제시된 참고자료와 관련된 핵심 검토 의견을 충실히 작성하고, explanation은 두 문장 이내로 쓰고 JSON 객체 하나로만 답하라. "
-    "출력 항목의 형식: " + json.dumps(ITEM_SCHEMA, ensure_ascii=False)
+    "응답 최상위는 반드시 observations 키를 가진 객체 하나여야 하며, 검토 의견이 단 하나여도 observations 배열에 넣어 반환하라. "
+    "출력 형식: " + json.dumps(SCHEMA, ensure_ascii=False)
 )
 
 
@@ -403,6 +404,7 @@ def review_document(result, library, router, context, pii):
 
     start_mono = time.monotonic()
     accumulated_cost_usd = 0.0
+    accumulated_uncertain_usd = 0.0
 
     for idx, claim_obj in enumerate(sorted_claims):
         # 다음 주장을 보내기 전에 개수·시간·비용 예산 확인 (TK-63 3.2절, 한국어 주석)
@@ -508,7 +510,12 @@ def review_document(result, library, router, context, pii):
         result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in c_outcome.executions)
         executed_any |= bool(c_outcome.executions or c_outcome.used)
         if c_outcome and c_outcome.executions:
-            accumulated_cost_usd += sum(float(getattr(e, "cost_usd", 0.0) or 0.0) for e in c_outcome.executions)
+            for e in c_outcome.executions:
+                c_val = float(getattr(e, "cost_usd", 0.0) if hasattr(e, "cost_usd") else (e.get("cost_usd", 0.0) if isinstance(e, dict) else 0.0) or 0.0)
+                c_st = str(getattr(e, "cost_status", "") if hasattr(e, "cost_status") else (e.get("cost_status", "") if isinstance(e, dict) else ""))
+                accumulated_cost_usd += c_val
+                if c_st == "RESERVED_UNCERTAIN":
+                    accumulated_uncertain_usd += c_val
 
         c_accepted = bool(c_outcome.used and not c_outcome.quarantined)
         accepted_any |= c_accepted
@@ -594,6 +601,8 @@ def review_document(result, library, router, context, pii):
             "budget_seconds": budget_seconds,
             "budget_usd": budget_usd,
             "halt_reason": halt_reason,
+            "spent_usd": round(accumulated_cost_usd, 4),
+            "uncertain_usd": round(accumulated_uncertain_usd, 4),
         },
     }
 
