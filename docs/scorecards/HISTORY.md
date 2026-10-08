@@ -517,3 +517,4 @@
 - TK-63 릴리스용 봉인 세트 작성 프롬프트: `docs/handoff/PROMPT_FOR_CODEX_SEALED_SET_TK63.md`(F3판 기반, 작성 세션의 GitHub 열람 금지 명시, 폴더 이름 겹침 방지, 2~8쪽·긴 서면 1건 이상). 채점 운영본은 `main` 9192b44.
 - 전달문 (28) 전달 완료(사용자, 2026-10-08). Antigravity TK-63 보완(PR #40 같은 브랜치) 대기.
 - **TK-63 릴리스용 새 봉인 세트 작성 완료(사용자 보고, 2026-10-08, 내용 비열람)**: `PROMPT_FOR_CODEX_SEALED_SET_TK63.md`로 새 Codex 격리 세션이 작성. 채점은 TK-63 수용·Steve 반영 뒤 운영본 `main` 9192b44와 후보를 같은 조건으로 한다.
+- 봉인 세트 자체 점검 프롬프트(Codex, 저장소 미연결 새 세션): `docs/handoff/PROMPT_FOR_CODEX_SEALED_SELFCHECK.md`. 기존 점검에 더해 폴더 구성(허용 파일만)·저장소 밖 여부·세트 지문(SHA-256 앞 16자리)을 낸다. 합성 세트로 확인: 정상 오류 0, 여분 파일·`.sealed_out/` 오류 1, 저장소 안 폴더 오류.
