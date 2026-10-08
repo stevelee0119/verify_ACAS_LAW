@@ -102,6 +102,16 @@ class Settings:
     rag_inventory_max_files: int = field(default_factory=lambda: max(1, min(100000, int(os.getenv("LV_RAG_INVENTORY_MAX_FILES", "20000")))))
     rag_metadata_first: bool = field(default_factory=lambda: os.getenv("LV_RAG_METADATA_FIRST", "1") == "1")
     rag_download_mb: int = field(default_factory=lambda: max(1, min(512, int(os.getenv("LV_RAG_DOWNLOAD_MB", "128")))))
+    # --- RAG 주장 단위 대조 예산형 상한 (TK-63, 한국어 주석) ---
+    rag_claim_max_per_document: int = field(
+        default_factory=lambda: max(1, min(100, int(os.getenv("LV_RAG_CLAIM_MAX_PER_DOCUMENT", "30"))))
+    )
+    rag_claim_budget_seconds: float = field(
+        default_factory=lambda: max(1.0, float(os.getenv("LV_RAG_CLAIM_BUDGET_SECONDS", "240")))
+    )
+    rag_claim_budget_usd: float = field(
+        default_factory=lambda: max(0.0, float(os.getenv("LV_RAG_CLAIM_BUDGET_USD", "1.00")))
+    )
     source_lookup_budget_seconds: float = field(
         default_factory=lambda: float(os.getenv("LV_SOURCE_LOOKUP_BUDGET_SECONDS", "120")))
     source_lookup_max_document_seconds: float = field(
