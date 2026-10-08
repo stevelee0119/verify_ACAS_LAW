@@ -184,3 +184,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **FT 설계 보충 개정 1(PR #24 ffe5d47, 2026-10-06): 조건부 승인.** 구현 조건 2건(목 글자 명시 집합, 예외 문구 파싱 금지). 전달문 (16): PR #24 병합 뒤 구현 착수.
 - **FT 구현(PR #27 ca0067b, 2026-10-06): 불승인.** [TK-62](TK-62_ft_subitem_absence_forced_contradiction.md)(P1: 목 단위 경로가 판본 대비 없이 CONTRADICTED를 만들어 새 A등급 오탐). 전달문 (17). 사용자 결정: TK-61만 먼저 배포(후보 c206386).
 - **FT 보완(PR #27 ed8d7d1, 2026-10-07): 내용 수용**(TK-62 해소, 승격 85e6378, `verify_all` 종료 0). 병합은 #28(TK-61 릴리스) 뒤 평가 측 PR로 한다. 전달문 (18).
+- **F3 지시서(2026-10-07):** [PROMPT_FOR_F3](PROMPT_FOR_F3.md) — 1단계 설계 보충(`requests/43_f3_design.md`). 평가 측이 회신 전에 T6~T9·요청 본문 스키마 시험을 고정한다. 착수 조건 (i) 연락처·주민등록번호 게이트 재측정, (ii) T9 등 평가 측 시험, (iii) F2·TK-29 충족. RAG-2는 D4와 맞지 않아 수용 기준에서 제외. F3 릴리스에는 새 봉인 세트가 필요하다. 전달문 (19).

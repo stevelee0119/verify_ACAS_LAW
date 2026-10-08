@@ -900,3 +900,114 @@
 - 남은 것: 태그 `release-20261006`, 배포 확인, 배포 직후 온라인 점검(서면9, 직전 19/23과 같은 조건).
 - 배포 확인(`/api/health` commit 565bffc, database ok), 태그 `release-20261006` 확인.
 - **배포 직후 온라인 점검: 서면9 19/23**(보고서 manifest commit 565bffc 확인, `score_report.py --record`). 실패 4항목은 직전 두 릴리스와 같고 새 실패는 0이다 → 정상. 릴리스 절차 완료.
+
+# FT 반영(PR #29 병합, Steve 04b87e0)·봉인 세트 첫 채점(운영본) — 2026-10-07
+- PR #29 병합: 같은 SHA(4e8a45d)에서 CI 필수 3개 성공(CI 결과 인용). FT·승격이 Steve에 들어갔다. 다음 main 릴리스는 봉인 채점이 필수다.
+- 봉인 세트 운영본(565bffc): 종합 5.5, 재현율 0.125, 오탐 2(A등급 1), 인젝션 방어. 자체 점검 오류 0. 조건은 오프라인·OCR 없음·Python 3.14.6이다(표준 환경과 다름, 비교 전용).
+- FT 후보 채점: Steve 04b87e0을 같은 세션·같은 조건으로 채점한다. 기준은 종합 ≥ 5.5, 오탐 ≤ 2, A등급 ≤ 1이다.
+- 측정 못 함: 표준 환경 봉인 점수, 온라인 봉인 점수, 문서별 상세(봉인 규칙상 평가 측 비열람).
+
+# 릴리스 후보(FT) — `Steve_ACASiaLAW` 04b87e0 (2026-10-07)
+- 봉인 세트(같은 조건: 오프라인·OCR 없음·Python 3.14.6, 사용자 실행)
+
+| 대상 | 종합 | 재현율 | 오탐 | A등급 | 인젝션 |
+|---|---|---|---|---|---|
+| 운영본 565bffc | 5.5 | 0.125 | 2 | 1 | 방어 |
+| FT 후보 04b87e0 | 5.5 | 0.125 | 2 | 1 | 방어 |
+
+  - 판정 기준(종합 ≥ 5.5, 오탐 ≤ 2, A등급 ≤ 1) **충족**: 후보가 운영본보다 낮지 않다.
+  - 오프라인이라 FT 개선 폭은 드러나지 않는다(안내서 10절). 개선 확인은 배포 직후 온라인 점검(TMP-1 등)으로 한다.
+- `verify_all` 전체 모드: 85e6378에서 종료 0. 04b87e0과의 차이는 문서뿐이다(4e8a45d와 트리 동일).
+- 같은 SHA CI: 점수 게이트 성공, CI(테스트)는 진행 중이다(릴리스 PR의 필수 확인으로 다시 본다).
+- `main` 565bffc 대비 제품 코드 변경: `packages/legal_engine/temporal_review.py` 하나. DB 마이그레이션 없음.
+- 열린 P1 회귀: 0(TK-62 해소).
+- 버전 판정: **0.10.0 유지(상향 없음)**. 고정 시험과 봉인 세트 점수가 같아, 같은 조건의 성능 상승이 측정되지 않았다(VERSION_POLICY). 태그는 `release-20261007` 예정이다.
+
+# 릴리스 FT — PR #30 병합 (`main` 43d3132, 2026-10-07)
+- 병합 전 같은 SHA(04b87e0)에서 CI 필수 3개와 CodeQL이 성공했다(CI 인용). 봉인 기준 충족, 0.10.0 유지.
+- 남은 것: 배포 확인, 태그 `release-20261007`, 배포 직후 온라인 점검(서면9, 직전 19/23, TMP-1 포함).
+- **배포 직후 온라인 점검: 서면9 20/23**(보고서 manifest commit 43d3132 = 배포 확인, `score_report.py --record`). 새 실패 0 → 정상.
+  - RAG-1 통과는 FT와 무관한 경로라 개선으로 세지 않는다(모델 출력 변동 가능).
+  - TMP-1 통과 유지.
+  - 온라인 조건에서 FT 고유 효과(목 단위·같은 시행일 판본)를 재는 항목은 이 명세에 없다. 측정 못 함.
+- 태그(사용자 결정 2026-10-07): F3 종료 뒤 일괄 부착. `release-20261007` → 43d3132.
+
+# F3 설계 보충 — PR #32 3398943 (2026-10-07) · **보완 요구(승인 보류)**
+- 근거: CI 결과 인용(필수 3개 성공), 평가 측이 코드를 대조하고 관련 시험을 재실행했다(코드 = Steve 7110273). F3 보호 시험, T1~T5, TK-29 가드, 구조화 요청, Drive RAG 시험: 122 passed, 6 xfailed.
+- 맞게 된 것
+  - 2절을 다시 설계하지 않았다.
+  - 두 축이 독립이고, 문서 단위 경로를 유지한다.
+  - 보호 시험의 이름('N건 중 M건', `REASON_BUDGET_EXCEEDED`, 허용 키 4개)과 일치한다.
+- 필수 보완 1~8(PR 코멘트 원문)
+  1. 호출 수 단위: `router.run` 1회가 공급자 호출 최대 3회다(`router.py:421`). 주장당 3회와 문서 총량을 '공급자로 나간 요청 수'로 다시 센다.
+  2. 인용 행 SUPPORTED는 동일성 대조에서만 온다. CONTRADICTED가 가려지지 않게 우선순위를 둔다. CONTEXT를 NOT_MENTIONED로 바꾸지 않는다. 의견과 인용은 `link_observations`로 연결한다.
+  3. 동일성 대조 규칙: 사건번호 경계 일치, 법령명+조 근접 기준, 마스킹 본문 기준. LOCAL_ONLY·QUICK에서도 돈다.
+  4. `evidence_sources`에 Drive 링크를 넣는다. 없는 필드 `ReviewItem.authority_limitation`은 정리한다.
+  5. LOCAL_ONLY·QUICK 분기는 진입부가 아니라 현행 위치(`review.py:146`)에 둔다. 진입부에 두면 평가 측 통과 시험 T9 QUICK이 실패한다.
+  6. fail-closed 검사 함수의 위치·이름·실패 신호, `reference_sources` 항목 키, 19b 6.1 길이 한도를 적는다(`title` 제외 권고).
+  7. 주장 단위 Drive 검색 결과 중 읽지 않은 파일의 처리(색인 안 검색, 또는 기존 읽기 경로)와 거절 시 중단을 적는다.
+  8. finding이 없는 참고 의견 행의 검토 상태 저장 위치를 적는다(F2는 finding 단위 저장).
+- 사실 정정 5건: 함수명 `build_document_review_items`, `inspect_request`는 `router.run` 안, `incremental_findings_count` 이름, 상수 위치·매니페스트 키, 오프라인 CI에서는 `review_document`가 호출되지 않음.
+- 평가 측: 하네스의 가짜 Drive에 `search_fulltext` 대역을 더했다(결과 불변).
+- 다음: 메모를 고쳐 같은 PR에 다시 '검토 요청' → 평가 측 회신(승인이면 fail-closed 단위 시험 추가) → PR #32 병합 → 구현.
+
+# F3 설계 보충 개정 — PR #32 96a4f47 (2026-10-07) · **조건부 승인(구현 착수 가능)**
+- 근거: CI 결과 인용(필수 3개 성공)과 평가 측 코드 대조. 평가 측이 마스킹이 사건번호·조문 번호를 보존하는지 실행해 확인했다(`PIIEngine.mask_text`).
+- 1차 필수 보완 8건 반영. 로컬 경로 링크 제거(60e8266의 17곳 → 0). 주장당 Drive 검색 2회 재기재.
+- 구현 조건 3건(메모 재개정 불요, 구현 PR에서 확인)
+  1. 검사 함수는 `packages/rag_engine/review.py`의 `validate_claim_request_payload(payload) -> bool` 하나다. 예외를 내지 않고 어떤 위반이든 False다(평가 측 결정). 메모에 위치·실패 신호가 둘씩 적혀 있었고, 이름이 개정 사이에 바뀌었다.
+  2. 주장–인용 연결은 `Claim.citation_ids`(`schemas.py:395`)로 한다. 메모의 '`Citation.claim_id`'는 없는 필드다.
+  3. 마스킹 근거 경로를 `packages/pii_engine`으로 정정한다. 메모는 `llm_router/privacy.py`로 적었다.
+- 평가 측 시험: fail-closed 단위 시험 10건(strict xfail)을 위 계약으로 고정했다. `test_f3_protected.py`는 통과 9, xfail 16이다.
+- 구현 수용 기준: PROMPT_FOR_F3 5절 그대로. T6~T9·스키마·fail-closed가 XPASS여야 하고, 점수·rule_id·FindingType에 변화가 없어야 한다. 평가 측은 PII 게이트를 재측정하고 `verify_all`을 전체 모드로 돌린다.
+
+# F3 구현 — PR #34 5abb84e (2026-10-07) · **불승인(필수 보완 6건)**
+- 근거: CI 결과 인용(점수 하락 게이트·테스트 실패, Docker 성공) + 평가 측 재실행(같은 SHA, Python 3.11.15, tesseract 5.3.4).
+- 충족
+  - scorecard: dev 81.7 / holdout 79.2 / 오탐 0으로 기준선과 같다. `score_gate --strict-env` 통과.
+  - acceptance: 16 failed(전부 XPASS(strict)), 956 passed. `--runxfail`이면 F3 보호 시험 25 passed.
+  - regression 501 passed. acceptance 밖 전체 3456 passed·11 skipped·22 xfailed, 실패 0. CI 실패는 예정된 XPASS뿐이다.
+  - 구현 조건 a(검사 함수 bool)·b(`Claim.citation_ids`)를 지켰다. QUICK·LOCAL_ONLY 분기 위치가 맞다. 주장당 `router.run`은 1회다.
+- 미충족(필수)
+  1. `claim_coverage` 불변식 회귀: 상한 밖 주장이 문서 단위 대조로 연결되면 대조와 미대조에 이중으로 들어간다.
+     - 합성 재현: Steve b5d9000 1+13=14 → 5abb84e 1+14=15≠14.
+     - 보호 시험 `test_t7_claim_linked_by_document_level_review_is_not_also_unreviewed`를 추가했다(Steve 통과, 5abb84e 실패).
+  2. 주장 단위 Drive 검색 미실행: `library.client` 속성이 없어 `search_fulltext`가 호출되지 않는다. 모든 주장이 같은 `sources[:5]` 앞 800자를 받는다.
+  3. `evidence_sources`에 Drive URL이 없다(설계 1.2·2.1).
+  4. TK-09 차단 미구현: pipeline 승격 필터가 그대로라, 플래그를 켜면 주장 단위 의견이 승격 후보가 된다(기본값 꺼짐, 잠재 결함).
+  5. 평가 측 시험의 합성 문자열 '두 인용을 대조한다'를 제품 코드에 복사했다.
+  6. 보고 부정확: '83.5/81.0 유지'라고 적었으나 표준 조건 측정값은 81.7/79.2다. 출력 원문이 없다.
+- 측정 못 함: 실제 Drive·모델 대조 품질. PII 게이트 재측정과 `verify_all`은 수용 SHA에서 한다.
+
+# F3 구현 보완 — PR #34 54ac965 (2026-10-08) · **불승인(소규모 보완 2건)**
+- 근거: CI 결과 인용(점수 하락 게이트·테스트 실패 = 예정된 strict XPASS 16건, Docker 성공) + 평가 측 재실행(같은 SHA, Python 3.11.15, tesseract 5.3.4).
+- 해소: 1차 필수 1(대조율 이중 계산, 새 T7 시험 통과)·3(Drive URL)·5(시험 문자열)·6(보고 원문·조건). 2는 실질 해소(로컬 점수 정렬로 주장별 발췌).
+- 측정
+  - scorecard 81.7/79.2/0으로 같다. `score_gate` 통과.
+  - acceptance: XPASS(strict) 16, 957 passed. `--runxfail`이면 F3 26 passed.
+  - regression·새 단위·TK-09 시험 519 passed. acceptance 밖 전체 3460 passed, 실패 0.
+- 보완 필요
+  1. TK-09 가드가 범위를 넘는다. `review["advisory_only"]`가 늘 True라 모든 RAG 의견이 승격에서 빠진다.
+     - 플래그를 켠 합성 재현: `verify_rag_candidate` 호출이 Steve 1회 → 54ac965 0회.
+     - 요구: 주장 단위 의견 표시로만 거른다.
+  2. Drive 본문 검색이 운영에서 실행되지 않는다. sync가 클라이언트를 닫고(`library.py:178-179`), 기한도 지났다.
+     - 평가 측 실행: 닫힘이면 RuntimeError, 기한 경과면 SYNC_BUDGET_EXHAUSTED.
+     - 새 단위 시험은 닫히지 않는 가짜 클라이언트를 주입하고, 일부는 제품 루프를 시험 안에 재구현해 이를 잡지 못한다.
+     - 요구: 죽은 경로를 지우고, 로컬 점수 정렬을 주장별 발췌 경로로 확정한다. `review_document`를 통한 시험으로 바꾼다.
+
+# F3 구현 2차 보완 — PR #34 2e02c94 (2026-10-08) · **수용**
+- 근거: CI 결과 인용(점수 하락 게이트·테스트 실패 = 예정된 strict XPASS 16, Docker 성공) + 평가 측 재실행(같은 SHA, Python 3.11.15, tesseract 5.3.4).
+- 남은 2건 해소
+  - TK-09 가드: 개별 의견 표시로만 거른다. 플래그를 켠 합성 재현에서 후보 검증 1회로 Steve와 같다.
+  - Drive 검색 죽은 경로 제거, 로컬 점수 정렬로 확정. 단위 시험이 `review_document`를 호출한다.
+- 수용 측정
+  - scorecard 81.7/79.2/0으로 같다. `score_gate` 통과.
+  - acceptance: XPASS(strict) 16, 그 밖 실패 0. `--runxfail`이면 F3 26 passed.
+  - 연락처·주민등록번호 필수 게이트 1·2·3판: RRN 0, PHONE 0·0·1/54(국가번호 구간), 라우터 도달 0, 오탐 0으로 기존과 같다.
+  - 승격 cb01624(평가 측 병합 + strict xfail 16 표시 제거)에서 `verify_all --base 2895921` 전체 모드 종료 0.
+    - acceptance 973·원장 501·전체 3261·브라우저 197 통과, 실제 실패 0.
+    - 점수·회귀·하드코딩·시험 편집·보호 경로·버전 정책 통과.
+  - 참고: 동시 실행 중 OCR 시험 1건이 한 번 실패했다. 단독 재실행과 `verify_all`에서는 통과했다(F3 변경 범위 밖).
+- 측정 못 함: 실제 Drive·모델 대조 품질, 화면 사용성. 온라인 점검은 릴리스 뒤에 한다.
+- 병합 경로: 평가 측 PR(F3 커밋 + 승격)로 Steve에 들인다. PR #34를 그대로 병합하면 strict XPASS로 CI가 실패한다.
+- 릴리스 조건(PROMPT_FOR_F3 5절): 새 봉인 세트(새 격리 세션) 채점. 운영본(main 43d3132)과 후보를 같은 조건으로 비교한다.
