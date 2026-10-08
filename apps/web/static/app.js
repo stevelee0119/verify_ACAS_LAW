@@ -791,6 +791,11 @@ function referenceSection(docs) {
     if (!review) continue;
     const details = node("details");
     details.append(node("summary", `${doc.filename}: ${statuses[review.status] || review.status}`));
+    if (review.claim_coverage && typeof review.claim_coverage.eligible_claims === "number") {
+      const c = review.claim_coverage;
+      const pct = c.eligible_claims > 0 ? Math.round(((c.linked_claims || 0) / c.eligible_claims) * 100) : 0;
+      details.append(node("p", `참고자료 대조율: 대조 대상 ${c.eligible_claims}건 중 ${c.linked_claims || 0}건 완료 (${pct}%)`, "coverage-text"));
+    }
     if (review.reason) details.append(node("p", review.reason, "muted"));
     if (typeof review.model_response_accepted === "boolean") {
       details.append(node("p", `모델 호출 ${review.model_executed ? "있음" : "없음"} · 응답 채택 ${review.model_response_accepted ? "성공" : "미완료"} · 근거 확인 의견 ${(review.observations || []).length}건 · 제외 의견 ${(review.rejected_observations || []).length}건`, "muted"));

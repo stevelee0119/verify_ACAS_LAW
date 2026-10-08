@@ -423,8 +423,10 @@ class VerificationPipeline:
                         doc_text = document_result.normalized.visible_text
                         sources = review.get("sources", [])
                         for obs in review.get("observations", []):
-                            # exhibit_facts 등 결정론 정규식 관찰은 승격 대상에서 제외
+                            # exhibit_facts 등 결정론 정규식 관찰 및 RAG 주장 단위 참고 의견(advisory_only)은 정식 Finding 후보 승격에서 원천 제외 (D4, 설계 4.1)
                             if obs.get("engine") == "exhibit_facts" or obs.get("source_type") == "deterministic":
+                                continue
+                            if obs.get("advisory_only", False):
                                 continue
                             if obs.get("relationship") == "CONTRADICTS":
                                 candidate = ModelCandidate(
