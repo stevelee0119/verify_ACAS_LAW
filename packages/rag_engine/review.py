@@ -67,7 +67,6 @@ PERSON_KEY = re.compile(
 )
 CLAIM_LIMIT_PER_DOCUMENT = 10
 MODEL_CALLS_PER_CLAIM = 3
-SEARCH_CALLS_PER_CLAIM = 2
 EXCERPT_CHARS = 4000
 
 
@@ -358,14 +357,6 @@ def review_document(result, library, router, context, pii):
         ec_id = ec.get("claim_id")
         if ec_id:
             unreviewed_claims_map[ec_id] = "REASON_BUDGET_EXCEEDED"
-
-    client = getattr(library, "client", None)
-    search_fn = getattr(client, "search_fulltext", None) if client else None
-    folder_ids = [getattr(library, "folder", None)] if getattr(library, "folder", None) else []
-
-    from . import relevance
-    search_halted = False
-
     for claim_obj in bounded_claims:
         c_id = claim_obj.get("claim_id")
         c_raw_text = claim_obj.get("text", "")
@@ -374,49 +365,16 @@ def review_document(result, library, router, context, pii):
 
         # 1) 질의어 생성 (한국어 핵심어 추출, 단일 문장 주장 보충 지원)
         salient = _claim_salient_words(c_raw_text)
-        relevant_sources = []
-        found_fids = set()
-        search_calls = 0
 
-        # 2) Drive 본문 검색 (주장당 최대 2회 검색 한도 준수, SEARCH_CALLS_PER_CLAIM = 2)
-        if search_fn and salient and not search_halted:
-            # 첫 번째 검색: 최우선 핵심어 질의
-            try:
-                res = search_fn(folder_ids, salient[:5], max_results=200)
-                search_calls += 1
-                if isinstance(res, (set, list)):
-                    found_fids.update(res)
-            except Exception as exc:
-                if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_403", "DRIVE_HTTP_429",
-                                "DRIVE_FULLTEXT_FORBIDDEN", "SYNC_BUDGET_EXHAUSTED"):
-                    search_halted = True
-
-            # 두 번째 검색: 첫 검색 결과가 없고 추가 핵심어가 있을 때 보조 질의
-            if not search_halted and search_calls < SEARCH_CALLS_PER_CLAIM and not found_fids and len(salient) > 5:
-                try:
-                    res = search_fn(folder_ids, salient[5:10], max_results=200)
-                    search_calls += 1
-                    if isinstance(res, (set, list)):
-                        found_fids.update(res)
-                except Exception as exc:
-                    if str(exc) in ("DRIVE_HTTP_401", "DRIVE_HTTP_403", "DRIVE_HTTP_429",
-                                    "DRIVE_FULLTEXT_FORBIDDEN", "SYNC_BUDGET_EXHAUSTED"):
-                        search_halted = True
-
-        if found_fids:
-            # (a) 이미 읽은 색인(sources) 안에서 찾는다는 설계를 지킴 (미독 파일 배제)
-            relevant_sources = [s for s in sources if s.get("file_id") in found_fids]
-
-        # 검색 결과가 없거나 search_fn 미지원 시: 이미 색인된 sources 내에서 핵심어 출현 빈도로 정렬
-        if not relevant_sources:
-            if salient:
-                def _score_source(src):
-                    stext = src.get("text", "")
-                    return sum(1 for w in salient if w in stext)
-                scored = sorted(sources, key=_score_source, reverse=True)
-                relevant_sources = scored[:5]
-            else:
-                relevant_sources = sources[:5]
+        # 2) 이미 읽은 sources 안에서 주장 핵심어 출현 빈도로 로컬 점수 정렬 (확정 발췌 경로, 한국어 주석)
+        if salient:
+            def _score_source(src):
+                stext = src.get("text", "")
+                return sum(1 for w in salient if w in stext)
+            scored = sorted(sources, key=_score_source, reverse=True)
+            relevant_sources = scored[:5]
+        else:
+            relevant_sources = sources[:5]
 
         # 3) 발췌문 구성 (주장 관련 문맥 구간 추출, 최대 5개 항목, 항목당 800자 이내, 총합 4,000자 이내)
         ref_sources_items = []

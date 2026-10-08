@@ -1,82 +1,39 @@
 # -*- coding: utf-8 -*-
-"""F3 주장 단위 검색 및 문맥 발췌 추출 단위 시험.
+"""F3 주장 단위 로컬 점수 정렬 및 문맥 발췌 추출 단위 시험.
 
 검증 항목:
-1. ReferenceLibrary.sync 완료 후 self.client 속성 보존.
+1. review_document 실행 시 주장 핵심어에 따라 로컬 점수 정렬로 주장별 최적 발췌가 골라짐 (시험 내 제품 루프 재구현 배제).
 2. 주장별 핵심어 매칭 위치 기반 문맥 발췌 구간(800자 이내) 추출 (원문 앞 800자 기계적 절단 방지).
-3. 주장당 검색 호출 한도(SEARCH_CALLS_PER_CLAIM = 2) 준수.
-4. validate_claim_request_payload 유효성 통과.
+3. 주장 단위 요청 페이로드의 validate_claim_request_payload 유효성 통과 및 스키마 제한 준수.
 """
 from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import MagicMock
 
 import pytest
 
-from packages.rag_engine.library import ReferenceLibrary
+from packages.common.enums import ExternalAIPolicy, VerificationProfile
 from packages.rag_engine.review import (
-    SEARCH_CALLS_PER_CLAIM,
+    _claim_salient_words,
+    review_document,
     validate_claim_request_payload,
 )
 
 
-class _MockDriveClient:
-    """단위 시험용 Drive 클라이언트 대역."""
-
-    def __init__(self, *args, **kwargs):
-        self.calls = []
-
-    def remaining(self):
-        return 100
-
-    def inventory(self, *args, **kwargs):
-        return []
-
-    def search_fulltext(self, folder_ids, terms, *, max_results=200):
-        self.calls.append((folder_ids, terms))
-        return {"fid_mock_001"}
-
-    def close(self):
-        pass
-
-
-def test_reference_library_preserves_client(tmp_path):
-    """ReferenceLibrary.sync 실행 시 self.client 속성이 정상 저장되어 검색에 활용 가능한지 검증."""
-    settings = SimpleNamespace(
-        rag_drive_folder_id="test_folder_id",
-        storage_root=str(tmp_path),
-        rag_metadata_first=False,
-        rag_sync_seconds=10,
-        rag_max_files=10,
-        rag_inventory_max_files=10,
-        rag_download_mb=10,
-        allow_network=True,
-    )
-    lib = ReferenceLibrary(settings, client_factory=_MockDriveClient)
-    assert lib.client is None
-    lib.sync()
-    assert lib.client is not None
-    assert isinstance(lib.client, _MockDriveClient)
-
-
 def test_context_aware_excerpt_extraction():
     """800자 이후에 위치한 핵심어에 대해 원문 앞 800자가 아닌 핵심어 주변 문맥이 발췌되는지 검증."""
-    from packages.rag_engine import relevance
-
     # 1,500자 위치에 핵심어가 출현하는 2,500자 합성 본문
-    padding_before = "가나다라마바사 일반적인 안내 규정 내용입니다. " * 50  # 약 1,300자
+    padding_before = "일반적인 안내 규정 내용입니다. " * 50  # 약 1,000자 이상
     target_sentence = "현장 점검 시 추락 위험 방지 조치를 의무적으로 이행하여야 한다."
-    padding_after = " 추가적인 세부 관리 지침 및 후속 조치 사항입니다. " * 40  # 약 1,200자
+    padding_after = " 추가적인 세부 관리 지침 및 후속 조치 사항입니다. " * 40  # 약 1,000자 이상
     full_text = padding_before + target_sentence + padding_after
 
     claim_text = "피고는 현장 점검 시 추락 위험 방지 조치 의무를 이행하지 않았다."
-    from packages.rag_engine.review import _claim_salient_words
     salient = _claim_salient_words(claim_text)
-    assert "추락" in salient or "위험" in salient or "조치" in salient
+    assert any(w in salient for w in ("추락", "위험", "방지", "조치"))
 
-    # 발췌 로직 시뮬레이션
+    # 핵심어 위치 탐색
     best_pos = -1
     for w in salient:
         pos = full_text.find(w)
@@ -84,9 +41,9 @@ def test_context_aware_excerpt_extraction():
             best_pos = pos
             break
 
-    assert best_pos >= 1000, "핵심어가 800자 이후에 위치해야 시험 목적에 부합함"
+    assert best_pos >= 800, "핵심어가 800자 이후에 위치해야 시험 목적에 부합함"
 
-    # 앞뒤 800자 문맥 발췌
+    # 앞뒤 800자 문맥 발췌 계산
     start_pos = max(0, best_pos - 200)
     end_pos = min(len(full_text), start_pos + 800)
     if end_pos - start_pos < 800 and len(full_text) > (end_pos - start_pos):
@@ -112,71 +69,67 @@ def test_context_aware_excerpt_extraction():
     assert validate_claim_request_payload(payload) is True
 
 
-def test_search_calls_bounded_per_claim():
-    """주장당 search_fulltext 호출 횟수가 최대 2회(SEARCH_CALLS_PER_CLAIM)를 초과하지 않는지 검증."""
-    client = _MockDriveClient()
-    folder_ids = ["test_folder"]
-    salient = ["안전점검", "위험방지", "작업발판", "추락방지", "보호구", "비계연결", "안전통로"]
+def test_claim_level_excerpt_selection_via_review_document(monkeypatch):
+    """review_document 실행 시 이미 읽은 sources 안에서 주장별 핵심어에 따라 서로 다른 관련 발췌가 선정됨을 검증."""
+    # 2가지 서로 다른 참고자료 준비:
+    # R1: 안전 및 추락 방지 규정 (앞부분 패딩 후 1,000자 부근에 핵심 내용 배치)
+    pad1 = "산업현장 일반 시설관리 기본 원칙입니다. " * 40
+    safety_body = pad1 + "작업발판 및 추락방지 난간 설치 의무 기준을 반드시 준수하여야 한다." + pad1
+    # R2: 임금 및 퇴직금 정산 규정 (앞부분 패딩 후 1,000자 부근에 핵심 내용 배치)
+    pad2 = "경영지원 일반 행정처리 기본 절차입니다. " * 40
+    wage_body = pad2 + "퇴직금 지급 기일은 퇴직일로부터 14일 이내로 정산 지급하여야 한다." + pad2
 
-    search_calls = 0
-    search_halted = False
-    found_fids = set()
+    sources_list = [
+        {
+            "file_id": "fid_safety_001",
+            "source_id": "R1",
+            "title": "안전관리 운영지침.txt",
+            "folder_path": "",
+            "page": 1,
+            "relevance": 0.8,
+            "text_coverage": 0.5,
+            "shared_terms": 5,
+            "text": safety_body,
+        },
+        {
+            "file_id": "fid_wage_002",
+            "source_id": "R2",
+            "title": "급여및퇴직금 관리규정.txt",
+            "folder_path": "",
+            "page": 1,
+            "relevance": 0.8,
+            "text_coverage": 0.5,
+            "shared_terms": 5,
+            "text": wage_body,
+        },
+    ]
 
-    # 1차 검색
-    if client and salient and not search_halted:
-        res = client.search_fulltext(folder_ids, salient[:5], max_results=200)
-        search_calls += 1
-        # 1차에서 빈 결과 시뮬레이션
-        res = set()
-
-        # 2차 검색
-        if not search_halted and search_calls < SEARCH_CALLS_PER_CLAIM and not res and len(salient) > 5:
-            res2 = client.search_fulltext(folder_ids, salient[5:10], max_results=200)
-            search_calls += 1
-            if isinstance(res2, (set, list)):
-                found_fids.update(res2)
-
-    assert search_calls <= SEARCH_CALLS_PER_CLAIM
-    assert search_calls == 2
-    assert len(client.calls) == 2
-
-
-def test_claim_search_executes_during_review(monkeypatch):
-    """review_document 실행 시 library.client.search_fulltext가 실제로 호출되고 맞춤 발췌가 구성되는지 검증."""
-    from packages.rag_engine.review import review_document
-    from packages.common.enums import ExternalAIPolicy, VerificationProfile
-
-    client = _MockDriveClient()
-    source_text = "서두 안내문입니다. " * 60 + "현장 점검 시 추락 위험 방지 조치를 이행하여야 한다." + " 후반 지침입니다. " * 40
     library = SimpleNamespace(
         summary={"status": "READY", "snapshot_hash": "mock_hash"},
-        client=client,
         folder="test_folder",
         select=lambda text: {
             "decision": "USED",
             "reason": "RELEVANT_REFERENCE_FOUND",
             "coverage": "CHECKED_INDEXED_CORPUS",
-            "sources": [{
-                "file_id": "fid_mock_001",
-                "source_id": "R1",
-                "title": "안전관리 운영지침.txt",
-                "folder_path": "",
-                "page": 1,
-                "relevance": 0.8,
-                "text_coverage": 0.5,
-                "shared_terms": 5,
-                "text": source_text,
-            }],
+            "sources": sources_list,
         },
     )
 
-    doc_text = "피고는 현장 점검 시 추락 위험 방지 조치 의무를 이행하지 않았다."
-    monkeypatch.setattr("packages.rag_engine.review.analysis_text", lambda doc, findings: (doc_text, {"omitted_chars": 0}))
+    # 2가지 서로 다른 주장:
+    claim1_text = "피고는 작업발판 및 추락방지 난간을 설치하지 않아 사고를 유발하였다."
+    claim2_text = "피고는 원고의 퇴직일로부터 14일 이내에 퇴직금을 지급하지 않았다."
+
+    combined_doc_text = f"{claim1_text}\n{claim2_text}"
+    monkeypatch.setattr("packages.rag_engine.review.analysis_text", lambda doc, findings: (combined_doc_text, {"omitted_chars": 0}))
+
     result = SimpleNamespace(
-        document_id="doc1",
-        normalized=SimpleNamespace(visible_text=doc_text, pages=[SimpleNamespace(text=doc_text)], blocks=[]),
+        document_id="doc_test_1",
+        normalized=SimpleNamespace(visible_text=combined_doc_text, pages=[SimpleNamespace(text=combined_doc_text)], blocks=[]),
         findings=[],
-        claims=[{"claim_id": "CLM_1", "text": doc_text}],
+        claims=[
+            {"claim_id": "CLM_SAFETY", "text": claim1_text},
+            {"claim_id": "CLM_WAGE", "text": claim2_text},
+        ],
         citations=[],
         engine_data={},
     )
@@ -199,15 +152,22 @@ def test_claim_search_executes_during_review(monkeypatch):
 
     review_document(result, library, MockRouter(), context, pii)
 
-    # 1. client.search_fulltext가 실제로 호출되었는지 검증
-    assert len(client.calls) >= 1
-    # 2. 주장 단위 대조 요청(stage="claim_rag_advisory")이 라우터에 전달되었는지 검증
+    # 주장 단위 대조 요청(stage="claim_rag_advisory") 필터링
     claim_reqs = [r for r in executed_requests if r.metadata.get("stage") == "claim_rag_advisory"]
-    assert len(claim_reqs) == 1
-    user_payload = json.loads(claim_reqs[0].user)
-    assert user_payload["claim_id"] == "CLM_1"
-    # 3. 맞춤 발췌문에 핵심 문장이 포함되고 기계적 선두 절단이 아님을 검증
-    extracted_text = user_payload["reference_sources"][0]["text"]
-    assert "추락 위험 방지 조치" in extracted_text
-    assert extracted_text != source_text[:800]
+    assert len(claim_reqs) == 2, f"주장 2건에 대해 각각 대조 요청이 생성되어야 함 (실제: {len(claim_reqs)})"
 
+    # 주장 1 검증: 안전 관련 주장 -> R1(안전지침)이 최우선 발췌로 선택됨
+    req1_payload = json.loads(claim_reqs[0].user)
+    assert req1_payload["claim_id"] == "CLM_SAFETY"
+    assert validate_claim_request_payload(req1_payload) is True
+    assert req1_payload["reference_sources"][0]["source_id"] == "R1"
+    assert "추락방지 난간 설치 의무" in req1_payload["reference_sources"][0]["text"]
+    assert req1_payload["reference_sources"][0]["text"] != safety_body[:800]
+
+    # 주장 2 검증: 퇴직금 관련 주장 -> R2(퇴직금규정)가 최우선 발췌로 선택됨
+    req2_payload = json.loads(claim_reqs[1].user)
+    assert req2_payload["claim_id"] == "CLM_WAGE"
+    assert validate_claim_request_payload(req2_payload) is True
+    assert req2_payload["reference_sources"][0]["source_id"] == "R2"
+    assert "퇴직금 지급 기일" in req2_payload["reference_sources"][0]["text"]
+    assert req2_payload["reference_sources"][0]["text"] != wage_body[:800]

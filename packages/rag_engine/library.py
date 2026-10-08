@@ -67,7 +67,6 @@ class ReferenceLibrary:
         self.notify = notify
         self.client_factory, self.extractor = client_factory, extractor
         self.folder = settings.rag_drive_folder_id
-        self.client = None  # 라이브러리가 관리하는 Drive 클라이언트 인스턴스 (한국어 주석)
         folder_key = hashlib.sha256(self.folder.encode()).hexdigest()
         self.directory = Path(settings.storage_root) / "reference-cache" / folder_key
         self.db_path = self.directory / "index.sqlite3"
@@ -119,8 +118,7 @@ class ReferenceLibrary:
             self.summary["issues"] = [{"reason": "NETWORK_DISABLED"}]
             return self._finish(started, None)
         deadline = time.monotonic() + budget
-        # 클라이언트 인스턴스를 self.client에 보존하여 주장 단위 검색 등에서 활용 (한국어 주석)
-        self.client = client = self.client_factory(deadline=deadline, check=self.check)
+        client = self.client_factory(deadline=deadline, check=self.check)
         diagnostics["credential_mode"] = getattr(client, "credential_mode", "injected")
         try:
             valid_id(self.folder)
