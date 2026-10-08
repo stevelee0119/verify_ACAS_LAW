@@ -591,15 +591,9 @@ def review_document(result, library, router, context, pii):
         "selection_rule": selection_rule,
         "budget": {
             "max_per_document": max_claims,
-            "max_claims": max_claims,
-            "rag_claim_max_per_document": max_claims,
             "budget_seconds": budget_seconds,
-            "rag_claim_budget_seconds": budget_seconds,
             "budget_usd": budget_usd,
-            "rag_claim_budget_usd": budget_usd,
             "halt_reason": halt_reason,
-            "reason": halt_reason,
-            "stop_reason": halt_reason,
         },
     }
 

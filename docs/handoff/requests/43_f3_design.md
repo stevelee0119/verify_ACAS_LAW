@@ -250,6 +250,7 @@
      - `rag_claim_budget_seconds` (`LV_RAG_CLAIM_BUDGET_SECONDS`): 기본값 240, 주장 단위 단계의 경과 시간 예산 (초)
      - `rag_claim_budget_usd` (`LV_RAG_CLAIM_BUDGET_USD`): 기본값 1.00, 주장 단위 단계의 외부 모델 누적 비용 예산 ($) (0이면 비용 한도 비활성화)
    - **판정 시점**: 진행 중인 호출을 강제 중단하지 않고, **다음 주장을 공급자로 전송하기 직전에** 개수·시간·비용 한도 초과 여부를 사전 검사합니다.
+   - **개수 상한 셈 기준**: 모델 응답 여부와 무관하게, 예산 범위 내에서 선별되어 실제 대조 처리에 들어간(발췌 구성 및 검증 단계) 주장 수(`bounded_claims` 크기)를 기준으로 안전하고 보수적으로 산정합니다.
    - **예산 초과 처리**: 예산 제한으로 대조되지 못한 주장은 분모(`eligible_claims`)에 온전히 보존되며, 사유를 `"REASON_BUDGET_EXCEEDED"`로 기록하여 T7 불변식(`eligible_claims == linked_claims + len(unreviewed)`)을 엄격히 충족합니다.
    - 주장당 최대 3회 공급자 요청(`MODEL_CALLS_PER_CLAIM = 3`), 최대 4,000자 발췌(`EXCERPT_CHARS = 4000`), 스키마 검증(`validate_claim_request_payload`)은 그대로 유지합니다.
 
