@@ -1,6 +1,7 @@
 """[평가 에이전트 소관] F3 보호 시험 T6~T9·요청 본문 스키마 (F3 지시서 docs/handoff/PROMPT_FOR_F3.md 4절, 2026-10-07 고정).
 
 설계 회신 전에 고정한다. 구현 측은 이 파일을 고치지 않는다. 미해결 단언은 strict xfail이고, 구현 중 XPASS가 나면 평가 측이 표시를 지운다.
+F3 구현(PR #34 2e02c94)에서 16건 모두 XPASS가 되어 2026-10-08 표시를 지웠다(평가 측 승격). 이제 모두 일반 회귀 시험이다.
 
 - T6 참고자료 위계: 공식 미발견 인용이 참고자료 본문에 같은 인용으로 있으면 `reference_status`만 SUPPORTED가 되고
   `official_status=OFFICIAL_NOT_FOUND`·finding·심각도는 그대로다(D4). 제목에만 있거나 읽지 못한 파일로는 올리지 않는다(TK-29 U1).
@@ -246,7 +247,7 @@ def _keys(value):
 
 
 # --------------------------------------------------------------------------- T6 ---
-@pytest.mark.xfail(strict=True, reason="F3 미구현: reference_status는 아직 NOT_CHECKED뿐이다(PROMPT_FOR_F3 3절 1)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_t6_official_absent_case_found_in_reference_body_is_supported_without_touching_official_status(
         monkeypatch, tmp_path):
     case = DOMAINS["safety"]["case"]
@@ -331,7 +332,7 @@ def test_t7_claim_linked_by_document_level_review_is_not_also_unreviewed(monkeyp
     assert len(ids) == len(set(ids)) and set(ids) <= eligible
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: 문서당 주장 상한과 REASON_BUDGET_EXCEEDED 사유가 없다(19b 5.2)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_t7_claims_over_the_document_limit_stay_in_the_denominator_with_budget_reason(monkeypatch, tmp_path):
     result, _, _, _ = _run(monkeypatch, tmp_path, MANY_CLAIMS_BRIEF,
                            {"refmany000000001": ("현장 안전점검 기준.txt",
@@ -422,7 +423,7 @@ def test_t7_screen_harness_renders_the_reference_review_section():
     assert "참고문헌 검토 결과" in text and "합성.pdf" in text
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: 화면이 claim_coverage(N건 중 M건 대조)를 보이지 않는다(PROMPT_FOR_F3 3절 4)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_t7_screen_shows_the_claim_coverage_values_from_data():
     assert COVERAGE_SHOWN.search(_screen_text()), "화면에 claim_coverage 값(7건 중 3건)이 보이지 않는다"
 
@@ -440,7 +441,7 @@ def test_t8_both_domains_go_through_the_same_procedure(monkeypatch, tmp_path):
     assert shapes[0] == shapes[1]
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: 두 분야 모두 reference_status가 NOT_CHECKED다")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_t8_reference_support_works_in_both_domains(monkeypatch, tmp_path):
     for key in DOMAINS:
         _, doc, _, _ = _domain_run(monkeypatch, tmp_path / key, key)
@@ -482,7 +483,7 @@ def test_t9_reference_excerpt_is_masked_and_inspected_before_sending(monkeypatch
     assert all(r.user in inspected for r in sent), "inspect_request를 지나지 않은 요청이 공급자에 갔다"
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: 주장 단위 대조 요청이 없다(PROMPT_FOR_F3 3절 3·5)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_t9_claim_level_requests_are_inspected_masked_and_bounded(monkeypatch, tmp_path):
     _, _, sent, inspected = _pii_reference_run(monkeypatch, tmp_path)
     pairs = _claim_requests(sent)
@@ -500,7 +501,7 @@ def test_t9_claim_level_requests_are_inspected_masked_and_bounded(monkeypatch, t
 
 
 # --------------------------------------------------------------------- 요청 본문 스키마 ---
-@pytest.mark.xfail(strict=True, reason="F3 미구현: 주장 단위 요청 본문이 없다(19b 6.1)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_schema_claim_level_request_keys_are_allowlisted_and_name_no_person(monkeypatch, tmp_path):
     _, _, sent, _ = _pii_reference_run(monkeypatch, tmp_path)
     pairs = _claim_requests(sent)
@@ -538,12 +539,12 @@ def _validator():
     return validate
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_claim_request_payload가 없다(설계 메모 5.2)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 def test_schema_validator_accepts_an_allowlisted_body():
     assert _validator()(json.loads(json.dumps(_VALID_BODY))) is True
 
 
-@pytest.mark.xfail(strict=True, reason="F3 미구현: validate_claim_request_payload가 없다(설계 메모 5.2)")
+# 승격(2026-10-08, F3 PR #34 2e02c94에서 XPASS): strict xfail 표시를 지웠다.
 @pytest.mark.parametrize("case", sorted(_INVALID_BODIES))
 def test_schema_validator_fails_closed_without_raising(case):
     assert _validator()(json.loads(json.dumps(_INVALID_BODIES[case], ensure_ascii=False))) is False, case
