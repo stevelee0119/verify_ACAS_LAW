@@ -281,6 +281,7 @@ LV_ALLOW_NETWORK=0 python scripts/scorecard.py --sets holdout --sealed-dir ~/sea
 ## 9. 사용 뒤
 - 점수를 확인한 세트는 다시 봉인 시험으로 쓰지 않는다. 개발용으로 옮기고, 다음 탐지 변경 릴리스 전에 새 세트로 교체한다(AGENT_ROLES 4절).
 - 개발용으로 옮길지와 그 시점은 사용자가 정한다. 옮기기 전까지는 계속 저장소 밖에 둔다.
+- 옮기는 위치: `tests/fixtures/retired_sealed/<폴더 이름>/`(PDF·`ground_truth.json`·`match_spec.json`만, `.sealed_out/` 제외). 고정 시험·기준선에는 섞지 않는다([README](../../tests/fixtures/retired_sealed/README.md)).
 
 ## 10. 측정 한계
 - 오프라인(`LV_ALLOW_NETWORK=0`) 채점은 AI 작성 판별(모델), 공식 DB 대조, Drive 대조를 재지 못한다.
