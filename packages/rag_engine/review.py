@@ -303,7 +303,9 @@ def review_document(result, library, router, context, pii):
     selection = library.select(document + "\n" + "\n".join(context.requested_issues))
     hits = selection.pop("sources")
     selection["sources_used"] = [{k: h.get(k) for k in ("source_id", "file_id", "title", "folder_path", "page",
-                                                       "relevance", "text_coverage", "shared_terms")} for h in hits]
+                                                       "relevance", "text_coverage", "shared_terms",
+                                                       "structured_case_table", "sheet", "row",
+                                                       "source_cell_range")} for h in hits]
     review["selection"] = selection
     mask = (lambda value: value) if context.external_ai_policy == ExternalAIPolicy.ORIGINAL else (
         lambda value: pii.mask_text(value).masked_text)
