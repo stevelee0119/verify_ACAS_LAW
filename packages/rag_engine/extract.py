@@ -15,7 +15,7 @@ from packages.document_engine.registry import parse_document
 
 MAX_CHARS = 3_000_000
 MAX_PAGES = 1500
-EXTRACTOR_VERSION = "drive-text-v3"
+EXTRACTOR_VERSION = "drive-text-v4-case-table"
 EXCLUDE_MIN_TOTAL = 10       # 이보다 짧은 파일은 쪽 단위로 빼지 않고 전체를 격리한다
 EXCLUDE_MAX_SHARE = 0.02     # 전체 쪽수의 2%까지(최소 1쪽)
 EXCLUDE_MAX_PAGES = 3        # 그리고 3쪽까지만 해당 쪽을 빼고 색인한다
@@ -122,6 +122,16 @@ def extract(path, filename, mime):
         doc.structure.update(text_parser="pypdfium2" if native is not None else "pypdf",
                              fallback_pages=fallback_pages)
     else:
+        # Structured precedent tables use a bounded row reader.  This keeps a
+        # large workbook out of the ordinary visible-text limit while retaining
+        # sheet/row/case-head provenance for exact lookup.
+        if path.suffix.lower() in (".xlsx", ".csv"):
+            from .case_table import extract_case_table
+            structured = extract_case_table(path, file_id="", revision="")
+            if structured is not None:
+                structured.setdefault("body_extraction_scope", "STRUCTURED_CASE_TABLE_ROWS")
+                structured.setdefault("page_numbers_reliable", False)
+                return structured
         doc = parse_document(str(path), document_id="reference", filename=filename,
                              mime_type=mime, sha256=digest)
         total = len(doc.pages)
@@ -178,6 +188,15 @@ def main():
             # Keep a compressed or malformed reference from exhausting the API/worker container.
             resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
         result = extract(source, filename, mime)
+    except ValueError as exc:
+        # Preserve stable resource/security reason codes for the cache.  The
+        # old broad catch turned an actionable limit or timeout into a generic
+        # parse failure, making retries and operator diagnosis impossible.
+        code = str(exc)
+        allowed = {"REFERENCE_TEXT_LIMIT", "REFERENCE_PARSE_TIMEOUT", "REFERENCE_QUARANTINED",
+                   "REFERENCE_PARSE_FAILED", "ENCRYPTED_REFERENCE", "REFERENCE_CASE_TABLE_PARTIAL"}
+        result = {"chunks": [], "partial": True,
+                  "reason": code if code in allowed else "REFERENCE_PARSE_FAILED"}
     except Exception:
         result = {"chunks": [], "partial": True, "reason": "REFERENCE_PARSE_FAILED"}
     Path(output).write_text(json.dumps(result, ensure_ascii=False), encoding="utf-8")

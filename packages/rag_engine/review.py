@@ -152,6 +152,11 @@ def _match_citations_to_references(citations: list, sources: list) -> dict:
 
             # 사건번호: 경계 일치
             if case_no:
+                # Structured precedent rows have their own exact lookup and a
+                # separate reference_case_match field.  A number appearing in
+                # an editorial row is never, by itself, a SUPPORTS verdict.
+                if src.get("structured_case_table"):
+                    continue
                 pattern = rf"(?<!\d){re.escape(str(case_no))}(?!\d)"
                 if re.search(pattern, text):
                     matched = True
@@ -312,21 +317,35 @@ def review_document(result, library, router, context, pii):
     from .contract_facts import review_contract_calculations
     review["contract_review"] = review_contract_calculations(document, sources)
     review["coverage"] = selection.get("coverage")
-    if selection["decision"] == "INCOMPLETE_COVERAGE":
+    citations = getattr(result, "citations", []) or []
+    citation_by_id = {getattr(c, "citation_id", None) or (c.get("citation_id") if isinstance(c, dict) else None): c
+                      for c in citations}
+    reference_case_matches = {}
+    if getattr(library, "has_case_tables", lambda: False)():
+        for citation in citations:
+            cid = getattr(citation, "citation_id", None) or (citation.get("citation_id") if isinstance(citation, dict) else None)
+            case_number = getattr(citation, "canonical_case_number", None) or getattr(citation, "case_number", None)
+            if isinstance(citation, dict):
+                case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
+            if cid and case_number:
+                reference_case_matches[cid] = library.match_case(citation)
+        review["structured_case_search"] = {"enabled": True, "corpus": "ELIGIBLE_CASE_TABLE_ROWS",
+                                             "holding_first": True}
+    review["reference_case_matches"] = reference_case_matches
+    if selection["decision"] == "INCOMPLETE_COVERAGE" and not reference_case_matches and not getattr(library, "has_case_tables", lambda: False)():
         review.update(status="INCOMPLETE_COVERAGE", reason="RELEVANT_REFERENCES_NOT_FULLY_READ")
         return review
     if selection["reason"] == "NO_ELIGIBLE_REFERENCE":
         # Nothing could be read from Drive: that is an unfinished check, not "no relevant material".
         review["reason"] = "NO_READABLE_DRIVE_REFERENCE"
         return review
-    if not sources:
+    if not sources and not getattr(library, "has_case_tables", lambda: False)():
         # No relevant Drive material: the library is not used for this document (not proof of absence).
         review.update(status="NOT_RELEVANT", reason="NO_RELEVANT_DRIVE_REFERENCE:" + selection["reason"])
         return review
     review["drive_used"] = True
 
     # 1. 인용 동일성 대조 (U1: 판례 사건번호 경계 일치, 법령명+조 근접 대조)
-    citations = getattr(result, "citations", []) or []
     reference_matches = _match_citations_to_references(citations, sources)
     review["reference_matches"] = reference_matches
 
@@ -431,15 +450,40 @@ def review_document(result, library, router, context, pii):
         # 1) 질의어 생성 (한국어 핵심어 추출, 단일 문장 주장 보충 지원)
         salient = _claim_salient_words(c_raw_text)
 
-        # 2) 이미 읽은 sources 안에서 주장 핵심어 출현 빈도로 로컬 점수 정렬 (확정 발췌 경로, 한국어 주석)
+        # 2) 문서 최초 선택과 독립된 전체 구조화 판례 코퍼스 주장별 검색.
+        #    인용이 있으면 정확 사건번호 행을 우선하고, 없으면 쟁점/요지로 찾는다.
+        claim_case_sources = []
+        if getattr(library, "has_case_tables", lambda: False)():
+            claim_citation_ids = claim_obj.get("citation_ids") or []
+            if isinstance(claim_citation_ids, str):
+                claim_citation_ids = [claim_citation_ids]
+            linked_citations = [citation_by_id[cid] for cid in claim_citation_ids
+                                if cid in citation_by_id]
+            claim_case_sources = library.search_case_table(c_raw_text, citations=linked_citations, limit=5)
+
+        # 3) 이미 읽은 sources와 행 단위 후보를 주장 핵심어 출현 빈도로 정렬
+        claim_sources = list(sources)
+        next_source_id = len(claim_sources) + 1
+        for case_source in claim_case_sources:
+            case_source = {**case_source, "source_id": f"R{next_source_id}",
+                           "text": mask(case_source.get("text", "")),
+                           "title": mask(case_source.get("title", ""))}
+            next_source_id += 1
+            claim_sources.append(case_source)
+            # Keep the source available to quote grounding and the final
+            # report.  The request itself still observes the existing
+            # five-item/eight-hundred-character envelope.
+            if not any(s.get("source_id") == case_source["source_id"] for s in sources):
+                sources.append(case_source)
+                review["sources"] = sources
         if salient:
             def _score_source(src):
                 stext = src.get("text", "")
                 return sum(1 for w in salient if w in stext)
-            scored = sorted(sources, key=_score_source, reverse=True)
+            scored = sorted(claim_sources, key=lambda src: (src.get("structured_case_table", False), _score_source(src)), reverse=True)
             relevant_sources = scored[:5]
         else:
-            relevant_sources = sources[:5]
+            relevant_sources = claim_sources[:5]
 
         # 3) 발췌문 구성 (주장 관련 문맥 구간 추출, 최대 5개 항목, 항목당 800자 이내, 총합 4,000자 이내)
         ref_sources_items = []
@@ -521,7 +565,7 @@ def review_document(result, library, router, context, pii):
         accepted_any |= c_accepted
 
         if c_accepted and c_outcome.parsed:
-            c_obs = grounded_observations(c_outcome.parsed, document, sources,
+            c_obs = grounded_observations(c_outcome.parsed, document, claim_sources,
                                           rejected=review["rejected_observations"])
             if c_obs:
                 for o in c_obs:
@@ -637,7 +681,7 @@ def report_lines(run_result):
         return []
     lines = [f"주요 참고문헌 검토 결과(RAG): {library.get('status')} / 조회 {library.get('checked_at')} / "
              f"색인 {library.get('files_indexed', 0)}건 / 목록 {library.get('files_seen', 0)}건",
-             "색인은 검색 가능한 텍스트 범위이며 책 전체 AI 검토가 아니다. 실제 대조는 선택된 발췌문에 한정된다.",
+             "색인은 검색 가능한 텍스트 범위이며 책 전체 AI 검토가 아니다. 구조화 판례는 주장별 행 발췌와 사건정보 대조 범위만 기록한다.",
              "검색 기반 AI 참고 의견이며 공식 출처 확인, AI 작성 여부, 위조 여부 판정을 대체하지 않는다."]
     recorded = {item.get("file_id") for item in library.get("inventory", []) if item.get("file_id")}
     for issue in [i for i in library.get("issues", []) if not i.get("file_id") or i["file_id"] not in recorded][:20]:
@@ -658,6 +702,9 @@ def report_lines(run_result):
         review = doc.engine_data.get("rag", {})
         used = "Drive 자료 활용" if review.get("drive_used") else "Drive 자료 미활용"
         lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {used} / {review.get('reason', '')}")
+        for cid, match in (review.get("reference_case_matches") or {}).items():
+            lines.append(f"사건정보 대조({cid}): {match.get('status', 'NOT_CHECKED')} / "
+                         f"{match.get('sheet', '')}!{match.get('source_cell_range', '')}")
         for source in review.get("sources", []):
             location = f"{source['page']}쪽" if source.get("page_numbers_reliable", True) else f"텍스트 구간 {source['page']}(원본 쪽 미확인)"
             lines.append(f"{source['source_id']}: {source['title']} / {location} / "

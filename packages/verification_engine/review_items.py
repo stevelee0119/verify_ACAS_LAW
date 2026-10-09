@@ -197,6 +197,7 @@ def build_document_review_items(
         rag_data = getattr(doc_result, "engine_data", {}).get("rag", {})
         drive_used = rag_data.get("drive_used", False)
         ref_matches = rag_data.get("reference_matches", {})
+        case_matches = rag_data.get("reference_case_matches", {})
         issues = rag_data.get("issues", [])
 
         # 인용과 연결된 Claim 확인: Claim.citation_ids에 cid가 포함된 주장들
@@ -214,6 +215,7 @@ def build_document_review_items(
 
         has_contradicted = any(issue.get("relationship") == "CONTRADICTS" for issue in linked_issues)
         match_info = ref_matches.get(cid)
+        case_match_info = case_matches.get(cid) or {}
 
         # 상태 우선순위: CONTRADICTED > SUPPORTED > NOT_MENTIONED > NOT_CHECKED
         if has_contradicted:
@@ -274,6 +276,12 @@ def build_document_review_items(
             evidence_sources.append(
                 f"참고자료(공식 법령·판례 아님): {source_title} (https://drive.google.com/file/d/{file_id}/view)"
             )
+        if case_match_info.get("status") in {"MATCH", "METADATA_MISMATCH", "AMBIGUOUS", "NOT_IN_REFERENCE"}:
+            evidence_sources.append(
+                "표준판례 사건정보 대조: " + str(case_match_info.get("status"))
+                + (f" ({case_match_info.get('sheet')}!{case_match_info.get('source_cell_range')})"
+                   if case_match_info.get("sheet") else "")
+            )
 
         reasoning = h_row.get("reasoning_sections")
         counteraction = h_row.get("recommended_counteraction")
@@ -298,6 +306,7 @@ def build_document_review_items(
             advisory_only=False,
             reasoning_sections=reasoning,
             counteraction=counteraction,
+            reference_case_match=case_match_info.get("status"),
         )
         items.append(item)
 

@@ -20,6 +20,7 @@ from .drive import DriveClient, EXPORTS, ReferenceError, access_problem, revisio
 from .extract import EXTRACTOR_VERSION
 from . import relevance
 from .relevance import tokens
+from .case_table import lookup_records
 
 SUPPORTED = {".pdf", ".docx", ".hwpx", ".hwp", ".xlsx", ".txt", ".md", ".csv"}
 
@@ -51,9 +52,18 @@ def isolated_extract(data, filename, mime, *, directory, timeout):
             raise ReferenceError("REFERENCE_PARSE_TIMEOUT") from None
         except subprocess.CalledProcessError:
             raise ReferenceError("REFERENCE_PARSE_FAILED") from None
-        if not output.exists() or output.stat().st_size > 16_000_000:
+        if not output.exists():
             raise ReferenceError("REFERENCE_TEXT_LIMIT")
-        return json.loads(output.read_text(encoding="utf-8"))
+        # Structured tables carry row provenance alongside text.  Their bound
+        # is explicit and independent from the ordinary 16 MB extraction cap;
+        # a malformed/unbounded workbook still fails closed.
+        payload_size = output.stat().st_size
+        if payload_size > 64_000_000:
+            raise ReferenceError("REFERENCE_TEXT_LIMIT")
+        payload = json.loads(output.read_text(encoding="utf-8"))
+        if payload_size > 16_000_000 and not payload.get("structured_case_table"):
+            raise ReferenceError("REFERENCE_TEXT_LIMIT")
+        return payload
 
 
 def stale_quarantine(parsed):
@@ -76,7 +86,7 @@ class ReferenceLibrary:
                         "files_reused": 0, "issues": [], "sources": [], "duplicates": [], "similar_names": [],
                         "diagnostics": {}, "inventory": [],
                         "retrieval": "SQLite FTS5; Korean character bigrams; corpus-IDF relevance gate "
-                                     "with folder/file-name bonus",
+                                     "with folder/file-name bonus; structured case rows use exact lookup and claim-level holding-first search",
                         "authority": "USER_REFERENCE_NOT_OFFICIAL", "extractor": EXTRACTOR_VERSION}
 
     @contextmanager
@@ -88,6 +98,19 @@ class ReferenceLibrary:
         db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5("
                    "file_id UNINDEXED, revision UNINDEXED, page UNINDEXED, start UNINDEXED, text UNINDEXED, terms)")
         db.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunk_terms USING fts5vocab(chunks, 'row')")
+        db.execute("""CREATE TABLE IF NOT EXISTS case_rows (
+            record_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, revision TEXT NOT NULL,
+            sheet TEXT, row_number INTEGER, source_cell_range TEXT,
+            original_number TEXT, title TEXT, case_info TEXT, court TEXT,
+            decision_date TEXT, case_numbers TEXT, target_case_numbers TEXT, referenced_case_numbers TEXT,
+            issue TEXT, facts TEXT,
+            reason TEXT, holding TEXT, hyperlinks TEXT, quality_warnings TEXT,
+            case_head TEXT, indexed_text TEXT, raw_cells TEXT
+        )""")
+        columns = {row[1] for row in db.execute("PRAGMA table_info(case_rows)")}
+        for missing in ("target_case_numbers", "referenced_case_numbers", "raw_cells"):
+            if missing not in columns:
+                db.execute(f"ALTER TABLE case_rows ADD COLUMN {missing} TEXT")
         try:
             yield db
         finally:
@@ -241,6 +264,7 @@ class ReferenceLibrary:
         for (file_id,) in db.execute("SELECT id FROM files").fetchall():
             if file_id not in seen:
                 db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                db.execute("DELETE FROM case_rows WHERE file_id=?", (file_id,))
                 db.execute("DELETE FROM files WHERE id=?", (file_id,))
         db.commit()
         downloaded = 0
@@ -267,6 +291,7 @@ class ReferenceLibrary:
                 if skip.get(file_id) in self.eligible:
                     diagnostics["duplicates_skipped"] += 1
                     db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                    db.execute("DELETE FROM case_rows WHERE file_id=?", (file_id,))
                     db.execute("DELETE FROM files WHERE id=?", (file_id,))
                     db.commit()
                     entry.update(status="DUPLICATE_REUSED", reason="IDENTICAL_CONTENT", duplicate_of=skip[file_id])
@@ -334,13 +359,33 @@ class ReferenceLibrary:
                         diagnostics["extractions"]["count"] += 1
                         diagnostics["extractions"]["ms"] += round((time.monotonic() - mark) * 1000)
                     chunks = parsed.pop("chunks", [])
+                    case_records = parsed.pop("case_records", [])
                     parsed["chunk_count"] = len(chunks)
                     # Cache terminal parse outcomes, too; a large unreadable file must not starve later files.
                     with db:
                         db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                        db.execute("DELETE FROM case_rows WHERE file_id=?", (file_id,))
                         db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (file_id, version, json.dumps(parsed)))
                         db.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?)", [
                             (file_id, version, c["page"], c["start"], c["text"], " ".join(tokens(c["text"]))) for c in chunks])
+                        if case_records:
+                            db.executemany("""INSERT OR REPLACE INTO case_rows
+                                (record_id,file_id,revision,sheet,row_number,source_cell_range,
+                                 original_number,title,case_info,court,decision_date,case_numbers,
+                                 target_case_numbers,referenced_case_numbers,issue,facts,reason,holding,
+                                 hyperlinks,quality_warnings,case_head,indexed_text,raw_cells) VALUES
+                                (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""", [
+                                (r.get("record_id"), file_id, version, r.get("sheet"), r.get("row"),
+                                 r.get("source_cell_range"), r.get("original_number"), r.get("title"),
+                                 r.get("case_info"), r.get("court"), r.get("decision_date"),
+                                 json.dumps(r.get("case_numbers", []), ensure_ascii=False),
+                                 json.dumps(r.get("target_case_numbers", r.get("case_numbers", [])), ensure_ascii=False),
+                                 json.dumps(r.get("referenced_case_numbers", []), ensure_ascii=False), r.get("issue"),
+                                 r.get("facts"), r.get("reason"), r.get("holding"),
+                                 json.dumps(r.get("hyperlinks", []), ensure_ascii=False),
+                                 json.dumps(r.get("quality_warnings", []), ensure_ascii=False),
+                                 r.get("case_head"), r.get("indexed_text"),
+                                 json.dumps(r.get("raw_cells", {}), ensure_ascii=False)) for r in case_records])
                 if parsed.get("partial") or not parsed.get("chunk_count"):
                     self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
                         "reason": parsed.get("reason") or "REFERENCE_EMPTY",
@@ -350,9 +395,12 @@ class ReferenceLibrary:
                              reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
                              read_pages=parsed.get("read_pages"))
                 for key in ("excluded_pages", "scan_findings", "no_text_pages", "unprocessed_pages", "coverage_note",
-                            "text_parser", "fallback_pages"):
+                            "text_parser", "fallback_pages", "stats"):
                     if parsed.get(key):
                         entry[key] = parsed[key]
+                if parsed.get("structured_case_table"):
+                    entry["structured_case_table"] = True
+                    entry["case_table_stats"] = parsed.get("stats", {})
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
                 entry["body_extraction_scope"] = parsed.get("body_extraction_scope")
                 if parsed.get("chunk_count"):
@@ -365,7 +413,9 @@ class ReferenceLibrary:
                         "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages"),
                         "page_numbers_reliable": parsed.get("page_numbers_reliable", True),
                         "body_extraction_scope": parsed.get("body_extraction_scope"),
-                        "chunk_count": parsed["chunk_count"]}
+                        "chunk_count": parsed["chunk_count"],
+                        "structured_case_table": bool(parsed.get("structured_case_table")),
+                        "case_table_stats": parsed.get("stats", {})}
             except ReferenceError as exc:
                 code = str(exc)
                 entry.update(status="UNSUPPORTED_TYPE" if code == "UNSUPPORTED_REFERENCE_FORMAT" else
@@ -549,3 +599,89 @@ class ReferenceLibrary:
 
     def search(self, text, limit=12):
         return self.select(text, limit)["sources"]
+
+    def has_case_tables(self) -> bool:
+        return any(v.get("structured_case_table") for v in self.eligible.values())
+
+    def _case_rows(self) -> list[dict]:
+        if not self.has_case_tables() or not self.db_path.exists():
+            return []
+        try:
+            with self.connect() as db:
+                rows = db.execute("""SELECT record_id,file_id,revision,sheet,row_number,
+                    source_cell_range,original_number,title,case_info,court,decision_date,
+                    case_numbers,target_case_numbers,referenced_case_numbers,issue,facts,reason,holding,hyperlinks,quality_warnings,
+                    case_head,indexed_text,raw_cells FROM case_rows""").fetchall()
+        except sqlite3.Error:
+            return []
+        fields = ("record_id", "file_id", "revision", "sheet", "row", "source_cell_range",
+                  "original_number", "title", "case_info", "court", "decision_date",
+                  "case_numbers", "target_case_numbers", "referenced_case_numbers", "issue", "facts", "reason", "holding", "hyperlinks",
+                  "quality_warnings", "case_head", "indexed_text", "raw_cells")
+        result = []
+        for row in rows:
+            item = dict(zip(fields, row))
+            for key in ("case_numbers", "target_case_numbers", "referenced_case_numbers", "hyperlinks", "quality_warnings", "raw_cells"):
+                try:
+                    item[key] = json.loads(item[key] or "[]")
+                except (TypeError, ValueError):
+                    item[key] = []
+            result.append(item)
+        return result
+
+    def match_case(self, citation) -> dict:
+        """Exact lookup in the structured corpus; never changes official findings."""
+        case_number = getattr(citation, "canonical_case_number", None) or getattr(citation, "case_number", None)
+        court = getattr(citation, "court", None) or getattr(citation, "court_name", None)
+        decision_date = getattr(citation, "decision_date", None) or getattr(citation, "date", None)
+        if isinstance(citation, dict):
+            case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
+            court = court or citation.get("court") or citation.get("court_name")
+            decision_date = decision_date or citation.get("decision_date") or citation.get("date")
+        return lookup_records(self._case_rows(), str(case_number or ""), court=court,
+                              decision_date=str(decision_date or "") or None)
+
+    def search_case_table(self, text: str, *, citations=None, limit: int = 5) -> list[dict]:
+        """Claim-level search over every eligible case-table row.
+
+        Holding/reason are ordered before the issue text so the existing
+        request envelope receives the most probative editorial material first.
+        """
+        rows = self._case_rows()
+        if not rows:
+            return []
+        exact_ids = set()
+        for citation in citations or []:
+            match = self.match_case(citation)
+            if match.get("record_id"):
+                exact_ids.add(match["record_id"])
+            exact_ids.update(match.get("record_ids") or [])
+        query = str(text or "")
+        from .relevance import salient_words
+        words = salient_words(query, limit=12)
+        if not words:
+            import re
+            words = list(dict.fromkeys(re.findall(r"[가-힣]{2,}", query)))[:12]
+        ranked = []
+        for row in rows:
+            hay = " ".join([row.get("title", ""), row.get("issue", ""), row.get("reason", ""),
+                            row.get("holding", ""), row.get("facts", "")])
+            score = (1000 if row.get("record_id") in exact_ids else 0) + sum(hay.count(w) for w in words)
+            if score or exact_ids.intersection({row.get("record_id")}):
+                ranked.append((score, row))
+        ranked.sort(key=lambda pair: (-pair[0], pair[1].get("file_id", ""), pair[1].get("row", 0)))
+        result = []
+        for _score, row in ranked[:limit]:
+            source = self.eligible.get(row["file_id"], {})
+            # One source item remains within the established 800-character
+            # claim envelope; the review layer applies masking before use.
+            holding = row.get("holding") or ""
+            support = " | ".join(filter(None, [holding, row.get("reason"), row.get("issue"), row.get("case_head")]))
+            result.append({**source, "source_id": "", "text": support[:800], "page": row.get("row", 1),
+                           "relevance": _score, "structured_case_table": True,
+                           "case_record_id": row.get("record_id"), "case_head": row.get("case_head"),
+                           "sheet": row.get("sheet"), "row": row.get("row"),
+                           "source_cell_range": row.get("source_cell_range"),
+                           "case_numbers": row.get("case_numbers", []), "court": row.get("court"),
+                           "decision_date": row.get("decision_date"), "holding": holding})
+        return result
