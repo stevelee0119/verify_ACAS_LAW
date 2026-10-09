@@ -3,7 +3,7 @@
 갱신: 2026-10-09 평가 측(PR #53 판정, TK-71 신설). 이전 전달문(2026-10-04)을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Codex 작업 — 통합 지시 2026-10-09 (4)]
+[Codex 작업 — 통합 지시 2026-10-09 (5)]
 
 0. 규칙(AGENTS.md)
  - 시작: 평가 측 기록 PR #51이 Steve_ACASiaLAW에 병합된 뒤, 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다(티켓 개정이 거기 들어 있다).
@@ -48,8 +48,8 @@
  - 시험(티켓 2.7)은 합성 자료만 쓴다. 사용자 Drive 파일과 그 내용은 저장소에 넣지 않는다. 새 분석 경로마다 반복 입력 시간 시험을 둔다.
  - 순서
    1) 설계 메모를 지금 docs/handoff/requests/에 첫 커밋으로 낸다(브랜치 codex/tk71-structured-case-table). 평가 측 회신 전에는 코드를 쓰지 않는다.
-   2) 구현은 Antigravity의 TK-70(packages/verification_engine/pipeline.py·candidate_verifier.py·gate.py)과
-      TK-68(packages/rag_engine/review.py)이 Steve에 병합된 뒤, 최신 Steve를 병합 커밋으로 받아 시작한다. 같은 파일을 동시에 고치지 않기 위해서다.
+   2) (사용자 결정 2026-10-09로 변경) 구현은 지금 진행한다. TK-71을 먼저 받고, Antigravity TK-68은 TK-71 병합 뒤 시작한다.
+      TK-70(pipeline.py·candidate_verifier.py·gate.py)과 겹치면 먼저 병합된 쪽을 병합 커밋으로 받아 맞춘다.
  - 수용 SHA에서 평가 측이 verify_all 전체 모드를 돌리고, 배포 뒤 평가 측 비공개 온라인 세트로 잰다.
 
 각 항목은 따로 Steve_ACASiaLAW 대상 PR로 올리고, CI가 끝난 뒤 '검토 요청'을 남긴다. 병합은 사용자가 한다.
