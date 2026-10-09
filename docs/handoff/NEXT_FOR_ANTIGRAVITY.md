@@ -1,38 +1,28 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-09 평가 측(TK-63 배포·온라인 점검 완료, TK-65 신설). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-09 평가 측(TK-64 봉인 기준 충족, 버전 0.11.0 판정). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-09 (31)]
+[Antigravity 작업 — 통합 지시 2026-10-09 (35)]
 
 0. 규칙(AGENTS.md): 리베이스·강제 푸시 금지(병합 커밋). 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청').
    푸시 전 python scripts/check_test_edits.py --base origin/Steve_ACASiaLAW 출력을 보고에 붙인다.
-   착수 시점(B·C 공통): 평가 측 PR #42가 병합된 뒤(티켓 파일이 Steve_ACASiaLAW에 들어간 뒤) 그 최신에서 브랜치를 만든다.
-   B와 C는 고치는 파일이 겹치지 않는다. 브랜치·PR을 따로 낸다. 우선순위는 B(A등급 오탐)다.
 
-[A] TK-63 — 배포 완료(main 1f38751). 온라인 서면9 19/23(새 실패 0). 선별 규칙·예산 기록 동작 확인. 할 일 없음.
+[A] TK-63·TK-65 배포 완료(main 4c18528). TK-64 Steve 병합 완료(34e1c9a), 봉인 기준 충족. 할 일 없음.
 
-[B] TK-64(P2, 기존 결함) — 본문 서술 문단을 증거 목록 행으로 읽어 '같은 호증 번호 중복' A등급 오탐.
-    티켓: docs/handoff/TK-64_exhibit_list_prose_rows_duplicate_number.md (요구 4절, 사전 점검 5절, 수용 6절)
-    브랜치: antigravity/tk64-exhibit-rows
-    1. 번호가 붙은 목록 구역 제목('다. 입증방법', '3. 입증방법', '(1) 입증방법')을 구역 시작으로 알아본다.
-       제목 뒤에 다른 말이 이어지는 문장('3. 내부 기준과 입증방법')은 구역 제목으로 보지 않는다.
-    2. 본문 구역의 서술 문단을 목록 행으로 받지 않는다(어휘 목록 확장이 아니라 문장 구조로 판별).
-       목록 구역이 있으면 같은 번호의 본문 언급은 중복 판단에서 뺀다.
-    3. 합성 시험: 양성 유지 3건 이상(목록 안 진짜 중복, 번호 접두 유무별), 오탐 제거 3건 이상. 은퇴 세트의 문장·값을 쓰지 않는다.
-    4. 보고: 전후 scorecard 출력 원문과 측정 조건, 관련 시험 pytest 요약 줄 원문.
+[B] 버전 커밋 0.10.0 → 0.11.0 (VERSION_POLICY 6절 3)
+    착수 시점: 평가 측 판정서(docs/scorecards/version_verdicts.json의 0.11.0 항목)가 Steve_ACASiaLAW에 들어간 뒤.
+               평가 측 PR이 병합되면 사용자가 알린다. 그 전에는 시작하지 않는다(판정서 없는 상향은 점검 실패).
+    브랜치: Steve_ACASiaLAW 최신에서 antigravity/version-0.11.0
+    1. 커밋 1개만 만든다. 바꾸는 것은 아래 셋뿐이다. 다른 변경을 섞지 않는다.
+       - packages/common/config.py 의 version: "0.10.0" → "0.11.0"
+       - docs/releases.json 에 0.11.0 항목 1개(date 2026-10-09). changes에는 판정서 근거 수치와 포함 티켓을 적는다:
+         TK-64(번호 붙은 입증방법 제목 인식, 목록 구역 번호의 본문 언급 중복 제외 — 봉인 sealed_20261009 오탐 3→1·A등급 2→0,
+         은퇴 sealed_20261008b 24.6→29.6), TK-63(주장 선별 규칙·예산형 상한), TK-65(응답 최상위 형식·빈 예외 문구·비용 기록 분리).
+         봉인·은퇴 세트의 문장·사건 값은 쓰지 않는다(이름과 수치만).
+       - python scripts/update_readme.py 가 갱신하는 README 표
+    2. 보고: python scripts/check_version_policy.py --base origin/Steve_ACASiaLAW 출력 원문,
+       git show --stat HEAD 출력(바뀐 파일이 위 셋뿐인지), check_test_edits 출력.
 
-[C] TK-65(P2, 기능 목표 미달) — F3 주장 단위 대조에서 인용 주장 응답이 형식 검사(최상위 observations 필수)에 걸려 대조되지 않는다.
-    티켓: docs/handoff/TK-65_f3_claim_response_envelope_schema.md (요구 4절, 사전 점검 5절, 수용 6절)
-    브랜치: antigravity/tk65-response-envelope
-    1. RAG_REVIEW_SYSTEM_PROMPT에 최상위 형식({"observations": [항목, ...]} 객체 하나, 의견이 하나여도 배열)을 명시하고,
-       형식 예시는 ITEM_SCHEMA 대신 전체 SCHEMA를 보인다.
-    2. 요청 스키마는 ENVELOPE_SCHEMA를 그대로 둔다(등록 스키마, 보호 시험 하네스가 의존). 관대한 수용 스키마는 이번에 하지 않는다.
-    3. 공급자 어댑터(providers.py의 error=str(exc) 4곳)에서 예외 메시지가 비면 예외 형식 이름을 남긴다. 재시도 판정은 그대로.
-    4. claim_coverage.budget에 spent_usd(예산 판정에 쓴 합계)·uncertain_usd(그중 RESERVED_UNCERTAIN 예약액)를 더한다. 판정 방식은 그대로.
-    5. 합성 시험: 프롬프트 형식 문장·전체 SCHEMA·등록 검사 통과, 빈 예외 오류 문구(어댑터마다), 비용 기록 2키.
-       서면9 문장·규정명·조항 번호에 맞춘 규칙을 넣지 않는다.
-    6. 보고: 관련 시험 pytest 요약 줄 원문, 고정 시험 scorecard(81.7/79.2/0 유지) 원문과 측정 조건.
-
-[D] FT 후속(목 뒤 가운뎃점 '가목·나목' 인식) — 아직 하지 않는다. 착수 시점은 평가 측이 따로 지시한다.
+[C] FT 후속(목 뒤 가운뎃점 '가목·나목' 인식) — 아직 하지 않는다. 착수 시점은 평가 측이 따로 지시한다.
 ```

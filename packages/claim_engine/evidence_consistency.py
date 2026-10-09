@@ -160,7 +160,7 @@ def exhibit_rows(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         for row in body:
             values = {key: _cell(row[index]) if index < len(row) else "" for key, index in columns.items()}
             for ref in parse_exhibits(values.get("id", "")):
-                rows.append(_row(values, ref, table_ref=table.get("table_ref"), page=table.get("page")))
+                rows.append(_row(values, ref, table_ref=table.get("table_ref"), page=table.get("page"), from_lines=False, in_section=True))
     return rows or _exhibit_lines(doc)
 
 
@@ -206,8 +206,15 @@ def _columns_by_content(cells: List[List[Any]]) -> Dict[str, int]:
 _NOT_CONTINUATION_RE = re.compile(r"^\s*(?:(?:19|20)\d{2}\s*\.|첨\s*부|위\s|원\s*고|피\s*고|대\s*리\s*인|귀\s*중|"
                                   r"\d{1,2}\s*[.)]|[가-하]\s*[.)]|[①-⑳]|[■□▶-]|입\s*증\s*방\s*법|증\s*거\s*목\s*록)")
 
-# 증거 목록 섹션 시작 헤더 (입증방법, 첨부서류, 증거목록 등)
-_EXHIBIT_SECTION_HEAD_RE = re.compile(r"^\s*(?:\[\s*)?(?:입\s*증\s*방\s*법|첨\s*부\s*서\s*류|증\s*거\s*목\s*록|소\s*명\s*방\s*법)(?:\s*\])?(?:\s*[:：])?")
+# 증거 목록 섹션 시작 헤더 (앞의 번호·기호 허용, 제목 뒤 괄호·쌍점 부연 허용, TK-64·TK-66 ReDoS 방지)
+_EXHIBIT_SECTION_HEAD_RE = re.compile(
+    r"^\s*(?:(?:(?:\d{1,2}|[가-하])\s*[.)]|\(\s*(?:\d{1,2}|[가-하])\s*\)|[①-⑳]|\[(?:\s*(?:\d{1,2}|[가-하]))?\s*\]?)\s*){0,3}"
+    r"(?:입\s*증\s*방\s*법|첨\s*부\s*서\s*류|증\s*거\s*목\s*록|소\s*명\s*방\s*법)"
+    r"(?:\s*(?:및|·|,)\s*(?:입\s*증\s*방\s*법|첨\s*부\s*서\s*류|증\s*거\s*목\s*록|소\s*명\s*방\s*법))?"
+    r"(?:\s*\])?"
+    r"(?:\s*\([^\)]*\))*"
+    r"(?:\s*[:：\-–—]\s*.*)?\s*$"
+)
 
 # 본문 서술 문맥의 단순 인용·참조 표기 (예: '중 발췌하여', '참조바람', '보더라도' 등)
 _EXHIBIT_REF_SENTENCE_RE = re.compile(
@@ -232,7 +239,7 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         if not stripped:
             continue
 
-        # 입증방법 / 첨부서류 / 증거목록 섹션 진입 감지
+        # 입증방법 / 첨부서류 / 증거목록 섹션 진입 감지 (번호 붙은 제목 및 괄호·쌍점 부연 포함, TK-64)
         if _EXHIBIT_SECTION_HEAD_RE.search(stripped):
             in_exhibit_section = True
             previous_was_item = False
@@ -280,6 +287,7 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             tail = rest[found.end():].strip() if found else ""
             rows.append(_row({"id": ref["label"], "name": name, "date": found.group(0) if found else "",
                               "author": tail, "purpose": tail}, ref, table_ref=None, page=None, from_lines=True,
+                             in_section=in_exhibit_section,
                              line_group=(paragraph_index, ref["span"])))
     return rows
 
@@ -440,8 +448,19 @@ def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> 
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
     # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
+    # 목록 구역(표 또는 번호 붙은 입증방법 섹션)에 존재하는 호증 번호는 본문 언급을 중복 판단에서 제외 (TK-64)
+    section_keys = {
+        (r["party"], r["number"])
+        for r in rows
+        if r.get("in_section", not r.get("from_lines", False))
+    }
+
     seen: Dict[tuple, List[Dict[str, Any]]] = {}
     for row in rows:
+        is_in_section = row.get("in_section", not row.get("from_lines", False))
+        # 목록 구역이 존재하는 서면에서, 해당 목록 구역에 이미 등록된 번호의 본문 행은 중복 집계에서 제외
+        if section_keys and not is_in_section and (row["party"], row["number"]) in section_keys:
+            continue
         keys = [(row["party"], row["number"], b) for b in row.get("branches") or []] or [(row["party"], row["number"], None)]
         for key in keys:
             seen.setdefault(key, []).append(row)

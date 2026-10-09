@@ -29,5 +29,37 @@
   "decided_by": "evaluator(claude-code)",
   "decided_at": "2026-10-04",
   "note": "첫 판정. 등급 임계값 재검토 결과 현행 유지(사용자 결정 2026-10-04)."
+ },
+ {
+  "version": "0.11.0",
+  "from": "0.10.0",
+  "level": "minor",
+  "measured_commit": "34e1c9ad855f70137f0acf58f3aadc2ec22ae02d",
+  "conditions": {
+   "network": false,
+   "os": "Linux",
+   "python": "3.11.15",
+   "tesseract": "5.3.4",
+   "scoring": "scripts/scorecard.py(dev·holdout, 은퇴 세트 2종 --sealed-dir) 평가 측 재실행; 봉인 sealed_20261009는 사용자 환경(Python 3.12.14, tesseract 5.5.0 kor 없음)에서 운영본·후보 같은 조건"
+  },
+  "evidence": {
+   "M1": {
+    "baseline": "main 4c18528(= a31b561 탐지 코드) dev 81.7 / holdout 79.2 / 오탐 0",
+    "candidate": "dev 81.7 / holdout 79.2 / 오탐 0",
+    "delta": "0 (상향 근거 아님)"
+   },
+   "M2": "봉인 sealed_20261009(문서 8·결함 58, 지문 cf2944d9059d4ba6): 운영본 4c18528 24.2/0.362/오탐 3(대조군 3, A 2) → 후보 34e1c9a 34.2/0.362/오탐 1(대조군 1, A 0), 인젝션 방어 유지(같은 PC·같은 환경). 은퇴 sealed_20261008b(평가 측 표준 환경): 24.6/0.296/오탐 1(A 1) → 29.6/0.296/0, 은퇴 sealed_20261008: 19.0 → 19.0",
+   "M3": "인계 티켓 TK-64(A등급 증거번호 중복 오탐) 수용 기준(6절·개정 1) 모두 충족·해소 → 첫째 자리 기준('인계 티켓 1건이 수용 기준을 모두 충족하며 해소')",
+   "P1": "verify_all regression_gate --base a31b561 회귀 없음",
+   "P2": "점수 게이트 통과(종합점수 하락·오탐 증가 0), 봉인 오탐·A등급 감소",
+   "P3": "하드코딩 변경분 점검 통과(새 rule_id 없음)",
+   "P4": "verify_all 전체 모드 종료 0(f1ba73c: acceptance 989·원장 501·전체 3,284·브라우저 197), 같은 SHA CI 필수 3개 성공",
+   "P5": "열린 신규 회귀 티켓 0",
+   "P6": "판정서 f1_gate_verdict 'TK-64 보완'·'릴리스 후보(TK-64)'",
+   "not_measured": "AI 작성 판별·공식 DB 대조·Drive 대조(오프라인). 봉인 세트 자체 점검(별도 세션) 미실시 — 지문은 채점 세션 계산값"
+  },
+  "decided_by": "evaluator(claude-code)",
+  "decided_at": "2026-10-09",
+  "note": "TK-63·TK-65 릴리스는 같은 조건의 오프라인 성능 상승이 측정되지 않아 0.10.0 유지였다. 이번에는 봉인·은퇴 세트에서 같은 조건의 오탐 감소·종합점수 상승이 측정되었다. 여러 기준 중 가장 높은 등급(첫째 자리) 하나만 적용."
  }
 ]
