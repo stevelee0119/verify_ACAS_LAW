@@ -370,28 +370,67 @@ def review_document(result, library, router, context, pii):
                           issues=link_observations(provision_obs, sources, masked_claims))
         return review
 
-    # 4. 문서 단위 배치 대조 (기존 경로 100% 보존)
-    batch_size = 6
-    batches = [sources[i:i + batch_size] for i in range(0, len(sources), batch_size)] or [sources]
+    # 4. 문서 단위 배치 대조 (TK-68: 기본 묶음 크기 축소 및 출력 한도 잘림 방지 적응형 분할)
+    default_doc_batch_size = 3
+    max_doc_batch_text_chars = 12000
+
+    def _split_sources_into_batches(src_list: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """참고자료를 묶음 크기(최대 3개) 및 텍스트 길이(최대 12,000자) 기준으로 분할한다."""
+        if not src_list:
+            return []
+        res_batches: List[List[Dict[str, Any]]] = []
+        cur_batch: List[Dict[str, Any]] = []
+        cur_chars = 0
+        for s in src_list:
+            s_chars = len(s.get("text") or "")
+            if cur_batch and (len(cur_batch) >= default_doc_batch_size or (cur_chars + s_chars > max_doc_batch_text_chars)):
+                res_batches.append(cur_batch)
+                cur_batch = [s]
+                cur_chars = s_chars
+            else:
+                cur_batch.append(s)
+                cur_chars += s_chars
+        if cur_batch:
+            res_batches.append(cur_batch)
+        return res_batches
+
+    initial_batches = _split_sources_into_batches(sources) or [sources]
+    evaluated_batches: List[List[Dict[str, Any]]] = []
     all_observations = []
     executed_any = False
     accepted_any = False
-    outcome = None  # 변수 명시적 초기화 (한국어 주석: 권고 사항 반영)
+    outcome = None  # 변수 명시적 초기화 (한국어 주석)
 
-    for b_idx, s_batch in enumerate(batches):
+    queue = list(initial_batches)
+    batch_counter = 0
+
+    while queue:
+        s_batch = queue.pop(0)
+        batch_counter += 1
         request = LLMRequest(
             system=RAG_REVIEW_SYSTEM_PROMPT,
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
-            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": b_idx + 1})
+            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": batch_counter})
         # One selected provider; the existing router bounds each call and its transient retries.
-        outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
-                                         policy=context.external_ai_policy, expected_task="참고자료 검토"))
-        result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
-        executed_any |= bool(outcome.executions or outcome.used)
-        failed = [e.provider for e in outcome.executions if getattr(e, "provider", "") and not e.ok]
-        if not outcome.used and failed:
-            # 한 공급자가 실패(형식 오류·잘림·일시 장애)하면 다른 공급자로 한 번만 다시 묻는다.
+        batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
+                                               policy=context.external_ai_policy, expected_task="참고자료 검토"))
+        outcome = batch_outcome
+        result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in batch_outcome.executions)
+        executed_any |= bool(batch_outcome.executions or batch_outcome.used)
+
+        # TK-68: 출력 한도 초과(OUTPUT_TRUNCATED)로 실패하고 묶음에 2개 이상의 참고자료가 있는 경우,
+        # 동일 대형 묶음으로 다른 공급자에 재시도하여 낭비하지 않고 절반으로 나누어 적응형 재시도(Adaptive Halving) 수행
+        is_truncated = any("OUTPUT_TRUNCATED" in getattr(e, "error", "") for e in batch_outcome.executions)
+        if not batch_outcome.used and is_truncated and len(s_batch) > 1:
+            mid = len(s_batch) // 2
+            queue.insert(0, s_batch[mid:])
+            queue.insert(0, s_batch[:mid])
+            continue
+
+        failed = [e.provider for e in batch_outcome.executions if getattr(e, "provider", "") and not e.ok]
+        if not batch_outcome.used and failed:
+            # 한 공급자가 실패(형식 오류·일시 장애 등)하면 다른 공급자로 한 번만 다시 묻는다.
             retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
                                            exclude=failed, expected_task="참고자료 검토"))
             result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
@@ -399,13 +438,18 @@ def review_document(result, library, router, context, pii):
             if retry.executions:
                 review.setdefault("retried_after", []).extend(failed)
                 outcome = retry
-        batch_accepted = bool(outcome.used and not outcome.quarantined)
+                batch_outcome = retry
+
+        evaluated_batches.append(s_batch)
+        batch_accepted = bool(batch_outcome.used and not batch_outcome.quarantined)
         accepted_any |= batch_accepted
-        if batch_accepted and outcome.parsed:
-            b_obs = grounded_observations(outcome.parsed, document, s_batch,
+        if batch_accepted and batch_outcome.parsed:
+            b_obs = grounded_observations(batch_outcome.parsed, document, s_batch,
                                           rejected=review["rejected_observations"])
             if b_obs:
                 all_observations.extend(b_obs)
+
+    batches = evaluated_batches or initial_batches
 
     # 5. 주장 단위 검색 및 대조 (F3b, 19b 5.2/6.1, TK-63 개정 1)
     from packages.common.config import get_settings
