@@ -81,10 +81,60 @@ SUBITEM_TAIL_RE = r"(?=\s|[.,()，。:;\-·・ㆍ]|$|의|에|에서|에게|을|�
 # 호-목 인식: 공백 중첩 분할 모호성을 제거하여 선형 탐색 시간 보장 (TK-69)
 ITEM_SUBITEM_RE = re.compile(rf"(?:제\s*)?(?P<item>\d+)호\s*(?:제\s*)?(?P<subitem>[{SUBITEM_LETTERS}])목{SUBITEM_TAIL_RE}")
 RANGE_TAIL_RE = re.compile(rf"^\s*(?:부터|내지|~|-)\s*(?:제\s*)?(?P<end>[{SUBITEM_LETTERS}])목(?:\s*까지)?{SUBITEM_TAIL_RE}")
-NEXT_SUBITEM_RE = re.compile(rf"^\s*(?:[·・ㆍ,]|\s*(?:및|와|과))\s*(?:제\s*)?(?P<next>[{SUBITEM_LETTERS}])목{SUBITEM_TAIL_RE}")
+# 다음 목 인식: ^\s* 뒤 선택지 내부의 \s*를 제거하여 이중 공백 분할 백트래킹(다항식 증가) 완전 차단 (TK-69 개정 1)
+NEXT_SUBITEM_RE = re.compile(rf"^\s*(?:[·・ㆍ,]|및|와|과)\s*(?:제\s*)?(?P<next>[{SUBITEM_LETTERS}])목{SUBITEM_TAIL_RE}")
+
+# 목 연속 인식 유한 창 상한 (긴 텍스트나 반복 공백 입력 시 상수 시간 탐색 보장)
+SUBITEM_WINDOW_LIMIT = 100
 
 # 목 분할 정규식: 호 본문 내부에서 목 열거 글자만을 대상으로 분할
 SUBITEM_SPLIT_RE = re.compile(rf"\n\s*(?P<letter>[{SUBITEM_LETTERS}])\.\s*")
+
+
+def parse_subitem_sequence(tail_text: str, first_letter: str) -> Tuple[List[str], int]:
+    """첫 번째 목(first_letter) 직후의 텍스트(tail_text)에서 이어지는 목 목록과 소비된 문자 길이를 반환한다 (TK-69).
+
+    - 유한 창 상한(SUBITEM_WINDOW_LIMIT)을 두어 긴 텍스트나 반복 입력에 대해 즉각적인 탐색 완료를 보장한다.
+    - '가목부터 다목까지', '가목·나목', '가목 및 나목' 등의 표기를 지원한다.
+    """
+    if not tail_text or first_letter not in SUBITEM_LETTER_SET:
+        return [first_letter], 0
+
+    window = tail_text[:SUBITEM_WINDOW_LIMIT]
+    subitems = [first_letter]
+    pos = 0
+
+    # 1) 범위 표기 확인 ('가목부터 다목까지', '가목 내지 다목')
+    m_range = RANGE_TAIL_RE.match(window[pos:])
+    if m_range:
+        end = m_range.group("end")
+        s_idx = SUBITEM_LETTERS.find(first_letter)
+        e_idx = SUBITEM_LETTERS.find(end)
+        if 0 <= s_idx <= e_idx:
+            subitems = list(SUBITEM_LETTERS[s_idx : e_idx + 1])
+        return subitems, m_range.end()
+
+    # 2) 열거 표기 확인 ('가목·나목', '가목, 나목', '가목 및 나목')
+    while pos < len(window):
+        m_next = NEXT_SUBITEM_RE.match(window[pos:])
+        if not m_next:
+            break
+        subitems.append(m_next.group("next"))
+        pos += m_next.end()
+
+        # 복합 범위 표기 ('가목, 나목부터 라목까지' 등)
+        m_range = RANGE_TAIL_RE.match(window[pos:])
+        if m_range:
+            last = subitems.pop()
+            end = m_range.group("end")
+            s_idx = SUBITEM_LETTERS.find(last)
+            e_idx = SUBITEM_LETTERS.find(end)
+            if 0 <= s_idx <= e_idx:
+                subitems.extend(list(SUBITEM_LETTERS[s_idx : e_idx + 1]))
+            pos += m_range.end()
+            break
+
+    return subitems, pos
 
 
 def extract_subitems_info(citation) -> Tuple[Optional[str], List[str]]:
@@ -93,9 +143,17 @@ def extract_subitems_info(citation) -> Tuple[Optional[str], List[str]]:
     '가목·나목', '가목 및 나목', '가목부터 다목까지' 등 복수 목 인용을 모두 지원하며,
     호 표기(제N호 또는 N호)가 선행하는 경우에만 인정된다.
     """
-    raw = getattr(citation, "raw_text", "") or ""
     item = getattr(citation, "item", None)
-    attributes = citation.attributes or {}
+    attributes = getattr(citation, "attributes", None) or {}
+
+    # 1) attributes에 이미 파싱된 subitems가 있는 경우 우선 사용
+    attr_subitems = attributes.get("subitems")
+    if attr_subitems and isinstance(attr_subitems, list) and item:
+        valid = [s for s in attr_subitems if s in SUBITEM_LETTER_SET]
+        if valid:
+            return str(item), valid
+
+    raw = getattr(citation, "raw_text", "") or ""
     attr_subitem = attributes.get("subitem")
 
     m = ITEM_SUBITEM_RE.search(raw)
@@ -106,37 +164,10 @@ def extract_subitems_info(citation) -> Tuple[Optional[str], List[str]]:
 
     parsed_item = str(item) if item else m.group("item")
     first = m.group("subitem")
-    subitems = [first]
     pos = m.end()
 
-    # 1) 범위 표기 확인 ('가목부터 다목까지', '가목 내지 다목')
-    m_range = RANGE_TAIL_RE.match(raw[pos:])
-    if m_range:
-        end = m_range.group("end")
-        s_idx = SUBITEM_LETTERS.find(first)
-        e_idx = SUBITEM_LETTERS.find(end)
-        if 0 <= s_idx <= e_idx:
-            subitems = list(SUBITEM_LETTERS[s_idx : e_idx + 1])
-        return parsed_item, subitems
-
-    # 2) 열거 표기 확인 ('가목·나목', '가목, 나목', '가목 및 나목')
-    while True:
-        m_next = NEXT_SUBITEM_RE.match(raw[pos:])
-        if not m_next:
-            break
-        subitems.append(m_next.group("next"))
-        pos += m_next.end()
-        # 복합 범위 표기 ('가목, 나목부터 라목까지' 등)
-        m_range = RANGE_TAIL_RE.match(raw[pos:])
-        if m_range:
-            last = subitems.pop()
-            end = m_range.group("end")
-            s_idx = SUBITEM_LETTERS.find(last)
-            e_idx = SUBITEM_LETTERS.find(end)
-            if 0 <= s_idx <= e_idx:
-                subitems.extend(list(SUBITEM_LETTERS[s_idx : e_idx + 1]))
-            break
-
+    # parse_subitem_sequence를 호출하여 뒤따르는 목 목록 추출 (창 상한 100자 적용)
+    subitems, _ = parse_subitem_sequence(raw[pos:], first)
     return parsed_item, subitems
 
 
