@@ -1,9 +1,9 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-09 평가 측(TK-71 PR #57 수용 반영). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-09 평가 측(TK-71 PR #57 병합 반영). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-09 (43)]
+[Antigravity 작업 — 통합 지시 2026-10-09 (44)]
 
 0. 규칙(AGENTS.md)
  - 시작: 평가 측 기록 PR #51이 Steve_ACASiaLAW에 병합된 뒤 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다(새 티켓이 거기 들어 있다).
@@ -16,7 +16,7 @@
    TK-70은 packages/verification_engine/pipeline.py·candidate_verifier.py·gate.py, TK-68은 packages/rag_engine/review.py를 고친다. 두 PR이 같은 파일을 고치게 되면 먼저 병합된 쪽을 병합 커밋으로 받아 맞춘다.
    사용자 결정(2026-10-09): Codex의 TK-71(PR #57, packages/rag_engine/·review_items.py 등)을 먼저 받는다.
    TK-68은 packages/rag_engine/review.py를 TK-71과 함께 고치므로, TK-71이 Steve에 병합된 뒤 최신 Steve를 병합 커밋으로 받아 시작한다.
-   TK-71(PR #57 7aecc51)은 평가 측 수용됐다(2026-10-09). 사용자 병합을 확인한 뒤 TK-68을 시작한다.
+   TK-71(PR #57 7aecc51)은 Steve에 병합됐다(3c89a4e, 2026-10-09). TK-68은 지금 시작한다(최신 Steve에서 브랜치).
 
 [A] 릴리스 0.11.0 완료(main a8b2a7e, 태그 v.0.11.0). 할 일 없음.
 
@@ -44,7 +44,7 @@
      기존 가짜 공급자는 '모순' 의견을 내지 않으므로 승격 경로를 지키는 새 시험(티켓 2.7)이 꼭 필요하다.
    - 설계 메모를 첫 커밋으로. 브랜치 antigravity/tk70-rag-contradiction-promotion. RAG 경로라 봉인 시험은 없고, 배포 뒤 평가 측 비공개 온라인 세트와 서면9로 본다.
 
-[C] (낮음, B 뒤 · TK-71(PR #57, 수용됨) Steve 병합 뒤 시작) TK-68 문서 단위 Drive 대조 첫 묶음 출력 잘림 — docs/handoff/TK-68_rag_document_batch_output_truncation.md
+[C] (낮음, B 뒤 · 착수 가능: TK-71 병합됨 Steve 3c89a4e) TK-68 문서 단위 Drive 대조 첫 묶음 출력 잘림 — docs/handoff/TK-68_rag_document_batch_output_truncation.md
    - 서면9 온라인 보고서 8건 모두에서 첫 묶음(참고자료 6개, 입력 약 10,800 토큰)이 4000 토큰에서 잘려 약 $0.092·30초를 쓰고 대체 재시도로 넘어간다.
    - 요청·응답 크기를 맞춘다(묶음 축소·의견 수 상한·잘림 시 분할 재요청 중 설계 메모로 선택).
      응답 형식·등록 프롬프트·advisory_only·개인정보 경로·주장 단위 예산은 바꾸지 않는다.
