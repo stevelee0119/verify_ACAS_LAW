@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 
 from jsonschema import ValidationError, validate
@@ -370,12 +371,16 @@ def review_document(result, library, router, context, pii):
                           issues=link_observations(provision_obs, sources, masked_claims))
         return review
 
-    # 4. 문서 단위 배치 대조 (TK-68: 기본 묶음 크기 축소 및 출력 한도 잘림 방지 적응형 분할)
-    default_doc_batch_size = 3
-    max_doc_batch_text_chars = 12000
+    # 4. 문서 단위 배치 대조 (TK-68 개정 1: 비용 비증가 조건 C1~C3 충족)
+    max_batch_sources = 6
+    safe_batch_text_chars = 8000
+    max_subdivision_depth = 1
 
     def _split_sources_into_batches(src_list: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-        """참고자료를 묶음 크기(최대 3개) 및 텍스트 길이(최대 12,000자) 기준으로 분할한다."""
+        """참고자료를 개수(최대 6개) 및 본문 글자 수(안전 한도 8,000자) 기준으로 사전 분할한다.
+        - C1: 작은 참고자료 6개는 1개 묶음으로 유지하여 호출 수 및 입력 토큰 증가 방지
+        - C2: 큰 참고자료(서면9형)는 8,000자 기준으로 선제 분할하여 첫 시도에 잘림 없이 성공
+        """
         if not src_list:
             return []
         res_batches: List[List[Dict[str, Any]]] = []
@@ -383,7 +388,7 @@ def review_document(result, library, router, context, pii):
         cur_chars = 0
         for s in src_list:
             s_chars = len(s.get("text") or "")
-            if cur_batch and (len(cur_batch) >= default_doc_batch_size or (cur_chars + s_chars > max_doc_batch_text_chars)):
+            if cur_batch and (len(cur_batch) >= max_batch_sources or (cur_chars + s_chars > safe_batch_text_chars)):
                 res_batches.append(cur_batch)
                 cur_batch = [s]
                 cur_chars = s_chars
@@ -401,17 +406,21 @@ def review_document(result, library, router, context, pii):
     accepted_any = False
     outcome = None  # 변수 명시적 초기화 (한국어 주석)
 
-    queue = list(initial_batches)
-    batch_counter = 0
+    # 큐 항목: (참고자료 묶음, 분할 깊이)
+    queue = [(b, 0) for b in initial_batches]
+    total_calls = 0
+    # C3 최악 상한: 전체 호출 수(재시도·분할 포함) <= 2 * ceil(N / 6)
+    max_total_calls = 2 * math.ceil(len(sources) / 6) if sources else 2
 
-    while queue:
-        s_batch = queue.pop(0)
-        batch_counter += 1
+    while queue and total_calls < max_total_calls:
+        s_batch, depth = queue.pop(0)
+        total_calls += 1
+
         request = LLMRequest(
             system=RAG_REVIEW_SYSTEM_PROMPT,
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
-            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": batch_counter})
+            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls})
         # One selected provider; the existing router bounds each call and its transient retries.
         batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                                policy=context.external_ai_policy, expected_task="참고자료 검토"))
@@ -419,26 +428,27 @@ def review_document(result, library, router, context, pii):
         result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in batch_outcome.executions)
         executed_any |= bool(batch_outcome.executions or batch_outcome.used)
 
-        # TK-68: 출력 한도 초과(OUTPUT_TRUNCATED)로 실패하고 묶음에 2개 이상의 참고자료가 있는 경우,
-        # 동일 대형 묶음으로 다른 공급자에 재시도하여 낭비하지 않고 절반으로 나누어 적응형 재시도(Adaptive Halving) 수행
+        # TK-68: OUTPUT_TRUNCATED 발생 시 1회에 한하여 절반으로 분할(Adaptive Halving)
+        # 하위 묶음은 재분할하지 않으며(depth < max_subdivision_depth), 단일 참고자료는 분할하지 않음
         is_truncated = any("OUTPUT_TRUNCATED" in getattr(e, "error", "") for e in batch_outcome.executions)
-        if not batch_outcome.used and is_truncated and len(s_batch) > 1:
+        if not batch_outcome.used and is_truncated and len(s_batch) > 1 and depth < max_subdivision_depth:
             mid = len(s_batch) // 2
-            queue.insert(0, s_batch[mid:])
-            queue.insert(0, s_batch[:mid])
+            queue.insert(0, (s_batch[mid:], depth + 1))
+            queue.insert(0, (s_batch[:mid], depth + 1))
             continue
 
         failed = [e.provider for e in batch_outcome.executions if getattr(e, "provider", "") and not e.ok]
         if not batch_outcome.used and failed:
-            # 한 공급자가 실패(형식 오류·일시 장애 등)하면 다른 공급자로 한 번만 다시 묻는다.
-            retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
-                                           exclude=failed, expected_task="참고자료 검토"))
-            result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
-            executed_any |= bool(retry.executions or retry.used)
-            if retry.executions:
-                review.setdefault("retried_after", []).extend(failed)
-                outcome = retry
-                batch_outcome = retry
+            if total_calls < max_total_calls:
+                total_calls += 1
+                retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
+                                               exclude=failed, expected_task="참고자료 검토"))
+                result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
+                executed_any |= bool(retry.executions or retry.used)
+                if retry.executions:
+                    review.setdefault("retried_after", []).extend(failed)
+                    outcome = retry
+                    batch_outcome = retry
 
         evaluated_batches.append(s_batch)
         batch_accepted = bool(batch_outcome.used and not batch_outcome.quarantined)
@@ -448,6 +458,12 @@ def review_document(result, library, router, context, pii):
                                           rejected=review["rejected_observations"])
             if b_obs:
                 all_observations.extend(b_obs)
+
+    # C3 최악 상한 등에 도달하여 검토되지 못한 참고자료를 기록 (분모 보존)
+    reviewed_source_ids = {s.get("source_id") for b in evaluated_batches for s in b if s.get("source_id")}
+    unreviewed_sources = [s for s in sources if s.get("source_id") not in reviewed_source_ids]
+    if unreviewed_sources:
+        review["unreviewed_drive_sources"] = [s.get("source_id") for s in unreviewed_sources]
 
     batches = evaluated_batches or initial_batches
 
