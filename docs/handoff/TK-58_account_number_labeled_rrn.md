@@ -29,3 +29,13 @@
 - 서면9 PDF 오프라인: kinds에 ACCOUNT 1·RRN 0
 - 평가 측 `contact_rrn` 세트(1·2·3판): 주민등록번호·연락처 누락 0, 라우터 도달 0, 오탐 0 유지(평가 측이 잰다)
 - 양성 3건 이상(계좌 3-4-4-2·3-6-5·4-4-5 등 RRN이 아닌 13자리 묶음 → ACCOUNT)과 대조 3건 이상(6-7 묶음 → RRN 유지) 시험
+
+## 개정 1 — 재점검과 Codex 재인계(2026-10-09, 사용자 결정 '장기 미해결 과제는 Codex에 전달')
+- 2026-10-04 Codex 전달문 [C]로 넘겼으나 구현 PR이 없었다. 요구·수용은 3·4절 그대로다.
+- 재점검(평가 측, Steve 114f8b3 = 운영 `main` a8b2a7e, 오프라인, Python 3.11.15)
+  - 서면9 PDF 마스킹 종류에 RRN 1·ACCOUNT 0이 나온다. 재현이 유지된다.
+  - 온라인 서면9 점검 PII-K6은 0.10.0부터 0.11.0까지 8회 모두 실패했다.
+- 관련 시험 기준값(구현 전, 같은 SHA): `tests/test_pii_and_claims.py`·`tests/regression/test_r8f_contact_rrn.py`·`tests/regression/test_r8f1_rrn_linebreak.py` **85 passed**. 이 시험들은 고치지 않는다.
+- 개인정보 엔진 변경이므로 다음을 지킨다.
+  - 수용 SHA에서 평가 측이 필수 게이트(연락처·주민등록번호 비공개 세트 1·2·3판)와 `verify_all` 전체 모드를 돌린다.
+  - 기준값: RRN 0, PHONE 0·0·1/54, 라우터 도달 0, 오탐 0.

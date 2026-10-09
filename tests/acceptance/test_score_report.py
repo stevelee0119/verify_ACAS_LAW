@@ -120,3 +120,52 @@ def test_record_appends_one_line_with_provenance(tmp_path):
     assert entry["input"] == "online_report" and entry["measured_commit"] == "abcdef123456"
     assert entry["report_sha256"] == result["report_sha256"] and entry["note"] == "시험"
     assert "online" in entry["condition"]
+
+
+def _rag_spec(tmp_path, scope=None, rule_version=None):
+    check = {"id": "R", "kind": "rag_relationship", "relationship": "CONTRADICTS", "text": "제7조"}
+    if scope:
+        check["scope"] = scope
+    spec = {"name": "synthetic_rag", "checks": [check]}
+    if rule_version:
+        spec["rule_version"] = rule_version
+    path = tmp_path / "rag_spec.json"
+    path.write_text(json.dumps(spec, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def _report_with_claim(claim_text, quote, relationship="CONTRADICTS", claim_id="CLM_a"):
+    """합성: 인용 주장 원문에는 조항 번호가 있고, 모델이 고른 claim_quote에는 인용문만 있는 경우."""
+    report = _report(rag=[{"relationship": relationship, "claim_id": claim_id, "claim_quote": quote}])
+    report["documents"][0]["claims"] = [{"claim_id": "CLM_a", "text": claim_text}]
+    return report
+
+
+def test_rag_claim_scope_uses_claim_text_by_claim_id(tmp_path):
+    report = _write(tmp_path, _report_with_claim("「가상 규정」 제7조에 따르면 \"전부 면제한다\"고 정한다", "전부 면제한다"))
+    assert sr.score(report, _rag_spec(tmp_path))["failed"] == ["R"]                  # 1판(인용 범위만)
+    assert sr.score(report, _rag_spec(tmp_path, scope="claim"))["failed"] == []      # 2판(주장 원문 포함)
+
+
+def test_rag_claim_scope_still_needs_relationship_and_matching_claim(tmp_path):
+    spec = _rag_spec(tmp_path, scope="claim")
+    other_relation = _report_with_claim("「가상 규정」 제7조에 따르면", "따르면", relationship="CONTEXT")
+    assert sr.score(_write(tmp_path, other_relation), spec)["failed"] == ["R"]
+    other_claim = _report_with_claim("「가상 규정」 제7조에 따르면", "따르면", claim_id="CLM_b")
+    assert sr.score(_write(tmp_path, other_claim), spec)["failed"] == ["R"]
+
+
+def test_spec_rejects_unknown_scope_and_records_rule_version(tmp_path):
+    with pytest.raises(ValueError):
+        sr.load_spec(_rag_spec(tmp_path, scope="anything"))
+    result = sr.score(_write(tmp_path, _report()), _rag_spec(tmp_path, rule_version="2"))
+    log = tmp_path / "log.jsonl"
+    sr.record(result, "시험", log)
+    assert json.loads(log.read_text(encoding="utf-8"))["rule_version"] == "2"
+    assert sr.score(_write(tmp_path, _report()), SPEC_ONLINE)["rule_version"] == "1"
+
+
+def test_case9_online_spec_rag1_uses_claim_scope():
+    spec = sr.load_spec(ROOT / "tests" / "fixtures" / "probes" / "case9_state_compensation_online.json")
+    assert spec["rule_version"] == "2"
+    assert {c["id"]: c.get("scope") for c in spec["checks"]}["RAG-1"] == "claim"
