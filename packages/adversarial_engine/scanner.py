@@ -186,6 +186,7 @@ class AdversarialScanner:
                 visible=block.visible,
                 hidden_reason=block.attributes.get("hidden_reason"),
                 block_type=block.block_type,
+                pattern_hits=block.attributes.get("_pattern_hits"),
             )
             if classification.label == AdversarialClass.BENIGN_CONTENT:
                 continue

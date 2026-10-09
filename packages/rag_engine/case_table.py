@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from packages.adversarial_engine import AdversarialScanner
+from packages.adversarial_engine.classifier import find_pattern_hits_batch
+from packages.adversarial_engine.normalize import normalize_for_classification
 from packages.common.enums import MetaMessageType, Severity
 from packages.common.schemas import Block, NormalizedDocument, Page
 
@@ -66,8 +68,17 @@ def _cell_range(first: int, last: int, width: int) -> str:
 def _case_numbers(value: str) -> list[str]:
     # Generic Korean court case-number shape.  It deliberately accepts only
     # normalized number tokens; no actual case number is embedded in code.
-    found = re.findall(r"(?<![\w-])\d{2,4}\s*[가-힣A-Za-z]{1,8}\s*\d{1,8}(?:\s*[-·/]\s*\d{1,8})?(?![\w-])", value)
-    return list(dict.fromkeys(re.sub(r"\s+", "", item) for item in found))
+    pattern = re.compile(
+        r"(?<![\w-])(?P<year>\d{2,4})\s*(?P<kind>[가-힣A-Za-z]{1,8})\s*"
+        r"(?P<number>\d{1,8})(?P<merged>(?:\s*[,·/]\s*\d{1,8})*)(?![\w-])"
+    )
+    result: list[str] = []
+    for match in pattern.finditer(value):
+        prefix = f"{match.group('year')}{match.group('kind')}{match.group('number')}"
+        result.append(prefix)
+        for suffix in re.findall(r"\d{1,8}", match.group("merged") or ""):
+            result.append(f"{match.group('year')}{match.group('kind')}{suffix}")
+    return list(dict.fromkeys(result))
 
 
 def _date_value(value: str) -> str | None:
@@ -97,12 +108,12 @@ def _header_map(values: list[Any]) -> dict[str, int] | None:
     return result
 
 
-def _iter_rows(path: Path) -> Iterable[tuple[str, int, list[Any], list[str], bool]]:
+def _iter_rows(path: Path) -> Iterable[tuple[str, int, list[Any], list[str], bool, str]]:
     suffix = path.suffix.casefold()
     if suffix == ".csv":
         with path.open("r", encoding="utf-8-sig", newline="") as stream:
             for number, row in enumerate(csv.reader(stream), 1):
-                yield "CSV", number, row, [""] * len(row), True
+                yield "CSV", number, row, [""] * len(row), True, ""
         return
     if suffix != ".xlsx":
         return
@@ -112,8 +123,7 @@ def _iter_rows(path: Path) -> Iterable[tuple[str, int, list[Any], list[str], boo
     hidden_by_sheet = _xlsx_hidden_rows(path)
     try:
         for sheet in workbook.worksheets:
-            if sheet.sheet_state != "visible":
-                continue
+            sheet_hidden = sheet.sheet_state != "visible"
             for number, cells in enumerate(sheet.iter_rows(), 1):
                 values, links = [], []
                 white_row = False
@@ -125,7 +135,11 @@ def _iter_rows(path: Path) -> Iterable[tuple[str, int, list[Any], list[str], boo
                     if color is not None and getattr(color, "type", None) == "rgb":
                         rgb = str(getattr(color, "rgb", ""))[-6:].upper()
                         white_row |= rgb == "FFFFFF"
-                yield sheet.title, number, values, links, number not in hidden_by_sheet.get(sheet.title, set()) and not white_row
+                visible = number not in hidden_by_sheet.get(sheet.title, set()) and not white_row and not sheet_hidden
+                hidden_reason = ("HIDDEN_SHEET" if sheet_hidden else
+                                 "HIDDEN_ROW" if number in hidden_by_sheet.get(sheet.title, set()) else
+                                 "WHITE_ON_WHITE" if white_row else "")
+                yield sheet.title, number, values, links, visible, hidden_reason
     finally:
         workbook.close()
 
@@ -234,7 +248,8 @@ def _chunks(record: dict[str, Any], target: int = 1040, max_size: int = 1200) ->
     return output
 
 
-def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "", max_seconds: float = MAX_SECONDS) -> dict[str, Any] | None:
+def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "",
+                       max_seconds: float = MAX_SECONDS, max_excluded_rows: int | None = None) -> dict[str, Any] | None:
     """Return a structured extraction, or ``None`` for an ordinary workbook."""
     path = Path(path)
     started = time.monotonic()
@@ -244,8 +259,11 @@ def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "
     chunks: list[dict[str, Any]] = []
     stats = {"discovered": 0, "indexed": 0, "quarantined": 0, "errors": 0, "pending": 0}
     scanner = AdversarialScanner()
-    for sheet, number, values, links, visible in _iter_rows(path):
+    pending_rows: list[dict[str, Any]] = []
+    for sheet, number, values, links, visible, hidden_reason in _iter_rows(path):
         if time.monotonic() - started > max_seconds:
+            stats["pending"] = max(0, stats["discovered"] - stats["indexed"] - stats["quarantined"] - stats["errors"])
+            stats["status_total"] = stats["indexed"] + stats["quarantined"] + stats["errors"] + stats["pending"]
             return {"chunks": chunks, "case_records": records, "sha256": digest,
                     "structured_case_table": True, "partial": True,
                     "reason": "REFERENCE_PARSE_TIMEOUT", "stats": stats,
@@ -263,10 +281,7 @@ def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "
         if not populated:
             continue
         stats["discovered"] += 1
-        if not visible:
-            stats["quarantined"] += 1
-            continue
-        if len(records) >= MAX_ROWS:
+        if len(pending_rows) >= MAX_ROWS:
             stats["pending"] += 1
             continue
         row_values = {key: _text(values[index]) if index < len(values) else ""
@@ -277,8 +292,13 @@ def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "
             stats["errors"] += 1
             continue
         case_info = row_values.get("case_info", "")
-        numbers = _case_numbers(case_info)
-        case_head = " / ".join(filter(None, [row_values.get("title"), case_info, ", ".join(numbers)]))[:1200]
+        target_numbers = _case_numbers(case_info)
+        referenced_numbers = _case_numbers(" ".join(filter(None, [row_values.get("issue"), row_values.get("facts"),
+                                                                    row_values.get("reason"), row_values.get("holding")])) )
+        numbers = list(dict.fromkeys(target_numbers + referenced_numbers))
+        head_values = [f"[{sheet}]", row_values.get("court") or _court_value(case_info),
+                       _date_value(case_info) or "", ", ".join(target_numbers), row_values.get("title") or ""]
+        case_head = " ".join(value for value in head_values if value).strip()[:500]
         indexed_text = " | ".join(filter(None, [case_head, row_values.get("issue"), row_values.get("facts"),
                                                   row_values.get("reason"), row_values.get("holding")]))
         record = {
@@ -288,24 +308,72 @@ def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "
             "original_number": row_values.get("number", ""), "title": row_values.get("title", ""),
             "case_info": case_info, "court": _court_value(case_info),
             "decision_date": _date_value(case_info), "case_numbers": numbers,
-            "target_case_numbers": numbers[:1], "referenced_case_numbers": numbers[1:],
+            "target_case_numbers": target_numbers, "referenced_case_numbers": referenced_numbers,
             "issue": row_values.get("issue", ""), "facts": row_values.get("facts", ""),
             "reason": row_values.get("reason", ""), "holding": row_values.get("holding", ""),
             "hyperlinks": [link for _i, _v, link in populated if link],
             "raw_cells": raw_cells, "quality_warnings": [], "case_head": case_head,
             "indexed_text": indexed_text,
+            "raw_text": raw_text, "visible": visible, "hidden_reason": hidden_reason,
         }
+        if hidden_reason:
+            record["quality_warnings"].append(hidden_reason)
         if any(str(v).startswith("=") for _i, v, _l in populated):
             record["quality_warnings"].append("FORMULA_CELL")
-        warnings = _row_scan(sheet, number, raw_text, scanner)
+        pending_rows.append(record)
+    # Scanning one document with one block per row preserves row-level finding
+    # locations while avoiding scanner setup and full-text work thousands of
+    # times.  Hidden/white rows remain in the scan and count toward exclusion.
+    scan_doc = NormalizedDocument("reference-case-table", path.name, "text", digest)
+    normalized_rows = [normalize_for_classification(row["raw_text"])[0] for row in pending_rows]
+    pattern_hits = find_pattern_hits_batch(normalized_rows)
+    for row, hits in zip(pending_rows, pattern_hits):
+        scan_doc.pages.append(Page(row["row"], blocks=[Block(
+            row["record_id"], row["raw_text"], row["row"], visible=row["visible"],
+            block_type="table",
+            attributes={**({"hidden_reason": row["hidden_reason"]} if row["hidden_reason"] else {}),
+                        "_pattern_hits": hits})]))
+    scan = scanner.scan(scan_doc)
+    findings_by_row: dict[str, list[dict[str, Any]]] = {}
+    for finding in scan.findings:
+        if finding.severity not in (Severity.HIGH, Severity.CRITICAL) \
+                or finding.meta_message_type != MetaMessageType.MM1_MACHINE_INSTRUCTION:
+            continue
+        block_ids = (finding.confidence_features or {}).get("block_ids") or []
+        if not block_ids and finding.block_id:
+            block_ids = [finding.block_id]
+        evidence = {"type": str(getattr(finding.type, "value", finding.type)),
+                    "severity": str(getattr(finding.severity, "value", finding.severity)),
+                    "page": finding.page,
+                    "path": (finding.confidence_features or {}).get("injection_path"),
+                    "excerpt": " ".join(str((finding.confidence_features or {}).get("observed_text", "")).split())[:100]}
+        for block_id in block_ids:
+            findings_by_row.setdefault(block_id, []).append(evidence)
+    excluded_limit = max_excluded_rows
+    if excluded_limit is None:
+        import os
+        excluded_limit = int(os.getenv("LV_CASE_TABLE_MAX_EXCLUDED_ROWS", "32"))
+    file_scan_findings: list[dict[str, Any]] = []
+    for row in pending_rows:
+        warnings = findings_by_row.get(row["record_id"], [])
         if warnings:
-            record["quality_warnings"].append("SECURITY_QUARANTINE")
-            record["scan_findings"] = warnings[:3]
+            row["quality_warnings"].append("SECURITY_QUARANTINE")
+            row["scan_findings"] = warnings[:3]
+            file_scan_findings.extend(warnings)
+        if warnings or not row["visible"]:
             stats["quarantined"] += 1
             continue
-        records.append(record)
-        chunks.extend(_chunks(record))
+        records.append({key: value for key, value in row.items()
+                        if key not in {"raw_text", "visible", "hidden_reason"}})
+        chunks.extend(_chunks(records[-1]))
         stats["indexed"] += 1
+    if stats["quarantined"] > max(0, excluded_limit):
+        stats["status_total"] = stats["indexed"] + stats["quarantined"] + stats["errors"] + stats["pending"]
+        return {"chunks": [], "case_records": [], "sha256": digest,
+                "structured_case_table": True, "partial": True,
+                "reason": "REFERENCE_QUARANTINED", "stats": stats,
+                "scan_findings": file_scan_findings[:3],
+                "elapsed_ms": round((time.monotonic() - started) * 1000)}
     if not headers:
         return None
     stats["status_total"] = stats["indexed"] + stats["quarantined"] + stats["errors"] + stats["pending"]
@@ -313,7 +381,8 @@ def extract_case_table(path: str | Path, *, file_id: str = "", revision: str = "
     return {"chunks": chunks, "case_records": records, "sha256": digest,
             "structured_case_table": True, "partial": partial,
             "reason": "REFERENCE_CASE_TABLE_PARTIAL" if partial else "",
-            "stats": stats, "table_version": CASE_TABLE_VERSION,
+            "stats": stats, "scan_findings": file_scan_findings[:3],
+            "table_version": CASE_TABLE_VERSION,
             "elapsed_ms": round((time.monotonic() - started) * 1000)}
 
 

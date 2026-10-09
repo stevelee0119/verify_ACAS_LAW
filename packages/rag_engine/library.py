@@ -76,6 +76,8 @@ class ReferenceLibrary:
         self.settings, self.check = settings, check
         self.notify = notify
         self.client_factory, self.extractor = client_factory, extractor
+        self._case_rows_cache: list[dict] | None = None
+        self._case_number_index: dict[str, list[dict]] = {}
         self.folder = settings.rag_drive_folder_id
         folder_key = hashlib.sha256(self.folder.encode()).hexdigest()
         self.directory = Path(settings.storage_root) / "reference-cache" / folder_key
@@ -119,6 +121,8 @@ class ReferenceLibrary:
     def sync(self, query=""):
         started = time.monotonic()
         self.eligible = {}
+        self._case_rows_cache = None
+        self._case_number_index = {}
         self.summary.update(checked_at=None, snapshot_hash=None, files_seen=0, files_indexed=0,
                             files_reused=0, issues=[], sources=[], duplicates=[], similar_names=[], inventory=[])
         # 분석 문서마다 따로 받은 질의(목록)나 하나로 합친 질의(문자열) 모두 받는다.
@@ -604,6 +608,8 @@ class ReferenceLibrary:
         return any(v.get("structured_case_table") for v in self.eligible.values())
 
     def _case_rows(self) -> list[dict]:
+        if self._case_rows_cache is not None:
+            return self._case_rows_cache
         if not self.has_case_tables() or not self.db_path.exists():
             return []
         try:
@@ -613,7 +619,9 @@ class ReferenceLibrary:
                     case_numbers,target_case_numbers,referenced_case_numbers,issue,facts,reason,holding,hyperlinks,quality_warnings,
                     case_head,indexed_text,raw_cells FROM case_rows""").fetchall()
         except sqlite3.Error:
-            return []
+            self._case_rows_cache = []
+            self._case_number_index = {}
+            return self._case_rows_cache
         fields = ("record_id", "file_id", "revision", "sheet", "row", "source_cell_range",
                   "original_number", "title", "case_info", "court", "decision_date",
                   "case_numbers", "target_case_numbers", "referenced_case_numbers", "issue", "facts", "reason", "holding", "hyperlinks",
@@ -627,6 +635,13 @@ class ReferenceLibrary:
                 except (TypeError, ValueError):
                     item[key] = []
             result.append(item)
+        self._case_rows_cache = result
+        self._case_number_index = {}
+        for item in result:
+            for number in item.get("target_case_numbers") or item.get("case_numbers") or []:
+                key = str(number or "").replace(" ", "")
+                if key:
+                    self._case_number_index.setdefault(key, []).append(item)
         return result
 
     def match_case(self, citation) -> dict:
@@ -638,7 +653,9 @@ class ReferenceLibrary:
             case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
             court = court or citation.get("court") or citation.get("court_name")
             decision_date = decision_date or citation.get("decision_date") or citation.get("date")
-        return lookup_records(self._case_rows(), str(case_number or ""), court=court,
+        normalized = str(case_number or "").replace(" ", "")
+        rows = self._case_number_index.get(normalized, []) if normalized else self._case_rows()
+        return lookup_records(rows, normalized, court=court,
                               decision_date=str(decision_date or "") or None)
 
     def search_case_table(self, text: str, *, citations=None, limit: int = 5) -> list[dict]:
@@ -667,18 +684,22 @@ class ReferenceLibrary:
             hay = " ".join([row.get("title", ""), row.get("issue", ""), row.get("reason", ""),
                             row.get("holding", ""), row.get("facts", "")])
             score = (1000 if row.get("record_id") in exact_ids else 0) + sum(hay.count(w) for w in words)
-            if score or exact_ids.intersection({row.get("record_id")}):
-                ranked.append((score, row))
+            exact = row.get("record_id") in exact_ids
+            if exact or score >= 2:
+                ranked.append((score, row, exact))
         ranked.sort(key=lambda pair: (-pair[0], pair[1].get("file_id", ""), pair[1].get("row", 0)))
         result = []
-        for _score, row in ranked[:limit]:
+        exact_ranked = [item for item in ranked if item[2]]
+        related_ranked = [item for item in ranked if not item[2]][:max(0, limit - len(exact_ranked))]
+        for _score, row, exact in (exact_ranked + related_ranked)[:limit]:
             source = self.eligible.get(row["file_id"], {})
             # One source item remains within the established 800-character
             # claim envelope; the review layer applies masking before use.
             holding = row.get("holding") or ""
-            support = " | ".join(filter(None, [holding, row.get("reason"), row.get("issue"), row.get("case_head")]))
+            support = " | ".join(filter(None, [row.get("case_head"), holding, row.get("reason"), row.get("issue")]))
             result.append({**source, "source_id": "", "text": support[:800], "page": row.get("row", 1),
-                           "relevance": _score, "structured_case_table": True,
+                           "relevance": _score, "structured_case_table": exact,
+                           "case_table_candidate": True,
                            "case_record_id": row.get("record_id"), "case_head": row.get("case_head"),
                            "sheet": row.get("sheet"), "row": row.get("row"),
                            "source_cell_range": row.get("source_cell_range"),
