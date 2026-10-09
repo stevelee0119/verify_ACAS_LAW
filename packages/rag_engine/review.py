@@ -374,38 +374,52 @@ def review_document(result, library, router, context, pii):
     # 4. 문서 단위 배치 대조 (TK-68 개정 1: 비용 비증가 조건 C1~C3 충족)
     max_subdivision_depth = 1
 
-    def _split_sources_into_batches(doc_text: str, src_list: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-        """서면 본문 크기와 참고자료 발췌 크기를 종합하여 묶음을 사전 분할한다.
-        - 서면9 실증 근거: 서면 본문이 긴 서면(약 5,000자 이상)에서는 6개 묶음이 잘리고 5개 묶음은 첫 시도에 성공함.
-          따라서 긴 서면에서는 묶음당 상한을 5개로 제한하여 첫 시도 잘림을 선제 방지한다 (C2).
-        - 일반 서면: 본문이 짧은 경우 6개까지 1개 묶음으로 유지하여 호출 수와 입력 토큰을 최소화한다 (C1).
-        - 묶음당 전체 글자 수(본문 + 참고자료) 합계가 12,000자를 넘지 않도록 안전 상한을 적용한다.
+    def _split_sources_into_batches(
+        src_list: List[Dict[str, Any]],
+        max_chars_limit: int = 6000,
+        max_items_limit: int = 6,
+    ) -> List[List[Dict[str, Any]]]:
+        """참고자료 발췌 글자 수 합계와 개수 상한에 기초하여 고르게 균등 분할한다. (한국어 주석)
+        - 서면9 실증 근거: 참고자료 11개 중 앞 6개 합계 6,885자 묶음은 잘렸으나, 5개 묶음은 첫 시도에 성공함.
+        - 서면 본문 길이와 무관하게, 참고자료 발췌 글자 수 합계(상한 6,000자) 및 개수(최대 6개)에 따라 균등 분할함.
+        - 1개짜리 꼬리 묶음 없이 고르게 분할함 (예: 11개 -> 4·4·3 분할로 각 묶음 4개 이하 및 6,000자 이하 충족).
+        - 작은 참고자료 6개(N<=6)는 1개 묶음으로 유지하여 호출 수 1회 보장 (C1).
         """
         if not src_list:
             return []
-        d_len = len(doc_text or "")
-        max_batch_sources = 5 if d_len >= 5000 else 6
-        max_total_chars = 12000
+        n = len(src_list)
+        # k = 1부터 n까지 균등 분할을 시도하여 모든 묶음이 개수(<=6) 및 발췌 합계(<=6000)를 만족하는 최소 k 탐색
+        for k in range(1, n + 1):
+            base = n // k
+            rem = n % k
+            batches = []
+            idx = 0
+            valid = True
+            for i in range(k):
+                size = base + (1 if i < rem else 0)
+                batch = src_list[idx:idx + size]
+                idx += size
+                batch_chars = sum(len(s.get("text") or "") for s in batch)
+                if len(batch) > max_items_limit or batch_chars > max_chars_limit:
+                    valid = False
+                    break
+                batches.append(batch)
+            if valid:
+                return batches
 
-        res_batches: List[List[Dict[str, Any]]] = []
-        cur_batch: List[Dict[str, Any]] = []
-        cur_src_chars = 0
-        for s in src_list:
-            s_chars = len(s.get("text") or "")
-            batch_full = len(cur_batch) >= max_batch_sources
-            size_exceeded = (d_len + cur_src_chars + s_chars) > max_total_chars
-            if cur_batch and (batch_full or size_exceeded):
-                res_batches.append(cur_batch)
-                cur_batch = [s]
-                cur_src_chars = s_chars
-            else:
-                cur_batch.append(s)
-                cur_src_chars += s_chars
-        if cur_batch:
-            res_batches.append(cur_batch)
-        return res_batches
+        # 단일 참고자료 > 6,000자 등 극단적 경우 대비 최대 개수(max_items_limit) 기준 균등 분할 fallback
+        min_k = math.ceil(n / max_items_limit)
+        base = n // min_k
+        rem = n % min_k
+        fallback_batches = []
+        idx = 0
+        for i in range(min_k):
+            size = base + (1 if i < rem else 0)
+            fallback_batches.append(src_list[idx:idx + size])
+            idx += size
+        return fallback_batches
 
-    initial_batches = _split_sources_into_batches(document, sources) or [sources]
+    initial_batches = _split_sources_into_batches(sources) or [sources]
     evaluated_batches: List[List[Dict[str, Any]]] = []
     all_observations = []
     executed_any = False
@@ -461,14 +475,15 @@ def review_document(result, library, router, context, pii):
                     outcome = retry
                     batch_outcome = retry
 
-        evaluated_batches.append(s_batch)
         batch_accepted = bool(batch_outcome.used and not batch_outcome.quarantined)
         accepted_any |= batch_accepted
-        if batch_accepted and batch_outcome.parsed:
-            b_obs = grounded_observations(batch_outcome.parsed, document, s_batch,
-                                          rejected=review["rejected_observations"])
-            if b_obs:
-                all_observations.extend(b_obs)
+        if batch_accepted:
+            evaluated_batches.append(s_batch)
+            if batch_outcome.parsed:
+                b_obs = grounded_observations(batch_outcome.parsed, document, s_batch,
+                                              rejected=review["rejected_observations"])
+                if b_obs:
+                    all_observations.extend(b_obs)
 
     # C3 최악 상한 등에 도달하여 검토되지 못한 참고자료를 기록 (분모 보존)
     reviewed_source_ids = {s.get("source_id") for b in evaluated_batches for s in b if s.get("source_id")}
