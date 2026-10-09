@@ -1,9 +1,9 @@
 # Codex 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-09 평가 측(장기 미해결 과제 인계, 사용자 결정). 이전 전달문(2026-10-04)을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-09 평가 측(PR #52·#53·#54 판정 반영). 이전 전달문(2026-10-04)을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Codex 작업 — 통합 지시 2026-10-09]
+[Codex 작업 — 통합 지시 2026-10-09 (2)]
 
 0. 규칙(AGENTS.md)
  - 시작: 평가 측 기록 PR #51이 Steve_ACASiaLAW에 병합된 뒤, 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다(티켓 개정이 거기 들어 있다).
@@ -17,41 +17,23 @@
  - 다른 구현 담당(Antigravity)이 같은 시기에 packages/claim_engine/evidence_consistency.py, packages/legal_engine/temporal_review.py,
    packages/rag_engine/review.py를 고친다(TK-67·69·68). 이 세 파일은 건드리지 않는다.
 
-[A] (보통, 먼저) TK-58 계좌번호가 주민등록번호(RRN)로 분류됨 — docs/handoff/TK-58_account_number_labeled_rrn.md (3·4절, 개정 1)
- - 증상: 서면9 PDF에서 '3-4-4-2' 꼴 계좌번호가 RRN으로 분류된다. 가림은 된다. 온라인 PII-K6이 0.10.0부터 8회 연속 실패했다.
- - 요구: 앞 6자리 안에 공백이 아닌 구분 기호가 있으면 RRN으로 분류하지 않고, 앞 문맥에 계좌 라벨이 있으면 ACCOUNT로 분류한다.
-   날짜 유효성·검증 숫자로 거르지 않는다. 가림 구간·전송 차단 동작은 바꾸지 않는다.
- - 브랜치 codex/tk58-account-kind. 관련 시험(기준 85 passed, 고치지 않음):
-   tests/test_pii_and_claims.py tests/regression/test_r8f_contact_rrn.py tests/regression/test_r8f1_rrn_linebreak.py
- - 수용: 서면9 PDF 오프라인 ACCOUNT 1·RRN 0, 고정 81.7/79.2/0.
-   평가 측이 필수 게이트(연락처·주민등록번호 비공개 세트, 기준 RRN 0·PHONE 0·0·1/54·도달 0·오탐 0)와 verify_all 전체 모드를 잰다.
+[A] TK-58 — PR #52(f2033e1) 수용. 병합은 사용자가 한다. 할 일 없음.
+ - 참고(후속 후보, 지금 하지 않음): 판단이 안 되는 번호의 새 종류 'PII'는 화면·보고서에 한글 이름이 없다.
 
-[B] (보통, 설계 메모 먼저) TK-24 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐(LEG-2) — docs/handoff/TK-24_unreasonable_argument_statutory_period.md (요구·수용, 개정 1)
- - 증상: 10-01부터 온라인·오프라인 모두 LEG-2 실패. tests/acceptance/test_case9_state_compensation.py의 [docx-LEG-2]·[text-LEG-2]가 strict xfail.
- - 첫 커밋: docs/handoff/requests/에 1쪽 이내 설계 메모(방법, 일반화 근거, 과탐 위험, 시험 계획). 평가 측 회신 전에는 탐지 코드를 쓰지 않는다.
-   틀: 적용 배제 대상(법정 기간·요건·면책 규정의 닫힌 집합, 조문 번호 열거 금지) + 배제 근거 유형(정의·형평·자연법·유추·준용·상위 규범)
-       + 범주적 표현 + 요건 논의 부재. 법이 정한 예외(시효 중단·정지 사유 등)를 정확히 원용한 서면은 알리지 않는다(대조군).
-       TK-45 원칙: 낱말 위치 일치 금지, 절·극성 구조로 판정.
- - 브랜치 codex/tk24-statutory-period-exclusion. 관련 시험 기준값(구현 전):
-   tests/test_tk20_unreasonable_argument_cluster.py tests/test_v4_g4_reasoning_axis.py tests/test_verification_regressions.py
-   tests/test_v2_phase1_verdicts.py tests/test_efficacy_round2.py tests/test_v5_claim_polarity.py tests/test_ground_truth_prepared_brief.py
-   tests/acceptance/test_generalization_guards.py tests/acceptance/test_round5_regressions.py tests/acceptance/test_variant_generalization.py
-   tests/acceptance/test_case9_state_compensation.py → 310 passed, 2 xfailed
-   tests/acceptance/test_round7_findings.py → 105 passed, 5 xfailed
- - 수용: LEG-2 2건만 XPASS(strict)로 바뀌고 그 밖 실패 0(보고에 'XPASS(strict) 외 실패 0'으로 적는다. 표시는 평가 측이 지운다).
-   양성 5건(대상·근거를 바꾼 변형)·대조 3건(법정 예외를 정확히 원용) 시험. 고정 81.7/79.2/0, 기존 무리한 주장 항목과 대조군 유지.
+[B] (보통, 지금) TK-24 — PR #53 설계 메모 승인. 같은 브랜치(codex/tk24-statutory-period-exclusion)에 구현 커밋을 이어 올린다.
+ - 평가 측 회신(PR #53 코멘트)의 보완 5개를 반영한다.
+   1) 결론절에 당위·청구 형태('~되어야 한다', '~되어서는 안 된다', '적용을 배제하여 달라')를 포함
+   2) 범주적 한정어가 없어도 무조건적 적용 부정이면 같은 판단. 양성 1건(한정어 없음)·대조 1건(한정어 있으나 법정 예외 정확 원용) 시험 추가
+   3) 출력: LEGAL_ARGUMENT_INVALID(또는 OVERCLAIM)·SUSPICIOUS·MEDIUM 이하, 근거 발췌는 배제 결론 문장 구간, 새 rule_id, 기존 NO_BASIS_REMEDY와 별개
+   4) 평가 측 비공개 법리 세트의 정상 항변 오탐 없음 8/8 유지(평가 측이 잰다)
+   5) 수용: LEG-2 두 건만 strict XPASS·그 밖 실패 0, 관련 310 passed·2 xfailed / round7 105 passed·5 xfailed 기준, 고정 81.7/79.2/0, 은퇴 세트 하락 없음, 새 정규식이면 반복 입력 시간 시험
+ - 탐지 엔진 변경이므로 수용 SHA에서 평가 측이 verify_all 전체 모드를 돌리고, 릴리스 전 새 봉인 세트로 봉인 시험을 한다.
 
-[C] (낮음, A·B 뒤) CodeQL 로그 주입 경보 정리 — apps/api/project_purge.py 63·73행(2026-10-04 지시 그대로, 아직 미착수)
- - 실제 위험은 없다(%r 기록, 값은 DB의 프로젝트 ID·PROJECT_ID_RE 검증). CodeQL이 repr을 정화로 인식하지 않아 경보가 남는다.
- - 기록용 값을 CodeQL이 정화로 인식하는 형태로 만든다:
-   도우미 하나(예: _log_id(v) = str(v).replace("\r", "").replace("\n", "")[:40])를 63·73행과 routers/projects.py의 project_purge_retry 로그에 쓴다.
-   동작·메시지 형식은 바꾸지 않는다.
- - 브랜치 codex/codeql-purge-log, 커밋 1개. 관련 시험: tests/test_project_lifecycle.py tests/test_storage_encryption.py.
-   경보 해소는 릴리스 PR(main 대상)의 CodeQL에서 확인한다.
+[C] CodeQL 로그 정리 — PR #54 수용·병합(Steve 5d7ac6c). 할 일 없음. 경보 해소는 다음 릴리스 PR의 CodeQL에서 평가 측이 확인한다.
 
 각 항목은 따로 Steve_ACASiaLAW 대상 PR로 올리고, CI가 끝난 뒤 '검토 요청'을 남긴다. 병합은 사용자가 한다.
 ```
 
 ## 평가 측 메모(전달하지 않는다)
-- RAG-2(Drive 대조 모순을 finding 목록에 올림)는 넘기지 않았다. 사용자 결정 D4('참고자료 대조 의견은 승격하지 않는다', PROMPT_FOR_F3 1절)와 정면으로 충돌하기 때문이다. D4를 바꿀지 사용자 결정을 먼저 받는다.
+- RAG-2(Drive 대조 모순을 finding 목록에 올림)는 Codex에 넘기지 않았다. 사용자가 D4를 '단계적 조건부 승격'으로 바꿨고(2026-10-09), 1단계 측정 충족 뒤 TK-70으로 Antigravity (40) [D]에 넘겼다.
 - TK-45 잔여(요건 부정 변형 미탐)는 이번 결정 범위(LEG-2·PII-K6·RAG-2) 밖이라 넘기지 않았다.
