@@ -17,7 +17,7 @@
  - 다른 구현 담당(Antigravity)이 같은 시기에 packages/claim_engine/evidence_consistency.py, packages/legal_engine/temporal_review.py,
    packages/rag_engine/review.py를 고친다(TK-67·69·68). 이 세 파일은 건드리지 않는다.
 
-[A] TK-58 — PR #52(f2033e1) 수용. 병합은 사용자가 한다. 할 일 없음.
+[A] TK-58 — PR #52(f2033e1) 수용·병합(Steve 3daf7b6). 할 일 없음.
  - 참고(후속 후보, 지금 하지 않음): 판단이 안 되는 번호의 새 종류 'PII'는 화면·보고서에 한글 이름이 없다.
 
 [B] (보통, 지금) TK-24 — PR #53 설계 메모 승인. 같은 브랜치(codex/tk24-statutory-period-exclusion)에 구현 커밋을 이어 올린다.
