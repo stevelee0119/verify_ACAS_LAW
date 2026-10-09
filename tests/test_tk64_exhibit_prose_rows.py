@@ -255,3 +255,51 @@ def test_exhibit_section_regex_contrasts():
     assert _EXHIBIT_SECTION_HEAD_RE.search("다. 입증방법")
     assert _EXHIBIT_SECTION_HEAD_RE.search("(1) 입증방법")
 
+
+def test_tk66_exhibit_section_head_regex_redos_prevention():
+    """[TK-66] 지수적 백트래킹(ReDoS) 방어: 반복 입력 4종에 대해 search가 0.1초 안에 종료된다."""
+    import time
+    from packages.claim_engine.evidence_consistency import _EXHIBIT_SECTION_HEAD_RE
+
+    cases = [
+        "[" + "\t[" * 2000 + "x",
+        "①" + "\t①" * 2000 + "x",
+        "(1)" + "\t(1)" * 2000 + "x",
+        "1." + " 1." * 2000 + "x",
+    ]
+    for case in cases:
+        t0 = time.perf_counter()
+        res = _EXHIBIT_SECTION_HEAD_RE.search(case)
+        elapsed = time.perf_counter() - t0
+        assert res is None, "악의적 패턴 매칭 실패 보장"
+        assert elapsed < 0.1, f"ReDoS 발생: {elapsed:.4f}초 소요 (한도: 0.1초)"
+
+
+def test_tk66_exhibit_section_head_regex_13_contrasts():
+    """[TK-66] 동작 유지: 티켓 2절 2의 구역 제목 판별 대조 13건(양성 10건, 음성 3건)을 정확히 단언한다."""
+    from packages.claim_engine.evidence_consistency import _EXHIBIT_SECTION_HEAD_RE
+
+    positive_cases = [
+        "다. 입증방법",
+        "3. 입증방법",
+        "(1) 입증방법",
+        "① 입증방법",
+        "[입증방법]",
+        "[1] 입증방법",
+        "입 증 방 법",
+        "첨부서류 및 입증방법",
+        "입증방법 (추가 제출)",
+        "입증방법 : 아래와 같음",
+    ]
+    for case in positive_cases:
+        assert _EXHIBIT_SECTION_HEAD_RE.search(case) is not None, f"구역 제목으로 인식되어야 함: {case}"
+
+    negative_cases = [
+        "3. 내부 기준과 입증방법",
+        "입증방법에 관하여 본다.",
+        "가. 입증방법의 신빙성",
+    ]
+    for case in negative_cases:
+        assert _EXHIBIT_SECTION_HEAD_RE.search(case) is None, f"구역 제목이 아니어야 함: {case}"
+
+
