@@ -1927,6 +1927,9 @@ function renderFindings() {
         if (basisText) {
           tdBasis.append(node("p", basisText, "basis-text"));
         }
+        if (item.reference_case_match) {
+          tdBasis.append(node("p", `표준판례 사건정보 대조: ${item.reference_case_match}`, "basis-text"));
+        }
         if (item.context_review?.reason) {
           const review = item.context_review;
           const context = node("div", null, "citation-context-review");

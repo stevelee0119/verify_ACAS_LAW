@@ -625,6 +625,7 @@ class ReviewItem:
     advisory_only: bool = False                  # 참고의견 여부 (True면 심각도 승격 없음)
     reasoning_sections: Optional[Dict[str, str]] = None  # {validity, counter_argument, strategy}
     counteraction: Optional[str] = None          # 권고 대응 방향
+    reference_case_match: Optional[str] = None   # 구조화 판례 사건정보 대조(지지 판정과 별개)
 
     def to_dict(self) -> Dict[str, Any]:
         """직렬화 사전 반환 (Enum은 문자열로 변환)."""
@@ -637,6 +638,7 @@ class ReviewItem:
             "cited_authority": self.cited_authority,
             "official_status": str(self.official_status),
             "reference_status": str(self.reference_status),
+            "reference_case_match": self.reference_case_match,
             "evidence_sources": self.evidence_sources,
             "verdict_label": self.verdict_label,
             "severity": str(self.severity),
