@@ -116,8 +116,8 @@ def find_pattern_hits_batch(texts: List[str]) -> List[List[PatternHit]]:
     cue = re.compile(
         r"AI|ＡＩ|LLM|인공지능|프롬프트|시스템|system|developer|assistant|override|admin|security|audit|gate|"
         r"지시|명령|무시|무효|취소|잊|폐기|우회|생략|건너뛰|스킵|중단|비활성|억제|해제|삭제|전송|업로드|"
-        r"검증|검토|분석|판례|사건번호|원문|경고|플래그|적법|정상|PASS|COMPLIANT|VERIFIED|"
-        r"보고서|결과|요약|결론|판정|확인|조회|대조|기재|출력|반환|제외|누락|배제|인용|전부|모두|전체|"
+        r"경고|플래그|적법|정상|PASS|COMPLIANT|VERIFIED|보고서|요약|결론|판정|출력|반환|제외|누락|배제|전부|모두|전체|"
+        r"(?:검증|검토|분석|판례|사건번호|원문|확인|조회|대조|기재|인용).{0,12}(?:생략|제외|건너뛰|무시|하지\s*말|않고|말고)|"
         r"ignore|disregard|forget|instructions?|prompt|verify|check|validate|skip|disable|bypass|suppress|"
         r"delete|remove|erase|send|upload|exfiltrate|execute|permission|future|always|classify|report|output|"
         r"\b(?:you\s+are|act\s+as|do\s+not|new\s+instructions?)\b",
