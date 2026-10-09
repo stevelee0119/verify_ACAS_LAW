@@ -25,7 +25,7 @@ from .case_table import lookup_records
 SUPPORTED = {".pdf", ".docx", ".hwpx", ".hwp", ".xlsx", ".txt", ".md", ".csv"}
 
 
-def isolated_extract(data, filename, mime, *, directory, timeout):
+def isolated_extract(data, filename, mime, *, directory, timeout, continuation=None):
     from apps.api.security import scan_upload
 
     # MIME and signature take precedence over cosmetic names such as "x.pdf copy".
@@ -38,14 +38,19 @@ def isolated_extract(data, filename, mime, *, directory, timeout):
     with tempfile.TemporaryDirectory(prefix="extract-", dir=directory) as temporary:
         path, output = Path(temporary) / filename, Path(temporary) / "result.json"
         path.write_bytes(data)
+        arguments = [sys.executable, "-m", "packages.rag_engine.extract", str(path), str(output), filename, mime]
+        if continuation:
+            checkpoint = Path(temporary) / "continuation.json"
+            checkpoint.write_text(json.dumps(continuation, ensure_ascii=False), encoding="utf-8")
+            arguments.append(str(checkpoint))
         env = {k: v for k, v in os.environ.items() if k.upper() in {
-            "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "PYTHONUTF8"}}
+            "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "PYTHONUTF8",
+            "LV_CASE_TABLE_MAX_EXCLUDED_ROWS"}}
         env.update(LV_ALLOW_NETWORK="0", LV_OCR_MAX_PAGES="0", LV_INDEPENDENT_OCR="off",
                    OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
                    LV_DATA_DIR=str(Path(temporary) / "data"), LV_STORAGE_ROOT=str(Path(temporary) / "storage"))
         try:
-            subprocess.run([sys.executable, "-m", "packages.rag_engine.extract", str(path), str(output),
-                            filename, mime], cwd=REPO_ROOT, env=env, timeout=timeout,
+            subprocess.run(arguments, cwd=REPO_ROOT, env=env, timeout=timeout,
                            check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         except subprocess.TimeoutExpired:
@@ -310,6 +315,10 @@ class ReferenceLibrary:
                 row = db.execute("SELECT payload FROM files WHERE id=? AND revision=?", (file_id, version)).fetchone()
                 if row and stale_quarantine(json.loads(row[0])):
                     row = None                    # 예전 규칙(파일 전체 격리, 근거 미기록)의 결과는 다시 읽는다
+                prior = json.loads(row[0]) if row else None
+                continuation = prior.get("continuation") if prior else None
+                if continuation:
+                    row = None  # Only a progressing structured table is retried at the same revision.
                 if row:
                     parsed = json.loads(row[0])
                     self.summary["files_reused"] += 1
@@ -331,6 +340,10 @@ class ReferenceLibrary:
                         raise ReferenceError(problem)
                     item = {**fresh, "folder_path": folder_path, "listed_parent": item.get("listed_parent")}
                     version = revision(item) + ":" + EXTRACTOR_VERSION
+                    if prior and continuation:
+                        stored = db.execute("SELECT revision FROM files WHERE id=?", (file_id,)).fetchone()
+                        if not stored or stored[0] != version:
+                            prior, continuation = None, None
                     mime = item.get("mimeType", "")
                     if (mime not in EXPORTS and mime != "application/pdf"
                             and relevance.extension(item.get("name")) not in SUPPORTED):
@@ -354,9 +367,26 @@ class ReferenceLibrary:
                         raise ReferenceError("SYNC_BUDGET_EXHAUSTED")
                     mark = time.monotonic()
                     try:
-                        parsed = self.extractor(data, filename, mime, directory=self.directory, timeout=30)
+                        kwargs = {"directory": self.directory, "timeout": 30}
+                        if continuation:
+                            kwargs["continuation"] = continuation
+                        parsed = self.extractor(data, filename, mime, **kwargs)
+                        if (continuation and not parsed.get("resumed")
+                                and parsed.get("reason") in ("REFERENCE_PARSE_TIMEOUT", "REFERENCE_PARSE_FAILED")):
+                            raise ReferenceError(parsed["reason"])
                     except ReferenceError as exc:
                         if str(exc) not in ("REFERENCE_PARSE_TIMEOUT", "REFERENCE_PARSE_FAILED"):
+                            raise
+                        if continuation:
+                            # Retain committed rows/cursor, but do not retry a stuck row forever.
+                            failed_batch = dict(prior)
+                            failed_batch["resume_failures"] = int(prior.get("resume_failures", 0)) + 1
+                            if failed_batch["resume_failures"] >= 2:
+                                failed_batch["continuation"] = None
+                                failed_batch.update(partial=True, reason=str(exc))
+                            with db:
+                                db.execute("UPDATE files SET payload=? WHERE id=? AND revision=?",
+                                           (json.dumps(failed_batch), file_id, version))
                             raise
                         parsed = {"chunks": [], "partial": True, "reason": str(exc)}
                     finally:
@@ -364,11 +394,14 @@ class ReferenceLibrary:
                         diagnostics["extractions"]["ms"] += round((time.monotonic() - mark) * 1000)
                     chunks = parsed.pop("chunks", [])
                     case_records = parsed.pop("case_records", [])
-                    parsed["chunk_count"] = len(chunks)
+                    append_batch = bool(prior and parsed.get("resumed") and prior.get("sha256") == parsed.get("sha256")
+                                        and parsed.get("reason") != "REFERENCE_QUARANTINED")
+                    parsed["chunk_count"] = len(chunks) + (prior.get("chunk_count", 0) if append_batch else 0)
                     # Cache terminal parse outcomes, too; a large unreadable file must not starve later files.
                     with db:
-                        db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
-                        db.execute("DELETE FROM case_rows WHERE file_id=?", (file_id,))
+                        if not append_batch:
+                            db.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+                            db.execute("DELETE FROM case_rows WHERE file_id=?", (file_id,))
                         db.execute("INSERT OR REPLACE INTO files VALUES (?,?,?)", (file_id, version, json.dumps(parsed)))
                         db.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?)", [
                             (file_id, version, c["page"], c["start"], c["text"], " ".join(tokens(c["text"]))) for c in chunks])
@@ -399,7 +432,7 @@ class ReferenceLibrary:
                              reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
                              read_pages=parsed.get("read_pages"))
                 for key in ("excluded_pages", "scan_findings", "no_text_pages", "unprocessed_pages", "coverage_note",
-                            "text_parser", "fallback_pages", "stats"):
+                            "text_parser", "fallback_pages", "stats", "read_ranges", "excluded_rows", "table_version"):
                     if parsed.get(key):
                         entry[key] = parsed[key]
                 if parsed.get("structured_case_table"):
@@ -629,6 +662,8 @@ class ReferenceLibrary:
         result = []
         for row in rows:
             item = dict(zip(fields, row))
+            if item["file_id"] not in self.eligible:
+                continue
             for key in ("case_numbers", "target_case_numbers", "referenced_case_numbers", "hyperlinks", "quality_warnings", "raw_cells"):
                 try:
                     item[key] = json.loads(item[key] or "[]")
@@ -653,6 +688,7 @@ class ReferenceLibrary:
             case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
             court = court or citation.get("court") or citation.get("court_name")
             decision_date = decision_date or citation.get("decision_date") or citation.get("date")
+        self._case_rows()  # Populate the per-document exact-number index once.
         normalized = str(case_number or "").replace(" ", "")
         rows = self._case_number_index.get(normalized, []) if normalized else self._case_rows()
         return lookup_records(rows, normalized, court=court,

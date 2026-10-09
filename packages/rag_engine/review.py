@@ -334,14 +334,14 @@ def review_document(result, library, router, context, pii):
         review["structured_case_search"] = {"enabled": True, "corpus": "ELIGIBLE_CASE_TABLE_ROWS",
                                              "holding_first": True}
     review["reference_case_matches"] = reference_case_matches
-    if selection["decision"] == "INCOMPLETE_COVERAGE" and not reference_case_matches and not getattr(library, "has_case_tables", lambda: False)():
+    if selection["decision"] == "INCOMPLETE_COVERAGE":
         review.update(status="INCOMPLETE_COVERAGE", reason="RELEVANT_REFERENCES_NOT_FULLY_READ")
         return review
     if selection["reason"] == "NO_ELIGIBLE_REFERENCE":
         # Nothing could be read from Drive: that is an unfinished check, not "no relevant material".
         review["reason"] = "NO_READABLE_DRIVE_REFERENCE"
         return review
-    if not sources and not getattr(library, "has_case_tables", lambda: False)():
+    if not sources:
         # No relevant Drive material: the library is not used for this document (not proof of absence).
         review.update(status="NOT_RELEVANT", reason="NO_RELEVANT_DRIVE_REFERENCE:" + selection["reason"])
         return review
