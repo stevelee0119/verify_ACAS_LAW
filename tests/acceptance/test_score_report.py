@@ -169,3 +169,15 @@ def test_case9_online_spec_rag1_uses_claim_scope():
     spec = sr.load_spec(ROOT / "tests" / "fixtures" / "probes" / "case9_state_compensation_online.json")
     assert spec["rule_version"] == "2"
     assert {c["id"]: c.get("scope") for c in spec["checks"]}["RAG-1"] == "claim"
+
+
+def test_no_rag_relationship_is_the_negation_with_claim_scope(tmp_path):
+    spec = tmp_path / "neg.json"
+    spec.write_text(json.dumps({"name": "neg", "checks": [
+        {"id": "C", "kind": "no_rag_relationship", "relationship": "CONTRADICTS", "text": "제7조", "scope": "claim"}]},
+        ensure_ascii=False), encoding="utf-8")
+    hit = _report_with_claim("「가상 규정」 제7조에 따르면", "따르면")
+    assert sr.score(_write(tmp_path, hit), spec)["failed"] == ["C"]          # 모순 의견이 있으면 대조군 실패
+    context = _report_with_claim("「가상 규정」 제7조에 따르면", "따르면", relationship="CONTEXT")
+    assert sr.score(_write(tmp_path, context), spec)["failed"] == []          # 다른 관계는 통과
+    assert sr.score(_write(tmp_path, _report()), spec)["failed"] == []        # 의견이 없으면 통과

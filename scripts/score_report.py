@@ -17,6 +17,8 @@ AI 작성 판정·공식 DB 대조·Drive 대조·모델 경로를 이 도구가
                      항목에 "scope": "claim"이 있으면 의견의 claim_id로 찾은 주장 원문(documents[].claims[].text)에 text가 들어도
                      통과한다(2026-10-09 사용자 결정: claim_quote는 모델이 고른 인용 범위라 같은 주장에 대한 같은 의견도 범위에 따라
                      결과가 갈렸다). 명세 머리의 rule_version이 기록에 남는다. 규칙 판이 다른 점수끼리 증감을 비교하지 않는다.
+- no_rag_relationship : rag_relationship과 같은 조건(scope 포함)에 맞는 의견이 없다(대조군: 참고자료와 맞는 주장에 '모순' 의견이
+                     나오지 않아야 한다, 2026-10-09 D4 재검토 1단계)
 """
 from __future__ import annotations
 
@@ -31,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG = ROOT / "docs" / "scorecards" / "first_touch_log.jsonl"
-KINDS = {"finding", "no_finding", "pii_kind", "ai_verdict", "ai_models", "rag_relationship"}
+KINDS = {"finding", "no_finding", "pii_kind", "ai_verdict", "ai_models", "rag_relationship", "no_rag_relationship"}
 
 
 def _probe():
@@ -105,13 +107,15 @@ def evaluate(spec: Dict[str, Any], obs: Dict[str, Any]) -> List[Dict[str, Any]]:
                   if float(m.get("score") or 0) >= float(check.get("min_score", 0))
                   and str(m.get("verdict", "")).startswith("AI_")]
             passed = len(ai) >= int(check.get("at_least", 1))
-        else:  # rag_relationship
+        else:  # rag_relationship / no_rag_relationship
             claim_scope = check.get("scope") == "claim"
             texts = obs.get("claim_texts") or {}
             passed = any(o.get("relationship") == check["relationship"]
                          and (check["text"] in str(o.get("claim_quote", ""))
                               or (claim_scope and check["text"] in texts.get(str(o.get("claim_id")), "")))
                          for o in obs["rag"])
+            if kind == "no_rag_relationship":
+                passed = not passed
         rows.append({"id": check["id"], "label": check.get("label", ""), "passed": bool(passed)})
     return rows
 
