@@ -30,7 +30,7 @@ from ..db import Document, DocumentVersion, Project, VerificationRun, get_db
 from ..job_control import DurableJob, TERMINAL
 from ..project_lifecycle import lock_project
 from ..db_errors import error_label, is_retryable
-from ..project_purge import purge_files, purge_rows
+from ..project_purge import _log_id, purge_files, purge_rows
 from ..storage_admin import vacuum_in_background
 from ..workspace import ReportJob
 from ..schemas import DocumentOut, ProjectCreate, ProjectOut, ProjectUpdate, DocumentUpdate, DocumentScopeUpdate
@@ -282,9 +282,8 @@ def purge_project(project_id: str, session: Session = Depends(get_db)):
             session.rollback()
             if not is_retryable(exc):
                 raise
-            # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
             logger.warning("project_purge_retry project=%r attempt=%s error=%s",
-                           project_id, attempt + 1, error_label(exc))
+                           _log_id(project_id), attempt + 1, error_label(exc))
             if attempt + 1 == PURGE_ATTEMPTS:
                 raise HTTPException(409, {
                     "message": "다른 작업이 이 프로젝트의 자료를 쓰고 있어 영구 삭제하지 못했습니다. 잠시 후 다시 시도하세요.",

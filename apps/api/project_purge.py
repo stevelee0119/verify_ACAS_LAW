@@ -25,6 +25,11 @@ logger = logging.getLogger(__name__)
 KEEP_TABLES = {"audit_events"}
 
 
+def _log_id(value: object) -> str:
+    """로그용 식별자에서 줄 구분자를 제거하고 길이를 제한한다."""
+    return str(value).replace("\r", "").replace("\n", "")[:40]
+
+
 def _conditions(project_id: str) -> Dict[str, object]:
     """테이블마다 '이 프로젝트에 속한 행' 조건. 부모 조건을 하위 질의로 물려받는다."""
     from . import identity, job_control, workspace  # noqa: F401 - 모든 테이블을 메타데이터에 등록한다
@@ -59,8 +64,7 @@ def purge_files(project_id: str) -> Dict[str, object]:
     try:
         result["files_removed"] = get_storage().delete_project_files(project_id)
     except Exception as exc:  # 저장소 오류는 삭제 결과와 로그로 알린다
-        # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
-        logger.error("project_purge_files_failed project=%r error_type=%s", project_id, type(exc).__name__)
+        logger.error("project_purge_files_failed project=%r error_type=%s", _log_id(project_id), type(exc).__name__)
         result["file_errors"].append(f"원본·보고서 파일: {type(exc).__name__}")
     # 보안(TK-35): match+$ 대신 fullmatch로 끝 줄바꿈 허용 방지
     if PROJECT_ID_RE.fullmatch(project_id):
@@ -69,7 +73,6 @@ def purge_files(project_id: str) -> Dict[str, object]:
             if vault.exists():
                 vault.unlink()
         except OSError as exc:
-            # 보안(TK-35): 로그 주입 방지를 위해 project_id를 %r로 기록
-            logger.error("project_purge_vault_failed project=%r error_type=%s", project_id, type(exc).__name__)
+            logger.error("project_purge_vault_failed project=%r error_type=%s", _log_id(project_id), type(exc).__name__)
             result["file_errors"].append(f"가명 처리 보관소: {type(exc).__name__}")
     return result
