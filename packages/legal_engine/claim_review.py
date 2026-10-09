@@ -37,6 +37,7 @@ PROVISION_RE = re.compile(
 BARE_PROVISION_RE = re.compile(r"제\s*\d+\s*조")
 # 판례 인용은 사건번호나 '선고'가 있어야 한다. '판결'이라는 낱말만으로는 근거 인용으로 보지 않는다.
 CASE_CITE_RE = re.compile(r"(?:19|20)?\d{2}\s*(?:헌[가-힣]|[가-힣]{1,3})\s*\d{2,6}|선고")
+DIGIT_RE = re.compile(r"\d")
 CITATION_ANY_RE = re.compile(rf"{PROVISION_RE.pattern}|{CASE_CITE_RE.pattern}|제\s*\d+\s*조")
 CONSTITUTION_NAMES = {"헌법", "대한민국헌법", "대한민국 헌법"}
 
@@ -63,6 +64,7 @@ LEGAL_EFFECT_RE = re.compile(
 QUALIFIER_RE = re.compile(r"특별한\s*사정이\s*없는\s*한|원칙적으로|대체로|일반적으로\s*(?:는|은)?\s*(?:[가-힣]+\s*){0,2}한다고\s*보|"
                           r"경우가\s*많|할\s*수\s*있다")
 
+STANDARD_MARKER_RE = re.compile(r"표|기준|가이드라인|지침|매뉴얼|관행|해설서|안내서|편람|핸드북|요령")
 STANDARD_NOUN_RE = re.compile(
     r"(?:[가-힣]{0,12}\s?)(?:산정\s*기준표|판정\s*기준표|기준표|산정\s*기준|산정표|요율표|가이드라인|지침|매뉴얼|업무\s*기준|내부\s*기준|실무\s*기준|"
     r"업계\s*(?:기준|관행)|표준\s*[가-힣]{0,6}표|판정\s*기준|해설서|안내서|편람|핸드북|업무\s*(?:처리\s*)?요령|실무\s*요령)")
@@ -177,7 +179,11 @@ def _is_constitution(law: str) -> bool:
 
 
 def _has_citation(*texts: str) -> bool:
-    return any(t and CITATION_ANY_RE.search(t) for t in texts)
+    # Every numeric alternative requires a decimal digit; the only digit-free
+    # alternative is 선고.  Avoid retrying the long provision-name expression
+    # at every word of a sentence that cannot contain any citation.
+    return any(t and ("선고" in t or DIGIT_RE.search(t))
+               and CITATION_ANY_RE.search(t) for t in texts)
 
 
 # 앞 문장의 인용은 이 문장이 앞 문장을 이어받을 때만 근거로 본다('따라서', '이에 따라', '위 판결은' 등).
@@ -302,6 +308,9 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
 
 
 def _unsourced_standard(sentence: str) -> Optional[ClaimMatch]:
+    # Every existing alternative contains one of these terminal markers.
+    if not STANDARD_MARKER_RE.search(sentence):
+        return None
     for noun in STANDARD_NOUN_RE.finditer(sentence):
         if not RELIANCE_RE.match(sentence, noun.end()):
             continue
@@ -326,9 +335,12 @@ def _requirement_exclusion(sentence: str, previous: str) -> Optional[ClaimMatch]
         # 예외 근거는 소송요건의 예외를 정한 조문·판례여야 한다. 헌법의 일반 기본권 조항(재판청구권 등)만 든
         # 경우는 예외 근거로 보지 않는다.
         previous = _linked_previous(sentence, previous)
-        cited = [m for m in PROVISION_RE.finditer(sentence + " " + previous) if not _is_constitution(m.group("law"))]
+        context = sentence + " " + previous
+        has_numeric_citation = bool(DIGIT_RE.search(context))
+        cited = ([m for m in PROVISION_RE.finditer(context) if not _is_constitution(m.group("law"))]
+                 if has_numeric_citation else [])
         other_cite = CASE_CITE_RE.search(sentence) or (previous and CASE_CITE_RE.search(previous))
-        constitutional_only = bool(PROVISION_RE.search(sentence)) and not cited and not other_cite
+        constitutional_only = has_numeric_citation and bool(PROVISION_RE.search(sentence)) and not cited and not other_cite
         if EXCEPTION_BASIS_RE.search(sentence) and not constitutional_only:
             return None
         if (cited or other_cite) and not constitutional_only:

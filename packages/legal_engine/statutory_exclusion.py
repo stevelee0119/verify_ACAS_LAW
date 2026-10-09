@@ -7,14 +7,15 @@ the existing legal verification flow rather than treated as a categorical claim.
 from __future__ import annotations
 
 import re
-from bisect import bisect_left
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from functools import lru_cache
 
 from packages.document_engine.reading_text import QUOTE_SPAN_RE
 
 from .legal_rules import _REQUIREMENT_CLAUSE_END_RE
-from .polarity import ASSERTED, polarity
+from .polarity import (ASSERTED, polarity, CLAUSE_BREAK_RE, NEGATION_RE, OPPONENT_REPORT_RE,
+                       REPORT_VERB_RE, COURT_SUBJECT_RE, CASE_CITE_RE, CONDITIONAL_LEAD_RE, CONDITIONAL_TAIL_RE)
 
 
 TARGET_RE = re.compile(
@@ -84,83 +85,138 @@ def _clauses(sentence: str):
         yield start, len(sentence)
 
 
+class _Matches:
+    """One full-text scan; range queries do not rescan prefixes or suffixes."""
+    def __init__(self, regex, text, *, enabled=True):
+        self.regex, self.text = regex, text
+        self.matches = list(regex.finditer(text)) if enabled else []
+        self.starts = [match.start() for match in self.matches]
+        self.ends = [match.end() for match in self.matches]
+
+    def first(self, start=0, end=None):
+        index = bisect_left(self.starts, start)
+        if index > 0 and self.ends[index - 1] > start:
+            overlap = self.regex.search(self.text, start, self.ends[index - 1] if end is None else min(end, self.ends[index - 1]))
+            if overlap:
+                return overlap
+        if index < len(self.matches) and (end is None or self.ends[index] <= end):
+            return self.matches[index]
+        return None
+
+    def last(self, start, end):
+        index = bisect_right(self.ends, end) - 1
+        if index >= 0 and self.starts[index] >= start:
+            return self.matches[index]
+        return None
+
+    def count(self, start, end):
+        return max(0, bisect_right(self.ends, end) - bisect_left(self.starts, start))
+
+
+class _PolarityIndex:
+    def __init__(self, text):
+        self.breaks = _Matches(CLAUSE_BREAK_RE, text)
+        self.negations = _Matches(NEGATION_RE, text)
+        self.opponent = _Matches(OPPONENT_REPORT_RE, text)
+        self.report = _Matches(REPORT_VERB_RE, text)
+        self.court = _Matches(COURT_SUBJECT_RE, text, enabled=bool(self.report.matches))
+        self.citation = _Matches(CASE_CITE_RE, text, enabled=bool(self.report.matches))
+        self.lead = _Matches(CONDITIONAL_LEAD_RE, text)
+        self.tail = _Matches(CONDITIONAL_TAIL_RE, text + " ")
+        self.length = len(text)
+
+    def asserted(self, start, end, *, left=0, right=None, previous=""):
+        right = self.length if right is None else right
+        stop = self.breaks.first(end, right)
+        clause_end = stop.start() if stop else right
+        if self.negations.count(end, clause_end) % 2:
+            return False
+        if self.opponent.first(end, right):
+            return False
+        if (self.report.first(end, right)
+                and (self.court.first(left, start) or self.court.first(end, right))
+                and (self.citation.first(left, right) or CASE_CITE_RE.search(previous))):
+            return False
+        if self.lead.first(left, start) and self.tail.first(end, clause_end + 1):
+            return False
+        return True
+
+
 @lru_cache(maxsize=256)
 def _exclusion_clauses_cached(sentence: str, previous: str = "", cited: bool = False):
-    """Find conclusion spans whose statutory target and rationale are linked.
-
-    Only causal/instrumental predecessor clauses carry a target or rationale
-    forward. A previous sentence must already have been linked by the caller.
-    Negation/reporting is tested after the entire exclusion proposition, so an
-    application prohibition is not mistaken for a denial of that prohibition.
-    """
+    """Compute sentence features once and query each causal conclusion by position."""
     if not TARGET_RE.search(sentence) or not EXCLUSION_RE.search(sentence):
         return []
     clauses = list(_clauses(sentence))
-    quote_view = sentence.translate(str.maketrans({"‘": "“", "’": "”", "'": '"'}))
-    quotes = [q.span() for q in QUOTE_SPAN_RE.finditer(quote_view)]
+    quote_view = sentence.translate(str.maketrans({"‘": "“", "’": "”", "'": '"'})) if any(char in sentence for char in ("‘", "’", "'")) else sentence
+    quotes = _Matches(QUOTE_SPAN_RE, quote_view)
+    predicates = _Matches(EXCLUSION_RE, sentence)
+    polarities = _PolarityIndex(sentence)
+    reports = _Matches(REPORT_RE, sentence)
+    conditions = _Matches(CONDITION_RE, sentence)
+    grounds = _Matches(GROUND_RE, sentence)
+    exceptions = _Matches(EXCEPTION_RE, sentence)
+    fulfilments = _Matches(FULFILMENT_RE, sentence)
+    arguments = list(ARGUMENT_RE.finditer(sentence))
+    other_arguments = [match.start() for match in arguments if match.group()[:-1] != "적용"]
+    targets = []
+    for target in TARGET_RE.finditer(sentence):
+        role = TARGET_ROLE_RE.match(sentence, target.end())
+        if role:
+            targets.append((target, role.end()))
+    target_ends = [role_end for _target, role_end in targets]
+    target_starts = [target.start() for target, _role_end in targets]
+    previous_condition = bool(CONDITION_RE.search(previous))
+    previous_ground = list(GROUND_RE.finditer(previous))
+    previous_exception = EXCEPTION_RE.search(previous)
+    previous_fulfilment = FULFILMENT_RE.search(previous)
+    previous_exception_asserted = bool(previous_fulfilment and polarity(previous, previous_fulfilment.span()) == ASSERTED)
     out = []
+    unit_start = 0
     for index, (start, end) in enumerate(clauses):
-        clause = sentence[start:end]
-        predicate = EXCLUSION_RE.search(clause)
+        if index == 0 or not LINK_RE.search(sentence[clauses[index - 1][0]:start]):
+            unit_start = start
+        predicate = predicates.first(start, end)
         if not predicate:
             continue
-        predicate_span = (start + predicate.start(), start + predicate.end())
-        if any(left <= predicate_span[0] < right for left, right in quotes):
+        quote_index = bisect_right(quotes.starts, predicate.start()) - 1
+        if quote_index >= 0 and predicate.start() < quotes.ends[quote_index]:
             continue
-        if polarity(sentence, predicate_span, previous=previous) != ASSERTED:
+        if not polarities.asserted(predicate.start(), predicate.end(), previous=previous):
             continue
-        if REPORT_RE.search(sentence[predicate_span[1]:end]):
+        if reports.first(predicate.end(), end):
             continue
-        unit_start = start
-        for left, right in reversed(clauses[:index]):
-            if not LINK_RE.search(sentence[left:right]):
-                break
-            unit_start = left
-        unit = sentence[unit_start:predicate_span[1]]
-        context = previous + " " + unit if previous else unit
-        if CONDITION_RE.search(context):
+        if previous_condition or conditions.first(unit_start, predicate.end()):
             continue
-        targets = []
-        # ARGUMENT_RE used to be scanned from every target to the end of a
-        # long clause.  A long synthetic sentence with repeated targets made
-        # that quadratic.  Build the argument positions once and answer each
-        # target's suffix query with a binary search; the rule and spans stay
-        # unchanged.
-        argument_matches = list(ARGUMENT_RE.finditer(unit))
-        argument_starts = [match.start() for match in argument_matches]
-        end_limit = len(unit) - len(predicate.group())
-        usable_arguments = [match for match in argument_matches if match.start() < end_limit]
-        suffix_has_other = [False] * (len(usable_arguments) + 1)
-        for argument_index in range(len(usable_arguments) - 1, -1, -1):
-            suffix_has_other[argument_index] = (
-                suffix_has_other[argument_index + 1]
-                or usable_arguments[argument_index].group()[:-1] != "적용"
-            )
-        for target in TARGET_RE.finditer(unit):
-            role = TARGET_ROLE_RE.match(unit, target.end())
-            if not role:
+        target_index = bisect_right(target_starts, predicate.end()) - 1
+        if target_index < 0:
+            continue
+        target, role_end = targets[target_index]
+        if target.start() < unit_start or target.end() > predicate.end():
+            continue
+        argument_index = bisect_left(other_arguments, predicate.start()) - 1
+        if argument_index >= 0 and other_arguments[argument_index] >= max(unit_start, role_end):
+            continue
+        ground = grounds.last(unit_start, predicate.end())
+        if ground is None and previous_ground:
+            ground = previous_ground[-1]
+        if ground is None:
+            continue
+        exception = previous_exception or exceptions.first(unit_start, predicate.end())
+        fulfilled = previous_fulfilment or fulfilments.first(unit_start, predicate.end())
+        if cited and exception and fulfilled:
+            if previous_fulfilment:
+                # Previous is normally one linked sentence; inspect it once.
+                exception_asserted = previous_exception_asserted
+            else:
+                exception_asserted = polarities.asserted(fulfilled.start(), fulfilled.end(),
+                                                         left=unit_start, right=predicate.end(), previous=previous)
+            if exception_asserted and ("시효" not in exception.group() or "시효" in target.group()):
                 continue
-            argument_index = bisect_left(argument_starts, role.end())
-            if argument_index < len(usable_arguments) and suffix_has_other[argument_index]:
-                continue
-            targets.append(target)
-        grounds = list(GROUND_RE.finditer(context))
-        if not targets or not grounds:
-            continue
-        # An exception name or citation alone cannot establish its application.
-        exception = EXCEPTION_RE.search(context)
-        fulfilled = FULFILMENT_RE.search(context)
-        if (cited and exception and fulfilled
-                and polarity(context, fulfilled.span()) == ASSERTED):
-            # Prescription interruptions cannot justify a different time limit.
-            if "시효" not in exception.group() or "시효" in targets[-1].group():
-                continue
-        ground = grounds[-1]
-        # Include an inherited grammatical subject in the evidence span, rather
-        # than emitting only the subjectless final clause ("its application...").
-        trimmed = len(clause) - len(clause.lstrip())
-        excerpt_start = min(start + trimmed, unit_start + targets[-1].start())
-        out.append(ExclusionClause(excerpt_start, end, targets[-1].group(), ground.lastgroup))
+        trimmed_start = start
+        while trimmed_start < end and sentence[trimmed_start].isspace():
+            trimmed_start += 1
+        out.append(ExclusionClause(min(trimmed_start, target.start()), end, target.group(), ground.lastgroup))
     return out
 
 

@@ -189,3 +189,31 @@ def test_synthetic_long_sentence_and_repeated_prefixes_are_linear():
     for _ in range(2000):
         classify_claims("소멸시효의 적용을 배제하여 달라.")
     assert perf_counter() - started < 0.1
+
+
+@pytest.mark.parametrize('prefix,expected', [
+    ('소멸시효는 정의에 따라 적용이 배제되어야 하므로, ', 2001),
+    ('소멸시효의 적용을 ', 1),
+])
+@pytest.mark.parametrize('entry', [exclusion_clauses, classify_claims])
+def test_synthetic_single_sentence_2000_repetitions_cold_budget(prefix, expected, entry):
+    """합성 접두어 2,000회가 들어간 한 문장을 캐시 없이 분석한다."""
+    from packages.legal_engine.statutory_exclusion import _exclusion_clauses_cached
+    text = prefix * 2000 + '정의에 따라 소멸시효의 적용을 배제하여 달라.'
+    import gc
+    timings = []
+    # Standard timeit practice: exclude unrelated cyclic collection/scheduler jitter,
+    # and take the best of three independently cold runs, never a cache hit.
+    gc_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        for _ in range(3):
+            _exclusion_clauses_cached.cache_clear()
+            started = perf_counter()
+            matches = entry(text)
+            timings.append(perf_counter() - started)
+            assert len(matches) == expected
+    finally:
+        if gc_enabled:
+            gc.enable()
+    assert min(timings) < 0.1
