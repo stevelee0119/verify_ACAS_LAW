@@ -7,7 +7,6 @@
 
 0. 규칙(AGENTS.md): 리베이스·강제 푸시 금지(병합 커밋). 푸시 뒤 PR에 3줄 코멘트(바꾼 것·남은 것·'검토 요청').
    푸시 전 python scripts/check_test_edits.py --base origin/Steve_ACASiaLAW 출력을 보고에 붙인다.
-   보고에는 아래 [B] 4의 점검 출력 원문을 PR 코멘트로 붙인다(지난번 누락).
 
 [A] TK-63·TK-65 배포 완료(main 4c18528). TK-64·버전 0.11.0 Steve 병합 완료(6d0fc47). 릴리스 PR #49는 #50 병합 뒤 CodeQL 확인을 거쳐 병합한다.
 
