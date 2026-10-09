@@ -7,7 +7,9 @@ the existing legal verification flow rather than treated as a categorical claim.
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from dataclasses import dataclass
+from functools import lru_cache
 
 from packages.document_engine.reading_text import QUOTE_SPAN_RE
 
@@ -82,7 +84,8 @@ def _clauses(sentence: str):
         yield start, len(sentence)
 
 
-def exclusion_clauses(sentence: str, previous: str = "", *, cited: bool = False):
+@lru_cache(maxsize=256)
+def _exclusion_clauses_cached(sentence: str, previous: str = "", cited: bool = False):
     """Find conclusion spans whose statutory target and rationale are linked.
 
     Only causal/instrumental predecessor clauses carry a target or rationale
@@ -118,12 +121,27 @@ def exclusion_clauses(sentence: str, previous: str = "", *, cited: bool = False)
         if CONDITION_RE.search(context):
             continue
         targets = []
+        # ARGUMENT_RE used to be scanned from every target to the end of a
+        # long clause.  A long synthetic sentence with repeated targets made
+        # that quadratic.  Build the argument positions once and answer each
+        # target's suffix query with a binary search; the rule and spans stay
+        # unchanged.
+        argument_matches = list(ARGUMENT_RE.finditer(unit))
+        argument_starts = [match.start() for match in argument_matches]
+        end_limit = len(unit) - len(predicate.group())
+        usable_arguments = [match for match in argument_matches if match.start() < end_limit]
+        suffix_has_other = [False] * (len(usable_arguments) + 1)
+        for argument_index in range(len(usable_arguments) - 1, -1, -1):
+            suffix_has_other[argument_index] = (
+                suffix_has_other[argument_index + 1]
+                or usable_arguments[argument_index].group()[:-1] != "적용"
+            )
         for target in TARGET_RE.finditer(unit):
             role = TARGET_ROLE_RE.match(unit, target.end())
             if not role:
                 continue
-            later_arguments = ARGUMENT_RE.finditer(unit, role.end(), len(unit) - len(predicate.group()))
-            if any(a.group()[:-1] != "적용" for a in later_arguments):
+            argument_index = bisect_left(argument_starts, role.end())
+            if argument_index < len(usable_arguments) and suffix_has_other[argument_index]:
                 continue
             targets.append(target)
         grounds = list(GROUND_RE.finditer(context))
@@ -144,3 +162,8 @@ def exclusion_clauses(sentence: str, previous: str = "", *, cited: bool = False)
         excerpt_start = min(start + trimmed, unit_start + targets[-1].start())
         out.append(ExclusionClause(excerpt_start, end, targets[-1].group(), ground.lastgroup))
     return out
+
+
+def exclusion_clauses(sentence: str, previous: str = "", *, cited: bool = False):
+    """Return a fresh result list while caching repeated deterministic inputs."""
+    return list(_exclusion_clauses_cached(sentence, previous, cited))

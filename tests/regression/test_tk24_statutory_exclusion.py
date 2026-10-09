@@ -167,3 +167,25 @@ def test_synthetic_repeated_input_finishes_within_tenth_second():
     elapsed = perf_counter() - start
     assert sum(bool(v) for v in results) == 1000
     assert elapsed < 0.1
+
+
+def test_synthetic_long_sentence_and_repeated_prefixes_are_linear():
+    """합성 56KB 문장과 두 접두어를 반복해 선형 처리 예산을 확인한다."""
+    from packages.legal_engine.claim_review import classify_claims
+
+    long_sentence = ("소멸시효는 정의에 따라 적용이 배제되어야 하므로, " +
+                     "그 적용은 법정 기간의 취지에 반한다. " * 4500)
+    prefixes = ["소멸시효는 정의에 따라 적용이 배제되어야 하므로, ",
+                "소멸시효의 적용을 "]
+    for prefix in prefixes:
+        started = perf_counter()
+        for _ in range(2000):
+            exclusion_clauses(prefix + "적용이 배제되어야 한다.")
+        assert perf_counter() - started < 0.1
+    started = perf_counter()
+    exclusion_clauses(long_sentence)
+    assert perf_counter() - started < 0.1
+    started = perf_counter()
+    for _ in range(2000):
+        classify_claims("소멸시효의 적용을 배제하여 달라.")
+    assert perf_counter() - started < 0.1
