@@ -498,13 +498,29 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
                                 "같은 호증의 가지번호가 1부터 이어지지 않는다. 누락된 증거가 있는지 확인해야 한다.",
                                 ", ".join(f"{party} 제{number}호증의 {b}" for b in sorted(present)),
                                 features={"party": party, "number": number, "missing_branches": missing}))
+    # 당사자별 결번 판정: 목록 구역이 있으면 구역 번호로만, 구역 최소 번호부터 결번 산출 (TK-67)
+    has_any_section = any(r.get("in_section", not r.get("from_lines", False)) for r in rows)
     for party, numbers in listed.items():
-        gaps = [n for n in range(1, max(numbers) + 1) if n not in numbers]
+        sec_nums = {
+            r["number"] for r in rows
+            if r["party"] == party and r.get("in_section", not r.get("from_lines", False))
+        }
+        if has_any_section:
+            if not sec_nums:
+                # 서면에 목록 구역이 존재하나 해당 당사자는 본문 언급만 있는 경우 결번 판정 제외
+                continue
+            target_nums = sec_nums
+            start_num = min(sec_nums)
+        else:
+            # 목록 구역이 없는 서면은 기존 동작 유지 (1번부터 결번 산출)
+            target_nums = numbers
+            start_num = 1
+        gaps = [n for n in range(start_num, max(target_nums) + 1) if n not in target_nums]
         if gaps:
             out.append(_finding(doc, FindingType.EVIDENCE_NUMBERING_GAP, EvidenceGrade.B, Severity.MEDIUM,
                                 f"호증 번호가 비어 있다: {party} 제{', '.join(map(str, gaps))}호증 결번",
                                 "증거 목록의 번호가 연속하지 않는다. 누락된 증거가 있는지 확인해야 한다.",
-                                ", ".join(f"{party} 제{n}호증" for n in sorted(numbers)),
+                                ", ".join(f"{party} 제{n}호증" for n in sorted(target_nums)),
                                 features={"party": party, "missing": gaps}))
     text = build_reading_text(doc).text
     mentioned = exhibit_keys(text)
