@@ -19,7 +19,7 @@ POSITIVES = [
     "정의 실현을 위하여 법정 성립 요건을 전면 배제하여 달라.",
     "상위 규범에 기초하여 책임한도 규정은 일체 적용되지 않아야 한다.",
     "자연법에 비추어 면책 규정의 적용을 무조건 배제해야 한다.",
-    "소멸시효 규정은 형평에 반하므로, 그 적용이 배제되어야 한다.",
+    "소멸시효 규정은 형평에 반하므로, 민법 제162조에도 그 적용이 배제되어야 한다.",
 ]
 
 
@@ -104,6 +104,26 @@ def test_synthetic_remedy_and_statutory_conclusions_remain_separate():
     assert "NO_BASIS_REMEDY" in types
     conclusion = next(m.sentence for m in matches if m.claim_type == "STATUTORY_RULE_EXCLUSION")
     assert findings(text, skip_sentences=[conclusion])
+
+
+@pytest.mark.parametrize("text", [
+    "헌법의 평등 원칙에 따라 소멸시효는 적용되지 않는다.",
+    "상위 규범에 비추어 제소기간은 적용되지 않는다.",
+    "자연법에 따라 소멸 시효는 전면 배제되어야 한다.",
+])
+def test_synthetic_existing_exclusion_classification_is_not_duplicated(text):
+    matched = review_claims(doc(text))
+    assert len(matched) == 1
+    assert matched[0].confidence_features["rule_id"] == "CLAIM.LITIGATION_REQUIREMENT_EXCLUSION"
+
+
+@pytest.mark.parametrize("text", [
+    "민법 제162조를 인용하면서 정의에 따라 소멸시효는 적용되지 않는다.",
+    "행정소송법 제20조를 인용하면서 형평에 따라 제소기간은 전면 배제되어야 한다.",
+    "자연법에 비추어 민법 제162조의 소멸시효는 적용되지 않는다.",
+])
+def test_synthetic_citation_to_excluded_rule_still_gets_the_new_classification(text):
+    assert len(findings(text)) == 1
 
 
 def test_synthetic_evidence_uses_conclusion_block_not_heading():

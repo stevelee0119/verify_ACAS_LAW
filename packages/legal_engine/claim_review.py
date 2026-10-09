@@ -477,15 +477,8 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
         sentence = " ".join(text[start:end].split())
         if not sentence:
             continue
-        linked = _linked_previous(sentence, previous)
-        for clause in exclusion_clauses(text[start:end], linked, cited=_has_citation(sentence, linked)):
-            out.append(ClaimMatch(
-                "STATUTORY_RULE_EXCLUSION", text[start + clause.start:start + clause.end].strip(),
-                start + clause.start, "추상적 근거로 법정 규정의 적용 배제 주장", "C", "SUSPICIOUS", [],
-                f"{clause.target}의 적용을 배제한다는 결론에 법정 예외의 요건과 충족 사실을 연결한 근거가 확인되지 않는다. "
-                "정의·형평이나 다른 제도의 유추만으로 적용을 배제할 수 있는지, 관련 법령·판례 및 구체적 요건을 확인해야 한다.",
-                {"excluded_target": clause.target, "exclusion_ground": clause.ground}))
         in_relief = bool(relief and relief[0] <= start < relief[1])
+        chosen = None
         for check in (lambda s: _unconstitutionality(s, lookup), lambda s: _civil_inference(s, previous),
                       lambda s: _generalization(s, previous),
                       lambda s: _remedy(s, in_relief, criminal_doc), _unsourced_standard,
@@ -496,7 +489,21 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
             if match:
                 match.start = start
                 out.append(match)
+                chosen = match
                 break  # 한 문장은 가장 앞선 유형 하나로만 판정한다(같은 문장 이중 판정 방지)
+        linked = _linked_previous(sentence, previous)
+        legacy_excluded = EXCLUSION_RE.search(text[start:end]) if chosen else None
+        for clause in exclusion_clauses(text[start:end], linked, cited=_has_citation(sentence, linked)):
+            if (chosen and chosen.claim_type == "LITIGATION_REQUIREMENT_EXCLUSION"
+                    and legacy_excluded and clause.start <= legacy_excluded.start() < clause.end
+                    and "".join(clause.target.split()) == chosen.extra.get("requirement")):
+                continue  # Keep the existing classification of this same exclusion proposition.
+            out.append(ClaimMatch(
+                "STATUTORY_RULE_EXCLUSION", text[start + clause.start:start + clause.end].strip(),
+                start + clause.start, "추상적 근거로 법정 규정의 적용 배제 주장", "C", "SUSPICIOUS", [],
+                f"{clause.target}의 적용을 배제한다는 결론에 법정 예외의 요건과 충족 사실을 연결한 근거가 확인되지 않는다. "
+                "정의·형평이나 다른 제도의 유추만으로 적용을 배제할 수 있는지, 관련 법령·판례 및 구체적 요건을 확인해야 한다.",
+                {"excluded_target": clause.target, "exclusion_ground": clause.ground}))
         previous = sentence
     return out
 
