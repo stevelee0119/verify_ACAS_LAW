@@ -582,6 +582,7 @@ def _contact_matches(
     page: Optional[int],
 ) -> List[PIIMatch]:
     matches: List[PIIMatch] = []
+    seen = set()
 
     # 3-2-5로 표시된 사업자번호는 짧은 휴대전화 패턴과 숫자만 보면 겹친다.
     # 정규화 뷰에서 기존의 그룹 구조를 보존해 연락처 후보에서 제외한다.
@@ -631,8 +632,23 @@ def _contact_matches(
                 else:
                     confidence = 0.8
                     note = "형식 일치, 검증부호 불일치"
-            if not any(existing.kind == kind and existing.start == start and existing.end == end for existing in matches):
-                matches.append(PIIMatch(kind, raw, start, end, block_id, page, confidence, note))
+            match_kind = kind
+            if kind == "RRN":
+                candidate = normalized[norm_start:norm_end]
+                # The sixth digit may be followed by a separator; earlier symbols
+                # cannot form an RRN prefix. OCR whitespace has already been removed.
+                if "-" in candidate[:6]:
+                    context_start = max(0, norm_start - 40)
+                    has_account_label = any(
+                        labelled_account.span(1) == (norm_start - context_start, norm_end - context_start)
+                        for labelled_account in ACCOUNT_LABELLED_RE.finditer(normalized[context_start:norm_end])
+                    )
+                    match_kind = "ACCOUNT" if has_account_label or ACCOUNT_RE.fullmatch(candidate) else "PII"
+                    note = "계좌 구분 구조" if match_kind == "ACCOUNT" else "주민등록번호 외 식별 숫자"
+            key = (match_kind, start, end)
+            if key not in seen:
+                matches.append(PIIMatch(match_kind, raw, start, end, block_id, page, confidence, note))
+                seen.add(key)
 
     return matches
 
