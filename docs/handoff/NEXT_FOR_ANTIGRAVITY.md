@@ -1,9 +1,9 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-09 평가 측(릴리스 0.11.0 완료, 사용자 결정 '1~6 권고대로'). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-09 평가 측(릴리스 0.11.0 완료, 사용자 결정 '1~6 권고대로', D4 개정 → TK-70). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-09 (39)]
+[Antigravity 작업 — 통합 지시 2026-10-09 (40)]
 
 0. 규칙(AGENTS.md)
  - 시작: 평가 측 기록 PR #51이 Steve_ACASiaLAW에 병합된 뒤 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다(새 티켓이 거기 들어 있다).
@@ -13,6 +13,7 @@
  - 은퇴 세트 측정은 작업 트리를 깨끗이 한 상태에서 한다.
  - 다른 구현 담당(Codex)이 같은 시기에 개인정보 엔진(TK-58)과 법리 규칙(TK-24)을 고친다. packages/pii_engine/와
    packages/legal_engine/claim_review.py는 건드리지 않는다.
+   TK-70은 packages/verification_engine/pipeline.py·candidate_verifier.py·gate.py, TK-68은 packages/rag_engine/review.py를 고친다. 두 PR이 같은 파일을 고치게 되면 먼저 병합된 쪽을 병합 커밋으로 받아 맞춘다.
 
 [A] 릴리스 0.11.0 완료(main a8b2a7e, 태그 v.0.11.0). 할 일 없음.
 
@@ -27,6 +28,16 @@
    - 평가 측 사전 점검(가운뎃점 문자 추가만): 관련 7개 파일 140 passed, 고정 같음.
    - 설계 메모를 첫 커밋으로. 브랜치 antigravity/tk69-ft-subitem-list.
  - 수용 SHA마다 평가 측이 verify_all 전체 모드를 돌린다. 두 PR 병합 뒤 새 봉인 세트 하나로 릴리스 전 봉인 시험을 한다.
+
+[D] (보통, B와 병행 가능 — 파일이 겹치지 않음) TK-70 Drive 참고자료 '모순' 의견의 조건부 finding 승격(D4 개정, 사용자 결정)
+   — docs/handoff/TK-70_rag_contradiction_conditional_promotion.md
+   - CONTRADICTS + verify_rag_candidate 통과 의견을 FACT_CONTRADICTION·SUSPICIOUS·LOW·C등급으로 올린다(문서·주장 단위 모두, advisory_only 표시만으로 빼지 않음).
+     '내부 참고자료 대조 — 법적 구속력 미판단, 사람 확인 필요' 표기, claim_id·주장 원문 기록, 같은 주장·같은 참고자료는 하나로 합친다.
+   - 검증위험 지수·차단 게이트·official_status·다른 finding 심각도는 바꾸지 않는다. 기본 켬, 끌 수 있는 운영 스위치 하나.
+     LV_CANDIDATE_PROMOTION_ENABLED(그 밖의 모델 후보)는 그대로 둔다.
+   - 평가 측 사전 점검: 플래그·advisory 건너뛰기만 뗀 임시 패치로 RAG 관련 14개 파일 431 passed·1 xfailed(전후 같음).
+     기존 가짜 공급자는 '모순' 의견을 내지 않으므로 승격 경로를 지키는 새 시험(티켓 2.7)이 꼭 필요하다.
+   - 설계 메모를 첫 커밋으로. 브랜치 antigravity/tk70-rag-contradiction-promotion. RAG 경로라 봉인 시험은 없고, 배포 뒤 평가 측 비공개 온라인 세트와 서면9로 본다.
 
 [C] (낮음, B 뒤) TK-68 문서 단위 Drive 대조 첫 묶음 출력 잘림 — docs/handoff/TK-68_rag_document_batch_output_truncation.md
    - 서면9 온라인 보고서 8건 모두에서 첫 묶음(참고자료 6개, 입력 약 10,800 토큰)이 4000 토큰에서 잘려 약 $0.092·30초를 쓰고 대체 재시도로 넘어간다.
