@@ -1136,3 +1136,4 @@
 - 병합 전 같은 SHA(a31b561)에서 CI 필수 3개와 CodeQL이 성공했다(CI 인용). TK-65 수용(a54cf40, 제품 코드 동일), `verify_all` 종료 0, 필수 게이트 기존과 같음.
 - 봉인 시험: 생략(변경 범위 밖 — RAG·모델 호출 경로만 변경, 2026-10-09 사용자 결정). 0.10.0 유지, 태그 없음.
 - 남은 것: 배포 확인(`/api/health` commit 4c18528), 배포 직후 온라인 점검(서면9, 직전 19/23; 새 실패 0이면 정상, 인용 주장 `INVALID_RESPONSE_SCHEMA` 건수·RAG-1·`budget.spent_usd`·`uncertain_usd` 확인).
+- 배포 확인(health commit 4c18528·db ok). 배포 직후 온라인 점검 서면9 **20/23**(run_5b7daa96a0924c7c, 새 실패 0, RAG-1 통과) → 릴리스 정상. 주장 단위 형식 실패 6 → 0, 대조됨 6 → 14, `spent_usd` 0.6652·`uncertain_usd` 0. 한 번의 결과라 효과를 단정하지 않는다.
