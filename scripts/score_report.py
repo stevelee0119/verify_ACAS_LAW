@@ -13,7 +13,12 @@ AI 작성 판정·공식 DB 대조·Drive 대조·모델 경로를 이 도구가
 - pii_kind      : 마스킹 요약(masked_preview.kinds)에 kind가 1건 이상 있다(종류 단위. 항목별 마스킹 여부는 보고서에 없다)
 - ai_verdict    : 문서별 AI 작성 판정이 any_of 중 하나다
 - ai_models     : 모델 의견 중 min_score 이상이면서 AI 쪽(verdict가 AI_로 시작)인 것이 at_least개 이상이다
-- rag_relationship : Drive 대조 의견(engine_data.rag.observations) 중 relationship이 같고 claim_quote에 text가 든 것이 있다
+- rag_relationship : Drive 대조 의견(engine_data.rag.observations) 중 relationship이 같고 claim_quote에 text가 든 것이 있다.
+                     항목에 "scope": "claim"이 있으면 의견의 claim_id로 찾은 주장 원문(documents[].claims[].text)에 text가 들어도
+                     통과한다(2026-10-09 사용자 결정: claim_quote는 모델이 고른 인용 범위라 같은 주장에 대한 같은 의견도 범위에 따라
+                     결과가 갈렸다). 명세 머리의 rule_version이 기록에 남는다. 규칙 판이 다른 점수끼리 증감을 비교하지 않는다.
+- no_rag_relationship : rag_relationship과 같은 조건(scope 포함)에 맞는 의견이 없다(대조군: 참고자료와 맞는 주장에 '모순' 의견이
+                     나오지 않아야 한다, 2026-10-09 D4 재검토 1단계)
 """
 from __future__ import annotations
 
@@ -28,7 +33,7 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG = ROOT / "docs" / "scorecards" / "first_touch_log.jsonl"
-KINDS = {"finding", "no_finding", "pii_kind", "ai_verdict", "ai_models", "rag_relationship"}
+KINDS = {"finding", "no_finding", "pii_kind", "ai_verdict", "ai_models", "rag_relationship", "no_rag_relationship"}
 
 
 def _probe():
@@ -47,6 +52,8 @@ def load_spec(path: Path) -> Dict[str, Any]:
     for check in spec["checks"]:
         if check["kind"] not in KINDS:
             raise ValueError(f"알 수 없는 kind: {check['kind']}")
+        if check.get("scope", "quote") not in ("quote", "claim"):
+            raise ValueError(f"알 수 없는 scope: {check.get('scope')}")
     return spec
 
 
@@ -57,7 +64,11 @@ def observe_report(report: Dict[str, Any]) -> Dict[str, Any]:
     verdicts: List[str] = []
     models: List[Dict[str, Any]] = []
     rag: List[Dict[str, Any]] = []
+    claim_texts: Dict[str, str] = {}
     for doc in report.get("documents", []):
+        for claim in doc.get("claims") or []:
+            if claim.get("claim_id"):
+                claim_texts[str(claim["claim_id"])] = str(claim.get("text") or "")
         for f in doc.get("findings", []):
             findings.append({"type": str(f.get("type")), "severity": str(f.get("severity")),
                              "status": str(f.get("status")), "text": json.dumps(f, ensure_ascii=False, default=str)})
@@ -72,7 +83,7 @@ def observe_report(report: Dict[str, Any]) -> Dict[str, Any]:
     for entry in ((report.get("scores") or {}).get("axes") or {}).get("ai_authorship", {}).get("documents", []):
         verdicts.append(str(entry.get("verdict")))
     manifest = report.get("run_manifest") or {}
-    return {"findings": findings, "pii_kinds": pii_kinds, "ai_verdicts": verdicts, "ai_models": models, "rag": rag,
+    return {"findings": findings, "pii_kinds": pii_kinds, "ai_verdicts": verdicts, "ai_models": models, "rag": rag, "claim_texts": claim_texts,
             "commit": ((manifest.get("implementation") or {}).get("git_commit") or "")[:12],
             "versions": manifest.get("versions") or {},
             "network": bool(((manifest.get("environment") or {}).get("network"))),
@@ -96,9 +107,15 @@ def evaluate(spec: Dict[str, Any], obs: Dict[str, Any]) -> List[Dict[str, Any]]:
                   if float(m.get("score") or 0) >= float(check.get("min_score", 0))
                   and str(m.get("verdict", "")).startswith("AI_")]
             passed = len(ai) >= int(check.get("at_least", 1))
-        else:  # rag_relationship
-            passed = any(o.get("relationship") == check["relationship"] and check["text"] in str(o.get("claim_quote", ""))
+        else:  # rag_relationship / no_rag_relationship
+            claim_scope = check.get("scope") == "claim"
+            texts = obs.get("claim_texts") or {}
+            passed = any(o.get("relationship") == check["relationship"]
+                         and (check["text"] in str(o.get("claim_quote", ""))
+                              or (claim_scope and check["text"] in texts.get(str(o.get("claim_id")), "")))
                          for o in obs["rag"])
+            if kind == "no_rag_relationship":
+                passed = not passed
         rows.append({"id": check["id"], "label": check.get("label", ""), "passed": bool(passed)})
     return rows
 
@@ -117,13 +134,14 @@ def score(report_path: Path, spec_path: Path) -> Dict[str, Any]:
     obs = observe_report(report)
     rows = evaluate(spec, obs)
     failed = [r["id"] for r in rows if not r["passed"]]
-    return {"spec": spec["name"], "rows": rows, "total": len(rows), "passed": len(rows) - len(failed), "failed": failed,
+    return {"spec": spec["name"], "rule_version": spec.get("rule_version", "1"), "rows": rows, "total": len(rows),
+            "passed": len(rows) - len(failed), "failed": failed,
             "commit": obs["commit"], "versions": obs["versions"], "network": obs["network"], "run_id": obs["run_id"],
             "report_sha256": sha256_file(Path(report_path))}
 
 
 def render(result: Dict[str, Any]) -> str:
-    lines = [f"{result['spec']} — 온라인 보고서 {result['passed']}/{result['total']} "
+    lines = [f"{result['spec']}(규칙 {result.get('rule_version', '1')}판) — 온라인 보고서 {result['passed']}/{result['total']} "
              f"(커밋 {result['commit'] or '?'}, 네트워크 {'켬' if result['network'] else '끔'}, run {result['run_id']})"]
     for row in result["rows"]:
         lines.append(f"  {'통과' if row['passed'] else '실패'}  {row['id']:<8} {row['label']}")
@@ -132,7 +150,8 @@ def render(result: Dict[str, Any]) -> str:
 
 def record(result: Dict[str, Any], note: str, log: Path = LOG) -> None:
     entry = {"recorded": datetime.now(timezone.utc).isoformat(timespec="seconds"), "sha": result["commit"],
-             "measured_commit": result["commit"], "backfilled": False, "spec": result["spec"], "input": "online_report",
+             "measured_commit": result["commit"], "backfilled": False, "spec": result["spec"],
+             "rule_version": result.get("rule_version", "1"), "input": "online_report",
              "passed": result["passed"], "total": result["total"], "failed": result["failed"], "note": note,
              "condition": "online(사용자 환경: 네트워크·모델·Drive), 보고서 JSON 채점",
              "report_sha256": result["report_sha256"], "run_id": result["run_id"], "versions": result["versions"]}
