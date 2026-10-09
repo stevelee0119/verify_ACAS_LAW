@@ -217,3 +217,23 @@ def test_synthetic_single_sentence_2000_repetitions_cold_budget(prefix, expected
         if gc_enabled:
             gc.enable()
     assert min(timings) < 0.1
+
+
+def test_synthetic_previous_citation_is_scanned_once_per_sentence(monkeypatch):
+    """합성 긴 선행 문장을 결론 절마다 재검색하지 않는다."""
+    import packages.legal_engine.statutory_exclusion as engine
+    original = engine.CASE_CITE_RE
+    previous = "합성 요건과 예외를 검토한다 " * 2000
+    calls = []
+    class CitationPattern:
+        def search(self, text):
+            calls.append(text)
+            return original.search(text)
+        def finditer(self, text):
+            return original.finditer(text)
+    monkeypatch.setattr(engine, 'CASE_CITE_RE', CitationPattern())
+    engine._exclusion_clauses_cached.cache_clear()
+    text = ('형평에 따라 소멸시효는 적용이 배제되어야 한다고 법원은 판단하였다, ' * 30
+            + '정의에 따라 소멸시효의 적용을 배제하여 달라.')
+    assert len(exclusion_clauses(text, previous)) == 31
+    assert calls.count(previous) == 1

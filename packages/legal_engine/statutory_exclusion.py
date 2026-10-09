@@ -114,7 +114,8 @@ class _Matches:
 
 
 class _PolarityIndex:
-    def __init__(self, text):
+    def __init__(self, text, previous=""):
+        self.previous_cited = bool(CASE_CITE_RE.search(previous))
         self.breaks = _Matches(CLAUSE_BREAK_RE, text)
         self.negations = _Matches(NEGATION_RE, text)
         self.opponent = _Matches(OPPONENT_REPORT_RE, text)
@@ -135,7 +136,7 @@ class _PolarityIndex:
             return False
         if (self.report.first(end, right)
                 and (self.court.first(left, start) or self.court.first(end, right))
-                and (self.citation.first(left, right) or CASE_CITE_RE.search(previous))):
+                and (self.citation.first(left, right) or self.previous_cited)):
             return False
         if self.lead.first(left, start) and self.tail.first(end, clause_end + 1):
             return False
@@ -151,7 +152,7 @@ def _exclusion_clauses_cached(sentence: str, previous: str = "", cited: bool = F
     quote_view = sentence.translate(str.maketrans({"‘": "“", "’": "”", "'": '"'})) if any(char in sentence for char in ("‘", "’", "'")) else sentence
     quotes = _Matches(QUOTE_SPAN_RE, quote_view)
     predicates = _Matches(EXCLUSION_RE, sentence)
-    polarities = _PolarityIndex(sentence)
+    polarities = _PolarityIndex(sentence, previous)
     reports = _Matches(REPORT_RE, sentence)
     conditions = _Matches(CONDITION_RE, sentence)
     grounds = _Matches(GROUND_RE, sentence)
