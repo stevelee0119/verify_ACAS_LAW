@@ -372,34 +372,40 @@ def review_document(result, library, router, context, pii):
         return review
 
     # 4. 문서 단위 배치 대조 (TK-68 개정 1: 비용 비증가 조건 C1~C3 충족)
-    max_batch_sources = 6
-    safe_batch_text_chars = 8000
     max_subdivision_depth = 1
 
-    def _split_sources_into_batches(src_list: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
-        """참고자료를 개수(최대 6개) 및 본문 글자 수(안전 한도 8,000자) 기준으로 사전 분할한다.
-        - C1: 작은 참고자료 6개는 1개 묶음으로 유지하여 호출 수 및 입력 토큰 증가 방지
-        - C2: 큰 참고자료(서면9형)는 8,000자 기준으로 선제 분할하여 첫 시도에 잘림 없이 성공
+    def _split_sources_into_batches(doc_text: str, src_list: List[Dict[str, Any]]) -> List[List[Dict[str, Any]]]:
+        """서면 본문 크기와 참고자료 발췌 크기를 종합하여 묶음을 사전 분할한다.
+        - 서면9 실증 근거: 서면 본문이 긴 서면(약 5,000자 이상)에서는 6개 묶음이 잘리고 5개 묶음은 첫 시도에 성공함.
+          따라서 긴 서면에서는 묶음당 상한을 5개로 제한하여 첫 시도 잘림을 선제 방지한다 (C2).
+        - 일반 서면: 본문이 짧은 경우 6개까지 1개 묶음으로 유지하여 호출 수와 입력 토큰을 최소화한다 (C1).
+        - 묶음당 전체 글자 수(본문 + 참고자료) 합계가 12,000자를 넘지 않도록 안전 상한을 적용한다.
         """
         if not src_list:
             return []
+        d_len = len(doc_text or "")
+        max_batch_sources = 5 if d_len >= 5000 else 6
+        max_total_chars = 12000
+
         res_batches: List[List[Dict[str, Any]]] = []
         cur_batch: List[Dict[str, Any]] = []
-        cur_chars = 0
+        cur_src_chars = 0
         for s in src_list:
             s_chars = len(s.get("text") or "")
-            if cur_batch and (len(cur_batch) >= max_batch_sources or (cur_chars + s_chars > safe_batch_text_chars)):
+            batch_full = len(cur_batch) >= max_batch_sources
+            size_exceeded = (d_len + cur_src_chars + s_chars) > max_total_chars
+            if cur_batch and (batch_full or size_exceeded):
                 res_batches.append(cur_batch)
                 cur_batch = [s]
-                cur_chars = s_chars
+                cur_src_chars = s_chars
             else:
                 cur_batch.append(s)
-                cur_chars += s_chars
+                cur_src_chars += s_chars
         if cur_batch:
             res_batches.append(cur_batch)
         return res_batches
 
-    initial_batches = _split_sources_into_batches(sources) or [sources]
+    initial_batches = _split_sources_into_batches(document, sources) or [sources]
     evaluated_batches: List[List[Dict[str, Any]]] = []
     all_observations = []
     executed_any = False
@@ -428,10 +434,15 @@ def review_document(result, library, router, context, pii):
         result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in batch_outcome.executions)
         executed_any |= bool(batch_outcome.executions or batch_outcome.used)
 
-        # TK-68: OUTPUT_TRUNCATED 발생 시 1회에 한하여 절반으로 분할(Adaptive Halving)
-        # 하위 묶음은 재분할하지 않으며(depth < max_subdivision_depth), 단일 참고자료는 분할하지 않음
         is_truncated = any("OUTPUT_TRUNCATED" in getattr(e, "error", "") for e in batch_outcome.executions)
-        if not batch_outcome.used and is_truncated and len(s_batch) > 1 and depth < max_subdivision_depth:
+        remaining_calls = max_total_calls - total_calls
+
+        # TK-68: OUTPUT_TRUNCATED 발생 시 적응형 분할
+        # - 남은 호출 예산이 2회 이상이면 절반으로 분할(Adaptive Halving)
+        # - 남은 호출 예산이 1회뿐이면(N<=6 문서 등) 반으로 나누면 뒷부분이 누락되므로,
+        #   분할 대신 기존 대체 공급자 재시도(아래 failed 처리)로 넘어가 6개 전체를 온전히 대조함
+        if (not batch_outcome.used and is_truncated and len(s_batch) > 1
+                and depth < max_subdivision_depth and remaining_calls >= 2):
             mid = len(s_batch) // 2
             queue.insert(0, (s_batch[mid:], depth + 1))
             queue.insert(0, (s_batch[:mid], depth + 1))
@@ -781,4 +792,6 @@ def report_lines(run_result):
                          f"{values['penalty']}원 / 기재 일수 일치: {calc['stated_days_match']} / {calc['note']}")
         if review.get("observation_limit_reached"):
             lines.append("참고 의견 5건 한도에 도달했다. 전체 주장 검토 완료를 의미하지 않는다.")
+        if review.get("unreviewed_drive_sources"):
+            lines.append(f"미대조 참고자료({len(review['unreviewed_drive_sources'])}건): {', '.join(review['unreviewed_drive_sources'])}")
     return lines
