@@ -159,11 +159,12 @@ class Settings:
     candidate_promotion_enabled: bool = field(
         default_factory=lambda: _flag("LV_CANDIDATE_PROMOTION_ENABLED", False)
     )
+    """TK-09 모델 의견 후보 승격 기능 활성화 여부 (사용자 승인 전 기본 꺼짐: False)."""
     # TK-70: Drive 참고자료 '모순' 의견의 조건부 승격 (D4 개정, 사용자 결정: 기본 켬)
     rag_contradiction_promotion_enabled: bool = field(
         default_factory=lambda: _flag("LV_RAG_CONTRADICTION_PROMOTION", True)
     )
-    """TK-09 모델 의견 후보 승격 기능 활성화 여부 (사용자 승인 전 기본 꺼짐: False)."""
+    """TK-70 Drive 참고자료 '모순' 의견의 조건부 LOW/C등급 Finding 승격 여부 (기본 켬: True)."""
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     pricing: Dict[str, Any] = field(default_factory=dict)
 

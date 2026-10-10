@@ -49,10 +49,12 @@
 - **공식 DB 상태 (`official_status`) 및 타 Finding 심각도 불변 (T6 원칙)**.
 - **RAG 원본 데이터 보존**: `document_result.engine_data["rag"]["observations"]` 및 대조율 통계는 원본 그대로 유지.
 
-### 2.5 운영 스위치
+### 2.5 운영 스위치 및 기존 경로와의 관계
 - `packages/common/config.py`의 `Settings`:
   - `rag_contradiction_promotion_enabled: bool = True` (환경변수 `LV_RAG_CONTRADICTION_PROMOTION`, 기본 True)
 - 기존 `candidate_promotion_enabled`(`LV_CANDIDATE_PROMOTION_ENABLED`)는 기본 False 유지.
+- **경로 우선순위 의도**: `rag_contradiction_promotion_enabled`가 켜져 있으면 RAG 관찰 결과 순회 시 새 조건부 승격 경로가 우선 적용되며, 기존 TK-09 RAG 후보 승격 경로(`elif settings.candidate_promotion_enabled`)는 동일 관찰의 중복 승격을 방지하기 위해 진입하지 않습니다 (기본값에서 동작 차이 없음).
+- **거부 기록 사유**: `verify_rag_candidate`에서 인용문 불일치 등으로 승격이 거부된 의견을 `review['rejected_observations']`에 기록하는 것은, UI 및 감사 보고서의 '제외 의견 N건'에서 탈락 사유를 투명하게 추적할 수 있도록 기존 TK-09 거부 기록 규칙과 일관성을 유지하기 위함입니다.
 
 ---
 
