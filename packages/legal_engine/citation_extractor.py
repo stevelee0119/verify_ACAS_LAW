@@ -905,12 +905,32 @@ _PREFIX_END_RE = re.compile(r'[.)]')
 _CLAUSE_PUNCT_RE = re.compile(r'[(),，]')
 
 
+
+_UNWRAP_NEWLINE_RE = re.compile(r"(?<![.?!:;])\n")
+_ENUMERATOR_HEAD_RE = re.compile(r"\d+[.)]|[가-하][.)]|[-•*]")
+
+
+def _unwrap_claim_lines(text):
+    """원본 개행 결합 규칙. 같은 공백 구간 끝의 열거표지는 한 번만 확인한다."""
+    if "\n" not in text:
+        return text
+    whitespace_end, enumerator = -1, False
+
+    def replace(match):
+        nonlocal whitespace_end, enumerator
+        if match.start() >= whitespace_end:
+            whitespace_end = _SPACE_RE.match(text, match.end()).end()
+            enumerator = _ENUMERATOR_HEAD_RE.match(text, whitespace_end) is not None
+        return "\n" if enumerator else " "
+
+    return _UNWRAP_NEWLINE_RE.sub(replace, text)
+
 def attach_claim_text(text: str, citations: List[Citation]) -> None:
     """원본 claim 계약을 문장별 병합 순회와 긴 문장의 위치 색인으로 계산한다."""
     located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
     if not located:
         return
-    unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text) if "\n" in text else text
+    unwrapped = _unwrap_claim_lines(text)
     c_idx = 0
     for s_start, s_end in _sentences(unwrapped):
         while c_idx < len(located) and located[c_idx].span[0] < s_start:

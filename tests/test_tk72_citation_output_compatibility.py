@@ -3,7 +3,7 @@
 기준 모듈에서 한 번 기록한 모든 필드의 SHA-256을 비교한다. 03fdcdb의 공개
 citation_extractor.py를 별도 모듈로 로딩하여 아래 _samples의 텍스트/문서 경로를
 각각 실행한 출력이다. 필드 누락 없이 sort_keys=True, separators=(",", ":") JSON의
-UTF-8 바이트를 기록했다. 원본 출력 254건 비교도 차이 0이다. 변경한 것은 무작위 인용 ID 및
+UTF-8 바이트를 기록했다. 원본 출력 272건 비교도 차이 0이다. 변경한 것은 무작위 인용 ID 및
 continued_from의 ID 표현뿐이다. 기존 시험/평가 자산을 수정하거나 복사하지 않는다.
 두 자리 연도 헌재의 회복된 분류는 2026-10-10 사용자 승인 예외로 따로 시험한다.
 """
@@ -492,3 +492,34 @@ def test_academic_negative_public_searches_with_long_whitespace_are_bounded():
     assert not list(ACADEMIC_RE.finditer(text))
     assert not extract_citations(_doc(text))
     assert time.perf_counter() - started < 1.0
+
+
+@pytest.mark.parametrize("text", [
+    "본문\n계속", "본문\n\n계속", "본문\n  계속",
+    "본문\n 1. 항목", "본문.\n계속", "본문\n- 항목",
+    "본문\n\n  가) 항목", "본문\n\t\r 12) 항목", "본문;\n계속",
+])
+def test_claim_line_join_keeps_original_positive_and_negative_contract(text):
+    import re
+    from packages.legal_engine.citation_extractor import _unwrap_claim_lines
+    original = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text)
+    assert _unwrap_claim_lines(text) == original
+
+
+@pytest.mark.parametrize("tail", ["\n" * 80_000 + "x", "\n " * 40_000 + "x",
+                                  "\n" * 80_000 + "1" * 20_000 + "x"])
+def test_claim_line_join_long_whitespace_actual_path(tail):
+    started = time.perf_counter()
+    citations = extract_citations(_doc("「민법」 제750조" + tail))
+    elapsed = time.perf_counter() - started
+    assert len(citations) == 1
+    assert citations[0].attributes["claim_text"] == tail.strip()[:400]
+    assert elapsed < 1.0
+
+
+def test_claim_line_join_short_repetitions():
+    from packages.legal_engine.citation_extractor import _unwrap_claim_lines
+    started = time.perf_counter()
+    for _ in range(2500):
+        assert _unwrap_claim_lines("본문\n\n 1. 항목\n계속") == "본문\n\n 1. 항목 계속"
+    assert time.perf_counter() - started < 0.1
