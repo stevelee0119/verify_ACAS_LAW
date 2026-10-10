@@ -19,13 +19,15 @@ from packages.llm_router.router import SYSTEM_BASE, _VERDICT_SCHEMA
 from packages.pii_engine.detector import (
     PARTY_AND_TITLE_LABELS,
     STRUCTURED_PERSON_KEY_LABELS,
+    DOUBLE_SURNAMES,
+    JOSA,
     detect,
     is_valid_korean_name_structure,
 )
 from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
 from packages.verification_engine.ai_document_detector import AI_DETECTOR_SYSTEM_PROMPT, _DETECTOR_SCHEMA
 
-POLICY_VERSION = "payload-pii-v3"
+POLICY_VERSION = "payload-pii-v4"
 
 # ===========================================================================
 # 라벨 키 집합: detector.py의 PARTY_AND_TITLE_LABELS에서 단일 출처로 구성 (TK-51, TK-52 2절)
@@ -56,12 +58,66 @@ _NAME_VALUE_RE = re.compile(
     r"(?:\s*(?:님|씨|군|양|선생|변호사|변호인|사무관|검사|판사|대위|중위|소령|중령|대령|병장|상병|일병|이병))?"
     r"(?:\s*[（(][^()（）\r\n]{1,24}[)）])?$"
 )
+_KEY_CAMEL_BOUNDARY_RE = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+_KEY_ENGLISH_WORD_RE = re.compile(r"[a-z0-9]+")
+_KEY_KOREAN_CLEAN_RE = re.compile(r"[^가-힣0-9a-z]")
+_NAME_FIELD_SUFFIX_RE = re.compile(r"(?:성명|성함|이름|명의자|명)$")
+_SPACED_NAME_PARTICLE_RE = re.compile(
+    rf"^(?P<name>(?:[가-힣][ \t]?){{1,3}}[가-힣])(?:{JOSA})$"
+)
+# Same token grammar as PseudonymStore, never a prefix-only exemption.
+_MASKED_NAME_VALUE_RE = re.compile(
+    rf"[ \t]*(?:\[?(?:PERSON|COMPANY)_[0-9]{{3,}}\]?(?:{JOSA})?)"
+    rf"(?:[ \t,;/]+\[?(?:PERSON|COMPANY)_[0-9]{{3,}}\]?(?:{JOSA})?)*[ \t]*"
+)
 
 
 def _normalise_korean_key(key: str) -> str:
     """공백·괄호·구두점 표기가 달라도 키의 한글 라벨을 비교한다."""
     text = unicodedata.normalize("NFKC", key)
-    return re.sub(r"[^가-힣0-9a-z]", "", text.casefold())
+    return _KEY_KOREAN_CLEAN_RE.sub("", text.casefold())
+
+
+# Fixed label grammar is computed once, not rebuilt for every field.
+_KOREAN_KEY_LABELS = tuple(sorted(
+    ((_normalise_korean_key(label), label) for label in PARTY_AND_TITLE_LABELS),
+    key=lambda pair: (-len(pair[0]), pair[0]),
+))
+_ENGLISH_KEY_PHRASES = tuple(sorted(
+    (tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS),
+    key=lambda phrase: (-len(phrase), phrase),
+))
+_ENGLISH_ROLE_TERMS = frozenset(
+    label for label in _ENGLISH_PERSON_KEY_LABELS
+    if " " not in label and label != "name"
+)
+_KOREAN_NON_PERSON_KEYS = frozenset(
+    f"{head}{suffix}" for head in _NON_PERSON_NAME_KEY_HEADS
+    for suffix in ("명", "이름")
+)
+
+
+def _key_words(key: str) -> tuple[str, ...]:
+    normalized = unicodedata.normalize("NFKC", key)
+    separated = _KEY_CAMEL_BOUNDARY_RE.sub(" ", normalized)
+    return tuple(_KEY_ENGLISH_WORD_RE.findall(separated.casefold()))
+
+
+def _has_name_field_marker(key: Any) -> bool:
+    """An unknown subject plus a name suffix is a field signal, not a person type."""
+    if not isinstance(key, str):
+        return False
+    korean = _normalise_korean_key(key)
+    if korean in _KOREAN_NON_PERSON_KEYS:
+        return False
+    words = _key_words(key)
+    if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
+        # Existing explicit human roles still override a non-person prefix.
+        if not any(word in _ENGLISH_ROLE_TERMS for word in words):
+            return False
+    return bool(_NAME_FIELD_SUFFIX_RE.search(korean)) or bool(
+        words and words[-1] in {"name", "nm", "surname", "forename"}
+    )
 
 
 def _person_label_for_key(key: Any) -> str | None:
@@ -73,53 +129,37 @@ def _person_label_for_key(key: Any) -> str | None:
     korean_key = _normalise_korean_key(normalized)
     if korean_key:
         # 단순히 '-명/이름'으로 끝나는 비인명 키에는 사람 문맥을 붙이지 않는다.
-        if any(
-            korean_key == f"{head}{suffix}"
-            for head in _NON_PERSON_NAME_KEY_HEADS
-            for suffix in ("명", "이름")
-        ):
+        if korean_key in _KOREAN_NON_PERSON_KEYS:
             return None
-        korean_labels = {
-            _normalise_korean_key(label)
-            for label in PARTY_AND_TITLE_LABELS
-            if isinstance(label, str) and re.search(r"[가-힣]", label)
-        }
-        for label in sorted(korean_labels, key=len, reverse=True):
+        for label, original in _KOREAN_KEY_LABELS:
             if label and label in korean_key:
-                return next(
-                    original for original in PARTY_AND_TITLE_LABELS
-                    if _normalise_korean_key(original) == label
-                )
+                return original
+        if _NAME_FIELD_SUFFIX_RE.search(korean_key):
+            return "이름"
 
     # camelCase, snake_case, 괄호·공백 변형을 동일한 영어 토큰으로 처리한다.
-    separated = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", normalized)
-    english_key = re.sub(r"[^a-z0-9]+", " ", separated.casefold()).strip()
-    if not english_key:
+    words = _key_words(normalized)
+    if not words:
         return None
-    words = english_key.split()
     if any(word in _NON_PERSON_ENGLISH_KEY_HEADS for word in words):
         # 명시적인 사람 역할 표지가 있으면 'company representative'처럼 사람 필드로 인정한다.
-        role_terms = _ENGLISH_PERSON_KEY_LABELS - {"name", "full name", "person name", "contact name"}
-        if not any(label in words for label in role_terms):
+        if not any(label in words for label in _ENGLISH_ROLE_TERMS):
             return None
-    label_phrases = sorted(
-        (tuple(label.split()) for label in _ENGLISH_PERSON_KEY_LABELS),
-        key=lambda phrase: (-len(phrase), phrase),
-    )
-    phrase_matches = []
-    for phrase in label_phrases:
-        positions = [
-            position
-            for position in range(len(words) - len(phrase) + 1)
-            if tuple(words[position:position + len(phrase)]) == phrase
-        ]
-        if positions:
-            phrase_matches.append((phrase, positions[0]))
+    # Constant-sized phrase grammar; one traversal per key.
+    phrase_matches = [
+        (phrase, position)
+        for position in range(len(words))
+        for phrase in _ENGLISH_KEY_PHRASES
+        if words[position:position + len(phrase)] == phrase
+        and not (phrase == ("name",) and position != 0)
+    ]
     if phrase_matches:
         phrase, _ = min(phrase_matches, key=lambda item: (-len(item[0]), item[1], item[0]))
-        if phrase[-1] == "name" and tuple(phrase[:-1]) in label_phrases:
+        if phrase[-1] == "name" and tuple(phrase[:-1]) in _ENGLISH_KEY_PHRASES:
             return " ".join(phrase[:-1])
         return " ".join(phrase)
+    if words[-1] == "nm":
+        return "이름"
     return None
 
 
@@ -131,11 +171,46 @@ def _is_person_name_key(key: Any) -> bool:
 def _name_like_value(value: str) -> str | None:
     """키 문맥을 붙일 단일 한국어 이름 토큰만 반환한다."""
     candidate = unicodedata.normalize("NFKC", value).strip()
+    particle_match = _SPACED_NAME_PARTICLE_RE.fullmatch(candidate)
+    if particle_match:
+        stem = re.sub(r"[ \t]", "", particle_match.group("name"))
+        compact = re.sub(r"[ \t]", "", candidate)
+        # Preserve three-syllable names and four-syllable double-surname names.
+        if len(compact) > 3 and not (
+            len(compact) == 4 and compact[:2] in DOUBLE_SURNAMES
+        ):
+            if is_valid_korean_name_structure(stem):
+                return stem
     match = _NAME_VALUE_RE.fullmatch(candidate)
     if not match:
         return None
     name = match.group("name")
     return name if is_valid_korean_name_structure(name) else None
+
+
+def _uncertain_person_value(value: Any, *, explicit_name: bool) -> bool:
+    """Decide send safety separately from extracting a single name token."""
+    if not isinstance(value, str):
+        return True
+    text = unicodedata.normalize("NFKC", value).strip()
+    if not text or _MASKED_NAME_VALUE_RE.fullmatch(text):
+        return False
+    if _name_like_value(text):
+        # Single-name context is checked by the normal detector.
+        return False
+    if explicit_name:
+        return True
+    # Preserve the role/unknown-subject contract for Korean non-name values.
+    # A name-shaped first word alone cannot establish the type of a multiword
+    # organization. Raw text is still scanned, with no new noun exemptions.
+    compact = []
+    for char in text:
+        if "가" <= char <= "힣":
+            if len(compact) < 5:
+                compact.append(char)
+        elif not char.isspace():
+            return True
+    return len(compact) <= 4 and is_valid_korean_name_structure("".join(compact))
 
 
 # ===========================================================================
@@ -226,12 +301,15 @@ def _try_json_parse(value: str):
     return None
 
 
-def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
+def _collect_texts_from_value(
+    value, path: str = "", *, _uncertain_paths: List[str] | None = None,
+) -> List[Tuple[str, str]]:
     """값에서 (경로, 검사할 텍스트) 쌍을 수집한다.
 
     사전:
       - 원본 문자열 값은 항상 검사.
-      - 키가 CONTEXT_LABEL_KEYS에 속하는 경우에만 '키: 값' 문맥을 합성 (TK-52 2절: 비라벨 키의 과차단 방지).
+      - 사람 표지 키의 단일 이름 꼴 값과 식별번호 종류 키에 문맥을 합성.
+      - 불확실 성명 필드는 원문 없이 _uncertain_paths에 경로만 기록(TK-56).
       - 형제 결합: 선행 값이 라벨이고 후행 값이 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (역할/이름 쌍 지원).
     배열:
       - 선행 원소가 라벨이고 후행 원소가 라벨이 아니며 유효한 이름 구조일 때만 결합 문맥 합성 (라벨 나열 배열 과차단 방지).
@@ -244,7 +322,7 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
         # JSON 문자열인지 시도
         decoded = _try_json_parse(value)
         if decoded is not None:
-            results.extend(_collect_texts_from_value(decoded, path))
+            results.extend(_collect_texts_from_value(decoded, path, _uncertain_paths=_uncertain_paths))
         else:
             # 일반 문자열 값
             results.append((path, value))
@@ -254,12 +332,21 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
         str_items: List[Tuple[str, str]] = []  # 형제 문자열 (key, value) 수집용
         for key, item in value.items():
             current_path = f"{path}.{key}" if path else str(key)
+            label = _person_label_for_key(key)
+            marker = _has_name_field_marker(key)
+            if (label or marker) and _uncertain_person_value(
+                item, explicit_name=bool(label and marker),
+            ):
+                if _uncertain_paths is not None:
+                    _uncertain_paths.append(current_path)
 
             if isinstance(item, str):
                 decoded = _try_json_parse(item)
                 if decoded is not None:
                     # JSON 문자열이면 파싱하여 재귀 검사
-                    results.extend(_collect_texts_from_value(decoded, current_path))
+                    results.extend(_collect_texts_from_value(
+                        decoded, current_path, _uncertain_paths=_uncertain_paths,
+                    ))
                 else:
                     # 원본 값 검사
                     results.append((current_path, item))
@@ -268,15 +355,17 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
                     if key in _PII_TYPE_KEYS:
                         results.append((current_path, f"{key}: {item}"))
                     else:
-                        label = _person_label_for_key(key)
                         name = _name_like_value(item)
-                        if label and name:
+                        if (label or marker) and name:
+                            label = label or "이름"
                             detector_label = "이름" if label.isascii() else label
                             results.append((current_path, f"{detector_label}: {name}"))
                     str_items.append((key, item))
             else:
                 # 비문자열 값은 재귀
-                results.extend(_collect_texts_from_value(item, current_path))
+                results.extend(_collect_texts_from_value(
+                    item, current_path, _uncertain_paths=_uncertain_paths,
+                ))
 
         # 형제 문자열 결합:
         # '라벨 값 다음에 이름 구조 값이 올 때만' 결합 문맥을 생성한다 (TK-52 2절)
@@ -295,12 +384,16 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
             if isinstance(item, str):
                 decoded = _try_json_parse(item)
                 if decoded is not None:
-                    results.extend(_collect_texts_from_value(decoded, current_path))
+                    results.extend(_collect_texts_from_value(
+                        decoded, current_path, _uncertain_paths=_uncertain_paths,
+                    ))
                 else:
                     results.append((current_path, item))
                     str_elements.append(item)
             else:
-                results.extend(_collect_texts_from_value(item, current_path))
+                results.extend(_collect_texts_from_value(
+                    item, current_path, _uncertain_paths=_uncertain_paths,
+                ))
 
         # 배열 이웃 결합:
         # '선행 원소가 라벨이고 후행 원소가 이름 구조일 때만' 결합 문맥을 생성한다 (TK-52 2절)
@@ -314,13 +407,15 @@ def _collect_texts_from_value(value, path: str = "") -> List[Tuple[str, str]]:
     return results
 
 
-def _walk_fields(value, path=""):
+def _walk_fields(value, path="", *, _uncertain_paths=None):
     """필드 경로(path)와 함께 문자열 값들을 추출한다 (R8-A 강화 버전).
 
-    TK-51: 모든 문자열 값에 '키: 값' 문맥, 형제 결합 문맥, 배열 이웃 문맥을 추가.
+    TK-51/TK-56: 원본 값과 유효한 이름 문맥, 형제/배열 문맥을 추출한다.
     라벨 키 정의는 detector.py의 PARTY_AND_TITLE_LABELS에서 단일 출처로 가져온다.
     """
-    for collected_path, collected_text in _collect_texts_from_value(value, path):
+    for collected_path, collected_text in _collect_texts_from_value(
+        value, path, _uncertain_paths=_uncertain_paths,
+    ):
         yield collected_path, collected_text
 
 
@@ -345,18 +440,26 @@ def inspect_request(request, *, _original_system: str = None):
 
     # R8-A: 조립 전 원본 system이 있으면 별도 검사 (JSON 구조 보존)
     if _original_system is not None:
-        for path, text in _walk_fields({"__original_system__": _original_system}):
+        uncertain_paths = []
+        for path, text in _walk_fields(
+            {"__original_system__": _original_system}, _uncertain_paths=uncertain_paths,
+        ):
             matches = [m for m in detect(text) if m.confidence >= 0.6]
             for m in matches:
                 kinds[m.kind] += 1
                 # 원본 system은 사용자 제공 동적 값이므로 등록 상수 면책 없음
                 blocked_kinds[m.kind] += 1
                 detected_paths.add(f"original_system.{path}")
+        if uncertain_paths:
+            kinds["PERSON"] += len(uncertain_paths)
+            blocked_kinds["PERSON"] += len(uncertain_paths)
+            detected_paths.update(f"original_system.{path}" for path in uncertain_paths)
 
     # 최상위 payload 필드를 개별 순회하여 경로 기반 등록 판정이 정확하게 동작하도록 함
     # (payload 전체를 _walk_fields에 넘기면 최상위 형제 결합이 경로 판정을 혼동시킴)
     for top_key, top_value in payload.items():
-        for path, text in _walk_fields(top_value, top_key):
+        uncertain_paths = []
+        for path, text in _walk_fields(top_value, top_key, _uncertain_paths=uncertain_paths):
             matches = [m for m in detect(text) if m.confidence >= 0.6]
             if not matches:
                 continue
@@ -379,6 +482,14 @@ def inspect_request(request, *, _original_system: str = None):
                     # 등록되지 않은 영역(사용자 입력 또는 동적 값이 혼입된 시스템 프롬프트)에서의 탐지는
                     # PII 종류(PERSON, DOB, PHONE, EMAIL 등)와 무관하게 차단
                     blocked_kinds[m.kind] += 1
+        if uncertain_paths:
+            kinds["PERSON"] += len(uncertain_paths)
+            detected_paths.update(uncertain_paths)
+            is_verified_static_source = (
+                top_key == "system" and is_registered_system_prompt(request.system)
+            ) or (top_key == "schema" and is_registered_schema(request.schema))
+            target = static_fp_kinds if is_verified_static_source else blocked_kinds
+            target["PERSON"] += len(uncertain_paths)
 
     if blocked_kinds:
         status = "BLOCKED"
