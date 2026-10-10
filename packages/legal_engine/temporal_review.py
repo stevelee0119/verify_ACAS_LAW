@@ -76,36 +76,105 @@ SUBITEM_LETTERS = "가나다라마바사아자차카타파하"
 SUBITEM_LETTER_SET = frozenset(SUBITEM_LETTERS)
 
 # 목 인식 정규식: 호 표기(제N호 또는 N호)가 반드시 선행해야 함
-# '제3호 다목적'의 '다'처럼 목 뒤에 낱말이 이어지는 경우를 배제하고 조사·문장부호·공백 등으로 한정
-SUBITEM_TAIL_RE = r"(?=\s|[.,()，。:;\-]|$|의|에|에서|에게|을|를|은|는|이|가|과|와|도|만|부터|까지|로|으로|등)"
-ITEM_SUBITEM_RE = re.compile(rf"(?:제?\s*(?P<item>\d+)호)\s*(?:제?\s*(?P<subitem>[{SUBITEM_LETTERS}])목){SUBITEM_TAIL_RE}")
+# '제3호 다목적'의 '다'처럼 목 뒤에 낱말이 이어지는 경우를 배제하고 조사·문장부호·공백 등으로 한정 (TK-69: 가운뎃점류 추가)
+SUBITEM_TAIL_RE = r"(?=\s|[.,()，。:;\-·・ㆍ]|$|의|에|에서|에게|을|를|은|는|이|가|과|와|도|만|부터|까지|로|으로|등)"
+# 호-목 인식: 공백 중첩 분할 모호성을 제거하여 선형 탐색 시간 보장 (TK-69)
+ITEM_SUBITEM_RE = re.compile(rf"(?:제\s*)?(?P<item>\d+)호\s*(?:제\s*)?(?P<subitem>[{SUBITEM_LETTERS}])목{SUBITEM_TAIL_RE}")
+RANGE_TAIL_RE = re.compile(rf"^\s*(?:부터|내지|~|-)\s*(?:제\s*)?(?P<end>[{SUBITEM_LETTERS}])목(?:\s*까지)?{SUBITEM_TAIL_RE}")
+# 다음 목 인식: ^\s* 뒤 선택지 내부의 \s*를 제거하여 이중 공백 분할 백트래킹(다항식 증가) 완전 차단 (TK-69 개정 1)
+NEXT_SUBITEM_RE = re.compile(rf"^\s*(?:[·・ㆍ,]|및|와|과)\s*(?:제\s*)?(?P<next>[{SUBITEM_LETTERS}])목{SUBITEM_TAIL_RE}")
+
+# 목 연속 인식 유한 창 상한 (긴 텍스트나 반복 공백 입력 시 상수 시간 탐색 보장)
+SUBITEM_WINDOW_LIMIT = 100
 
 # 목 분할 정규식: 호 본문 내부에서 목 열거 글자만을 대상으로 분할
 SUBITEM_SPLIT_RE = re.compile(rf"\n\s*(?P<letter>[{SUBITEM_LETTERS}])\.\s*")
 
 
-def extract_subitem_info(citation) -> Tuple[Optional[str], Optional[str]]:
-    """citation에서 호(item)와 목(subitem)을 추출한다.
+def parse_subitem_sequence(tail_text: str, first_letter: str) -> Tuple[List[str], int]:
+    """첫 번째 목(first_letter) 직후의 텍스트(tail_text)에서 이어지는 목 목록과 소비된 문자 길이를 반환한다 (TK-69).
 
-    목 글자는 명시 집합 [가나다라마바사아자차카타파하]로 한정하며,
-    반드시 호 표기(제N호 또는 N호)가 선행하는 경우에만 인정한다.
-    '항목'·'품목'·'교과목' 등 일반 명사는 제외된다.
+    - 유한 창 상한(SUBITEM_WINDOW_LIMIT)을 두어 긴 텍스트나 반복 입력에 대해 즉각적인 탐색 완료를 보장한다.
+    - '가목부터 다목까지', '가목·나목', '가목 및 나목' 등의 표기를 지원한다.
     """
-    raw = getattr(citation, "raw_text", "") or ""
+    if not tail_text or first_letter not in SUBITEM_LETTER_SET:
+        return [first_letter], 0
+
+    window = tail_text[:SUBITEM_WINDOW_LIMIT]
+    subitems = [first_letter]
+    pos = 0
+
+    # 1) 범위 표기 확인 ('가목부터 다목까지', '가목 내지 다목')
+    m_range = RANGE_TAIL_RE.match(window[pos:])
+    if m_range:
+        end = m_range.group("end")
+        s_idx = SUBITEM_LETTERS.find(first_letter)
+        e_idx = SUBITEM_LETTERS.find(end)
+        if 0 <= s_idx <= e_idx:
+            subitems = list(SUBITEM_LETTERS[s_idx : e_idx + 1])
+        return subitems, m_range.end()
+
+    # 2) 열거 표기 확인 ('가목·나목', '가목, 나목', '가목 및 나목')
+    while pos < len(window):
+        m_next = NEXT_SUBITEM_RE.match(window[pos:])
+        if not m_next:
+            break
+        subitems.append(m_next.group("next"))
+        pos += m_next.end()
+
+        # 복합 범위 표기 ('가목, 나목부터 라목까지' 등)
+        m_range = RANGE_TAIL_RE.match(window[pos:])
+        if m_range:
+            last = subitems.pop()
+            end = m_range.group("end")
+            s_idx = SUBITEM_LETTERS.find(last)
+            e_idx = SUBITEM_LETTERS.find(end)
+            if 0 <= s_idx <= e_idx:
+                subitems.extend(list(SUBITEM_LETTERS[s_idx : e_idx + 1]))
+            pos += m_range.end()
+            break
+
+    return subitems, pos
+
+
+def extract_subitems_info(citation) -> Tuple[Optional[str], List[str]]:
+    """citation에서 호(item)와 목 목록(subitems)을 추출한다 (TK-69).
+
+    '가목·나목', '가목 및 나목', '가목부터 다목까지' 등 복수 목 인용을 모두 지원하며,
+    호 표기(제N호 또는 N호)가 선행하는 경우에만 인정된다.
+    """
     item = getattr(citation, "item", None)
-    attributes = citation.attributes or {}
-    subitem = attributes.get("subitem")
+    attributes = getattr(citation, "attributes", None) or {}
+
+    # 1) attributes에 이미 파싱된 subitems가 있는 경우 우선 사용
+    attr_subitems = attributes.get("subitems")
+    if attr_subitems and isinstance(attr_subitems, list) and item:
+        valid = [s for s in attr_subitems if s in SUBITEM_LETTER_SET]
+        if valid:
+            return str(item), valid
+
+    raw = getattr(citation, "raw_text", "") or ""
+    attr_subitem = attributes.get("subitem")
 
     m = ITEM_SUBITEM_RE.search(raw)
-    if m:
-        if not item:
-            item = m.group("item")
-        if not subitem:
-            subitem = m.group("subitem")
+    if not m:
+        if attr_subitem and attr_subitem in SUBITEM_LETTER_SET and item:
+            return str(item), [attr_subitem]
+        return None, []
 
-    if subitem and subitem in SUBITEM_LETTER_SET and item:
-        return str(item), subitem
-    return None, None
+    parsed_item = str(item) if item else m.group("item")
+    first = m.group("subitem")
+    pos = m.end()
+
+    # parse_subitem_sequence를 호출하여 뒤따르는 목 목록 추출 (창 상한 100자 적용)
+    subitems, _ = parse_subitem_sequence(raw[pos:], first)
+    return parsed_item, subitems
+
+
+def extract_subitem_info(citation) -> Tuple[Optional[str], Optional[str]]:
+    """citation에서 호(item)와 첫 번째 목(subitem)을 추출한다 (하위 호환 유지)."""
+    item, subitems = extract_subitems_info(citation)
+    return item, (subitems[0] if subitems else None)
 
 
 def extract_item_body(article_text: str, item: str) -> Optional[str]:
@@ -144,11 +213,11 @@ def version_outcomes(citation, versions: List[Dict[str, Any]]) -> List[Dict[str,
     numbers_only = attributes.get("claim_mode") == "PARENTHETICAL_BASIS"
     subject = attributes.get("claim_subject")
 
-    # 목 단위 특정 여부 확인 (조건 ①: [가나다라마바사아자차카타파하] 명시 집합 & 호 선행 필수)
-    item_num, subitem_letter = extract_subitem_info(citation)
-    has_subitem_context = bool(item_num and subitem_letter and claim and claim.strip())
+    # 목 단위 특정 여부 확인 (TK-69 복수 목 지원)
+    item_num, subitem_letters = extract_subitems_info(citation)
+    has_subitem_context = bool(item_num and subitem_letters and claim and claim.strip())
 
-    # 1단계: 각 판본별 기본 조·항 대조 결과 및 목 단위 대조 정보 수집 (TK-62)
+    # 1단계: 각 판본별 기본 조·항 대조 결과 및 목 단위 대조 정보 수집 (TK-62, TK-69)
     parsed_versions = []
     for version in versions:
         article_text = version.get("text") or ""
@@ -164,10 +233,12 @@ def version_outcomes(citation, versions: List[Dict[str, Any]]) -> List[Dict[str,
 
             if subitems:
                 # 목 분할이 정상적으로 된 경우
-                # 1) 인용된 목 본문과 직접 대조
-                if subitem_letter in subitems:
+                # 1) 인용된 목들의 본문을 합친 범위와 대조 (TK-69)
+                cited_texts = [subitems[ltr] for ltr in subitem_letters if ltr in subitems]
+                if cited_texts:
+                    combined_text = "\n".join(cited_texts)
                     res = compare_claim_to_provision(
-                        claim, subitems[subitem_letter], numbers_only=numbers_only, subject=subject
+                        claim, combined_text, numbers_only=numbers_only, subject=subject
                     )
                     if res.get("status") == "VERIFIED":
                         subitem_verified_outcome = res
