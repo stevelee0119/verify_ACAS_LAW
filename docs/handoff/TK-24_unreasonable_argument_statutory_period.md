@@ -16,3 +16,18 @@
 ## 수용 기준
 - `python -m pytest tests/acceptance/test_case9_state_compensation.py -rxX`: `test_case9_check[docx-LEG-2]`, `[text-LEG-2]` XPASS.
 - 구현 측 새 시험: 대상(소멸시효·제척기간·제소기간 등)·근거(정의·유추·인도주의)를 바꾼 양성 5건, 법정 예외를 정확히 원용한 대조군 3건. 변형 1·2·서면6~8의 무리한 주장 항목과 대조군 유지, 고정 시험 오탐 0.
+
+## 개정 1 — 재점검과 Codex 인계(2026-10-09, 사용자 결정 '장기 미해결 과제는 Codex에 전달')
+- 재점검(평가 측, Steve 114f8b3 = 운영 `main` a8b2a7e 탐지 코드, 오프라인, Python 3.11.15)
+  - `tests/acceptance/test_case9_state_compensation.py`: `[docx-LEG-2]`·`[text-LEG-2]`가 여전히 strict xfail이다(61 passed, 2 xfailed).
+  - 온라인 서면9 점검에서도 LEG-2는 10-01부터 0.11.0까지 9회 모두 실패했다(`first_touch_log.jsonl`).
+- 관련 시험 기준값(구현 전, 같은 SHA)
+  - `test_tk20_unreasonable_argument_cluster`·`test_v4_g4_reasoning_axis`·`test_verification_regressions`·`test_v2_phase1_verdicts`·`test_efficacy_round2`·`test_v5_claim_polarity`·`test_ground_truth_prepared_brief`와 `tests/acceptance/`의 `test_generalization_guards`·`test_round5_regressions`·`test_variant_generalization`·`test_case9_state_compensation`: **310 passed, 2 xfailed**
+  - `tests/acceptance/test_round7_findings.py`: **105 passed, 5 xfailed**
+  - 구현 뒤 이 값에서 LEG-2 2건만 XPASS로 바뀌어야 한다. strict XPASS 실패는 예정된 것이고, 표시는 평가 측이 지운다.
+- 절차
+  - 법리 탐지 휴리스틱 변경이므로 **설계 메모를 첫 커밋**으로 `docs/handoff/requests/`에 낸다(AGENT_ROLES 2.1). 평가 측 회신 뒤 구현한다.
+  - 기존 무리한 주장 규칙(`packages/legal_engine/claim_review.py`의 `NO_BASIS_REMEDY` 등, TK-20 군집)과 같은 틀에 넣되, 정상 항변 오탐 0을 지킨 TK-45의 원칙을 따른다: 낱말 위치 일치 금지, 절·극성 구조로 판정.
+- 수용(원 수용 기준에 더함)
+  - 고정 81.7/79.2/0 같음, 은퇴 세트 3개 점수 하락 없음
+  - 수용 SHA에서 평가 측이 `verify_all` 전체 모드를 돌린다. 릴리스 전 봉인 시험은 새 세트로 한다.
