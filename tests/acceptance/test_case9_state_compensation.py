@@ -42,7 +42,8 @@ probe = _probe()
 CHECKS = {c["id"]: c["label"] for c in probe.load_spec(SPEC)["checks"]}
 
 # 알려진 미해결. {입력 방식: {항목 id: 인계 티켓}}
-KNOWN_OPEN = {"docx": {"LEG-2": "TK-24"}, "text": {"LEG-2": "TK-24"}}
+# 2026-10-10 TK-24(#53 0ad4fac) 통합으로 LEG-2가 풀려 표시를 지웠다(평가 측).
+KNOWN_OPEN = {"docx": {}, "text": {}}
 
 
 @functools.lru_cache(maxsize=None)

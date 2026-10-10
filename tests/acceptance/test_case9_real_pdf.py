@@ -12,6 +12,7 @@
 - 인용 법령명: PDF는 '육군 야외 기동훈련안전통제 및 사고조사 규정'(줄바꿈에서 띄어쓰기가 빠짐), docx는 '육군 야외 기동훈련 안전통제 및 사고조사 규정'.
   이 어긋남이 온라인에서 Drive 참고자료 연결(linked_claims 1/17)이 빠진 직접 원인 후보다(참고자료 이름과 일치하지 않는다).
 5차(c223f7b)에서 PDF 3건(제22조 문장 단일 청구·법령명 일치·청구 수)이 풀려 표시를 지웠다(평가 측 재현: 청구 70→47, 검증 대상 17→19, 법령명 일치). 남은 미해결은 LEG-2(TK-24)뿐이다.
+2026-10-10 TK-24 통합(#53 0ad4fac)으로 LEG-2도 풀려 표시를 지웠다(PDF 28/28).
 """
 from __future__ import annotations
 
@@ -38,7 +39,8 @@ DOCX = ROOT / "tests" / "fixtures" / "case9_state_compensation_brief.docx"
 ONLINE_RUN_SHA256 = "f79abba4abe4ffa4fecc273a8fc89ccbccc3a91f3e3259a92a5c4003a8d4df92"
 
 # 알려진 미해결(실제 PDF 입력의 정답 항목). 항목 id → 인계 티켓
-KNOWN_OPEN_CHECKS = {"LEG-2": "TK-24"}
+# 2026-10-10 TK-24(#53 0ad4fac) 통합으로 LEG-2가 풀려 표시를 지웠다(평가 측).
+KNOWN_OPEN_CHECKS: dict = {}
 
 
 def _probe():
