@@ -73,14 +73,54 @@ def _merged_attributes(main: str, merged: str) -> dict:
 
 
 # 「형법」 제250조 제1항 제2호 / 형법 제250조
+_LAW_NAME_PATTERN = r"[「『]?[가-힣A-Za-z· ]{1,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?"
 LAW_RE = re.compile(
-    r"(?P<law>[「『]?[가-힣A-Za-z· ]{1,40}?(?:법|법률|령|규칙|조례|훈령|예규|규정|고시|지침)[」』]?)\s*"
+    rf"(?P<law>{_LAW_NAME_PATTERN})\s*"
     r"(?:부칙\s*)?"
     r"제\s*(?P<article>\d+)\s*조(?:\s*의\s*(?P<article_sub>\d+))?"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?"
     r"(?:\s*제\s*(?P<item>\d+)\s*호(?:\s*의\s*(?P<item_sub>\d+))?)?"
     r"(?:\s*(?P<subitem>[가-힣])\s*목)?"
 )
+_LAW_ARTICLE_ANCHOR_RE = re.compile(r"제\s*\d+\s*조")
+_LAW_NAME_END_RE = re.compile(_LAW_NAME_PATTERN + r"\Z")
+# 원래 문법: 이름 본체 최대 40자 + 접미사 최대 2자 + 낫표 2자.
+_LAW_NAME_MAX_LENGTH = 40 + 2 + 2
+
+
+@lru_cache(maxsize=4096)
+def _law_prefix_start(prefix: str) -> Optional[int]:
+    match = _LAW_NAME_END_RE.search(prefix)
+    return match.start() if match else None
+
+
+def _law_matches(text: str):
+    """필수 조 위치에서 원래 이름 문법을 확인하고 원래 Match를 반환한다.
+
+    이름 밖 공백/부칙은 길이를 제한하지 않는다. 문법상 가능한 이름 구간만
+    캐시하므로 인용문 뒤 일반 문장을 시작점마다 반복 탐색하지 않는다.
+    """
+    previous_end = 0
+    for article in _LAW_ARTICLE_ANCHOR_RE.finditer(text):
+        if article.start() < previous_end:
+            continue
+        name_end = article.start()
+        while name_end > previous_end and text[name_end - 1].isspace():
+            name_end -= 1
+        if text[max(previous_end, name_end - 2):name_end] == "부칙":
+            name_end -= 2
+            while name_end > previous_end and text[name_end - 1].isspace():
+                name_end -= 1
+        begin = max(previous_end, name_end - _LAW_NAME_MAX_LENGTH)
+        offset = _law_prefix_start(text[begin:name_end])
+        if offset is None:
+            continue
+        match = LAW_RE.match(text, begin + offset)
+        if match is not None:
+            yield match
+            previous_end = match.end()
+
+
 # 앞 조문 인용에 이어지는 조문: "및 제751조", ", 제4조 제2항", "와 제9조의2"
 CONTINUED_ARTICLE_RE = re.compile(
     r"\s*(?:,|및|또는|와|과|·|ㆍ|(?:은|는)\s*[^.?!。\n「」『』,]{1,90},|"
@@ -97,7 +137,7 @@ SAME_ARTICLE_REF_RE = re.compile(
     # '같은 조건'·'위조한'·'동조하였다'는 조 인용이 아니다. 조(항) 뒤가 공백·문장부호·조사일 때만 잡는다.
     r"(?P<ref>(?:같은|동|위)\s*조(?:항)?|동조(?:항)?)(?=\s|[,.)」』]|은|는|이|가|의|에|을|를|도|$)"
     r"(?:\s*제\s*(?P<paragraph>\d+)\s*항)?(?:\s*제\s*(?P<item>\d+)\s*호)?")
-BARE_PARAGRAPH_REF_RE = re.compile(r"(?<![\d조])(?<!조\s)제\s*(?P<paragraph>\d+)\s*항(?:\s*제\s*(?P<item>\d+)\s*호)?")
+BARE_PARAGRAPH_REF_RE = re.compile(r"제(?<![\d조]제)(?<!조\s제)\s*(?P<paragraph>\d+)\s*항(?:\s*제\s*(?P<item>\d+)\s*호)?")
 REFERENCE_WINDOW = 300  # 앞 인용과 이 거리 안에 있을 때만 결합한다(문단을 건너 결합하지 않는다)
 # 행정규칙(훈령·예규·고시·지침). 법령 검증과 다른 경로로 검증한다.
 ADMIN_RULE_KINDS = ("훈령", "예규", "고시", "지침")
@@ -468,6 +508,10 @@ class SpanTracker:
     def seal_pattern(self):
         if not self.cur_starts:
             return
+        if not self.starts and self._tree is None:
+            self.starts, self.ends = self.cur_starts, self._cur_max
+            self.cur_starts, self.cur_ends, self._cur_max = [], [], []
+            return
         pairs = list(zip(self.starts, self.ends)) + list(zip(self.cur_starts, self.cur_ends))
         pairs.sort()
         self.starts, self.ends = [], []
@@ -506,7 +550,7 @@ class SpanTracker:
             self._tree = _span_insert(self._tree, start, end)
         self.cur_starts.append(start)
         self.cur_ends.append(end)
-        self._cur_max.append(max(end, self._cur_max[-1]) if self._cur_max else end)
+        self._cur_max.append(self._cur_max[-1] if self._cur_max and self._cur_max[-1] > end else end)
 
     def append(self, span):
         self.add(*span)
@@ -656,7 +700,7 @@ def extract_from_text(
     # 4) 법령 (조문 "조"가 있을 때만 수행)
     previous_law: Optional[str] = None
     if "조" in text:
-        for m in LAW_RE.finditer(text):
+        for m in _law_matches(text):
             if overlaps(m.start(), m.end()):
                 continue
             raw_law = m.group("law")
@@ -799,7 +843,10 @@ _STATUTE_TYPES = (CitationType.STATUTE,)
 
 def _resolve_article_references(text, citations, consumed, overlaps, *, document_id, block_id, page, _create=Citation.create) -> None:
     references = []
-    for pattern in (SAME_ARTICLE_REF_RE, BARE_PARAGRAPH_REF_RE):
+    patterns = [BARE_PARAGRAPH_REF_RE]
+    if any(word in text for word in ("같은", "동", "위")):
+        patterns.insert(0, SAME_ARTICLE_REF_RE)
+    for pattern in patterns:
         references += [m for m in pattern.finditer(text) if not overlaps(m.start(), m.end())]
     if not references:
         return
