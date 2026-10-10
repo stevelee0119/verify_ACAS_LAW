@@ -24,7 +24,7 @@ from packages.pii_engine.detector import (
     detect,
     is_valid_korean_name_structure,
 )
-from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
+from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, KOREAN_RAG_REVIEW_SYSTEM_PROMPT, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
 from packages.verification_engine.ai_document_detector import AI_DETECTOR_SYSTEM_PROMPT, _DETECTOR_SCHEMA
 
 POLICY_VERSION = "payload-pii-v4"
@@ -248,6 +248,7 @@ REGISTERED_SYSTEM_PROMPT_CONSTANTS: Dict[str, str] = {
     "SYS_AI_DOCUMENT_DETECTOR": AI_DETECTOR_SYSTEM_PROMPT,
     "SYS_RAG_REVIEW": RAG_REVIEW_SYSTEM_PROMPT,
     "SYS_ARGUMENT_OPINION": _OPINION_SYSTEM,
+    "SYS_KOREAN_RAG_REVIEW": KOREAN_RAG_REVIEW_SYSTEM_PROMPT,
     "SYS_ROUTER_BASE": SYSTEM_BASE,
     "SYS_EMPTY": "",
 }
