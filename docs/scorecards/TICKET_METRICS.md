@@ -30,19 +30,19 @@
 ## 미해결 목록
 | 티켓 | 상태 | 종류 | 발견일 | 메모 |
 |---|---|---|---|---|
-| TK-24 | merged | existing | 2026-10-01 | PR #53, Steve 03fdcdb(PR #67). 다음 릴리스 |
-| TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7, Steve 반영(PR #69). 다음 릴리스 |
-| TK-44 | open | regression | 2026-10-03 | 설계 조건부 승인(PR #63), 평가 측 조건 2 선행 |
-| TK-45 | open | regression | 2026-10-03 | Codex 구현 대기열 4순위 |
-| TK-49 | open | regression | 2026-10-03 | TK-44와 묶음 |
+| TK-24 | merged | existing | 2026-10-01 | PR #53 0ad4fac 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 9c1b218 미배포 |
+| TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
+| TK-44 | open | regression | 2026-10-03 | 설계 #63 e20bd6c 조건부 승인. 2단계는 평가 조건 2(계약/PDF 보호 시험) 준비 + TK-56 수용 뒤 |
+| TK-45 | open | regression | 2026-10-03 | Codex 대기열 4순위. TK-24 통합 충족, TK-56→TK-44/49 수용 뒤 |
+| TK-49 | open | regression | 2026-10-03 | TK-44와 묶음. 평가 조건 2 + TK-56 수용 뒤 2단계 |
 | TK-55 | known_open | regression | 2026-10-04 | 3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음 |
-| TK-56 | open | regression | 2026-10-04 | 착수 가능 · Codex 구현 |
-| TK-57 | known_open | existing | 2026-10-04 | 잔여(intl_paren 1/54) 알려진 미해결 |
-| TK-69 | merged | existing | 2026-10-07 | PR #56, Steve 03fdcdb(PR #67). 다음 릴리스 |
-| TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19, Steve 반영(PR #69). 다음 릴리스 |
-| TK-72 | open | existing | 2026-10-10 | 착수 가능 · Antigravity |
+| TK-56 | open | regression | 2026-10-04 | PR #70 ef790e7 불승인·Codex 보완 요구. 목표 XPASS 21 충족, 정상 요청 과차단 6/28→10/28(상한 6). 수용/통합 전 |
+| TK-57 | known_open | existing | 2026-10-04 | 필수 게이트 8F-1 해소·배포. intl_paren 원본 1/54는 국가코드 범위 참고 잔여(가입자 가림·실제 도달 0), 신규 배정 없음 |
+| TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
+| TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
+| TK-72 | open | existing | 2026-10-10 | PR #72 119d4cb 불승인·Antigravity 보완 요구. 저자 11/12명→마지막 10명 회귀, 실제 32,000건 1.068260초/상한 1초. 수용/통합 전 |
 | TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
-| TK-74 | open | existing | 2026-10-10 | 설계 조건부 승인(PR #68), 구현 대기 · Antigravity |
+| TK-74 | open | existing | 2026-10-10 | 설계 조건부 승인 유지. PR #68 39973f1 구현 불승인·Antigravity 보완 요구: MIME·미검토 범위·CSV 재선별 회귀. 수용/통합 전 |
 
 ## 읽는 법
 - 회귀 비율이 줄면 수정 과정의 품질 관리가 나아지는 것이다. 성능(처음 보는 문서의 탐지율)은 고정 비공개 벤치마크로 따로 본다(`FIXED_BENCHMARK.md`).
