@@ -3,9 +3,9 @@
  "status": {
   "deployed": 61,
   "merged": 4,
-  "open": 6,
+  "open": 5,
   "known_open": 2,
-  "accepted": 1
+  "accepted": 2
  },
  "open": [
   {
@@ -83,7 +83,7 @@
    "status": "open",
    "kind": "existing",
    "found_on": "2026-10-10",
-   "note": "PR #72 97dd735 재불승인. 필수 CI 종료·실패, 고정 79.9/77.3/0·학술 API 4실패·32k 1.028416초·authors 필드 7변경; 관련 12실패/63통과. 혼합 시간·헌재 회복. 사용자 결정으로 새 Codex 보완 구현 세션 이관, Antigravity 추가 푸시 중지. 수용/통합 전"
+   "note": "PR #72 97dd735 재불승인. 필수 CI 종료·실패, 고정 79.9/77.3/0·학술 API 4실패·32k 1.028416초·authors 필드 7변경; 관련 12실패/63통과. 혼합 시간·헌재 회복. 사용자 결정으로 새 Codex 보완 구현 세션 이관, Antigravity 추가 푸시 중지. TK-74 30f9f92 수용 후 별도 Codex 구현의 다음 보완 항목. 수용/통합 전"
   },
   {
    "id": "TK-73",
@@ -94,10 +94,10 @@
   },
   {
    "id": "TK-74",
-   "status": "open",
+   "status": "accepted",
    "kind": "existing",
    "found_on": "2026-10-10",
-   "note": "PR #68 2cc1376 재불승인. 이전 실패/이어읽기 회복·관련 19통과·필수 CI 성공. 일반 TXT 캐시 query 변경 뒤 검색 sources 1→0 새 회귀(시작 1통과/보완 1실패). 시험 교체 승인 유지, 수용/통합 전; 사용자 결정으로 새 Codex 보완 구현 세션 이관·Antigravity 추가 푸시 중지"
+   "note": "PR #68 30f9f92 내용 수용·평가 #73 통합51e042c. 공개 합성32통과·필수 CI11개 성공·고정81.7/79.2/0. 일반 TXT/PDF/DOCX 캐시 검색 회귀 해소; 이전 실패/교체1건 승인 유지. Steve 병합/운영 배포 전. 별도 Codex 구현은 TK-72로 진행, 평가 환경 독립 유지"
   }
  ],
  "weekly": {
