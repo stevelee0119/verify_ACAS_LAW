@@ -1376,3 +1376,7 @@
 - 평가 측 변경: LEG-2 strict xfail 3개 삭제(`tests/acceptance/test_case9_state_compensation.py`·`test_case9_real_pdf.py`). 서면9 docx·text·실제 PDF 28/28.
 - 근거: 평가 측 재실행. `verify_all` 전체 모드(c17e09b, 기준 Steve 6323400) 종료 0 — 전체 3,394·브라우저 197·acceptance 1,005·원장 570, 실제 실패 0. 고정 81.7/79.2/0. 은퇴 세트 4종 통합 전과 같음.
 - 판정: 통합 수용. 평가 측 PR(evaluator/round8-promotion → Steve_ACASiaLAW)로 들인다. CI 결과는 PR에서 확인한다.
+
+# TK-43 보완(PR #62 e4867e7, 2026-10-10): 수용 — Codex 평가 세션 판정, claude-code 통합
+- 판정(인용): 구별 가능 과마스킹 10/100·8/80, 구별 불가 가림 30/40·24/32 유지, 유출·이름·stem·필수 게이트·고정 81.7/79.2/0 유지, 필수 CI 3종 성공. 근거 'CI 결과 인용'과 '별도 평가 세션 재측정'(구현·평가 같은 계열, 별도 세션).
+- 통합(평가 측 재실행, deed155): 개인정보 필수 게이트 유지, `verify_all` 전체 모드 종료 0(전체 4,948·브라우저 197). 통합 PR로 들인다.
