@@ -35,16 +35,18 @@ CASE_TABLE_MAX_BYTES = 96 * 1024 * 1024
 
 
 def is_case_table_candidate(item: dict) -> bool:
-    """파일명이나 서면 본문과의 낱말 일치 여부와 무관하게 메타데이터로 판례 표 후보를 식별한다 (TK-74)."""
-    name = str(item.get("name") or "")
-    ext = relevance.extension(name).lower()
-    mime = str(item.get("mimeType") or "").lower()
+    """파일명이나 서면 본문과의 낱말 일치 여부와 무관하게 메타데이터로 판례 표 후보를 식별한다 (TK-74 한국어 주석)."""
     size = int(item.get("size") or 0)
     if size > CASE_TABLE_MAX_BYTES:
         return False
-    if ext in CASE_TABLE_EXTENSIONS or mime in CASE_TABLE_MIMES:
+    name = str(item.get("name") or "")
+    if name.endswith((".xlsx", ".csv", ".XLSX", ".CSV")):
         return True
-    return False
+    mime = str(item.get("mimeType") or "").lower()
+    if mime in CASE_TABLE_MIMES:
+        return True
+    ext = relevance.extension(name).lower()
+    return ext in CASE_TABLE_EXTENSIONS
 
 
 def isolated_extract(data, filename, mime, *, directory, timeout, continuation=None):
@@ -466,30 +468,90 @@ class ReferenceLibrary:
                                  r.get("case_head"), r.get("indexed_text"),
                                  json.dumps(r.get("raw_cells", {}), ensure_ascii=False)) for r in case_records])
                 is_case_table = bool(parsed.get("structured_case_table"))
-                is_non_case_candidate = bool(is_candidate(file_id) and not chosen(file_id) and not is_case_table)
-                if is_non_case_candidate:
-                    entry.update(status="NOT_A_CASE_TABLE", reason="NOT_A_CASE_TABLE")
-                elif is_case_table:
+                raw_reason = parsed.get("reason") or ""
+                is_partial = bool(parsed.get("partial"))
+                has_continuation = bool(parsed.get("continuation"))
+                chunk_count = int(parsed.get("chunk_count", 0))
+
+                # 파싱 중 오류·시간초과·격리 또는 미완료(이어 읽기 대기) 여부 판정 (TK-74 한국어 주석)
+                # 실제 sync 과정에서 추출기가 타임아웃, 파싱 실패, 격리 등을 반환한 경우를 포착한다.
+                is_failed_or_incomplete = (
+                    is_partial
+                    or has_continuation
+                    or any(k in raw_reason.upper() for k in ("TIMEOUT", "FAILED", "QUARANTINE", "UNAVAILABLE", "UNSUPPORTED"))
+                )
+
+                if is_case_table:
+                    # 1. 판례표로 성공적으로 확인된 경우
                     entry["structured_case_table"] = True
                     entry["case_table_stats"] = parsed.get("stats", {})
-                    entry["continuation"] = bool(parsed.get("continuation"))
-                    status = "INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED"
-                    entry.update(status=status,
-                                 reason=parsed.get("reason") or "TEXT_INDEXED",
-                                 pages=parsed.get("pages"), read_pages=parsed.get("read_pages"))
-                    if parsed.get("partial"):
-                        self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
-                            "reason": parsed.get("reason") or "REFERENCE_PARTIALLY_READ",
-                            "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
+                    entry["continuation"] = has_continuation
+                    status = "INDEXED_PARTIAL" if is_partial else "INDEXED"
+                    entry.update(
+                        status=status,
+                        reason=raw_reason or "TEXT_INDEXED",
+                        pages=parsed.get("pages"),
+                        read_pages=parsed.get("read_pages"),
+                    )
+                    if is_partial:
+                        self.summary["issues"].append({
+                            "file_id": file_id,
+                            "name": item.get("name"),
+                            "reason": raw_reason or "REFERENCE_PARTIALLY_READ",
+                            "read_pages": parsed.get("read_pages"),
+                            "pages": parsed.get("pages"),
+                        })
+                elif is_candidate(file_id) and not chosen(file_id):
+                    # 2. 표 후보이나 서면 본문 선별에서 제외된 파일 (TK-74 보완)
+                    if is_failed_or_incomplete:
+                        # 읽기 실패, 시간초과, 보안 격리, 또는 미완료(0행 이어 읽기 등)인 경우:
+                        # 정상 음성(NOT_A_CASE_TABLE)으로 덮어쓰지 않고 실제 실패/진행 사유와 상태를 보존한다.
+                        if "QUARANTINE" in raw_reason.upper():
+                            cand_status = "QUARANTINED"
+                        elif has_continuation:
+                            cand_status = "INDEXED_PARTIAL"
+                            entry["continuation"] = True
+                        elif any(k in raw_reason.upper() for k in ("TIMEOUT", "FAILED")):
+                            cand_status = "PARSE_FAILED"
+                        elif chunk_count > 0 and is_partial:
+                            cand_status = "INDEXED_PARTIAL"
+                        else:
+                            cand_status = "PARSE_FAILED"
+
+                        entry.update(
+                            status=cand_status,
+                            reason=raw_reason or "REFERENCE_PARSE_FAILED",
+                            pages=parsed.get("pages"),
+                            read_pages=parsed.get("read_pages"),
+                        )
+                        self.summary["issues"].append({
+                            "file_id": file_id,
+                            "name": item.get("name"),
+                            "reason": raw_reason or "REFERENCE_PARSE_FAILED",
+                            "read_pages": parsed.get("read_pages"),
+                            "pages": parsed.get("pages"),
+                        })
+                    else:
+                        # 정상적으로 완전히 읽었으나 판례표 요건을 충족하지 못한 경우: 정상 음성 판별
+                        entry.update(status="NOT_A_CASE_TABLE", reason="NOT_A_CASE_TABLE")
                 else:
-                    if parsed.get("partial") or not parsed.get("chunk_count"):
-                        self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
-                            "reason": parsed.get("reason") or "REFERENCE_EMPTY",
-                            "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
-                    entry.update(status=("INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED")
-                                 if parsed.get("chunk_count") else "PARSE_FAILED",
-                                 reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
-                                 read_pages=parsed.get("read_pages"))
+                    # 3. 서면 본문에서 선별된 일반 문서
+                    if is_partial or not chunk_count:
+                        self.summary["issues"].append({
+                            "file_id": file_id,
+                            "name": item.get("name"),
+                            "reason": raw_reason or "REFERENCE_EMPTY",
+                            "read_pages": parsed.get("read_pages"),
+                            "pages": parsed.get("pages"),
+                        })
+                    cand_status = ("INDEXED_PARTIAL" if is_partial else "INDEXED") if chunk_count else "PARSE_FAILED"
+                    entry.update(
+                        status=cand_status,
+                        reason=raw_reason or "TEXT_INDEXED",
+                        pages=parsed.get("pages"),
+                        read_pages=parsed.get("read_pages"),
+                    )
+
                 for key in ("excluded_pages", "scan_findings", "no_text_pages", "unprocessed_pages", "coverage_note",
                             "text_parser", "fallback_pages", "stats", "read_ranges", "excluded_rows", "table_version"):
                     if parsed.get(key):
@@ -499,7 +561,8 @@ class ReferenceLibrary:
                     entry["case_table_stats"] = parsed.get("stats", {})
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
                 # 표 후보 중 판례표가 아니고 문서 선별도 되지 않은 파일은 eligible에서 제외하여 RAG select() 격리 (TK-74)
-                if (parsed.get("chunk_count") or is_case_table) and not is_non_case_candidate:
+                # 판례표이거나, 본문에서 선별된 일반 문서인 경우에만 eligible에 등록
+                if is_case_table or (chosen(file_id) and chunk_count > 0):
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
                         "folder_path": folder_path,
                         "metadata_score": entry["metadata"]["score"],
@@ -509,7 +572,7 @@ class ReferenceLibrary:
                         "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages"),
                         "page_numbers_reliable": parsed.get("page_numbers_reliable", True),
                         "body_extraction_scope": parsed.get("body_extraction_scope"),
-                        "chunk_count": parsed.get("chunk_count", 0),
+                        "chunk_count": chunk_count,
                         "structured_case_table": is_case_table,
                         "case_table_stats": parsed.get("stats", {}),
                         "case_table_only": bool(is_case_table and not chosen(file_id))}
@@ -755,7 +818,7 @@ class ReferenceLibrary:
             elif status == "NOT_A_CASE_TABLE" or reason == "NOT_A_CASE_TABLE":
                 pass
             elif status in ("PARSE_FAILED", "UNAVAILABLE", "UNSUPPORTED_TYPE") or any(
-                err in reason for err in ("TIMEOUT", "PARSE_FAILED", "PARSE_TIMEOUT", "DOWNLOAD_FAILED", "UNAVAILABLE", "UNSUPPORTED")
+                err in reason.upper() for err in ("TIMEOUT", "PARSE_FAILED", "PARSE_TIMEOUT", "EXTRACT_TIMEOUT", "EXTRACT_FAILED", "DOWNLOAD_FAILED", "UNAVAILABLE", "UNSUPPORTED")
             ):
                 has_failed = True
             elif status == "NOT_SELECTED_METADATA":

@@ -44,6 +44,10 @@
 
 ### 4.1 부분·미검토 상태와 완전 부재(`NO_CASE_TABLE`)의 분리
 - 예산 중단, 읽기 실패, 보안 격리, 0행 이어 읽기 등은 `NO_CASE_TABLE`로 확정하지 않고 해당 상태와 사유를 구분 기록한다.
+- **실제 sync 경로의 추출기 실패/타임아웃 보존 (2차 보완 반영)**:
+  - 서면 본문 선별에서 제외된 표 후보(`is_candidate and not chosen`)라도, 추출기가 `partial=True` 및 `REFERENCE_EXTRACT_TIMEOUT` 또는 `REFERENCE_PARSE_FAILED`를 반환하거나 미완료 상태(`continuation` 존재 등)인 경우:
+  - `is_non_case_candidate` 분기에서 이를 정상 음성(`NOT_A_CASE_TABLE`)으로 덮어쓰지 않고, 실제 실패 상태(`PARSE_FAILED`, `INDEXED_PARTIAL`, `QUARANTINED`)와 원본 사유를 `inventory` 및 `issues`에 온전히 보존한다.
+  - 이를 통해 실제 sync 결과 및 manifest에서 미검토 범위와 사유가 소실되는 문제를 원천 방지한다.
 - 여러 표 후보가 존재할 경우 각 후보의 완료/부분/대기 상태를 종합하여 전체 `case_table_status`를 산출한다:
   - 완료된 표가 존재하더라도 격리(`QUARANTINED`), 실패/타임아웃(`PARSE_FAILED`), 대기/진행 중(`INDEXING`), 부분 색인(`INDEXED_PARTIAL`) 후보가 하나라도 공존하면 전체 상태를 `INDEXED`가 아닌 `PARTIAL`로 산출한다.
   - 색인된 표가 0건일 때, 읽기 실패나 타임아웃이 발생한 후보가 있으면 `NO_CASE_TABLE`로 단정하지 않고 `PARTIAL`로 유지하여 미검토 범위 및 사유를 남긴다.
