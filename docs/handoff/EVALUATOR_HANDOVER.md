@@ -38,6 +38,7 @@
 6. 배포 후 비공개 온라인 세트 v2·서면9를 여러 실행으로 점검한다. 실제 사용자 Drive 표는 저장소 밖에서 TK-74 수용 때 실제 선별 동기화 경로로 평가한다.
 
 ## 5-1. 추가 운영 항목(2026-10-10 사용자 지시)
+- **한국 법률 기준서면 30건:** [KR_LEGAL_BRIEFS_REFERENCE](../scorecards/KR_LEGAL_BRIEFS_REFERENCE.md). 업로드 합성 서면을 검토 대기 평가 자료로 등록했고 해시/구성/Word 읽기 검사 통과. 실제 독립 한국 변호사 검토 0명·법률 적용/정답 미확정·프로그램 미측정. 원문/정답은 저장소 밖, 검토자는 1명. 고정 벤치마크·새 봉인·TK-75 기존 사전등록 입력을 대체하지 않는다. Claude 실측은 사용자 최신 방침에 따라 릴리스 후, PR #74 기본 OFF 포함은 같은 SHA CI 성공·기술 수용 뒤 검토한다.
 - **고정 비공개 벤치마크:** [FIXED_BENCHMARK](../scorecards/FIXED_BENCHMARK.md). 작성 프롬프트 [PROMPT_FOR_CODEX_FIXED_BENCHMARK](PROMPT_FOR_CODEX_FIXED_BENCHMARK.md)(격리 세션). 측정 `scripts/fixed_benchmark.py`, 기록 `docs/scorecards/fixed_benchmark_log.jsonl`. 결과로 티켓을 만들지 않는다.
 - **티켓 지표:** 판정·병합·배포·닫힘 때마다 `docs/scorecards/ticket_registry.json`의 상태와 날짜를 갱신하고 `python scripts/ticket_metrics.py`로 [TICKET_METRICS](../scorecards/TICKET_METRICS.md)를 다시 만든다. 새 티켓을 만들면 등록부에 넣는다(`--check`가 빠진 티켓을 잡는다). 재발은 `recurrence_of`로 잇는다.
 
