@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import bisect
 import re
+from array import array
+from dataclasses import fields, make_dataclass
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -14,7 +16,7 @@ from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument, new_id
 
 from packages.document_engine.reading_text import (QUOTE_SPAN_RE, build_reading_text, ensure_running_heads,
-                                                    join_separator, sentence_bounds)
+                                                    iter_sentence_bounds, join_separator, sentence_bounds)
 
 from .normalize import (canonical_case_number, canonical_date, canonical_law_name as _raw_canonical_law_name,
                         law_name_suffix)
@@ -558,12 +560,12 @@ class SpanTracker:
 
 def extract_from_text(
     text: str, *, document_id: Optional[str] = None, block_id: Optional[str] = None, page: Optional[int] = None,
-    _create=None
+    _create=None, _select=None, _collection=None
 ) -> List[Citation]:
     # TK-07: 줄바꿈으로 갈라진 법령 인용을 공백으로 결합 (길이 불변)
     text = _join_hard_wrapped_citations(text)
     _create = _create or Citation.create
-    citations: List[Citation] = []
+    citations = _collection if _collection is not None else []
     consumed = SpanTracker()
     overlaps = consumed.overlaps
 
@@ -833,9 +835,13 @@ def extract_from_text(
             consumed.append((m.start(), m.end()))
         consumed.seal_pattern()
 
-    bind_quotes(text, citations)
-    attach_claim_text(text, citations)
-    return citations
+    retained = _select(citations) if _select is not None else citations
+    if not retained:
+        return retained
+    targets = {c.citation_id for c in retained} if _select is not None else None
+    bind_quotes(text, citations, _targets=targets)
+    attach_claim_text(text, citations, _targets=targets)
+    return retained
 
 
 _STATUTE_TYPES = (CitationType.STATUTE,)
@@ -972,14 +978,43 @@ def _unwrap_claim_lines(text):
 
     return _UNWRAP_NEWLINE_RE.sub(replace, text)
 
-def attach_claim_text(text: str, citations: List[Citation]) -> None:
+def attach_claim_text(text: str, citations: List[Citation], *, _targets=None) -> None:
     """원본 claim 계약을 문장별 병합 순회와 긴 문장의 위치 색인으로 계산한다."""
-    located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
-    if not located:
+    target_candidates = citations.originals() if isinstance(citations, _CitationOccurrences) else citations
+    if not any(c.span and (_targets is None or c.citation_id in _targets)
+               and c.type in (CitationType.STATUTE, CitationType.CASE, CitationType.CONSTITUTIONAL)
+               for c in target_candidates):
         return
     unwrapped = _unwrap_claim_lines(text)
+    if _targets is None:
+        located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
+        bounds = iter_sentence_bounds(unwrapped)
+    else:
+        # 최종 반환할 인용이 있는 원래 문장만 구체화한다. 그 문장 안의 중복
+        # 인용도 전부 포함하므로 다음 인용에서 claim을 끝내는 계약은 같다.
+        target_candidates = citations.originals() if isinstance(citations, _CitationOccurrences) else citations
+        target_starts = sorted(c.span[0] for c in target_candidates if c.span and c.citation_id in _targets)
+        bounds, target_index = [], 0
+        for start, end in iter_sentence_bounds(unwrapped):
+            if target_index == len(target_starts):
+                break
+            if target_starts[target_index] < end:
+                bounds.append((start, end))
+                while target_index < len(target_starts) and target_starts[target_index] < end:
+                    target_index += 1
+        starts = [start for start, _ in bounds]
+        located = []
+        candidates = citations.in_bounds(bounds) if isinstance(citations, _CitationOccurrences) else citations
+        for c in candidates:
+            if c.span:
+                index = bisect.bisect_right(starts, c.span[0]) - 1
+                if index >= 0 and c.span[0] < bounds[index][1]:
+                    located.append(c)
+        located.sort(key=lambda c: c.span[0])
+    if not located:
+        return
     c_idx = 0
-    for s_start, s_end in _sentences(unwrapped):
+    for s_start, s_end in bounds:
         while c_idx < len(located) and located[c_idx].span[0] < s_start:
             c_idx += 1
         inside_end = c_idx
@@ -988,6 +1023,8 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
         inside = located[c_idx:inside_end]
         c_idx = inside_end
         if not inside:
+            continue
+        if _targets is not None and not any(c.citation_id in _targets for c in inside):
             continue
         # 작은 문장에서는 기존 split의 상수 비용을 유지한다. 긴 문장만 색인한다.
         indexed = s_end - s_start > 800 and len(inside) > 1
@@ -1001,6 +1038,8 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
             opened = closed = s_start - 1
             comma = clause_start = s_start
         for position, citation in enumerate(inside):
+            if _targets is not None and citation.citation_id not in _targets:
+                continue
             start, end = citation.span
             if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                 if not indexed:
@@ -1100,14 +1139,18 @@ _CASE_TYPES = (CitationType.CASE, CitationType.CONSTITUTIONAL, CitationType.INTE
                CitationType.ADMIN_APPEAL)
 
 
-def bind_quotes(text: str, citations: List[Citation]) -> None:
+def bind_quotes(text: str, citations: List[Citation], *, _targets=None) -> None:
     """직접 인용문을 원본 우선순위로 결합하며 문장마다 위치 색인을 공유한다."""
-    for citation in citations:
+    originals = citations.originals() if isinstance(citations, _CitationOccurrences) else citations
+    for citation in originals:
         citation.quoted_text = None
-    located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
-    if not located or not any(q in text for q in ('"', '“')):
+    if not any(q in text for q in ('"', '“')):
         return
-    original_order = {id(c): i for i, c in enumerate(citations)}
+    located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
+    if not located:
+        return
+    order_key = (lambda c: c.citation_id) if _targets is not None else id
+    original_order = {order_key(c): i for i, c in enumerate(citations)}
     c_idx = 0
     for s_start, s_end in _sentences(text):
         while c_idx < len(located) and located[c_idx].span[0] < s_start:
@@ -1123,7 +1166,7 @@ def bind_quotes(text: str, citations: List[Citation]) -> None:
         starts = [c.span[0] for c in inside]
         cases = [c for c in inside if c.type in _CASE_TYPES]
         case_starts = [c.span[0] for c in cases]
-        by_end = sorted(inside, key=lambda c: (c.span[1], -original_order[id(c)]))
+        by_end = sorted(inside, key=lambda c: (c.span[1], -original_order[order_key(c)]))
         ends = [c.span[1] for c in by_end]
         closes = [m.start() for m in re.finditer(r'\)', text[s_start:s_end])]
         closes = [s_start + at for at in closes]
@@ -1148,7 +1191,7 @@ def bind_quotes(text: str, citations: List[Citation]) -> None:
                 before_idx = bisect.bisect_right(ends, quote.start()) - 1
                 if before_idx >= 0:
                     target = by_end[before_idx]
-            if target is not None:
+            if target is not None and (_targets is None or target.citation_id in _targets):
                 if target.quoted_text is None:
                     target.quoted_text = quote.group(1)
                 else:
@@ -1183,14 +1226,101 @@ def _cell_text(cell: str) -> str:
     return "".join(parts).replace("\n", " ")
 
 
+_CITATION_FIELDS = fields(Citation)
+# 실제 문서 경로의 임시 객체는 공개 스키마와 같은 필드/기본값을 갖는다.
+# 인용마다 별도 instance dict를 할당하지 않고 최종 반환 시 Citation으로 만든다.
+_PendingCitation = make_dataclass(
+    "_PendingCitation", [(field.name, field.type, field) for field in _CITATION_FIELDS], slots=True,
+)
+
+
+class _DuplicateCitation:
+    """반환에서 제외되는 인용도 원래 위치·원문·참조 ID를 가진다."""
+    __slots__ = ("prototype", "citation_id", "raw_text", "span", "attributes", "quoted_text")
+
+    def __init__(self, prototype, citation_id, raw_text, span, attributes=None):
+        self.prototype, self.citation_id = prototype, citation_id
+        self.raw_text, self.span = raw_text, span
+        self.attributes = attributes if attributes is not None else {}
+        self.quoted_text = None
+
+    def __getattr__(self, name):
+        return getattr(self.prototype, name)
+
+
+class _CitationOccurrences:
+    """중복 위치는 배열로 보관하고 순회 시 짧게 쓰는 뷰만 만든다."""
+    def __init__(self):
+        self.values, self.identifiers, self.raw_texts = [], [], []
+        self.starts, self.ends = array('q'), array('q')
+        self.duplicates = bytearray()
+
+    def append(self, citation):
+        duplicate = isinstance(citation, _DuplicateCitation)
+        self.duplicates.append(duplicate)
+        self.values.append(citation.prototype if duplicate else citation)
+        self.identifiers.append(citation.citation_id if duplicate else '')
+        self.raw_texts.append(citation.raw_text if duplicate else '')
+        self.starts.append(citation.span[0] if duplicate else 0)
+        self.ends.append(citation.span[1] if duplicate else 0)
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, index):
+        if self.duplicates[index]:
+            return _DuplicateCitation(self.values[index], self.identifiers[index], self.raw_texts[index],
+                                      (self.starts[index], self.ends[index]))
+        return self.values[index]
+
+    def __iter__(self):
+        for index in range(len(self)):
+            yield self[index]
+
+    def originals(self):
+        for index, duplicate in enumerate(self.duplicates):
+            if not duplicate:
+                yield self.values[index]
+
+    def in_bounds(self, bounds):
+        starts = [start for start, _ in bounds]
+        for index, duplicate in enumerate(self.duplicates):
+            span = None if duplicate else self.values[index].span
+            if not duplicate and span is None:
+                continue
+            start = self.starts[index] if duplicate else span[0]
+            bound = bisect.bisect_right(starts, start) - 1
+            if bound >= 0 and start < bounds[bound][1]:
+                yield self[index]
+
+
 class _CitationBatch:
     """중복 제거가 끝난 뒤 필요한 UUID만 생성한다. 내부 참조도 함께 확정한다."""
-    def __init__(self):
+    def __init__(self, reading=None):
         self.count = 0
+        self.reading = reading
+        self.prototypes = {}
+        self.body = _CitationOccurrences()
 
     def create(self, type, raw_text, **fields):
         self.count += 1
-        return Citation(f'@extraction:{self.count}', type, raw_text, **fields)
+        identifier = f'@extraction:{self.count}'
+        key = None
+        if self.reading is not None and type in (CitationType.STATUTE, CitationType.ACADEMIC) and fields.get('span'):
+            block, _ = self.reading.locate(fields['span'][0])
+            block_id = block.block_id if block is not None else fields.get('block_id')
+            attributes = fields.get('attributes') or {}
+            # _identity와 같은 키. 이 두 유형은 생성 뒤 키 필드가 바뀌지 않는다.
+            key = (str(type), fields.get('canonical_case_number'), fields.get('law_name'), fields.get('article'),
+                   fields.get('paragraph'), fields.get('item'), fields.get('doi'), (fields.get('title') or '').strip(),
+                   attributes.get('rule_number'), block_id)
+            prototype = self.prototypes.get(key)
+            if prototype is not None:
+                return _DuplicateCitation(prototype, identifier, raw_text, fields['span'], attributes)
+        citation = _PendingCitation(identifier, type, raw_text, **fields)
+        if key is not None:
+            self.prototypes[key] = citation
+        return citation
 
     def finish(self, citations):
         identifiers = {}
@@ -1202,7 +1332,8 @@ class _CitationBatch:
             citation.citation_id = final_id(citation.citation_id)
             if 'continued_from' in citation.attributes:
                 citation.attributes['continued_from'] = final_id(citation.attributes['continued_from'])
-        return citations
+        return [Citation(**{field.name: getattr(citation, field.name) for field in _CITATION_FIELDS})
+                for citation in citations]
 
 
 def extract_citations(doc: NormalizedDocument) -> List[Citation]:
@@ -1217,21 +1348,35 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
     reading = build_reading_text(doc)
     out: List[Citation] = []
     seen: set = set()
-    batch = _CitationBatch()
-    for citation in extract_from_text(reading.text, document_id=doc.document_id, _create=batch.create):
+    batch = _CitationBatch(reading)
+
+    def select_body(citations):
+        retained = []
+        for citation in citations.originals():
+            if citation.span:
+                block, _ = reading.locate(citation.span[0])
+                if block is not None:
+                    citation.block_id, citation.page = block.block_id, block.page
+            key = (_identity(citation), citation.block_id)
+            if key not in seen:
+                seen.add(key)
+                retained.append(citation)
+        return retained
+
+    for citation in extract_from_text(reading.text, document_id=doc.document_id, _create=batch.create,
+                                      _select=select_body, _collection=batch.body):
+        block = None
         if citation.span:
             block, offset = reading.locate(citation.span[0])
             if block is not None:
                 citation.block_id, citation.page = block.block_id, block.page
-                citation.attributes["reading_span"] = list(citation.span)
-                citation.span = (offset, offset + citation.span[1] - citation.span[0])
-        key = (_identity(citation), citation.block_id)
-        if key in seen:
-            continue
-        seen.add(key)
+        if block is not None:
+            citation.attributes["reading_span"] = list(citation.span)
+            citation.span = (offset, offset + citation.span[1] - citation.span[0])
         out.append(citation)
 
     _attach_law_alias_candidates(reading.text, out)
+    batch.reading = None
 
     for block in doc.body_blocks():
         if block.block_type != "table":
@@ -1244,12 +1389,12 @@ def extract_citations(doc: NormalizedDocument) -> List[Citation]:
                     continue
                 for citation in extract_from_text(text, document_id=doc.document_id,
                                                   block_id=block.block_id, page=block.page, _create=batch.create):
-                    citation.attributes["table_cell"] = {"table_ref": (block.attributes or {}).get("table_ref"),
-                                                         "row": r_index, "column": c_index}
                     key = (_identity(citation), block.block_id, r_index)
                     if key in seen:
                         continue
                     seen.add(key)
+                    citation.attributes["table_cell"] = {"table_ref": (block.attributes or {}).get("table_ref"),
+                                                         "row": r_index, "column": c_index}
                     out.append(citation)
     return batch.finish(out)
 

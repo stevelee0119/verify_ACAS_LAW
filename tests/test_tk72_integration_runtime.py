@@ -5,11 +5,13 @@ import time
 
 import pytest
 
+from packages.common.enums import CitationType
+from packages.common.schemas import Block, Citation, NormalizedDocument, Page
 from packages.document_engine.reading_text import (
     QUOTE_SPAN_RE, SENTENCE_END_RE, SPACE_MAP, _normalize_spaces, sentence_bounds,
 )
 from packages.legal_engine.citation_extractor import (
-    BARE_PARAGRAPH_REF_RE, LAW_RE, SpanTracker, _law_matches,
+    BARE_PARAGRAPH_REF_RE, LAW_RE, SpanTracker, _law_matches, extract_citations, extract_from_text,
 )
 
 
@@ -110,3 +112,87 @@ def test_anchor_and_sentence_short_repetitions():
         assert len(list(_law_matches(text))) == 1
         assert sentence_bounds(text) == expected
     assert time.perf_counter() - started < 0.1
+
+
+@pytest.mark.parametrize("text", [
+    "김가나, 「합성 논문 제목 첫째」, 학술원, 2024",
+    "이다라·박마바, 「합성 논문 제목 둘째」, 학술원, 2023",
+    "최사아, 「합성 논문 제목 셋째」, 학술원, 2022",
+    "「합성법률」 제17조 및 제18조에 따른다.",
+    "헌재 2024. 1. 2. 2023헌바100 결정에 따른다.",
+    "대법원 2024. 1. 2. 선고 2023다100 판결에 따른다.",
+])
+def test_document_batch_returns_public_citations_and_independent_attributes(text):
+    doc = NormalizedDocument("s", "s.txt", "text/plain", "s",
+                             pages=[Page(1, blocks=[Block("a", text, 1), Block("b", text, 1)])])
+    citations = extract_citations(doc)
+    assert len(citations) >= 2
+    assert {c.block_id for c in citations} == {"a", "b"}
+    assert all(type(c) is Citation and c.citation_id.startswith("CIT_") for c in citations)
+    assert all(c.to_dict()["raw_text"] == c.raw_text for c in citations)
+    assert len({id(c.attributes) for c in citations}) == len(citations)
+    citations[0].attributes["synthetic_mutation"] = True
+    assert "synthetic_mutation" not in citations[1].attributes
+
+
+@pytest.mark.parametrize("author", ["김가나", "이다라", "박마바"])
+def test_academic_citation_still_bounds_a_statute_claim_in_mixed_text(author):
+    text = f"「합성법률」 제17조에 따른 주장, {author}, 「합성 학술 논문 제목」, 학술원, 2024; 「합성법률」 제18조에 따른다."
+    citations = extract_from_text(text)
+    statutes = [c for c in citations if c.type == CitationType.STATUTE]
+    academic = [c for c in citations if c.type == CitationType.ACADEMIC]
+    assert len(statutes) == 2 and len(academic) == 1
+    # 원래 학술 저자 문법은 두 글자 '주장'부터 쉼표 저자 목록으로 잡는다.
+    assert statutes[0].attributes["claim_text"] == "에 따른"
+    assert statutes[1].attributes["claim_text"] == "에 따른다."
+    assert "claim_text" not in academic[0].attributes
+
+
+def test_table_duplicate_keeps_first_cell_per_row_and_all_rows():
+    text = "김가나, 「합성 학술 논문 제목」, 학술원, 2024"
+    table = Block("t", text, 1, block_type="table",
+                  attributes={"cells": [[text, text], [text]], "table_ref": "synthetic-table"})
+    doc = NormalizedDocument("s", "s.txt", "text/plain", "s", pages=[Page(1, blocks=[table])])
+    citations = extract_citations(doc)
+    assert len(citations) == 2
+    assert [c.attributes["table_cell"] for c in citations] == [
+        {"table_ref": "synthetic-table", "row": 0, "column": 0},
+        {"table_ref": "synthetic-table", "row": 1, "column": 0},
+    ]
+    assert all(type(c) is Citation for c in citations)
+
+
+@pytest.mark.parametrize("head", [
+    "「합성법률」 제17조", "『가상규칙』 제23조", "김가나, 「합성 학술 논문 제목」, 학술원, 2024",
+])
+def test_duplicate_quote_target_does_not_transfer_to_retained_citation(head):
+    first = "첫 번째 합성 직접 인용문을 제시한다"
+    second = "다른 두 번째 합성 직접 인용문을 제시한다"
+    text = f'{head}는 "{first}"라고 한다. {head}는 "{second}"라고 한다.'
+    direct = extract_from_text(text)
+    doc = NormalizedDocument("s", "s.txt", "text/plain", "s",
+                             pages=[Page(1, blocks=[Block("a", text, 1)])])
+    actual = extract_citations(doc)
+    assert len(direct) == 2 and len(actual) == 1
+    assert [c.quoted_text for c in direct] == [first, second]
+    assert actual[0].quoted_text == first
+    assert "additional_quotes" not in actual[0].attributes
+
+
+def test_duplicate_in_same_sentence_still_ends_first_claim():
+    text = "「합성법률」 제17조에 따른 첫 주장, 「합성법률」 제17조에 따른 나중 주장."
+    doc = NormalizedDocument("s", "s.txt", "text/plain", "s",
+                             pages=[Page(1, blocks=[Block("a", text, 1)])])
+    actual = extract_citations(doc)
+    assert len(actual) == 1
+    assert actual[0].attributes["claim_text"] == "에 따른 첫 주장,"
+
+
+def test_continued_reference_keeps_discarded_occurrence_identity():
+    text = "「합성법률」 제17조가 있다. 「합성법률」 제17조 및 제18조가 있다."
+    doc = NormalizedDocument("s", "s.txt", "text/plain", "s",
+                             pages=[Page(1, blocks=[Block("a", text, 1)])])
+    actual = extract_citations(doc)
+    assert [c.article for c in actual] == ["17", "18"]
+    head = actual[1].attributes["continued_from"]
+    assert head.startswith("CIT_") and head != actual[0].citation_id

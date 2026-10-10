@@ -301,13 +301,17 @@ SENTENCE_END_RE = re.compile(r"(?<=[다음함임됨])\.(?=\s|$)|\)\.(?=\s|$)|[!?
 _SENTENCE_END_POSITION_RE = re.compile(r"\.(?<=[다음함임됨)]\.)(?=\s|$)|[!?](?=\s|$)|\n")
 
 
-def sentence_bounds(text: str) -> List[Tuple[int, int]]:
-    """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
+def iter_sentence_bounds(text: str):
+    """인용문을 가린 같은 문장 경계를 임시 목록 없이 차례로 반환한다."""
     masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
-    bounds, start = [], 0
+    start = 0
     for end in _SENTENCE_END_POSITION_RE.finditer(masked):
-        bounds.append((start, end.end()))
+        yield start, end.end()
         start = end.end()
     if start < len(text):
-        bounds.append((start, len(text)))
-    return bounds
+        yield start, len(text)
+
+
+def sentence_bounds(text: str) -> List[Tuple[int, int]]:
+    """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
+    return list(iter_sentence_bounds(text))
