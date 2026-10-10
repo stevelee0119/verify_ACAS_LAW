@@ -66,8 +66,11 @@ def verify_rag_candidate(
     document_text: str,
     sources: List[Dict[str, Any]],
     document_id: Optional[str] = None,
+    is_reference_contradiction: bool = False,
+    claim_id: Optional[str] = None,
+    claim_text: Optional[str] = None,
 ) -> Tuple[Optional[Finding], Optional[Dict[str, str]]]:
-    """RAG 기반 모델 제안 후보를 결정적으로 검증하여 정식 Finding 또는 거부 사유를 반환합니다.
+    """RAG 기반 모델 제안 후보를 결정적으로 검증하여 정식 Finding 또는 거부 사유를 반환합니다. (한국어 주석)
 
     1) 서면 본문에 claim_quote가 실제로 존재하는가?
     2) 참고자료 원문에 basis_quote가 실제로 존재하는가?
@@ -99,6 +102,61 @@ def verify_rag_candidate(
         return None, {"candidate_id": candidate.candidate_id, "reason": "BASIS_QUOTE_NOT_GROUNDED_IN_SOURCE"}
 
     source_title = candidate.source_title or source.get("title") or candidate.source_id or "참고자료"
+
+    if is_reference_contradiction:
+        # TK-70: Drive 참고자료 '모순' 의견 조건부 승격 (D4 개정: LOW, C등급, SUSPICIOUS)
+        finding_title = f"내부 참고자료 대조 — 법적 구속력 미판단, 사람 확인 필요: {source_title} — {candidate.explanation[:80]}"
+        detail = (
+            f"서면 주장 '{candidate.claim_quote.strip()[:120]}' 및 참고자료({source_title})의 "
+            f"규정 '{candidate.basis_quote.strip()[:120]}'의 원문 일치가 확인되었습니다. "
+            f"모델 의견: {candidate.explanation.strip()} "
+            f"(참고: 내부 참고자료 대조 결과이며, 공식 법령·판례와 같은 법적 구속력은 판단하지 않았으므로 사람이 최종 확인해야 합니다)"
+        )
+        evidences = [
+            Evidence.create(
+                description="서면 주장 인용 (원문 확인됨)",
+                grade=EvidenceGrade.C,
+                document_id=document_id,
+                excerpt=candidate.claim_quote.strip()[:300],
+                supports=False,
+            ),
+            Evidence.create(
+                description=f"참고자료 규정 원문 ({source_title})",
+                grade=EvidenceGrade.C,
+                document_id=document_id,
+                excerpt=candidate.basis_quote.strip()[:300],
+                supports=True,
+            ),
+        ]
+        finding = Finding.create(
+            type=FindingType.FACT_CONTRADICTION,
+            status=VerificationStatus.SUSPICIOUS,
+            severity=Severity.LOW,
+            evidence_grade=EvidenceGrade.C,
+            title=finding_title,
+            detail=detail,
+            confidence=0.60,
+            confidence_features={
+                "rule_id": "RAG.REFERENCE_CONTRADICTION",
+                "candidate_id": candidate.candidate_id,
+                "source_id": candidate.source_id,
+                "source_title": source_title,
+                "claim_id": claim_id or "",
+                "claim_text": claim_text or candidate.claim_quote,
+                "claim_quote": candidate.claim_quote,
+                "basis_quote": candidate.basis_quote,
+                "model_name": candidate.model_name,
+                "human_review": True,
+            },
+            document_id=document_id,
+            engine=ENGINE_NAME,
+            tags=["RAG", "MODEL_CANDIDATE", "HUMAN_REVIEW_REQUIRED", "INTERNAL_REFERENCE_ONLY"],
+            advisory_only=False,
+            evidence=evidences,
+        )
+        return finding, None
+
+    # 기존 TK-09 후보 승격 경로 (MEDIUM, B등급)
     finding_title = f"모델 의견(인용문 일치 확인): {source_title} — {candidate.explanation[:80]}"
     detail = (
         f"서면 주장 '{candidate.claim_quote.strip()[:120]}' 및 참고자료({source_title})의 "
