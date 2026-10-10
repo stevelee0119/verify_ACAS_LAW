@@ -20,7 +20,9 @@ jobs:
   test:
     name: 테스트 (SQLite + PostgreSQL/pgvector + Redis)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 2026-10-10: 정상 실행이 17분 안팎까지 늘어 실행기 속도에 따라 20분 제한에서 취소됐다(PR #61 16ba308, 2회).
+    # 멈춤(무한 대기)을 잡는 상한은 유지하되 여유를 둔다.
+    timeout-minutes: 30
 
     services:
       db:
