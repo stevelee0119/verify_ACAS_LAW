@@ -342,3 +342,43 @@ def test_tk70_risk_index_and_gate_invariance(tmp_path, monkeypatch):
     score, _ = risk_index(result.all_findings)
     assert score == 0
     assert score == risk_index(findings_without_promo)[0]
+
+
+def test_tk70_pipeline_run_contradiction_promotion_five_cases(tmp_path, monkeypatch):
+    """PR b3efb73 호환 시험: 5건 관찰 종합 파이프라인 검증 (한국어 주석)."""
+    test_tk70_deduplication_grouping_same_claim_and_source(tmp_path, monkeypatch)
+
+
+def test_tk70_pipeline_run_switch_toggle(tmp_path, monkeypatch):
+    """PR b3efb73 호환 시험: 스위치 토글 검증 (한국어 주석)."""
+    test_tk70_switch_disabled_no_promotion(tmp_path, monkeypatch)
+
+
+def test_tk70_pipeline_run_multiple_sources_promoted(tmp_path, monkeypatch):
+    """PR b3efb73 호환 시험: 복수 출처 승격 검증 (한국어 주석)."""
+    test_tk70_positive_three_cases_promoted_to_low_c_suspicious(tmp_path, monkeypatch)
+
+
+def test_tk70_candidate_verifier_rejection_reasons():
+    """PR b3efb73 호환 시험: 결정론 검증 거부 사유 검증 (한국어 주석)."""
+    doc_text = "제10조: 지체상금률 1/1000을 납부한다."
+    sources = [{"source_id": "REF1", "title": "참고자료", "text": "지체상금률 0.5/1000 규정."}]
+    cand1 = ModelCandidate(
+        claim_quote="지체상금률 1/1000을 납부한다.",
+        defect_type="FACT_CONTRADICTION",
+        basis_quote="원문에 없는 가짜 인용문",
+        source_id="REF1",
+    )
+    f1, rej1 = verify_rag_candidate(cand1, doc_text, sources, is_reference_contradiction=True)
+    assert f1 is None
+    assert rej1["reason"] == "BASIS_QUOTE_NOT_GROUNDED_IN_SOURCE"
+
+    cand2 = ModelCandidate(
+        claim_quote="서면에 없는 가짜 주장",
+        defect_type="FACT_CONTRADICTION",
+        basis_quote="지체상금률 0.5/1000 규정.",
+        source_id="REF1",
+    )
+    f2, rej2 = verify_rag_candidate(cand2, doc_text, sources, is_reference_contradiction=True)
+    assert f2 is None
+    assert rej2["reason"] == "CLAIM_QUOTE_NOT_GROUNDED_IN_DOCUMENT"
