@@ -1571,3 +1571,21 @@ ACADEMIC_RE 저자 상한 `{0,9}`로 저자 11/12명의 선행 저자가 빠지�
 |---|---|---|---|---|
 | 10-09 | 온라인 서면9 20/23(a8b2a7e·2판) | TK-63 배포·TK-64/65/71 수용 | TK-66·TK-71 후보 회귀 배포 전 해소 | 당시 조건별 기록 유지 |
 | 10-10 | 수용분 고정81.7/79.2/0; TK-72 79.9/77.3/0 | TK-56 수용·TK-74 일반 캐시복구/수용 | TK-74 캐시 회귀 해소; TK-72 점수/API 회귀 미수용 | TK-74 관련32통과·CI 인용; #73 최신CI/독립감사/사용자승인 별도 |
+
+
+# TK-72 최종 보완 수용·평가 통합 (2026-10-10)
+
+대상 **PR #72 최종 SHA `df4a9c003b0f42cb4faf180fa05b86bafb286d42`**. 기준 `03fdcdb`; 이전 불승인 `119d4cb`·`8e421c1`·`97dd735`의 결과와 회신은 지우지 않는다. **구현 내용 수용**, 평가 PR #73 병합 커밋 **`4acea3bf2079e61c0087a1911f10478e9f5afdfd`**. 판정 근거는 동일 SHA 필수 CI 인용, 공개 합성 출력 호환성·API·성능 증거, 평가 브랜치 통합 확인이다.
+
+| 수용 기준 | 최종 확인 | 판정 |
+|---|---|---|
+| 이전 점수/API 회귀 회복 | CI 11 checks 성공; dev/holdout 81.7/79.2, 오탐0; TC-02/HO-02 recall 0.682/0.833. 기존 `ACADEMIC_RE.finditer/group`와 `ACADEMIC_BODY_RE` 복구 | 충족 |
+| 기존 출력 필드·저자 계약 | `03fdcdb` 대비 공개 합성 136종 × 텍스트/문서 실제 경로 272건 전체 JSON 필드 차이0. 랜덤 citation ID/계속참조 ID만 정규화. 쉼표/가운뎃점·11/12/250명 포함 | 충족 |
+| 사용자 승인 예외 | 두 자리 연도 헌재 `CONSTITUTIONAL/결정` 분류를 기준 `CASE/판결`과 분리해 별도 3건으로 확인 | 승인 범위 안 |
+| 실제 반복 경로·경계 | 32,000 citations·992,000자·2,272,000 bytes 0.693295초; 80KB 공백·가운뎃점·접속사와 8,000회 학술/혼합 반복이 기존 제한 아래. 80,000개 개행 구간도 동일 추출 계약으로 통과 | 충족 |
+| CI·시험 무결성 | 동일 SHA 점수 게이트 2개, SQLite/worker·Postgres/Celery·OCR/Docker 매트릭스 및 Sourcery 포함 필수 11개 성공. 778 passed/1 기존 OCR 조건부 skip, 기존 시험/보호 경로 변경 없음 | 충족 |
+| 통합 전체 모드 | full `verify_all`은 로컬 환경 차이로 종료1. 원본: acceptance 1011 passed/3 UI 실패, regression ledger591/0, score/regression/hardcoding/test-edit/protected/version 통과, full tests5979 passed/22 실패, browser122 passed/74 실패. Python3.11.15/Tesseract5.5.0이 CI와 다르고 Chromium sandbox/profile/socket 제한 확인. 권한 허용 + 기존 browser cache에서 acceptance UI 3건 및 UI 시험 묶음 통과. 마운트 감지 시험 1건은 현재 `/tmp` 마운트 격리에서 계속 실패하며 TK-72 변경과 무관 | 원본 실패 보존; 코드 수용은 CI·직접 기준으로 함 |
+
+따라서 **TK-72 제출 내용은 수용**하되 local full 종료1을 성공으로 바꾸거나 숨기지 않는다. 통합 SHA `4acea3b`의 PR #73 필수 CI를 확인하고 사용자 승인 후 Steve 반영한다. 운영 `main` `9c1b218`은 유지된다. TK-72는 offline citation extraction 변경이므로 다음 릴리스 전 새 봉인 시험이 필수다. 봉인 채점·Astra 독립 감사·최종 후보 full 검증·버전 판정·사용자 배포 승인은 미완료. TK-75 Claude for Legal은 다음 릴리스 별도 PR·실제 모델 A/B 평가 순서다.
+
+[PR #72 Codex 평가 회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036). 평가 통합은 구현과 다른 Codex 세션에서 했다.

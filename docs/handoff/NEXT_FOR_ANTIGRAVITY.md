@@ -1,9 +1,9 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-10 Codex 평가 측(별도 Codex 구현의 TK-74 30f9f92 내용 수용·평가 통합, TK-72→TK-75 Claude for Legal 다음 릴리스 우선). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-10 Codex 평가 측(별도 Codex 구현의 TK-74 30f9f92·TK-72 df4a9c0 내용 수용·평가 통합, TK-75 Claude for Legal 다음 릴리스 우선). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-10 (62)]
+[Antigravity 작업 — 통합 지시 2026-10-10 (63)]
 
 0. 규칙(AGENTS.md)
  - 시작: 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다. 이미 연 PR은 같은 브랜치에 보완 커밋을 올린다.
@@ -36,8 +36,8 @@
    - 후속 구현은 NEXT_FOR_CODEX 상단의 새 세션 프롬프트가 담당하며 평가·판정·수용분 통합은 별도 Codex 평가 세션이 한다.
    - 최신 판정: https://github.com/stevelee0119/verify_ACAS_LAW/pull/68#issuecomment-6097626696
 
-[F] TK-72 — PR #72 97dd735 재불승인. 같은 사용자 결정으로 **새 Codex 보완 구현 세션에 이관**한다.
-   - 이 PR/브랜치 추가 수정·푸시를 중지하고 이력·원본 실패 기록을 보존한다.
-   - 최신 판정: https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6097288881
-   - Antigravity의 새 구현 작업은 배정하지 않았다. TK-75 Claude for Legal은 별도 Codex 구현 세션이 TK-72 수용 뒤 진행하며 다음 릴리스에 포함한다. 별도 Codex 세션은 TK-74 수용을 마쳤으므로 TK-72 보완을 진행한다. 평가 환경/대화/자료 공유 금지를 유지한다.
+[F] TK-72 — PR #72 **df4a9c0 평가 수용·평가 PR #73 통합(4acea3b)**.
+   - #72 브랜치 추가 수정·푸시를 하지 않는다. 기존 119d4cb·8e421c1·97dd735 불승인 이력과 평가 회신을 보존한다.
+   - 최신 평가 회신: https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036
+   - Antigravity에 TK-72 구현 작업은 배정하지 않았다. 다음 구현은 TK-75 Claude for Legal이며 다음 릴리스에 포함한다. 평가 세션과 구현 세션의 독립성·비공개 자료 경계를 계속 유지한다.
 ```

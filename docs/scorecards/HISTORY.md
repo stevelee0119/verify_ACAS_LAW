@@ -801,3 +801,18 @@
 - **TK-74 실제 파일 경로 측정(30f9f92):** 연결 도구로 받은 사용자 XLSX를 저장소 밖에서 기본 isolated_extract·관측 메타데이터/다운로드 오프라인 대역으로 sync한 결과. 이름 선별false·Drive 본문 검색 빈 결과 조건, 시작03fdcdb 다운로드0/색인0행. 제출 cold sync4회: **1139/2021/2913/3556행**, 각 **25.826/25.627/25.597/22.360초**, PARTIAL/PARTIAL/PARTIAL/INDEXED, 다운로드누적1/2/3/4. 합성 문서3개 각각 단일 행 MATCH/METADATA_MISMATCH/NOT_IN_REFERENCE, prose sources0; 새 library 캐시 재사용1·추가 다운로드0·3556행 유지. 티켓 인용 사건은 실제 원문 표기0건으로 NOT_IN_REFERENCE. 과거3555행 기록과 이번 파일3556행을 구분한다. 첫 실제 대조의 중복 행은 기존 lookup_records 동일 사건 계약 때문에 날짜 불일치 가정에 실패; 원본 보존 후 단일 행 대상으로 경로를 확인했고 helper/제품/시험 기대값 변경 없음. 전체 행 정확성 감사·온라인 제품 Drive 인증/API/모델/서면9 점수 측정이 아님. [사용자 승인 보충 회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/68#issuecomment-6097715680).
 
 - **Claude for Legal 다음 릴리스 우선순위 변경(2026-10-10 사용자 결정):** TK-75 신규 배정, TK-72 수용→TK-75 구현/실제 모델 평가 수용→최종 후보 검증/릴리스 순서로 변경. 공개 참조95bdacc803aa5cfdb10f35e5b9fb2d4b11100133/Apache-2.0, 기본 미국법 예시의 한국법 조정·기존 모델/공식 자료/스키마/PII/예산 유지. 구현/평가 중 OFF·수용 후 릴리스 활성화·OFF 되돌림 및 실제 모델 동일조건 A/B 수용 필요. 사전 기존 F3/라우터/잘림 계약 평가 c3296eb, Linux/Python3.11.15·오프라인·기존 브라우저 캐시 설정, **59 passed in 5.64s**. 이는 기존 요구 충돌 점검이며 새 제품 구현·모델 품질 향상 측정은 아니다. TK-44/49 보호 시험 준비/TK-73 사전 점검 가능, 추가 제품 구현은 이번 릴리스 준비 뒤. Codex 전달문22·Antigravity62·등록부/릴리스 절차 갱신, 다음 후보 포함 대상8건(기존7+TK-75), 구현·평가 독립/새 봉인/최종 사용자 승인 유지.
+
+
+## 40. TK-72 최종 보완 수용·평가 통합 (2026-10-10)
+
+**대상:** PR #72 최종 SHA `df4a9c003b0f42cb4faf180fa05b86bafb286d42`, 기준 공개 코드 `03fdcdb`, 시작 보완 SHA `97dd735`. **내용 수용** 및 평가 브랜치 병합 `4acea3bf2079e61c0087a1911f10478e9f5afdfd`. 기존 `119d4cb`·`8e421c1`·`97dd735` 불승인, 점수/시험/저자 필드 실패와 해당 PR 회신은 이력으로 보존한다. 구현·평가 같은 계열(별도 세션)이며 비공개 평가 자료는 구현 측에 주지 않았다.
+
+| 기준 | 확인 결과 | 판정 |
+|---|---|---|
+| API·추출 필드 호환 | `ACADEMIC_RE.finditer/group`, `ACADEMIC_BODY_RE` 경로 복구. 쉼표 저자 단일 요소·가운뎃점 저자 분리 계약 포함, 전체 JSON 해시 272개(공개 기준 대비 136 합성 입력 × 텍스트/문서 경로) 차이 0. 승인된 두 자리 연도 헌재 `CONSTITUTIONAL/결정` 변경은 별도 3종 시험 | 충족 |
+| 점수·회귀 게이트 | 같은 SHA CI 11개 성공. dev 81.7, holdout 79.2, 오탐0, TC-02/HO-02 recall 0.682/0.833. 97dd735 점수 회귀(79.9/77.3) 회복 | 충족(CI 인용) |
+| 실제 반복 경로 성능 | 32,000건·992,000자·2,272,000 UTF-8 bytes 0.693295초. 80KB 빈 줄 3종 0.035906/0.031766/0.038298초. 학술 8,000회 0.150282초·혼합 8,000회 0.824417초 | 충족(제출 공개 증거) |
+| 시험 무결성·공개 보호 | 관련 27파일 778 passed/1 기존 OCR 조건부 skip. 보호 경로 변경·기존 시험 삭제/표시 변경 없음. PR SHA CI 점수/acceptance/regression·Docker 통합 성공 | 충족 |
+| 평가 브랜치 전체 검증 | 통합 `4acea3b`와 동일 트리의 로컬 후보 `604dd44`에서 full `verify_all` 종료1: acceptance 1011 passed/3 UI 실패, 원장591 passed, 점수·회귀·하드코딩·시험 편집·보호 경로·버전 게이트 통과, full tests5979 passed/22 실패, browser122 passed/74 실패. Python3.11.15/Tesseract5.5.0 환경 차이. 제한 샌드박스에서 Chromium socket/profile 권한 실패. 권한 허용 환경에서 acceptance UI 3건 및 UI 시험 묶음 재확인 통과. 기존 `test_mount_detection_uses_the_filesystem_not_the_path` 1건은 현재 `/tmp` 마운트 격리에서 계속 실패했으며 TK-72 변경 파일과 무관 | 환경 보완 결과 분리; 원본 종료1 보존 |
+
+[최종 구현 요청/점수/성능 증거](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036). 평가 통합 SHA `4acea3b`를 기존 PR #73에 포함한다. Steve ad25f51 병합·운영 main 9c1b218 배포 전이다. 오프라인 인용 추출 엔진 변경이므로 다음 릴리스의 새 봉인 시험은 필수이며 사용자가 작성/보관/실행한다. TK-75 Claude for Legal의 실제 모델 A/B 평가 후 최종 후보 전체 검증·새 봉인·버전 판정·사용자 배포 승인을 진행한다.

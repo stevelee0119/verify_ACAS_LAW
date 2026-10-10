@@ -4,7 +4,7 @@
 티켓 번호는 발견한 문제 수다. 해소 여부·회귀(구현 수정이 새로 만든 결함)·재발은 아래처럼 따로 센다.
 
 - 전체 75건 · 회귀 24건 · 미해결(open·accepted·merged·known_open) 14건
-- 상태별: open 6 · accepted 2 · merged 4 · known_open 2 · deployed 61 · closed 0
+- 상태별: open 5 · accepted 3 · merged 4 · known_open 2 · deployed 61 · closed 0
 - 해소일(deployed_on·closed_on)은 2026-10-10 이후 기록분만 있다. 그 전 해소 건은 날짜 미상이라 주간 해소 수에 들어가지 않는다.
 
 ## 주별
@@ -40,10 +40,10 @@
 | TK-57 | known_open | existing | 2026-10-04 | 필수 게이트 8F-1 해소·배포. intl_paren 원본 1/54는 국가코드 범위 참고 잔여(가입자 가림·실제 도달 0), 신규 배정 없음 |
 | TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
 | TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
-| TK-72 | open | existing | 2026-10-10 | PR #72 97dd735 재불승인. 필수 CI 종료·실패, 고정 79.9/77.3/0·학술 API 4실패·32k 1.028416초·authors 필드 7변경; 관련 12실패/63통과. 혼합 시간·헌재 회복. 사용자 결정으로 새 Codex 보완 구현 세션 이관, Antigravity 추가 푸시 중지. TK-74 30f9f92 수용 후 별도 Codex 구현의 다음 보완 항목. 수용/통합 전 |
+| TK-72 | accepted | existing | 2026-10-10 | PR #72 df4a9c003b0f42cb4faf180fa05b86bafb286d42 내용 수용·평가 PR #73 통합4acea3b. 동일 SHA CI 11개 성공·고정81.7/79.2/오탐0·합성272건 차이0(승인된 헌재 예외 별도)·32k 실제 추출0.693295초. full verify_all 종료1은 환경 실패 원본으로 보존; 3 acceptance UI와 UI 시험 묶음은 허용 환경에서 통과, 마운트 시험 1건은 로컬 실행환경 실패. Steve 병합·새 봉인·배포 전. 이전 불승인 SHA 유지. |
 | TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
 | TK-74 | accepted | existing | 2026-10-10 | PR #68 30f9f92 내용 수용·평가 #73 통합51e042c. 공개 합성32통과·필수 CI11개 성공·고정81.7/79.2/0. 일반 TXT/PDF/DOCX 캐시 검색 회귀 해소; 이전 실패/교체1건 승인 유지. Steve 병합/운영 배포 전. 별도 Codex 구현은 TK-72로 진행, 평가 환경 독립 유지 |
-| TK-75 | open | existing | 2026-10-10 | 사용자 2026-10-10 결정: Claude for Legal 한국법 검토 워크플로우를 다음 릴리스에 포함. 별도 Codex 구현이 TK-72 수용 뒤 새 PR로 진행. 기존 모델/보안/스키마/호출 예산 유지·실제 모델 A/B 품질 개선 수용 필요. 구현/효과/수용/배포 전 |
+| TK-75 | open | existing | 2026-10-10 | 사용자 2026-10-10 결정: Claude for Legal 한국법 검토 워크플로우를 다음 릴리스에 포함. TK-72 수용·평가 통합 완료; 별도 Codex 구현 세션이 최신 Steve에서 새 PR로 진행. 기존 모델/보안/스키마/호출 예산 유지·실제 모델 A/B 품질 개선 수용 필요. 구현/효과/수용/배포 전 |
 
 ## 읽는 법
 - 회귀 비율이 줄면 수정 과정의 품질 관리가 나아지는 것이다. 성능(처음 보는 문서의 탐지율)은 고정 비공개 벤치마크로 따로 본다(`FIXED_BENCHMARK.md`).
