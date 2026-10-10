@@ -18,8 +18,8 @@
 
 `build_review_comparison_request(request, korean_profile=False/True, reference_date=...)`는 같은 마스킹된 입력·참고자료·관할/기준일·schema·temperature·출력 한도·metadata를 갖는 두 요청을 만든다. 오직 system이 다르다. 네트워크 호출·채점·자동 이중 실행을 하지 않는다. 비교 요청은 기존 LLMRouter를 거치며 동일 Anthropic 모델과 외부 AI 정책/예산/시간 상한을 유지한다.
 
-실제 스위치 끔/켬 운영 비교도 별도로 실시한다. 끔에는 새 context가 없으므로 이 비교는 전체 효과이며 순수 지침 효과와 구분한다. OpenAI/Gemini는 이번 개선 대상이 아니고 fallback 계약 및 회귀 대조군이다. 실행 기록의 모델·usage·cost_status·latency·실패/격리/재시도와 실행 전체 벽시계 시간을 함께 확인한다.
+릴리즈 후 Render에서는 실제 스위치 끔/켬 운영 비교를 기본으로 한다. 끔에는 새 context가 없으므로 이 비교는 전체 효과이며 순수 지침 효과와 구분한다. 위 빌더를 사용하는 별도 지침 비교는 선택 사항이다. OpenAI/Gemini는 이번 개선 대상이 아니고 fallback 계약 및 회귀 대조군이다. 실행 기록의 모델·usage·cost_status·latency·실패/격리/재시도와 실행 전체 벽시계 시간을 함께 확인한다.
 
-법률 품질 개선과 평균 비용/p95 지연 각각 최대 20% 증가라는 사용자 조건은 별도 실제 평가로 확인한다. 모델 자기평가·문장 길이·대역 시험·고정 오프라인 점수만으로 개선을 판정하지 않는다. 수용 전 운영 스위치를 켜거나 병합·배포하지 않는다.
+최신 사용자 결정에 따라 실제 품질·비용·지연은 릴리즈 후 API 키가 설정된 Render 환경에서 대표 입력으로 종합 평가한다. 20% 비용·p95 지연 증가 기준은 참고 목표이며 자동 합격/탈락 조건이 아니다. 릴리즈 전에는 구현/보호 계약과 같은 SHA의 필수 CI 및 기존 승인 절차를 확인하고 기본 꺼짐으로 릴리즈한다. 실제 A/B 결과를 릴리즈 전 필수 조건으로 요구하지 않는다. 평가 시 제한적으로 켜고 결과에 따라 계속 사용/보완/복귀를 결정한다. 모델 자기평가·문장 길이·대역 시험·고정 오프라인 점수만으로 개선을 판정하지 않는다.
 
 [보완 설계](../docs/handoff/requests/korean_law_review_revision_design.md), [출처/라이선스 및 SHA 변경 사유](../docs/handoff/requests/korean_law_review_profile_sources.md), [다중 모델/MCP 결정](../docs/handoff/requests/korean_law_review_multimodel_design.md), [영향 분석·채택 기준](../docs/handoff/requests/korean_law_review_impact_analysis.md), [평가 인계](../docs/handoff/requests/korean_law_review_evaluation_handoff.md).
