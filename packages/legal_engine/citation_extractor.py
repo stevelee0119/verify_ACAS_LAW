@@ -53,9 +53,9 @@ BARE_CASE_RE = re.compile(rf"(?P<case_no>{CASE_NO_RE})\s*(?P<kind>판결|결정|
 CONST_RE = re.compile(
     rf"(?P<court>헌법\s?재판소|헌재)\s*(?P<date>{DATE_RE})?\s*"
     # 일련번호 자릿수를 제한하면 뒷자리가 잘린 다른 사건번호가 된다(2018헌바 90044 → 2018헌바9004). 숫자 경계까지 읽는다.
-    rf"(?P<case_no>(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*\d{{1,6}}(?!\d))"
+    rf"(?P<case_no>(?:(?:19|20)\d{{2}}|\d{{2}})\s*헌\s*[가-힣]{{1,2}}\s*\d{{1,6}}(?!\d))"
     # 병합 표기: 2004헌마554·566(병합), 2011헌바379 등(병합), 2004헌마554, 2004헌마566(병합)
-    rf"(?P<merged>(?:\s*[·ㆍ,]\s*(?:(?:19|20)\d{{2}}\s*헌\s*[가-힣]{{1,2}}\s*)?\d{{1,6}}(?!\d))*\s*(?:등\s*)?\(\s*병합\s*\))?"
+    rf"(?P<merged>(?:\s*[·ㆍ,]\s*(?:(?:(?:19|20)\d{{2}}|\d{{2}})\s*헌\s*[가-힣]{{1,2}}\s*)?\d{{1,6}}(?!\d))*\s*(?:등\s*)?\(\s*병합\s*\))?"
     rf"\s*(?P<kind>결정|전원재판부)?"
 )
 
@@ -194,9 +194,9 @@ def _admin_rule_citation(text: str, anchor_start: int, anchor_end: int, *, agenc
 
 
 # 법령해석례 / 행정심판재결례
-# 기관명이 없을 때는 '법령해석' 또는 '유권해석'으로 직접 시작하도록 하여 공백 구간에서의 제곱 시간 역추적 방지 (TK-72)
+# 03fdcdb 원본 구조를 유지하여 앞 공백 경계 어긋남으로 인한 중복 추출(1건->2건) 방지 (TK-72)
 INTERPRETATION_RE = re.compile(
-    r"(?:(?P<authority>법제처|법무부|국방부|행정안전부)\s*)?(?:법령해석|유권해석)\s*(?:례)?\s*"
+    r"(?P<authority>법제처|법무부|국방부|행정안전부)?\s*(?:법령해석|유권해석)\s*(?:례)?\s*"
     r"(?P<no>\d{2}\s*-\s*\d{4}(?!\d))?"
 )
 # "국방부 법무관리관실 2025. 4. 31.자 유권해석", "○○부 2024. 3. 2. 질의회신"
@@ -216,21 +216,65 @@ ADMIN_APPEAL_RE = re.compile(
 )
 # 학술: 저자, 「제목」, 학술지 권(호), 연도 / DOI
 DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
-# 학술: 저자, 「논문 제목」 또는 『단행본 제목』, 게재지·출판사, 연도
-#
-# 국내 표기 관행은 논문에 「」, 단행본에 『』를 쓴다. 『』가 빠져 있어
-# 단행본 인용(예: 홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)이
-# 전혀 추출되지 않았다. 단행본은 권·호가 없으므로 그 부분도 선택으로 둔다.
-# 저자 목록은 상한 없이 전원을 보존(* 복원)하며, 가운뎃점 반복 백트래킹은 제목 앵커 유한 창 탐색으로 해결한다 (TK-72).
-ACADEMIC_RE = re.compile(
-    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3})*)\s*,\s*"
+
+# 학술: 제목 낫표/따옴표 및 후속 출판정보 정규식 (백트래킹 없는 결정적 구조, TK-72)
+ACADEMIC_BODY_RE = re.compile(
     r"(?:[「『\"“](?P<title>[^」』\"”]{5,120})[」』\"”])\s*,\s*"
     r"(?P<journal>[가-힣A-Za-z\s]{2,40}?)\s*"
     r"(?:제?\s*(?P<volume>\d+)\s*권)?\s*(?:제?\s*(?P<issue>\d+)\s*호)?\s*[,(]?\s*"
     r"(?P<year>(?:19|20)\d{2})"
 )
-# 학술자료 제목 앵커 패턴: 제목 낫표/따옴표를 선행 탐색하여 O(1) 유한 창에서만 저자를 검사한다 (TK-72)
-ACADEMIC_TITLE_ANCHOR_RE = re.compile(r"[「『\"“][^」』\"”]{5,120}[」』\"”]")
+AUTHOR_TOKEN_RE = re.compile(r"^[가-힣][가-힣○△□*]{1,3}$")
+
+
+def _parse_authors_backward(text_before_comma: str) -> Tuple[Optional[List[str]], Optional[int]]:
+    """제목 앞 쉼표 이전 텍스트에서 뒤에서 앞으로(오른쪽->왼쪽) 유효 저자 목록을 선형 추출한다 (TK-72).
+
+    저자 수 상한 및 창 크기 상한 없이 문장 경계까지의 모든 저자를 선형(O(N))으로 온전히 보존하며,
+    앞쪽에 악성 가운뎃점(·)이나 공백이 반복되더라도 비저자 위치에서 즉시 중단되어 O(1) 시간에 완료된다. (한국어 주석)
+    """
+    last_break = max(
+        text_before_comma.rfind("\n"),
+        text_before_comma.rfind("."),
+        text_before_comma.rfind("?"),
+        text_before_comma.rfind("!"),
+        text_before_comma.rfind(";"),
+        -1,
+    )
+    cand = text_before_comma[last_break + 1:]
+    cand_offset = last_break + 1
+
+    i = len(cand)
+    authors: List[str] = []
+    author_start_in_cand = -1
+
+    while i > 0:
+        while i > 0 and cand[i - 1].isspace():
+            i -= 1
+        if i == 0:
+            break
+        tok_end = i
+        while i > 0 and not cand[i - 1].isspace() and cand[i - 1] not in "·,ㆍ":
+            i -= 1
+        token = cand[i:tok_end]
+        if not AUTHOR_TOKEN_RE.match(token):
+            break
+        authors.append(token)
+        author_start_in_cand = i
+        while i > 0 and cand[i - 1].isspace():
+            i -= 1
+        if i > 0 and cand[i - 1] in "·,ㆍ":
+            i -= 1
+        else:
+            break
+
+    if not authors:
+        return None, None
+
+    authors.reverse()
+    full_start = cand_offset + author_start_in_cand
+    return authors, full_start
+
 
 QUOTE_RE = re.compile(r"[“\"]([^”\"]{10,600})[”\"]")
 
@@ -252,58 +296,55 @@ def _quote_near(text: str, index: int, window: int = 400) -> Optional[str]:
 class SpanTracker:
     """구간 겹침 검사를 이진 탐색으로 수행하는 선형/로그 시간 색인 (TK-72).
 
-    이미 소비된 인용 구간들을 정렬 보존하여, 신규 구간과의 겹침 여부를 O(log N) 시간에 판정한다.
-    패턴 간 구간 추가 시 list.insert의 O(N^2) 메모리 이동 비용을 없애기 위해,
-    대기 목록(pending)에 추가 후 O(N) 투 포인터 병합을 수행한다. (한국어 주석)
+    각 정규식 패턴(K≈10) 내부에서는 finditer 순서상 단조 증가하므로 O(1) append하고,
+    패턴 종료 시 seal_pattern()을 통해 기존 정렬 목록과 단 1회 O(N) 투 포인터로 병합한다.
+    패턴 간 전환 시에만 병합하므로 전체 병합 비용은 O(K * N) = O(N) 선형 시간이 보장된다. (한국어 주석)
     """
-    __slots__ = ("starts", "ends", "pending_starts", "pending_ends")
+    __slots__ = ("starts", "ends", "cur_starts", "cur_ends")
 
     def __init__(self) -> None:
         self.starts: List[int] = []
         self.ends: List[int] = []
-        self.pending_starts: List[int] = []
-        self.pending_ends: List[int] = []
+        self.cur_starts: List[int] = []
+        self.cur_ends: List[int] = []
 
-    def _flush(self) -> None:
-        """대기 중인 신규 구간 목록을 기존 정렬 목록과 O(N) 투 포인터로 병합한다."""
-        if not self.pending_starts:
+    def seal_pattern(self) -> None:
+        """현재 패턴에서 수집된 신규 구간 목록을 기존 정렬 목록과 O(N) 투 포인터로 병합한다."""
+        if not self.cur_starts:
             return
         if not self.starts:
-            self.starts = self.pending_starts
-            self.ends = self.pending_ends
-            self.pending_starts = []
-            self.pending_ends = []
+            self.starts = self.cur_starts
+            self.ends = self.cur_ends
+            self.cur_starts = []
+            self.cur_ends = []
             return
-        # 두 개의 이미 정렬된 구간 리스트를 O(N) 단일 패스로 병합 정렬
         merged_starts: List[int] = []
         merged_ends: List[int] = []
         i, j = 0, 0
         n_old = len(self.starts)
-        n_new = len(self.pending_starts)
+        n_new = len(self.cur_starts)
         while i < n_old and j < n_new:
-            if self.starts[i] <= self.pending_starts[j]:
+            if self.starts[i] <= self.cur_starts[j]:
                 merged_starts.append(self.starts[i])
                 merged_ends.append(self.ends[i])
                 i += 1
             else:
-                merged_starts.append(self.pending_starts[j])
-                merged_ends.append(self.pending_ends[j])
+                merged_starts.append(self.cur_starts[j])
+                merged_ends.append(self.cur_ends[j])
                 j += 1
         if i < n_old:
             merged_starts.extend(self.starts[i:])
             merged_ends.extend(self.ends[i:])
         if j < n_new:
-            merged_starts.extend(self.pending_starts[j:])
-            merged_ends.extend(self.pending_ends[j:])
+            merged_starts.extend(self.cur_starts[j:])
+            merged_ends.extend(self.cur_ends[j:])
         self.starts = merged_starts
         self.ends = merged_ends
-        self.pending_starts = []
-        self.pending_ends = []
+        self.cur_starts = []
+        self.cur_ends = []
 
     def overlaps(self, start: int, end: int) -> bool:
-        """기존 구간 중 [start, end)와 겹치는 구간이 있는지 판정한다."""
-        if self.pending_starts:
-            self._flush()
+        """기존 구간 중 [start, end)와 겹치는 구간이 있는지 O(log N) 판정한다."""
         if not self.starts:
             return False
         idx = bisect.bisect_right(self.starts, start)
@@ -316,16 +357,9 @@ class SpanTracker:
         return False
 
     def add(self, start: int, end: int) -> None:
-        """새 구간을 추가한다. 단조 증가 시 바로 append하여 insert 비용을 방지한다."""
-        if not self.starts and not self.pending_starts:
-            self.starts.append(start)
-            self.ends.append(end)
-        elif not self.pending_starts and start >= self.starts[-1]:
-            self.starts.append(start)
-            self.ends.append(end)
-        else:
-            self.pending_starts.append(start)
-            self.pending_ends.append(end)
+        """새 구간을 현재 패턴 목록에 추가한다. 단조 증가 시 바로 append."""
+        self.cur_starts.append(start)
+        self.cur_ends.append(end)
 
     def append(self, span: Tuple[int, int]) -> None:
         """기존 consumed.append((start, end)) 인터페이스와의 호환 래퍼."""
@@ -365,10 +399,10 @@ def extract_from_text(
                     context=text[max(0, m.start() - 120):m.end() + 200],
                 ))
                 consumed.append((m.start(), m.end()))
+            consumed.seal_pattern()
 
-    # 1) 헌재 (헌법재판소/헌재/헌 관련 키워드가 있을 때만 수행)
-    if any(k in text for k in ("헌재", "헌법재판소", "헌")):
-        for m in CONST_RE.finditer(text):
+    # 1) 헌재 (키워드 선행 차단 없이 원본 정규식의 선택성을 온전히 보존, TK-72)
+    for m in CONST_RE.finditer(text):
             citations.append(
                 Citation.create(
                     CitationType.CONSTITUTIONAL,
@@ -388,57 +422,59 @@ def extract_from_text(
                 )
             )
             consumed.append((m.start(), m.end()))
+    consumed.seal_pattern()
 
-    # 2) 완전한 판례 인용 및 3) 법원명 없는 판례 인용 (판결/결정/명령/선고 등 종결어가 있을 때만 수행)
-    if any(k in text for k in ("판결", "결정", "명령", "선고", "자")):
-        for m in FULL_CASE_RE.finditer(text):
-            if overlaps(m.start(), m.end()):
-                continue
-            case_no = m.group("case_no")
-            citations.append(
-                Citation.create(
-                    CitationType.CASE,
-                    (f"{m.group('court').strip()} {text[m.start('date'):m.end()].strip()}" if m.group("particle")
-                     else m.group(0).strip()),
-                    document_id=document_id,
-                    block_id=block_id,
-                    page=page,
-                    span=(m.start(), m.end()),
-                    court=_court_name(m.group("court")),
-                    decision_date=canonical_date(m.group("date")),
-                    case_number=re.sub(r"\s+", "", case_no),
-                    canonical_case_number=canonical_case_number(case_no),
-                    case_kind=(m.group("kind") or "판결").replace("선고", "판결"),
-                    quoted_text=quote_near(m.end()),
-                    context=text[max(0, m.start() - 120) : m.end() + 200],
-                )
+    # 2) 완전한 판례 인용 및 3) 법원명 없는 판례 인용 (종결어 없는 판례도 원본과 동일하게 100% 정상 추출, TK-72)
+    for m in FULL_CASE_RE.finditer(text):
+        if overlaps(m.start(), m.end()):
+            continue
+        case_no = m.group("case_no")
+        citations.append(
+            Citation.create(
+                CitationType.CASE,
+                (f"{m.group('court').strip()} {text[m.start('date'):m.end()].strip()}" if m.group("particle")
+                 else m.group(0).strip()),
+                document_id=document_id,
+                block_id=block_id,
+                page=page,
+                span=(m.start(), m.end()),
+                court=_court_name(m.group("court")),
+                decision_date=canonical_date(m.group("date")),
+                case_number=re.sub(r"\s+", "", case_no),
+                canonical_case_number=canonical_case_number(case_no),
+                case_kind=(m.group("kind") or "판결").replace("선고", "판결"),
+                quoted_text=quote_near(m.end()),
+                context=text[max(0, m.start() - 120) : m.end() + 200],
             )
-            if m.group("case_name"):
-                citations[-1].attributes["case_name"] = m.group("case_name")
-            consumed.append((m.start(), m.end()))
+        )
+        if m.group("case_name"):
+            citations[-1].attributes["case_name"] = m.group("case_name")
+        consumed.append((m.start(), m.end()))
+    consumed.seal_pattern()
 
-        for m in BARE_CASE_RE.finditer(text):
-            if overlaps(m.start(), m.end()):
-                continue
-            case_no = m.group("case_no")
-            citations.append(
-                Citation.create(
-                    CitationType.CASE,
-                    m.group(0).strip(),
-                    document_id=document_id,
-                    block_id=block_id,
-                    page=page,
-                    span=(m.start(), m.end()),
-                    court=None,
-                    decision_date=None,
-                    case_number=re.sub(r"\s+", "", case_no),
-                    canonical_case_number=canonical_case_number(case_no),
-                    case_kind=m.group("kind"),
-                    quoted_text=quote_near(m.end()),
-                    context=text[max(0, m.start() - 120) : m.end() + 200],
-                )
+    for m in BARE_CASE_RE.finditer(text):
+        if overlaps(m.start(), m.end()):
+            continue
+        case_no = m.group("case_no")
+        citations.append(
+            Citation.create(
+                CitationType.CASE,
+                m.group(0).strip(),
+                document_id=document_id,
+                block_id=block_id,
+                page=page,
+                span=(m.start(), m.end()),
+                court=None,
+                decision_date=None,
+                case_number=re.sub(r"\s+", "", case_no),
+                canonical_case_number=canonical_case_number(case_no),
+                case_kind=m.group("kind"),
+                quoted_text=quote_near(m.end()),
+                context=text[max(0, m.start() - 120) : m.end() + 200],
             )
-            consumed.append((m.start(), m.end()))
+        )
+        consumed.append((m.start(), m.end()))
+    consumed.seal_pattern()
 
     # 4-1) 행정규칙 (훈령, 예규, 고시, 지침이 있을 때만 수행)
     if any(k in text for k in ADMIN_RULE_KINDS):
@@ -465,6 +501,7 @@ def extract_from_text(
                 number=m.group("number"), name=name, document_id=document_id, block_id=block_id, page=page,
                 **located))
             consumed.append((start, end))
+        consumed.seal_pattern()
 
     # 4) 법령 (조문 "조"가 있을 때만 수행)
     previous_law: Optional[str] = None
@@ -553,35 +590,41 @@ def extract_from_text(
         # 4-2) 앞 인용의 조를 가리키는 표현 해결
         _resolve_article_references(text, citations, consumed, overlaps, document_id=document_id,
                                     block_id=block_id, page=page)
+        consumed.seal_pattern()
 
-    # 5) 학술자료: 제목 낫표/따옴표 앵커 기반 유한 창 탐색 (TK-72)
+    # 5) 학술자료: 결정적 제목/출판정보 본문 매칭 후 저자 역방향 선형 파싱 (TK-72 한국어 주석)
+    # 저자 수 상한이나 유한 창 크기 상한 없이 모든 저자를 온전히 보존하며 백트래킹을 배제한다.
     if any(q in text for q in ("「", "『", '"', "“")):
-        for tm in ACADEMIC_TITLE_ANCHOR_RE.finditer(text):
-            w_start = max(0, tm.start() - 600)
-            w_end = min(len(text), tm.end() + 200)
-            window = text[w_start:w_end]
-            for m in ACADEMIC_RE.finditer(window):
-                g_start = w_start + m.start()
-                g_end = w_start + m.end()
-                if overlaps(g_start, g_end):
-                    continue
-                authors = [a.strip() for a in re.split(r"·", m.group("authors")) if a.strip()]
-                citations.append(
-                    Citation.create(
-                        CitationType.ACADEMIC,
-                        m.group(0).strip(),
-                        document_id=document_id,
-                        block_id=block_id,
-                        page=page,
-                        span=(g_start, g_end),
-                        title=m.group("title").strip(),
-                        authors=authors,
-                        journal=m.group("journal").strip(),
-                        year=int(m.group("year")),
-                        context=text[max(0, g_start - 80) : g_end + 120],
-                    )
+        for m in ACADEMIC_BODY_RE.finditer(text):
+            body_start = m.start()
+            prefix = text[:body_start].rstrip()
+            if not prefix.endswith(","):
+                continue
+            text_before_comma = prefix[:-1]
+            authors, auth_start = _parse_authors_backward(text_before_comma)
+            if not authors or auth_start is None:
+                continue
+            g_start = auth_start
+            g_end = m.end()
+            if overlaps(g_start, g_end):
+                continue
+            citations.append(
+                Citation.create(
+                    CitationType.ACADEMIC,
+                    text[g_start:g_end].strip(),
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(g_start, g_end),
+                    title=m.group("title").strip(),
+                    authors=authors,
+                    journal=m.group("journal").strip(),
+                    year=int(m.group("year")),
+                    context=text[max(0, g_start - 80) : g_end + 120],
                 )
-                consumed.append((g_start, g_end))
+            )
+            consumed.append((g_start, g_end))
+        consumed.seal_pattern()
 
     # DOI (10. 키워드가 있을 때만 수행)
     if "10." in text:
@@ -601,6 +644,7 @@ def extract_from_text(
                 )
             )
             consumed.append((m.start(), m.end()))
+        consumed.seal_pattern()
 
     bind_quotes(text, citations)
     attach_claim_text(text, citations)
@@ -705,12 +749,13 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
                     stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
                     claim = unwrapped[end:stop]
                     # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
-                    lead = _LEAD_STRIP_RE.sub("", before).split()
+                    lead = _LEAD_STRIP_RE.sub("", before).split() if any(ch in before for ch in "0123456789.)") else before.split()
                     if lead:
                         subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
                         if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):
                             citation.attributes["claim_subject"] = subject
-            citation.attributes["claim_text"] = " ".join(claim.split())[:400]
+            clean_claim = " ".join(claim.split()) if ("  " in claim or "\n" in claim or "\t" in claim) else claim.strip()
+            citation.attributes["claim_text"] = clean_claim[:400]
 
 
 @lru_cache(maxsize=4096)

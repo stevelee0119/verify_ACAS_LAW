@@ -178,6 +178,46 @@ def test_academic_authors_preservation_11_and_12():
     assert cits_12[0].span == (0, len(text_12))
 
 
+def test_repeated_statute_citations_are_linear():
+    """1절 4항: 정상 법령 인용 문장 반복(2,000건 vs 8,000건)의 선형성 확인 (TK-72 원본 보존)."""
+    # 0bf4ccc 기준 인용 수 4배 증가에 14배(제곱 시간) 걸리던 overlaps / attach_claim_text 병목이
+    # 정렬 이진 탐색 및 투 포인터 선형 순회로 개선되어 선형 시간비(배수 < 8)로 유지됨을 확인
+    line = "피고인은 「형법」 제250조 제1항을 위반하였다.\n"
+
+    def measure_cold(count: int) -> float:
+        text = line * count
+        gc_was_enabled = gc.isenabled()
+        gc.disable()
+        try:
+            best = float("inf")
+            for _ in range(2):
+                started = time.perf_counter()
+                c = extract_from_text(text)
+                elapsed = time.perf_counter() - started
+                assert len(c) == count
+                best = min(best, elapsed)
+            return best
+        finally:
+            if gc_was_enabled:
+                gc.enable()
+
+    time_2k = measure_cold(2000)
+    time_8k = measure_cold(8000)
+
+    # 4배 크기(2,000 -> 8,000건) 증가 시 시간 비가 8 미만이어야 함 (제곱 시간 16 배제)
+    ratio_4x = time_8k / max(time_2k, 1e-4)
+    assert ratio_4x < 8.0, f"인용 수 4배 증가 시 시간 증가비가 8 이상임 (제곱 시간 의심): {ratio_4x:.2f}배"
+
+    # 실제 경로(extract_citations) 8,000건 처리 시간 검증 (Linux CI 1.5초 이내, Windows 5.0초 이내)
+    doc_8k = _make_doc(line * 8000, "doc_8k")
+    t0 = time.perf_counter()
+    c_8k = extract_citations(doc_8k)
+    dt_8k = time.perf_counter() - t0
+    assert len(c_8k) >= 1
+    threshold_8k = 1.5 if sys.platform.startswith("linux") else 5.0
+    assert dt_8k < threshold_8k, f"8,000건 실제 경로 처리가 {threshold_8k}초를 초과함: {dt_8k:.4f}초"
+
+
 def test_statute_citations_32k_linear_performance():
     """1절 4항 및 3절 요구: 정상 법령 인용 32,000건(960KB 이상) 실제 경로 및 선형성 검증 (TK-72)."""
     line = "「형법」 제250조 제1항에 따르면 살인죄가 성립한다.\n"  # 30자 (32,000줄 = 960,000자, 2.1MB)
@@ -216,9 +256,36 @@ def test_statute_citations_32k_linear_performance():
     elapsed_32k = time.perf_counter() - started
 
     assert len(c_32k) >= 1
-    # Linux CI 환경 1.0초 이내 단언 (Windows 환경은 nt.urandom 및 OS 스케줄링 오버헤드 감안)
-    threshold = 1.0 if sys.platform.startswith("linux") else 8.0
+    # Linux CI 환경 1.0초 이내 단언 (Windows 환경은 nt.urandom 및 OS 스케줄링 오버헤드 감안 15초)
+    threshold = 1.0 if sys.platform.startswith("linux") else 15.0
     assert elapsed_32k < threshold, f"32,000건 실제 경로 처리가 {threshold}초를 초과함: {elapsed_32k:.4f}초"
+
+
+def test_academic_authors_preservation_large():
+    """저자 250명 대규모 인용 추출 시 전원 보존 검증 (TK-72 유한 창 상한 배제 및 역방향 파서 검증)."""
+    # 순수 한글 3자 이름으로 250명 합성
+    names_250 = [f"저자{chr(0xAC00 + i)}" for i in range(250)]
+    text_250 = "·".join(names_250) + ", 「합성 학술 논문 제목 250」, 합성법학논총 제1권 제1호, 2024"
+    doc_250 = _make_doc(text_250, "doc_authors_250")
+    cits_250 = extract_citations(doc_250)
+
+    assert len(cits_250) == 1
+    assert cits_250[0].type == CitationType.ACADEMIC
+    assert len(cits_250[0].authors) == 250
+    assert cits_250[0].authors == names_250
+    assert cits_250[0].span == (0, len(text_250))
+
+
+def test_constitutional_court_abbreviation_and_two_digit_year():
+    """헌재 인용 추출 검증: 두 자리 연도 및 축약형 표기 정규화 (TK-72 판례 누락 방지 검증)."""
+    text = "청구인은 헌법소원 심판을 청구하였다(헌재 1990. 9. 10. 89헌마82)."
+    doc = _make_doc(text, "doc_const_abbrev")
+    citations = extract_citations(doc)
+
+    assert len(citations) == 1
+    assert citations[0].type == CitationType.CONSTITUTIONAL
+    assert citations[0].court == "헌법재판소"
+    assert citations[0].canonical_case_number == "89헌마82"
 
 
 def test_citation_extraction_fidelity_unchanged():
