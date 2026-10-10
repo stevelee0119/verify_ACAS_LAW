@@ -42,6 +42,10 @@
 
 완료 판정: TK-43 e4867e7·TK-70 db21f19 수용·Steve 통합 완료. TK-74 c6d0f19는 설계 조건부 승인이고 신규 구현 39973f1은 불승인·보완 대기다. Codex 통합 e10a335 full 원본 종료 1(도구 환경 1실패)과 환경 보완 별도 2 passed는 그대로 보존한다. 다음 릴리스는 TK-24·TK-69·TK-43 등 오프라인 엔진 변경을 포함하므로 새 봉인을 생략하지 않는다.
 
+## 5-1. 추가 운영 항목(2026-10-10 사용자 지시)
+- **고정 비공개 벤치마크:** [FIXED_BENCHMARK](../scorecards/FIXED_BENCHMARK.md). 작성 프롬프트 [PROMPT_FOR_CODEX_FIXED_BENCHMARK](PROMPT_FOR_CODEX_FIXED_BENCHMARK.md)(격리 세션). 측정 `scripts/fixed_benchmark.py`, 기록 `docs/scorecards/fixed_benchmark_log.jsonl`. 결과로 티켓을 만들지 않는다.
+- **티켓 지표:** 판정·병합·배포·닫힘 때마다 `docs/scorecards/ticket_registry.json`의 상태와 날짜를 갱신하고 `python scripts/ticket_metrics.py`로 [TICKET_METRICS](../scorecards/TICKET_METRICS.md)를 다시 만든다. 새 티켓을 만들면 등록부에 넣는다(`--check`가 빠진 티켓을 잡는다). 재발은 `recurrence_of`로 잇는다.
+
 ## 6. 보고 규칙(사용자 지시, CLAUDE.md 요약)
 - 평가 결과마다 `docs/scorecards/DAILY_TREND.md` 갱신, 최근 행 제시.
 - 구현 측 전달문은 `NEXT_FOR_ANTIGRAVITY.md`·`NEXT_FOR_CODEX.md`를 통째로 갱신하고 그 내용을 보인다.

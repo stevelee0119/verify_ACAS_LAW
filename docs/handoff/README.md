@@ -243,3 +243,4 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **평가 역할 전환 재확인(2026-10-10, 사용자 지시):** Codex 평가 세션이 기존 claude-code의 측정·판정·회신·수용 SHA 통합·통합 검증·평가 PR·릴리스 준비 전체를 승계한다. 구현 세션 분리·제품 직접 수정 금지·사용자 최종 승인 유지. TK-70 수용 SHA db21f19를 b92100d로 통합했고 PR #69를 갱신한다. 전달문 Antigravity (54)·Codex (16). 과거 claude-code 측정 기록은 역사적 출처로 보존.
 
 - **TK-43·TK-70 Codex 평가 통합(PR #69, e10a335):** 통합 검증·보호 지표 유지 확인, full 원본의 도구 환경 실패 1과 환경 보완 재검증을 분리 기록. 검증 e10a335 필수 CI 모두 성공·통합 내용 수용. 최종 기록 SHA의 필수 CI는 PR #69 체크 상태로 확인하고 성공 뒤 사용자 병합 승인 단계로 넘긴다. 현재 평가·통합·PR·릴리스 준비 담당은 Codex 평가 세션.
+- **측정 체계 추가(2026-10-10, 사용자 지시):** 고정 비공개 벤치마크([FIXED_BENCHMARK](../scorecards/FIXED_BENCHMARK.md), 작성 프롬프트 [PROMPT_FOR_CODEX_FIXED_BENCHMARK](PROMPT_FOR_CODEX_FIXED_BENCHMARK.md), `scripts/fixed_benchmark.py`)와 티켓 지표([TICKET_METRICS](../scorecards/TICKET_METRICS.md), 등록부 `ticket_registry.json`, `scripts/ticket_metrics.py`). 초기값: 티켓 74건·회귀 24건·미해결 13건, 주별 회귀 비율 W40 36% → W41 20%.
