@@ -2,9 +2,10 @@
 
 These closed sets supplement the existing candidate stopwords. Sources describe
 the categories; they are not live dictionaries and introduce no download or
-morphological-analysis dependency. Supplemental nouns use complete candidates
-only; the legacy single-particle exclusions are not expanded. Do not use
-substring or prefix exclusion, including a prefix exposed by particle removal.
+morphological-analysis dependency. Supplemental nouns use complete original
+words, optionally with one grammatical particle. The standard-name ambiguity
+guard is defined in detector.py. Do not use substring/prefix exclusion or
+recursive particle removal; legacy stopword rules remain separate.
 """
 
 # Category: procedural acts, disposition, and stated intent in proceedings.
