@@ -26,6 +26,7 @@ from packages.document_engine.reading_text import build_reading_text, sentence_b
 
 from .legal_rules import load_rules
 from .polarity import ASSERTED, NEGATED, polarity
+from .statutory_exclusion import exclusion_clauses
 
 ENGINE_NAME = "legal_engine.claim_review"
 
@@ -36,6 +37,7 @@ PROVISION_RE = re.compile(
 BARE_PROVISION_RE = re.compile(r"제\s*\d+\s*조")
 # 판례 인용은 사건번호나 '선고'가 있어야 한다. '판결'이라는 낱말만으로는 근거 인용으로 보지 않는다.
 CASE_CITE_RE = re.compile(r"(?:19|20)?\d{2}\s*(?:헌[가-힣]|[가-힣]{1,3})\s*\d{2,6}|선고")
+DIGIT_RE = re.compile(r"\d")
 CITATION_ANY_RE = re.compile(rf"{PROVISION_RE.pattern}|{CASE_CITE_RE.pattern}|제\s*\d+\s*조")
 CONSTITUTION_NAMES = {"헌법", "대한민국헌법", "대한민국 헌법"}
 
@@ -62,6 +64,7 @@ LEGAL_EFFECT_RE = re.compile(
 QUALIFIER_RE = re.compile(r"특별한\s*사정이\s*없는\s*한|원칙적으로|대체로|일반적으로\s*(?:는|은)?\s*(?:[가-힣]+\s*){0,2}한다고\s*보|"
                           r"경우가\s*많|할\s*수\s*있다")
 
+STANDARD_MARKER_RE = re.compile(r"표|기준|가이드라인|지침|매뉴얼|관행|해설서|안내서|편람|핸드북|요령")
 STANDARD_NOUN_RE = re.compile(
     r"(?:[가-힣]{0,12}\s?)(?:산정\s*기준표|판정\s*기준표|기준표|산정\s*기준|산정표|요율표|가이드라인|지침|매뉴얼|업무\s*기준|내부\s*기준|실무\s*기준|"
     r"업계\s*(?:기준|관행)|표준\s*[가-힣]{0,6}표|판정\s*기준|해설서|안내서|편람|핸드북|업무\s*(?:처리\s*)?요령|실무\s*요령)")
@@ -176,7 +179,11 @@ def _is_constitution(law: str) -> bool:
 
 
 def _has_citation(*texts: str) -> bool:
-    return any(t and CITATION_ANY_RE.search(t) for t in texts)
+    # Every numeric alternative requires a decimal digit; the only digit-free
+    # alternative is 선고.  Avoid retrying the long provision-name expression
+    # at every word of a sentence that cannot contain any citation.
+    return any(t and ("선고" in t or DIGIT_RE.search(t))
+               and CITATION_ANY_RE.search(t) for t in texts)
 
 
 # 앞 문장의 인용은 이 문장이 앞 문장을 이어받을 때만 근거로 본다('따라서', '이에 따라', '위 판결은' 등).
@@ -301,6 +308,9 @@ def _remedy(sentence: str, in_relief: bool, criminal_doc: bool) -> Optional[Clai
 
 
 def _unsourced_standard(sentence: str) -> Optional[ClaimMatch]:
+    # Every existing alternative contains one of these terminal markers.
+    if not STANDARD_MARKER_RE.search(sentence):
+        return None
     for noun in STANDARD_NOUN_RE.finditer(sentence):
         if not RELIANCE_RE.match(sentence, noun.end()):
             continue
@@ -325,9 +335,12 @@ def _requirement_exclusion(sentence: str, previous: str) -> Optional[ClaimMatch]
         # 예외 근거는 소송요건의 예외를 정한 조문·판례여야 한다. 헌법의 일반 기본권 조항(재판청구권 등)만 든
         # 경우는 예외 근거로 보지 않는다.
         previous = _linked_previous(sentence, previous)
-        cited = [m for m in PROVISION_RE.finditer(sentence + " " + previous) if not _is_constitution(m.group("law"))]
+        context = sentence + " " + previous
+        has_numeric_citation = bool(DIGIT_RE.search(context))
+        cited = ([m for m in PROVISION_RE.finditer(context) if not _is_constitution(m.group("law"))]
+                 if has_numeric_citation else [])
         other_cite = CASE_CITE_RE.search(sentence) or (previous and CASE_CITE_RE.search(previous))
-        constitutional_only = bool(PROVISION_RE.search(sentence)) and not cited and not other_cite
+        constitutional_only = has_numeric_citation and bool(PROVISION_RE.search(sentence)) and not cited and not other_cite
         if EXCEPTION_BASIS_RE.search(sentence) and not constitutional_only:
             return None
         if (cited or other_cite) and not constitutional_only:
@@ -477,6 +490,7 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
         if not sentence:
             continue
         in_relief = bool(relief and relief[0] <= start < relief[1])
+        chosen = None
         for check in (lambda s: _unconstitutionality(s, lookup), lambda s: _civil_inference(s, previous),
                       lambda s: _generalization(s, previous),
                       lambda s: _remedy(s, in_relief, criminal_doc), _unsourced_standard,
@@ -487,7 +501,21 @@ def classify_claims(text: str, lookup: Optional[HistoryLookup] = None) -> List[C
             if match:
                 match.start = start
                 out.append(match)
+                chosen = match
                 break  # 한 문장은 가장 앞선 유형 하나로만 판정한다(같은 문장 이중 판정 방지)
+        linked = _linked_previous(sentence, previous)
+        legacy_excluded = EXCLUSION_RE.search(text[start:end]) if chosen else None
+        for clause in exclusion_clauses(text[start:end], linked, cited=_has_citation(sentence, linked)):
+            if (chosen and chosen.claim_type == "LITIGATION_REQUIREMENT_EXCLUSION"
+                    and legacy_excluded and clause.start <= legacy_excluded.start() < clause.end
+                    and "".join(clause.target.split()) == chosen.extra.get("requirement")):
+                continue  # Keep the existing classification of this same exclusion proposition.
+            out.append(ClaimMatch(
+                "STATUTORY_RULE_EXCLUSION", text[start + clause.start:start + clause.end].strip(),
+                start + clause.start, "추상적 근거로 법정 규정의 적용 배제 주장", "C", "SUSPICIOUS", [],
+                f"{clause.target}의 적용을 배제한다는 결론에 법정 예외의 요건과 충족 사실을 연결한 근거가 확인되지 않는다. "
+                "정의·형평이나 다른 제도의 유추만으로 적용을 배제할 수 있는지, 관련 법령·판례 및 구체적 요건을 확인해야 한다.",
+                {"excluded_target": clause.target, "exclusion_ground": clause.ground}))
         previous = sentence
     return out
 
@@ -561,6 +589,7 @@ _TYPE_LABELS = {"CIVIL_FRAUD_INFERENCE": "채무불이행과 사기", "DAMAGE_PR
                 "CRIMINAL_PROVISIONAL_EXECUTION": "가집행 참조 대상",
                 "UNCONSTITUTIONALITY": "위헌 주장", "UNSUPPORTED_GENERALIZATION": "전칭 일반화",
                 "NO_BASIS_REMEDY": "근거 없는 청구 유형", "REQUIREMENT_MISMATCH": "조문 요건 불일치",
+                "STATUTORY_RULE_EXCLUSION": "법정 규정 적용 배제",
                 "UNSOURCED_STANDARD": "출처 불명 기준", "LITIGATION_REQUIREMENT_EXCLUSION": "소송요건 배제"}
 
 
@@ -575,7 +604,7 @@ def review_claims(doc: NormalizedDocument, *, lookup: Optional[HistoryLookup] = 
     for match in matches:
         sentence_key = re.sub(r"\s+", "", match.sentence)
         key = (match.claim_type, sentence_key)
-        if (key in seen or sentence_key in skip
+        if (key in seen or (sentence_key in skip and match.claim_type != "STATUTORY_RULE_EXCLUSION")
                 or (match.claim_type == "NO_BASIS_REMEDY" and any(
                     len(s) >= 20 and (s in sentence_key or sentence_key in s) for s in skip))):
             continue

@@ -403,25 +403,40 @@ def extract_from_text(
         article = m.group("article")
         if m.group("article_sub"):
             article = f"{article}의{m.group('article_sub')}"
+
+        # TK-69: 목 인용('…제1호 가목') 뒤에 이어지는 복수 목(열거·범위) 확장
+        ext_end = m.end()
+        attr_dict: Dict[str, Any] = {}
+        if m.group("subitem") and m.group("item"):
+            from .temporal_review import parse_subitem_sequence
+            subitems_seq, consumed_len = parse_subitem_sequence(text[m.end():], m.group("subitem"))
+            if consumed_len > 0:
+                ext_end = m.end() + consumed_len
+            if subitems_seq:
+                attr_dict["subitem"] = subitems_seq[0]
+                attr_dict["subitems"] = subitems_seq
+
+        raw_cit = text[start:ext_end].strip()
         citations.append(
             Citation.create(
                 CitationType.STATUTE,
-                text[start:m.end()].strip(),
+                raw_cit,
                 document_id=document_id,
                 block_id=block_id,
                 page=page,
-                span=(start, m.end()),
+                span=(start, ext_end),
                 law_name=law_name,
                 article=article,
                 paragraph=m.group("paragraph"),
                 item=(f"{m.group('item')}의{m.group('item_sub')}" if m.group("item_sub") else m.group("item")),
-                quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, start - 100) : m.end() + 150],
+                quoted_text=_quote_near(text, ext_end),
+                context=text[max(0, start - 100) : ext_end + 150],
+                attributes=attr_dict if attr_dict else {},
             )
         )
-        consumed.append((m.start(), m.end()))
+        consumed.append((start, ext_end))
         # "제750조 및 제751조", "제3조, 제4조": 법령명 없이 이어진 조문도 같은 법령의 인용이다.
-        head_id, position = citations[-1].citation_id, m.end()
+        head_id, position = citations[-1].citation_id, ext_end
         while (more := CONTINUED_ARTICLE_RE.match(text, position)):
             bridge = text[position:more.start("ref")]
             # 사이에 다른 법령명('형법과')이 있으면 이어진 조문이 아니다('불법행위'의 '불법'은 법령명이 아니다).
