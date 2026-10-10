@@ -204,9 +204,7 @@ def _uncertain_person_value(value: Any, *, explicit_name: bool, name_field: bool
     if _name_like_value(text):
         # Single-name context is checked by the normal detector.
         return False
-    if explicit_name:
-        return True
-    if name_field:
+    if explicit_name or name_field:
         # A grammatical name suffix supplies context even when its subject is
         # unknown. Inspect only a bounded name window, not arbitrary titles or
         # an exception vocabulary. Role-only keys retain their existing contract.
@@ -214,7 +212,9 @@ def _uncertain_person_value(value: Any, *, explicit_name: bool, name_field: bool
             match = pattern.match(text)
             if match and is_valid_korean_name_structure(match.group("name")):
                 return True
-    # Preserve the role-only contract for Korean non-name values.
+    # Name markers do not change a clearly non-name Korean value into a person.
+    # Keep the same value-shape boundary for roles and explicit name fields;
+    # foreign scripts, punctuation and non-string values remain uncertain.
     # A name-shaped first word alone cannot establish the type of a multiword
     # organization. Raw text is still scanned, with no new noun exemptions.
     compact = []
