@@ -37,6 +37,10 @@
 5. 다음 릴리스에는 TK-24·TK-69·TK-43 등 오프라인 엔진 변경이 포함되므로 새 봉인 시험이 필요하다. 별도 격리 작성 세션·사용자 실행 절차를 유지한다. TK-70 단독 RAG 변경에는 봉인이 없지만 묶음 릴리스 요건을 면제하지 않는다.
 6. 배포 후 비공개 온라인 세트 v2·서면9를 여러 실행으로 점검한다. 실제 사용자 Drive 표는 저장소 밖에서 TK-74 수용 때 실제 선별 동기화 경로로 평가한다.
 
+## 5-1. 추가 운영 항목(2026-10-10 사용자 지시)
+- **고정 비공개 벤치마크:** [FIXED_BENCHMARK](../scorecards/FIXED_BENCHMARK.md). 작성 프롬프트 [PROMPT_FOR_CODEX_FIXED_BENCHMARK](PROMPT_FOR_CODEX_FIXED_BENCHMARK.md)(격리 세션). 측정 `scripts/fixed_benchmark.py`, 기록 `docs/scorecards/fixed_benchmark_log.jsonl`. 결과로 티켓을 만들지 않는다.
+- **티켓 지표:** 판정·병합·배포·닫힘 때마다 `docs/scorecards/ticket_registry.json`의 상태와 날짜를 갱신하고 `python scripts/ticket_metrics.py`로 [TICKET_METRICS](../scorecards/TICKET_METRICS.md)를 다시 만든다. 새 티켓을 만들면 등록부에 넣는다(`--check`가 빠진 티켓을 잡는다). 재발은 `recurrence_of`로 잇는다.
+
 ## 6. 보고 규칙(사용자 지시, CLAUDE.md 요약)
 - 평가 결과마다 `docs/scorecards/DAILY_TREND.md` 갱신, 최근 행 제시.
 - 구현 측 전달문은 `NEXT_FOR_ANTIGRAVITY.md`·`NEXT_FOR_CODEX.md`를 통째로 갱신하고 그 내용을 보인다.
