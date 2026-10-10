@@ -154,6 +154,9 @@ class Settings:
         int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
     rule_version: str = "2026.09.30.1"
     prompt_version: str = "v0.2"
+    korean_law_review_profile: bool = field(
+        default_factory=lambda: os.getenv("LV_KOREAN_LAW_REVIEW_PROFILE", "0").strip() == "1"
+    )
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))
     candidate_promotion_enabled: bool = field(
@@ -169,6 +172,9 @@ class Settings:
     pricing: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # 켬/끔 결과를 동일 verification_key로 재사용하지 않는다. 프로그램 버전은 유지한다.
+        if self.korean_law_review_profile and not self.prompt_version.endswith("+kr1"):
+            self.prompt_version += "+kr1"
         data_dir().mkdir(parents=True, exist_ok=True)
         self.storage_root.mkdir(parents=True, exist_ok=True)
         if not self.providers:
