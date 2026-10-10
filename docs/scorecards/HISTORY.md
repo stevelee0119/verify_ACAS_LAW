@@ -714,3 +714,6 @@
   - 필수 상태 확인 이름 `테스트 (SQLite + PostgreSQL/pgvector + Redis)`는 두 작업 결과를 모으는 집계 작업이 이어받는다(둘 다 성공해야 성공). 그래서 `main`·Steve 보호 규칙은 바꾸지 않아도 된다.
   - 예상: 테스트 작업 벽시계 시간 16~18분 → 약 11~12분. 실제 값은 이 변경을 담은 PR의 CI에서 확인한다.
   - 확인: actionlint 통과, 보호 경로 시험·CI 실패 목록 도구 시험 통과.
+- 전달문 Antigravity (51) 전달 완료(사용자, 2026-10-10). PR #64(버전 커밋 0.12.0) 병합(Steve bc8b9c1, 사용자 지시 '64병합'으로 평가 측 실행, 같은 SHA CI 7개 성공·버전 정책 위반 없음). 릴리스 PR #66(Steve → main) 작성.
+- **릴리스 PR #66 CodeQL: 이 PR이 바꾼 코드에 새 경보 3건(모두 high).** 배포 보류. 평가 세션은 코드 스캔 경보를 읽지 못하므로 `scripts/export_security_alerts.py`·`security-export.yml`에 참조 지정(`--ref`, 수동 실행 입력 `ref`)을 추가해 `refs/pull/66/merge` 경보를 읽는다.
+- PR #65 CI 분리 첫 실행(d8204c1): PostgreSQL 작업 8분 11초(시험 단계 7분) 성공. SQLite 작업은 15분 넘게 진행 중에 이 커밋으로 취소됨(동시 실행 CI가 많아 실행기 경합).
