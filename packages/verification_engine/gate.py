@@ -156,6 +156,10 @@ def risk_index(findings: Sequence[Any]) -> (int, List[RiskContribution]):
     for finding in findings:
         if getattr(finding, "advisory_only", False):
             continue
+        # TK-70: 내부 참고자료 대조 모순 승격은 법적 구속력 미판단 참고 의견이므로 검증위험 지수에 산입하지 않음 (한국어 주석)
+        features = getattr(finding, "confidence_features", None) or {}
+        if features.get("rule_id") == "RAG.REFERENCE_CONTRADICTION":
+            continue
         weight = RISK_WEIGHTS.get(finding.type)
         if weight is None:
             continue
@@ -231,7 +235,12 @@ def evaluate_gate(findings: Sequence[Any], *,
     nothing_analyzed는 본문을 하나도 읽지 못한 경우다. 그때 PASS를 주면
     "검증해서 문제 없음"과 "아무것도 못 읽음"이 같은 결론이 된다.
     """
-    active = [f for f in findings if not getattr(f, "advisory_only", False)]
+    # TK-70: 내부 참고자료 대조 모순 승격은 법적 구속력 미판단 참고 의견이므로 검증위험 지수 및 차단 게이트에서 제외 (한국어 주석)
+    active = [
+        f for f in findings
+        if not getattr(f, "advisory_only", False)
+        and (getattr(f, "confidence_features", None) or {}).get("rule_id") != "RAG.REFERENCE_CONTRADICTION"
+    ]
     total, contributions = risk_index(active)
 
     hard: List[str] = []
