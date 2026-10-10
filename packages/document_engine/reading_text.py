@@ -41,6 +41,13 @@ EDGE_ZONE = 0.12       # 쪽 위·아래 12% 안의 줄만 머리글·바닥글 
 FULL_LINE_SLACK = 0.06  # 본문 오른쪽 끝에서 이 비율 안에서 끝나면 '꽉 찬 줄'
 
 
+def _normalize_spaces(text: str) -> str:
+    """같은 길이 공백 치환. 한국어 본문의 모든 글자를 translate로 조회하지 않는다."""
+    for codepoint, replacement in SPACE_MAP.items():
+        text = text.replace(chr(codepoint), replacement)
+    return text
+
+
 def _signature(text: str) -> str:
     """쪽마다 달라지는 숫자를 지운 비교용 서명."""
     return re.sub(r"\d+", "#", re.sub(r"\s+", "", text))
@@ -265,7 +272,7 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
     for block in chosen:
         # 줄바꿈 없는 공백(U+00A0 등)은 같은 길이의 일반 공백으로 바꾼다(위치표는 그대로). PDF 서면은 단어 사이를
         # NBSP로 채우는 경우가 많아, 그대로 두면 법령명·재판유형 같은 같은 말이 서로 다르게 비교된다.
-        text = (block.text or "").strip().translate(SPACE_MAP)
+        text = _normalize_spaces((block.text or "").strip())
         if not text:
             continue
         if previous is not None:
@@ -289,15 +296,22 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
 QUOTE_SPAN_RE = re.compile(r"[“\"]([^”\"\n]{10,600})[”\"]")
 # 문장 끝: "…다." "…함." "…판결)." 줄바꿈(문단). 날짜의 마침표("2003. 5.")는 끝이 아니다.
 SENTENCE_END_RE = re.compile(r"(?<=[다음함임됨])\.(?=\s|$)|\)\.(?=\s|$)|[!?](?=\s|$)|\n")
+# 문장부호를 먼저 찾으면 정규식 엔진이 일반 글자를 한 번에 건너뛴다.
+# 원래 패턴의 ').'와 종료 위치가 같으며 여기서는 시작 위치를 사용하지 않는다.
+_SENTENCE_END_POSITION_RE = re.compile(r"\.(?<=[다음함임됨)]\.)(?=\s|$)|[!?](?=\s|$)|\n")
+
+
+def iter_sentence_bounds(text: str):
+    """인용문을 가린 같은 문장 경계를 임시 목록 없이 차례로 반환한다."""
+    masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
+    start = 0
+    for end in _SENTENCE_END_POSITION_RE.finditer(masked):
+        yield start, end.end()
+        start = end.end()
+    if start < len(text):
+        yield start, len(text)
 
 
 def sentence_bounds(text: str) -> List[Tuple[int, int]]:
     """인용문 안의 마침표에서 끊지 않도록 인용문을 가린 뒤 문장 경계를 찾는다."""
-    masked = QUOTE_SPAN_RE.sub(lambda q: "“" + "x" * (len(q.group(0)) - 2) + "”", text)
-    bounds, start = [], 0
-    for end in SENTENCE_END_RE.finditer(masked):
-        bounds.append((start, end.end()))
-        start = end.end()
-    if start < len(text):
-        bounds.append((start, len(text)))
-    return bounds
+    return list(iter_sentence_bounds(text))
