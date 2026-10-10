@@ -816,3 +816,11 @@
 | 평가 브랜치 전체 검증 | 통합 `4acea3b`와 동일 트리의 로컬 후보 `604dd44`에서 full `verify_all` 종료1: acceptance 1011 passed/3 UI 실패, 원장591 passed, 점수·회귀·하드코딩·시험 편집·보호 경로·버전 게이트 통과, full tests5979 passed/22 실패, browser122 passed/74 실패. Python3.11.15/Tesseract5.5.0 환경 차이. 제한 샌드박스에서 Chromium socket/profile 권한 실패. 권한 허용 환경에서 acceptance UI 3건 및 UI 시험 묶음 재확인 통과. 기존 `test_mount_detection_uses_the_filesystem_not_the_path` 1건은 현재 `/tmp` 마운트 격리에서 계속 실패했으며 TK-72 변경 파일과 무관 | 환경 보완 결과 분리; 원본 종료1 보존 |
 
 [최종 구현 요청/점수/성능 증거](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036). 평가 통합 SHA `4acea3b`를 기존 PR #73에 포함한다. Steve ad25f51 병합·운영 main 9c1b218 배포 전이다. 오프라인 인용 추출 엔진 변경이므로 다음 릴리스의 새 봉인 시험은 필수이며 사용자가 작성/보관/실행한다. TK-75 Claude for Legal의 실제 모델 A/B 평가 후 최종 후보 전체 검증·새 봉인·버전 판정·사용자 배포 승인을 진행한다.
+
+## 41. TK-75 PR #74 1차 평가 보류 (2026-10-10)
+
+대상 SHA `40fd3a9ccd983bcb769f0679108d3090f54583f0`, 기준 Steve `ad25f513fff0891d8f7459caacb6c94d496bc8fc`. PR #74 공개 설명의 제출 시험은 `tests/korean_law_profile` 47 passed in 1.57s, Python 3.12.14. GitHub CI run `38053628460`와 점수 게이트 `38053628517` 모두 성공. 이는 명시된 기능 범위·실제 법률 품질 향상 수용을 입증하지 않는다.
+
+**판정: 보류·미수용·미통합.** 티켓 TK-75 2절은 기존 법률 참고 검토 중 수용된 Claude 경로에만 워크플로우를 적용하고 다른 provider/fallback 계약을 유지하도록 한다. 제출은 `argument_validity_verifier._attach_ai_opinions`의 공통 경로를 Anthropic/OpenAI/Gemini에 모두 적용하고, 지정된 `review_document → LLMRouter.run` 경로와 Claude/fallback 경계를 실제 요청 경로에서 시험하지 않았다. 티켓이 고정한 공개 참조 `95bdacc803aa5cfdb10f35e5b9fb2d4b11100133` 대신 PR 설계·출처표는 `4a6c651889c97cc9140580363c73e0eb17379c2b`를 사용한다. 근거 있는 출처 갱신 또는 티켓 기준에 맞춘 정합이 필요하다.
+
+실제 온라인 한국법 품질·근거·반론·무근거 주장/오탐·누락/유보와 모델별 실제 비용·지연 OFF/ON 평가는 제출에서 미측정이다. 실제 모델·변호사 품질 판정, provider별 토큰/비용/지연 수치, 허용 회귀/비용/지연 임계치 사전고정, 평가 인계 세션 결과는 미수령/미실행. 같은 SHA CI·점수 게이트·새 합성 대역 시험은 이 필수 증거를 대체하지 않는다. 구현 경로/provider 범위와 출처 기록 보완 후 결과 미리보기 전에 평가 기준·표본·반복을 고정하고 실제 동일조건 비교를 해야 한다. PR 회신 [6098611209](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 사용자 병합/릴리스 미승인, 별도 독립 평가·통합 미완료.

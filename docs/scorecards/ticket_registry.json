@@ -301,7 +301,7 @@
   "TK-75": {
    "status": "open",
    "kind": "existing",
-   "note": "사용자 2026-10-10 결정: Claude for Legal 한국법 검토 워크플로우를 다음 릴리스에 포함. TK-72 수용·평가 통합 완료; 별도 Codex 구현 세션이 최신 Steve에서 새 PR로 진행. 기존 모델/보안/스키마/호출 예산 유지·실제 모델 A/B 품질 개선 수용 필요. 구현/효과/수용/배포 전"
+   "note": "사용자 2026-10-10 다음 릴리스 배정. PR #74 40fd3a9 제출; CI/점수 게이트 성공·공개 합성 47건은 제출 보고. 1차 Codex 판정 보류/미수용/미통합: 지정 Claude review_document 경로 대신 공통 argument-validity 경로를 Anthropic/OpenAI/Gemini에 적용, TK-75 고정 참조 SHA와 제출 출처 SHA 불일치, 실제 모델 법률 품질·비용·지연 A/B 미측정. 보완/평가 전 릴리스 제외. 판정 코멘트6098611209."
   }
  },
  "updated_on": "2026-10-10"

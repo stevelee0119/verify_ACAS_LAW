@@ -1589,3 +1589,16 @@ ACADEMIC_RE 저자 상한 `{0,9}`로 저자 11/12명의 선행 저자가 빠지�
 따라서 **TK-72 제출 내용은 수용**하되 local full 종료1을 성공으로 바꾸거나 숨기지 않는다. 통합 SHA `4acea3b`의 PR #73 필수 CI를 확인하고 사용자 승인 후 Steve 반영한다. 운영 `main` `9c1b218`은 유지된다. TK-72는 offline citation extraction 변경이므로 다음 릴리스 전 새 봉인 시험이 필수다. 봉인 채점·Astra 독립 감사·최종 후보 full 검증·버전 판정·사용자 배포 승인은 미완료. TK-75 Claude for Legal은 다음 릴리스 별도 PR·실제 모델 A/B 평가 순서다.
 
 [PR #72 Codex 평가 회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036). 평가 통합은 구현과 다른 Codex 세션에서 했다.
+
+## TK-75 PR #74 1차 평가(2026-10-10)
+
+**대상:** `40fd3a9ccd983bcb769f0679108d3090f54583f0`. **판정: 보류·미수용·미통합.** CI `38053628460` 및 점수 게이트 `38053628517` 성공. 공개 합성시험 47 passed는 구현 제출 보고이나 실제 법률 검토 품질·비용·지연 A/B는 미측정이다.
+
+| 기준 | 확인 결과 | 판정 |
+|---|---|---|
+| TK-75 Claude 경로·fallback 계약 | 티켓 2절은 수용된 기존 Claude 경로에만 적용하고 다른 provider/fallback 계약은 보존하도록 한다. PR은 `verify_argument_validity → _attach_ai_opinions` 공통 요청을 Anthropic/OpenAI/Gemini 전부에 적용하며 요구된 `review_document → LLMRouter.run` 경로의 Claude/fallback 시험이 없다. | 미충족; 보완 필요 |
+| 공개 방법론 출처 고정 | 티켓 고정 SHA `95bdacc803aa5cfdb10f35e5b9fb2d4b11100133`와 PR 설계/출처표의 `4a6c651889c97cc9140580363c73e0eb17379c2b`가 불일치한다. | 미충족; 기준 일치·근거 필요 |
+| 법률 품질·비용·지연 | 실제 동일조건 OFF/ON 법률 품질·근거·반론·무근거 주장/오탐·누락/유보 및 모델별 실측 비용·지연이 없다. | 미측정; 실제 평가 전 수용 불가 |
+| CI·기본 안전 게이트 | 같은 SHA 필수 CI·점수 게이트 성공, 공개 합성시험 47 passed는 제출 보고. | 통과한 범위만 확인; 위 미충족 기준 대체 불가 |
+
+구현 경로/provider 범위 및 참조 출처를 보완하고 결과를 확인하기 전에 고정한 기준으로 실제 모델 A/B 평가를 마친 뒤 재판정한다. [PR 판정 코멘트](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 작성자 PR이라 formal APPROVE 대신 conversation comment를 사용했다.
