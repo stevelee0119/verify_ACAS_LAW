@@ -173,8 +173,8 @@ class Settings:
 
     def __post_init__(self) -> None:
         # 켬/끔 결과를 동일 verification_key로 재사용하지 않는다. 프로그램 버전은 유지한다.
-        if self.korean_law_review_profile and not self.prompt_version.endswith("+kr1"):
-            self.prompt_version += "+kr1"
+        if self.korean_law_review_profile and not self.prompt_version.endswith("+kr2"):
+            self.prompt_version = self.prompt_version.removesuffix("+kr1") + "+kr2"
         data_dir().mkdir(parents=True, exist_ok=True)
         self.storage_root.mkdir(parents=True, exist_ok=True)
         if not self.providers:

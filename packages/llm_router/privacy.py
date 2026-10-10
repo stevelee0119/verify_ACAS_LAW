@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict, List, Set, Tuple
 
 from packages.common.enums import LLMRole
-from packages.legal_engine.argument_validity_verifier import _KOREAN_OPINION_SYSTEM, _OPINION_SCHEMA, _OPINION_SYSTEM
+from packages.legal_engine.argument_validity_verifier import _OPINION_SCHEMA, _OPINION_SYSTEM
 from packages.llm_router.router import SYSTEM_BASE, _VERDICT_SCHEMA
 from packages.pii_engine.detector import (
     PARTY_AND_TITLE_LABELS,
@@ -22,7 +22,7 @@ from packages.pii_engine.detector import (
     detect,
     is_valid_korean_name_structure,
 )
-from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
+from packages.rag_engine.review import ENVELOPE_SCHEMA, ITEM_SCHEMA, KOREAN_RAG_REVIEW_SYSTEM_PROMPT, RAG_REVIEW_SYSTEM_PROMPT, SCHEMA
 from packages.verification_engine.ai_document_detector import AI_DETECTOR_SYSTEM_PROMPT, _DETECTOR_SCHEMA
 
 POLICY_VERSION = "payload-pii-v3"
@@ -155,7 +155,7 @@ REGISTERED_SYSTEM_PROMPT_CONSTANTS: Dict[str, str] = {
     "SYS_AI_DOCUMENT_DETECTOR": AI_DETECTOR_SYSTEM_PROMPT,
     "SYS_RAG_REVIEW": RAG_REVIEW_SYSTEM_PROMPT,
     "SYS_ARGUMENT_OPINION": _OPINION_SYSTEM,
-    "SYS_KOREAN_ARGUMENT_OPINION": _KOREAN_OPINION_SYSTEM,
+    "SYS_KOREAN_RAG_REVIEW": KOREAN_RAG_REVIEW_SYSTEM_PROMPT,
     "SYS_ROUTER_BASE": SYSTEM_BASE,
     "SYS_EMPTY": "",
 }

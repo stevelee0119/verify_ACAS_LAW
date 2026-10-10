@@ -11,6 +11,7 @@ from jsonschema import ValidationError, validate
 from packages.common.enums import ExternalAIPolicy, LLMRole, VerificationProfile
 from packages.document_engine.analysis_text import analysis_text
 from packages.llm_router.providers import LLMRequest
+from .review_profile import KOREAN_REVIEW_METHOD, with_review_context
 
 import re
 
@@ -45,6 +46,7 @@ RAG_REVIEW_SYSTEM_PROMPT = (
     "응답 최상위는 반드시 observations 키를 가진 객체 하나여야 하며, 검토 의견이 단 하나여도 observations 배열에 넣어 반환하라. "
     "출력 형식: " + json.dumps(SCHEMA, ensure_ascii=False)
 )
+KOREAN_RAG_REVIEW_SYSTEM_PROMPT = RAG_REVIEW_SYSTEM_PROMPT + KOREAN_REVIEW_METHOD
 
 
 def _clean_str(s: str) -> str:
@@ -301,6 +303,7 @@ def review_document(result, library, router, context, pii):
         review.update(status="SKIPPED", reason="NO_TEXT_AFTER_REMOVING_INSTRUCTIONS")
         return review
     review["document_truncated"] = bool(review["input"]["omitted_chars"])
+    korean_profile = bool(getattr(getattr(router, "settings", None), "korean_law_review_profile", False))
     selection = library.select(document + "\n" + "\n".join(context.requested_issues))
     hits = selection.pop("sources")
     selection["sources_used"] = [{k: h.get(k) for k in ("source_id", "file_id", "title", "folder_path", "page",
@@ -441,6 +444,7 @@ def review_document(result, library, router, context, pii):
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
             schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls})
+        request = with_review_context(request, enabled=korean_profile, reference_date=getattr(context, "case_date", None))
         # One selected provider; the existing router bounds each call and its transient retries.
         batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                                policy=context.external_ai_policy, expected_task="참고자료 검토"))
@@ -634,6 +638,7 @@ def review_document(result, library, router, context, pii):
             max_tokens=4000,
             metadata={"stage": "claim_rag_advisory", "claim_id": c_id},
         )
+        claim_req = with_review_context(claim_req, enabled=korean_profile, reference_date=getattr(context, "case_date", None))
 
         c_outcome = asyncio.run(router.run(
             LLMRole.PRIMARY_REASONER, claim_req,

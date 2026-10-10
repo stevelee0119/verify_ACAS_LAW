@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import date
 from typing import Any, Callable, Dict, List, Optional
 
 from packages.common.confidence import score as confidence_score
@@ -243,7 +242,6 @@ async def verify_argument_validity(
     external_ai_policy: ExternalAIPolicy = ExternalAIPolicy.MASKED,
     mask: Optional[Callable[[str], str]] = None,
     semantic_reviews: Optional[List[Dict[str, Any]]] = None,
-    reference_date: Optional[str] = None,
 ) -> ArgumentValidityResult:
     """허위 판례 인용 및 법률 주장에 대한 타당성 종합 검토를 수행하고 대조표를 생성한다."""
     result = ArgumentValidityResult()
@@ -458,8 +456,7 @@ async def verify_argument_validity(
                        and router.has_available_provider(policy=external_ai_policy))
     cases_for_ai = [item for item in unverified_cases if item.get("basis") != "OFFICIAL_CONFIRMED"]
     if can_use_llm and cases_for_ai:
-        await _attach_ai_opinions(result, cases_for_ai, router, external_ai_policy, mask,
-                                  reference_date=reference_date)
+        await _attach_ai_opinions(result, cases_for_ai, router, external_ai_policy, mask)
 
     if result.rows:
         counts = {basis: sum(r.basis == basis for r in result.rows)
@@ -550,50 +547,6 @@ _OPINION_SYSTEM = (
     '"legal_reasoning": "...", "recommended_check": "..."}]}'
 )
 
-# Methodology adapted and rewritten for Korean law by ACASia_LAW.
-# Copyright 2026 Anthropic PBC; Apache-2.0. Source commit and selections:
-# docs/handoff/requests/korean_law_review_profile_sources.md
-_KOREAN_OPINION_SYSTEM = _OPINION_SYSTEM + (
-    "\n한국법 검토 프로필 kr1: 관할은 대한민국이다. 검토 맥락의 기준일을 명시하고 미지정이면 "
-    "현재 날짜로 대체하지 말고 시간적 적용을 유보하라. 미국법의 실체 규칙·소송 절차를 적용하지 마라.\n"
-    "분석 순서: 쟁점 → 적용 요건 → 문서 사실 → 근거 원문 → 적용 차이·반론 → 불확실성. "
-    "legal_reasoning에 이 순서를 짧게 표시하되 기존 분량 제한을 지켜라. "
-    "claim_text는 [당사자 주장], 문서에 적힌 사실은 [문서 기재 사실], 법적 연결은 [모델 추론]으로 "
-    "구분하라. 문서 기재를 입증된 사실로 승격하지 마라.\n"
-    "위의 '인용을 빼고 볼 때' 검토도 제공된 원문·요건에 근거해야 한다. 공식 DB 확인 상태와 원문 "
-    "대조가 모델 지식·의견 일치보다 우선하며 확인 상태는 변경하지 마라. 요건별로 사실·출처 위치를 "
-    "연결하고 누락·상충·발췌 한계를 밝혀라. 원문 없음을 부존재나 허위로 단정하지 마라. "
-    "자료가 부족하면 validity_verdict는 판단 불가, recommended_check는 필요한 사실·원문·연혁을 적어라.\n"
-    "제공 자료에 없는 사건번호·조문·인용문을 생성하지 마라. 인용문은 제공 원문의 정확한 문자열만 "
-    "사용하라. 사실 차이·예외 요건·가장 강한 반론과 그 반론을 뒷받침하거나 해소할 자료를 검토하되 "
-    "새 사실·법적 근거를 만들어 반론을 채우지 마라. 자기평가 점수는 쓰지 마라."
-)
-
-_OFFICIAL_SOURCE_CHARS = 6000
-
-
-def opinion_review_context(reference_date: Optional[str] = None) -> Dict[str, Any]:
-    """고정 관할·명시 기준일만 사용한다. 동적 값은 system 지침에 넣지 않는다."""
-    when = None
-    if isinstance(reference_date, str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", reference_date):
-        try:
-            when = date.fromisoformat(reference_date).isoformat()
-        except ValueError:
-            pass
-    return {"jurisdiction": "대한민국", "reference_date": when,
-            "reference_date_status": "EXPLICIT" if when else "UNSPECIFIED"}
-
-
-def build_opinion_request(items: List[Dict[str, Any]], *, korean_profile: bool = False,
-                          review_context: Optional[Dict[str, Any]] = None) -> LLMRequest:
-    """비교 시 같은 items/context를 양쪽에 전달한다. 호출·채점은 하지 않는다."""
-    payload = {"items": items}
-    if review_context is not None:
-        payload["review_context"] = review_context
-    return LLMRequest(system=_KOREAN_OPINION_SYSTEM if korean_profile else _OPINION_SYSTEM,
-                      user=json.dumps(payload, ensure_ascii=False), temperature=0.1,
-                      max_tokens=4096, schema=_OPINION_SCHEMA)
-
 
 def _answer_provider(answer) -> str:
     execution = next((e for e in reversed(answer.executions) if getattr(e, "provider", "")), None)
@@ -601,8 +554,7 @@ def _answer_provider(answer) -> str:
 
 
 async def _retry_truncated_singly(router: Any, replies: List[Any], batch: List[Dict[str, Any]],
-                                  policy: ExternalAIPolicy, *, korean_profile: bool = False,
-                                  review_context: Optional[Dict[str, Any]] = None) -> List[Any]:
+                                  policy: ExternalAIPolicy) -> List[Any]:
     if len(batch) < 2:
         return []
     providers = [p for p in (_answer_provider(a) for a in replies) if p]
@@ -612,8 +564,8 @@ async def _retry_truncated_singly(router: Any, replies: List[Any], batch: List[D
     for provider in (p for p in truncated if p):
         others = [p for p in providers if p != provider]
         for item in batch:
-            single = build_opinion_request([item], korean_profile=korean_profile,
-                                           review_context=review_context)
+            single = LLMRequest(system=_OPINION_SYSTEM, user=json.dumps({"items": [item]}, ensure_ascii=False),
+                                temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA)
             reply = await router.run(LLMRole.PRIMARY_REASONER, single, policy=policy, exclude=others,
                                      expected_task="법률 주장 타당성 검토")
             if _answer_provider(reply) == provider or not reply.executions:
@@ -623,16 +575,13 @@ async def _retry_truncated_singly(router: Any, replies: List[Any], batch: List[D
 
 async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: List[Dict[str, Any]],
                               router: Any, policy: ExternalAIPolicy,
-                              mask: Optional[Callable[[str], str]], *,
-                              reference_date: Optional[str] = None) -> None:
+                              mask: Optional[Callable[[str], str]]) -> None:
     """사용 가능한 모델 모두에게 묻고, 항목별 의견과 일치 여부를 행에 붙인다."""
     from packages.llm_router.providers import _extract_json
 
     from packages.llm_router.router import failure_summary
 
     hide = mask or (lambda text: text)
-    enabled = getattr(getattr(router, "settings", None), "korean_law_review_profile", False) is True
-    review_context = opinion_review_context(reference_date) if enabled else None
     items = [{
         "item_id": index,
         "page": item["citation"].page or 1,
@@ -641,32 +590,20 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
         "surrounding_context_and_claim": hide(item["context"][:1000]),
         **({"원문 대조(어절 단위, 원문 기준)": hide(item["quote_diff"])} if item.get("quote_diff") else {}),
     } for index, item in enumerate(unverified_cases, 1)]
-    if enabled:
-        row_ids = {row.citation_id: row.item_id for row in result.rows}
-        for prepared, item in zip(items, unverified_cases):
-            # 공식 확인 행은 모델 검토에서 빠진다. 원래 표의 행 ID를 보존한다.
-            prepared["item_id"] = row_ids.get(item["citation"].citation_id, prepared["item_id"])
-            source = str((item.get("verdict", {}).get("official_record") or {}).get("full_text") or "")
-            source = hide(source)  # 식별정보·지시문 제거 뒤 자른다(경계에서 식별자가 잘리지 않도록).
-            prepared["official_source"] = {
-                "text": source[:_OFFICIAL_SOURCE_CHARS],
-                "provided": bool(source), "truncated": len(source) > _OFFICIAL_SOURCE_CHARS,
-                "location": "official_record.full_text (prefix)",
-            }
     # 한 번에 모두 물으면 인용이 많을 때 응답이 출력 한도에서 잘린다. 한국어 JSON은
     # 공급자마다 토큰 사용량이 달라, 잘리는 모델만 교차검증에서 빠졌다.
     answers = []
     for start in range(0, len(items), _OPINION_BATCH):
-        request = build_opinion_request(items[start:start + _OPINION_BATCH], korean_profile=enabled,
-                                        review_context=review_context)
+        request = LLMRequest(system=_OPINION_SYSTEM,
+                             user=json.dumps({"items": items[start:start + _OPINION_BATCH]}, ensure_ascii=False),
+                             temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA)
         try:
             batch = items[start:start + _OPINION_BATCH]
             replies = await router.consult_all(LLMRole.PRIMARY_REASONER, request, policy=policy,
                                                expected_task="법률 주장 타당성 검토")
             answers += replies
             # 2건 묶음도 출력 한도에서 잘린 공급자(0.9.8 실제 실행 1건)에는 그 공급자에게만 1건씩 다시 묻는다.
-            answers += await _retry_truncated_singly(router, replies, batch, policy,
-                                                      korean_profile=enabled, review_context=review_context)
+            answers += await _retry_truncated_singly(router, replies, batch, policy)
         except Exception as exc:  # 참고 의견이 없어도 판정은 이미 끝났다.
             result.ai_summary = f"AI 교차검토를 수행하지 못함({type(exc).__name__})."
             return

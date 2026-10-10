@@ -1,5 +1,7 @@
 # 한국법 검토 프로필 — 구현 전 설계 메모 (2026-10-10)
 
+> 최초 설계의 역사 기록. 지정 경로 및 공급자 범위는 [보완 설계](korean_law_review_revision_design.md)로 대체되었다. 현재 구현은 `review_document → LLMRouter.run`의 Anthropic 요청에만 적용하며 기존 주장 의견 경로는 원복했다.
+
 **독립 범위·기준:** 사용자 요청을 이 티켓의 범위로 삼는다. `Steve_ACASiaLAW`의 `ad25f513fff0891d8f7459caacb6c94d496bc8fc`에서 새 브랜치로 시작한다. TK-72·74 PR/브랜치에는 변경을 넣지 않는다. Astra 도입·모델 교체·배포·통합·평가 자산 열람/수정은 제외한다.
 
 **현재 경로:** `config/providers.json`의 Anthropic 모델은 `claude-opus-5-5`. `pipeline → verify_argument_validity → _attach_ai_opinions → LLMRouter.consult_all(PRIMARY_REASONER) → run → AnthropicProvider.generate`로 호출한다. 의견 요청은 2건 배치, 4096 출력 토큰, temperature 0.1이며 잘린 공급자에 한해 기존 단건 재시도가 있다. 공식 DB/원문 대조와 규칙 판정 뒤 모델 의견을 별도 참고 칸에 붙이고 판정을 바꾸지 않는다. 현재 의견 입력에는 주변 문맥·확인 상태·어절 대조가 있으나 공식 원문 전문과 기준일은 없다.

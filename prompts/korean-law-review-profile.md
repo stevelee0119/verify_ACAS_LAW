@@ -1,27 +1,25 @@
-# 한국법 검토 프로필 kr1
+# 한국법 검토 프로필 kr2
 
-대상은 `verify_argument_validity`가 기존에 모델에게 묻던 법률 주장 **참고 의견**이다. 공식 DB 조회·인용 추출·규칙 판정·의미 검토 cascade·RAG·작성자 판정 전체를 새 프로필로 바꾸는 기능은 아니다. 공식 확인된 행을 새로 모델 검토에 넣지 않으며 가용 Anthropic/OpenAI/Gemini 모두 기존 `consult_all` 경로를 사용한다.
+사용자 결정(2026-10-10): Claude for Legal에서 선별한 스킬 지침을 기존 Claude 서버 API에 적용한다. Claude Code 실행기나 법률 특화 모델을 추가하는 기능이 아니다. 실제 MCP는 한국법 자료 범위·접근 권한을 확인한 뒤 별도 연결한다.
+
+대상은 `review_document → LLMRouter.run`의 문서·주장 단위 참고자료 검토 중 실제 선택 공급자가 Anthropic인 요청이다. OpenAI·Gemini fallback과 기존 모델 ID·역할·주장 의견 `consult_all`·공식 DB 조회·원문 대조·Finding 생성 규칙은 유지한다. 다른 stage나 다른 역할의 Claude 호출에는 적용하지 않는다.
 
 ## 켬·복귀
 
-`LV_KOREAN_LAW_REVIEW_PROFILE=1`로 API/worker 설정을 함께 다시 로드하면 새 실행에 적용한다. 미설정·`0` 및 `1` 이외 값은 꺼짐이다. 끄고 설정을 다시 로드하면 원래 지침과 입력 조립으로 복귀한다. 프로그램 버전·모델 설정 파일은 바뀌지 않는다.
+`LV_KOREAN_LAW_REVIEW_PROFILE=1`로 API/worker 설정을 함께 다시 로드하면 새 실행에 적용한다. 기본 및 `1` 이외 값은 꺼짐이며, `0`으로 설정을 다시 로드하면 기존 지침/입력으로 복귀한다. 프로그램 버전·모델 설정은 변경하지 않는다. 켬의 `+kr2` 프롬프트 버전은 끔 캐시 및 이전 잘못된 경로의 `+kr1`과 구별한다. worker의 기존 설정 스냅샷 드리프트 차단을 유지한다. 진행 중 요청이나 Settings 객체를 중간에 수정하지 않는다.
 
-켠 Settings의 프롬프트 버전에는 `+kr1`을 붙여 기존 verification_key·캐시와 구분한다. 켜진 큐 작업의 스냅샷과 현재 설정이 달라지면 기존 worker는 `EXECUTION_SETTINGS_CHANGED`로 실행을 거절한다. 진행 중 요청의 지침을 중간에 바꾸지는 않는다. 새 실행 또는 기존의 수동 재시도 경로로 현재 설정을 캡처한다. `Settings` 객체를 직접 수정해서 버전과 스위치를 불일치하게 만들지 않는다.
+기존 자료 선택·발췌·마스킹과 주장 요청 허용 키 검사를 거친 요청에 명시 기준일을 내부 marker로 담는다. 라우터가 공급자를 한 번 선택한 뒤 marker를 소비한다. Anthropic의 지정 stage/원 지침/스키마/PRIMARY_REASONER가 모두 맞을 때 고정 한국법 지침 및 기존 허용 키 `system_instructions`의 context를 사용한다. 다른 공급자는 marker 없이 기존 요청을 그대로 전송한다. 정적 지침만 개인정보 해시 등록소에 등록하며 동적 context/user는 기존 입력 검사를 거친다.
 
-대한민국 관할과 `ProjectContext.case_date`의 `YYYY-MM-DD` 기준일만 전달한다. 날짜가 없거나 유효하지 않으면 `UNSPECIFIED`로 전달하고 현재 날짜나 문서 날짜를 임의 채택하지 않는다. 기존 조회 결과의 `official_record.full_text`를 기존 `mask_for_models` 콜백으로 개인정보 가림·문서 지시문 제거 후 최대 6,000자 앞부분만 전달한다. `provided`/`truncated`와 위치를 함께 전달하며, 원문이 없으면 모델 지식으로 보충하지 않게 한다. 잘린 부분에 요건/예외가 있을 수 있어 적용성 판단을 유보해야 한다.
+관할은 대한민국이고 `ProjectContext.case_date`의 유효한 ISO 날짜만 기준일로 받는다. 미지정·부적합 날짜는 `UNSPECIFIED`이며 현재 날짜나 문서 날짜로 보충하지 않는다. 분석 순서는 쟁점 → 적용 요건 → 문서 사실 → 근거 원문 → 적용 차이·반론 → 불확실성이다. 문서 사실·당사자 주장·모델 추론을 구분하고 자료 밖 사건번호·조문·인용문은 만들지 않는다. 기존 응답 인용 필드와 두 문장 explanation을 사용한다. 기존 원문 인용 대조는 인용의 존재만 검사하며 법률적 타당성을 보증하지 않는다.
 
-분석 순서는 쟁점 → 적용 요건 → 문서 사실 → 근거 원문 → 적용 차이·반론 → 불확실성이다. 기존 JSON 필드·분량 제한·2건 배치·출력 4096토큰·temperature 0.1·잘린 공급자의 단건 재시도를 유지한다. 원문과 지침 추가에 따른 입력 토큰·지연 증가 및 잘림 발생률은 실제 모델에서 별도 측정해야 한다. 호출을 추가하도록 하는 새 경로는 없지만 모델 응답이 달라져 기존 재시도가 실제로 발생하는 횟수는 달라질 수 있다.
+기존 참고자료만 사용하며 새 공식 원문 수집/입력 보강은 없다. 자료가 한국 공식 시행본/판결 원문인지 확인되지 않거나 발췌가 부족하면 적용 판단을 유보해야 한다. 문서 길이/자료 선택/주장 발췌 한도, 문서 배치·분할/fallback·주장당 한 번 run·공급자 transient retry·출력 4000토큰·temperature 0·예산/timeout/입출력 검사·응답 스키마는 유지한다. 추가 호출 경로는 없지만 실제 잘림/실패/재시도 횟수는 응답 변화에 따라 달라질 수 있다.
 
-## 같은 입력으로 지침 비교
+## 같은 입력의 지침 비교
 
-`build_opinion_request(items, korean_profile=False/True, review_context=context)`를 두 번 호출하면 동일한 items/context·JSON 스키마·temperature·출력 한도에서 system 지침만 바뀐다. 함수는 네트워크 호출이나 채점·자동 이중 실행을 하지 않는다. 합성 시험이 두 요청의 다른 필드가 같은지 확인한다.
+`build_review_comparison_request(request, korean_profile=False/True, reference_date=...)`는 같은 마스킹된 입력·참고자료·관할/기준일·schema·temperature·출력 한도·metadata를 갖는 두 요청을 만든다. 오직 system이 다르다. 네트워크 호출·채점·자동 이중 실행을 하지 않는다. 비교 요청은 기존 LLMRouter를 거치며 동일 Anthropic 모델과 외부 AI 정책/예산/시간 상한을 유지한다.
 
-평가 측은 같은 마스킹·지시문 제거와 공식 조회 결과로 준비한 **하나의 입력/근거 묶음**을 양쪽에 전달한다. 스위치 끔/켬의 운영 전체 실행만 비교하면 켬에 추가된 원문 입력까지 달라지므로 지침 효과와 입력 보강 효과를 분리할 수 없다. 지침 비교에는 두 팔 모두 같은 보강 입력을 쓴다. 별도 운영 비교는 전체 효과로 명시한다.
+실제 스위치 끔/켬 운영 비교도 별도로 실시한다. 끔에는 새 context가 없으므로 이 비교는 전체 효과이며 순수 지침 효과와 구분한다. OpenAI/Gemini는 이번 개선 대상이 아니고 fallback 계약 및 회귀 대조군이다. 실행 기록의 모델·usage·cost_status·latency·실패/격리/재시도와 실행 전체 벽시계 시간을 함께 확인한다.
 
-각 공급자의 동일 모델 ID·정책·예산·입출력 검사·시간 상한·자료/버전·기준일을 고정하고 `LLMRouter.run`/`consult_all`을 통해 호출한다. 모델별 토큰·latency_ms·cost_usd·cost_status·실패/격리·재시도는 기존 ModelExecution으로 확인한다. 모델 지식에 따른 인용 생성이나 모델 합의를 공식 확인으로 승격하는 코드는 추가하지 않았다. 프롬프트만으로 환각 방지나 원문 인용의 정확성을 보증하지 않으며 모델 출력의 사실/법률 정확성은 평가 대상이다.
+법률 품질 개선과 평균 비용/p95 지연 각각 최대 20% 증가라는 사용자 조건은 별도 실제 평가로 확인한다. 모델 자기평가·문장 길이·대역 시험·고정 오프라인 점수만으로 개선을 판정하지 않는다. 수용 전 운영 스위치를 켜거나 병합·배포하지 않는다.
 
-평가는 법률 판단 정확성·근거 충실도·반론/적용 차이·무근거 주장·오탐/누락·판단 유보·비용/지연을 함께 다룬다. 자기평가·분량·고정 오프라인 점수만으로 개선을 판정하지 않는다. 새 입력의 온라인 검토도 별도 평가 세션에서 확인하고 수용 SHA만 통합한다. 구현 세션은 기존 시험·평가 도구·비공개 자료를 사용하지 않는다.
-
-## 공개 방법론·커넥터
-
-[원 설계](../docs/handoff/requests/korean_law_review_profile_design.md), [출처/라이선스](../docs/handoff/requests/korean_law_review_profile_sources.md), [OpenAI·Gemini 보충](../docs/handoff/requests/korean_law_review_multimodel_design.md)를 참조한다. 방법론은 한국법 지침으로 선별 재작성해 서버 요청에 넣었으며, 플러그인·자동 에이전트·Claude Code·새 MCP는 설치하지 않았다. 후속 한국 공식 자료 연결은 원문/연혁 접근 부족이 평가로 확인될 때 별도 설계한다.
+[보완 설계](../docs/handoff/requests/korean_law_review_revision_design.md), [출처/라이선스 및 SHA 변경 사유](../docs/handoff/requests/korean_law_review_profile_sources.md), [다중 모델/MCP 결정](../docs/handoff/requests/korean_law_review_multimodel_design.md), [영향 분석·채택 기준](../docs/handoff/requests/korean_law_review_impact_analysis.md), [평가 인계](../docs/handoff/requests/korean_law_review_evaluation_handoff.md).
