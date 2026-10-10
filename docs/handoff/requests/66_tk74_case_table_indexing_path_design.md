@@ -25,9 +25,13 @@
   4. 문서 선별을 통과한 일반 참고자료 (`chosen is True`)
   5. 미선별 일반 참고자료
 - **격리 추출 및 다운로드 통제 준수**: `extract_case_table`을 직접 호출하는 우회 경로를 만들지 않고, 기존 `isolated_extract` 서브프로세스 추출 경로(`self.extractor`)를 그대로 거친다. 표 후보 다운로드 시에도 기존 권한 확인, 리비전 비교, 체크섬 검증, 다운로드 용량 및 시간 예산 검사를 동일하게 거친다.
-- 판례표 여부 판별 결과 캐싱:
+- 판례표 여부 판별 결과 캐싱 및 격리 (평가 측 보완 반영):
+  - Google Sheets(`application/vnd.google-apps.spreadsheet`)는 확장자가 없더라도 `inventory`의 `mimeType` 메타데이터를 보존하여 표 후보 식별에서 누락되지 않도록 한다.
   - 판례표 머리글(`_header_map`)이 확인되면: `case_rows`에 행별로 색인하고 구조화 표로 등록한다.
-  - 판례표 머리글이 없는 일반 스프레드시트이고 문서 선별(`gate`)도 되지 않은 경우: 일반 RAG chunk로 색인하지 않고 `NOT_A_CASE_TABLE` 상태와 사유를 로컬 `files` 테이블에 캐시한다. 이 캐시는 파일 리비전과 추출기 버전(`EXTRACTOR_VERSION`)에 엄격히 묶이며, 리비전/버전 변경 시 다시 판별된다.
+  - 판례표 머리글이 없는 일반 스프레드시트이고 문서 선별(`gate`)도 되지 않은 경우:
+    - 추후 다른 질의에서 해당 문서가 일반 참고자료로 선별(`chosen`)될 때 캐시를 즉시 재사용할 수 있도록, 추출된 원본 `chunks`와 파싱 결과는 SQLite DB(`files`, `chunks`)에 온전히 보존하여 캐시한다.
+    - 현재 실행에서는 `entry["status"] = "NOT_A_CASE_TABLE"`로 기록하고, `self.eligible` 등록에서 제외하여 일반 RAG `select()` 검색 대상에서 안전하게 격리한다.
+    - 이를 통해 비판례 스프레드시트의 RAG 발췌 격리를 유지하면서도, 질의 변경 재선별 시의 회귀를 완전히 방지한다.
 
 ## 3. 예산 통제 및 보안 격리
 
@@ -40,7 +44,10 @@
 
 ### 4.1 부분·미검토 상태와 완전 부재(`NO_CASE_TABLE`)의 분리
 - 예산 중단, 읽기 실패, 보안 격리, 0행 이어 읽기 등은 `NO_CASE_TABLE`로 확정하지 않고 해당 상태와 사유를 구분 기록한다.
-- 여러 표 후보가 존재할 경우 각 후보의 완료/부분/대기 상태를 종합하여 전체 `case_table_status`를 산출한다.
+- 여러 표 후보가 존재할 경우 각 후보의 완료/부분/대기 상태를 종합하여 전체 `case_table_status`를 산출한다:
+  - 완료된 표가 존재하더라도 격리(`QUARANTINED`), 실패/타임아웃(`PARSE_FAILED`), 대기/진행 중(`INDEXING`), 부분 색인(`INDEXED_PARTIAL`) 후보가 하나라도 공존하면 전체 상태를 `INDEXED`가 아닌 `PARTIAL`로 산출한다.
+  - 색인된 표가 0건일 때, 읽기 실패나 타임아웃이 발생한 후보가 있으면 `NO_CASE_TABLE`로 단정하지 않고 `PARTIAL`로 유지하여 미검토 범위 및 사유를 남긴다.
+  - 오직 모든 후보가 정상 추출되어 판례표가 아님이 확인된 경우(`NOT_A_CASE_TABLE`)에만 `NO_CASE_TABLE`로 판정한다.
 - 부분 색인(`PARTIAL`) 상태에서 사건번호가 조회되지 않은 경우:
   - 기존 `lookup_records`의 `"status": "NOT_IN_REFERENCE"` 계약은 그대로 유지한다.
   - 동시에 `match` 결과에 `scope="PARTIAL_INDEX_RANGE"`, `partial_indexed=True`를 보강하여, '전체 표에 없는 것이 아니라 현재 색인된 범위 내 미조회'임을 결과 및 진단에서 명확히 구분할 수 있게 한다.

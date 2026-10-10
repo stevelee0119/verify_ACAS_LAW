@@ -148,8 +148,78 @@ def test_case_table_indexed_without_name_match_real_path(tmp_path, monkeypatch):
     assert matches["c3"]["status"] == "NOT_IN_REFERENCE"
 
 
-def test_non_case_table_spreadsheet_control_not_indexed_as_rag(tmp_path):
-    """대조군 시험: 판례표 머리글이 없는 스프레드시트는 NOT_A_CASE_TABLE로 판정되고 RAG chunk로 색인되지 않는다."""
+def test_google_sheets_candidate_without_extension_indexed(tmp_path):
+    """확장자가 없는 Google Sheets 파일도 inventory의 MIME으로 식별되어 선별 무관 색인된다 (평가 측 결함 1 보완)."""
+    root = "folder_root_gs"
+    table_fid = "gs_table_001"
+    table_content = (
+        "번호,제목,판례 정보,쟁점,선정이유,판결요지\n"
+        "1,구글시트 판례,대법원 2099다500 2099-01-02,구글시트 쟁점,이유,요지입니다\n"
+    )
+
+    class SyntheticDrive:
+        def __init__(self, *a, **kw):
+            pass
+
+        def __call__(self, **kw):
+            return self
+
+        def remaining(self):
+            return 120
+
+        def metadata(self, fid):
+            if fid == table_fid:
+                return {
+                    "id": table_fid,
+                    "name": "구글스프레드시트_표준판례",  # 확장자 없음
+                    "mimeType": "application/vnd.google-apps.spreadsheet",
+                    "version": "1",
+                    "modifiedTime": "2026-10-10T00:00:00Z",
+                    "parents": [root],
+                    "size": "0",  # Google Sheets는 드라이브 메타데이터 상 크기 0
+                    "capabilities": {"canDownload": True},
+                }
+            return {}
+
+        def inventory(self, *a, **kw):
+            return [self.metadata(table_fid)]
+
+        def download(self, item, **kw):
+            return table_content.encode(), "구글스프레드시트_표준판례.csv", "text/csv"
+
+        def search_fulltext(self, *a, **kw):
+            return []
+
+        def close(self):
+            pass
+
+    settings = replace(
+        get_settings(),
+        allow_network=True,
+        rag_drive_folder_id=root,
+        storage_root=tmp_path / "storage_gs",
+        rag_metadata_first=True,
+    )
+    library = ReferenceLibrary(settings, client_factory=SyntheticDrive)
+    # 서면 질의와 파일명이 전혀 일치하지 않아도 MIME으로 후보 감지 및 색인
+    sync_summary = library.sync(query="소유권이전등기 말소 청구의 소")
+    assert sync_summary["status"] in ("READY", "PARTIAL")
+    assert library.has_case_tables() is True
+    status_info = library.case_table_status()
+    assert status_info["status"] == "INDEXED"
+    assert status_info["indexed_rows"] == 1
+    assert len(status_info["candidates"]) == 1
+    assert status_info["candidates"][0]["file_id"] == table_fid
+    # 사건번호 정확 조회 가능 확인
+    match = library.match_case({"canonical_case_number": "2099다500", "court": "대법원", "decision_date": "2099-01-02"})
+    assert match["status"] == "MATCH"
+
+
+def test_non_case_table_spreadsheet_control_and_resync_recovery(tmp_path):
+    """대조군 및 질의 변경 재선별 회귀 방지 시험 (평가 측 결함 3 보완):
+    1. 첫 질의(불일치): 판례표가 아니므로 eligible 제외 및 NOT_A_CASE_TABLE 처리되나 DB 캐시(chunks)는 보존됨.
+    2. 두 번째 질의(일치): 캐시를 재사용하여 INDEXED로 복구되고 RAG select() 발췌가 정상 복구됨.
+    """
     root = "folder_root_002"
     budget_fid = "budget_file_001"
     budget_content = "일자,항목,수입,지출,잔액\n2099-01-01,소모품비,0,50000,100000\n"
@@ -193,12 +263,13 @@ def test_non_case_table_spreadsheet_control_not_indexed_as_rag(tmp_path):
         get_settings(),
         allow_network=True,
         rag_drive_folder_id=root,
-        storage_root=tmp_path / "storage",
+        storage_root=tmp_path / "storage_control",
         rag_metadata_first=True,
     )
 
+    # 1. 첫 번째 sync: 파일명/본문 불일치 질의
     library = ReferenceLibrary(settings, client_factory=SyntheticDrive)
-    library.sync(query="법률 계약 해석 분쟁")
+    sync1 = library.sync(query="법률 계약 해석 분쟁")
 
     # 판례 표가 아님 확인
     assert library.has_case_tables() is False
@@ -206,13 +277,131 @@ def test_non_case_table_spreadsheet_control_not_indexed_as_rag(tmp_path):
     assert status_info["status"] == "NO_CASE_TABLE"
     assert len(status_info["candidates"]) == 1
     assert status_info["candidates"][0]["status"] == "NOT_A_CASE_TABLE"
+    # 판례표가 아니므로 eligible 제외 -> RAG select 발췌에서 격리됨
+    assert budget_fid not in library.eligible
+    selection1 = library.select("소모품비 지출")
+    assert selection1["sources"] == []
 
-    # RAG chunks에도 들어가지 않음
+    # 그러나 추후 일반 문서 선별 시 재사용을 위해 chunks 테이블과 files 캐시는 보존되어 있어야 함
     with library.connect() as db:
         chunk_count = db.execute("SELECT count(*) FROM chunks WHERE file_id=?", (budget_fid,)).fetchone()[0]
         row_count = db.execute("SELECT count(*) FROM case_rows WHERE file_id=?", (budget_fid,)).fetchone()[0]
-        assert chunk_count == 0
-        assert row_count == 0
+        assert chunk_count > 0  # 청크가 삭제되지 않고 DB에 보존됨
+        assert row_count == 0   # 판례표가 아니므로 case_rows는 0
+
+    # 2. 두 번째 sync: 파일명과 일치하는 질의로 재선별
+    sync2 = library.sync(query="예산 지출 내역 소모품비 회계")
+    # 캐시 재사용 확인
+    assert sync2["files_reused"] == 1
+    entry = next(i for i in sync2["inventory"] if i["file_id"] == budget_fid)
+    assert entry["status"] == "INDEXED"
+    assert budget_fid in library.eligible
+
+    # RAG select() 발췌가 정상 복구됨 (기준 03fdcdb와 동일한 동작 확인)
+    selection2 = library.select("소모품비 지출")
+    assert len(selection2["sources"]) >= 1
+    assert selection2["sources"][0]["file_id"] == budget_fid
+
+
+def test_completed_table_with_quarantined_candidate_yields_partial(tmp_path):
+    """완료 표와 격리 후보가 공존할 때 전체 상태는 INDEXED가 아니라 PARTIAL이어야 한다 (평가 측 결함 2 보완)."""
+    library = ReferenceLibrary.__new__(ReferenceLibrary)
+    library.eligible = {
+        "good_table": {
+            "file_id": "good_table",
+            "name": "표준판례.xlsx",
+            "structured_case_table": True,
+            "case_table_only": True,
+            "case_table_stats": {"indexed": 5, "discovered": 5},
+        }
+    }
+    library.summary = {
+        "status": "READY",
+        "snapshot_hash": "hash123",
+        "inventory": [
+            {
+                "file_id": "good_table",
+                "name": "표준판례.xlsx",
+                "status": "INDEXED",
+                "reason": "TEXT_INDEXED",
+                "continuation": False,
+                "case_table_stats": {"indexed": 5, "discovered": 5},
+            },
+            {
+                "file_id": "bad_table",
+                "name": "악성_판례표.xlsx",
+                "status": "QUARANTINED",
+                "reason": "REFERENCE_QUARANTINED",
+                "continuation": False,
+                "case_table_stats": {"indexed": 0, "quarantined": 10},
+            },
+        ],
+        "diagnostics": {},
+    }
+    library.db_path = tmp_path / "index_quar.sqlite3"
+    library.directory = tmp_path
+    library._case_rows_cache = None
+    library._case_number_index = {}
+
+    with library.connect() as db:
+        rows = [
+            ("r1", "good_table", "v1", "시트", 2, "A2:F2", "1", "사건1", "대법원 2099다100 2099-01-02",
+             "대법원", "2099-01-02", '["2099다100"]', '["2099다100"]', '[]', "쟁점", "사실", "이유", "요지",
+             '[]', '[]', "머리", "텍스트", "{}"),
+        ]
+        db.executemany("INSERT INTO case_rows VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", rows)
+        db.commit()
+
+    status_info = library.case_table_status()
+    # 완료 표가 있어도 격리 후보가 함께 있으므로 전체는 INDEXED가 아니라 PARTIAL
+    assert status_info["status"] == "PARTIAL"
+    assert status_info["indexed_rows"] == 5
+    assert len(status_info["candidates"]) == 2
+
+
+def test_failed_candidate_yields_partial_not_no_case_table(tmp_path):
+    """후보 읽기 실패/타임아웃 시 NO_CASE_TABLE로 단정되지 않고 PARTIAL로 유지된다 (평가 측 결함 2 보완)."""
+    library = ReferenceLibrary.__new__(ReferenceLibrary)
+    library.eligible = {}
+    library.summary = {
+        "status": "PARTIAL",
+        "snapshot_hash": "hash_failed",
+        "inventory": [
+            {
+                "file_id": "timeout_table",
+                "name": "타임아웃_판례표.xlsx",
+                "status": "PARSE_FAILED",
+                "reason": "REFERENCE_PARSE_TIMEOUT",
+                "continuation": False,
+                "case_table_stats": {},
+            }
+        ],
+        "diagnostics": {},
+    }
+    library.db_path = tmp_path / "index_failed.sqlite3"
+    library.directory = tmp_path
+    library._case_rows_cache = None
+    library._case_number_index = {}
+
+    status_info = library.case_table_status()
+    # 읽기 실패/타임아웃 후보가 있으면 NO_CASE_TABLE이 아니라 PARTIAL이어야 함
+    assert status_info["status"] == "PARTIAL"
+    assert status_info["candidates"][0]["status"] == "PARSE_FAILED"
+
+    # 서면 검토 연동 시 미조회 사건 메타데이터 보강 확인
+    document = NormalizedDocument("doc", "doc.txt", "text", "", pages=[Page(1, blocks=[Block("b", "문서", 1)])])
+    result = DocumentResult("doc", "doc.txt", normalized=document)
+    result.citations = [
+        {"citation_id": "c1", "canonical_case_number": "2099다100", "court": "대법원", "decision_date": "2099-01-02"},
+    ]
+    router = SimpleNamespace(has_available_provider=lambda **kw: False)
+    pii = SimpleNamespace(mask_text=lambda value: SimpleNamespace(masked_text=value))
+
+    review = review_document(result, library, router, ProjectContext("p"), pii)
+    assert review["case_table_status"] == "PARTIAL"
+    assert review["reference_case_matches"]["c1"]["status"] == "NOT_IN_REFERENCE"
+    assert review["reference_case_matches"]["c1"]["scope"] == "PARTIAL_INDEX_RANGE"
+    assert review["reference_case_matches"]["c1"]["partial_indexed"] is True
 
 
 def test_partial_indexing_distinguished_from_no_case_table(tmp_path):

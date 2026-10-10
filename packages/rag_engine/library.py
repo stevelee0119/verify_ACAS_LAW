@@ -184,7 +184,9 @@ class ReferenceLibrary:
                 self._stage("inventory", mark, files=len(items))
                 self.summary["checked_at"] = datetime.now(timezone.utc).isoformat()
                 self.summary["files_seen"] = len(items)
+                # inventory 항목에 mimeType을 보존하여 확장자가 없는 Google Sheets 등 표 후보 식별이 누락되지 않도록 한다 (TK-74)
                 self.summary["inventory"] = [{"file_id": item["id"], "name": item.get("name", ""),
+                    "mimeType": item.get("mimeType", ""),
                     "folder_path": item.get("folder_path", ""), "size": int(item.get("size") or 0),
                     "metadata": relevance.metadata_priority(item, self.sync_query),
                     "status": "SELECTED_PENDING", "reason": "NOT_PROCESSED", "background_queued": False}
@@ -310,8 +312,13 @@ class ReferenceLibrary:
         # Cached files next, so bounded runs stay useful while new material warms up.
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
         audit = {item["file_id"]: item for item in self.summary["inventory"]}
+        items_by_id = {item["id"]: item for item in items}
         chosen = (lambda file_id: True) if gate is None else (lambda file_id: gate[file_id]["selected"])
-        is_candidate = lambda file_id: is_case_table_candidate(audit[file_id])
+        # inventory 및 원본 items 항목의 메타데이터를 모두 확인하여 표 후보를 누락 없이 식별한다 (TK-74)
+        is_candidate = lambda file_id: (
+            is_case_table_candidate(audit.get(file_id, {}))
+            or is_case_table_candidate(items_by_id.get(file_id, {}))
+        )
         ordered = sorted(items, key=lambda i: (
             not (chosen(i["id"]) or is_candidate(i["id"])),
             not is_candidate(i["id"]),
@@ -427,12 +434,8 @@ class ReferenceLibrary:
                     chunks = parsed.pop("chunks", [])
                     case_records = parsed.pop("case_records", [])
                     is_case_table = bool(parsed.get("structured_case_table"))
-                    # 표 후보로 다운로드되었으나 판례표가 아니고 문서 선별도 되지 않은 스프레드시트는 RAG chunk 격리
-                    if is_candidate(file_id) and not chosen(file_id) and not is_case_table:
-                        chunks = []
-                        case_records = []
-                        parsed["chunk_count"] = 0
-                        parsed["reason"] = "NOT_A_CASE_TABLE"
+                    # 판례표가 아닌 일반 스프레드시트라 하더라도 추후 문서 선별 시 캐시 재사용을 위해
+                    # chunks 및 parsed 메타데이터는 DB에 온전히 보존하여 저장한다 (TK-74 회귀 방지 보완).
                     append_batch = bool(prior and parsed.get("resumed") and prior.get("sha256") == parsed.get("sha256")
                                         and parsed.get("reason") != "REFERENCE_QUARANTINED")
                     parsed["chunk_count"] = len(chunks) + (prior.get("chunk_count", 0) if append_batch else 0)
@@ -495,8 +498,8 @@ class ReferenceLibrary:
                     entry["structured_case_table"] = True
                     entry["case_table_stats"] = parsed.get("stats", {})
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
-                entry["body_extraction_scope"] = parsed.get("body_extraction_scope")
-                if parsed.get("chunk_count") or is_case_table:
+                # 표 후보 중 판례표가 아니고 문서 선별도 되지 않은 파일은 eligible에서 제외하여 RAG select() 격리 (TK-74)
+                if (parsed.get("chunk_count") or is_case_table) and not is_non_case_candidate:
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
                         "folder_path": folder_path,
                         "metadata_score": entry["metadata"]["score"],
@@ -699,7 +702,7 @@ class ReferenceLibrary:
         return any(v.get("structured_case_table") for v in self.eligible.values())
 
     def case_table_status(self) -> dict[str, Any]:
-        """표 후보별 색인 상태 및 종합 판례표 상태를 반환한다 (TK-74)."""
+        """표 후보별 색인 상태 및 종합 판례표 상태를 반환한다 (TK-74 보완)."""
         inventory = self.summary.get("inventory", [])
         candidates = [item for item in inventory if is_case_table_candidate(item)]
         if not candidates:
@@ -712,12 +715,12 @@ class ReferenceLibrary:
         has_partial = False
         has_indexing = False
         has_quarantine = False
-        has_budget = False
+        has_failed = False
         total_indexed_rows = 0
 
         for c in candidates:
             fid = c.get("file_id")
-            status = c.get("status")
+            status = str(c.get("status") or "")
             reason = str(c.get("reason") or "")
             stats = c.get("case_table_stats") or {}
             indexed = stats.get("indexed", 0)
@@ -736,32 +739,57 @@ class ReferenceLibrary:
             cand_diagnostics.append(diag)
 
             if status == "INDEXED":
-                has_indexed = True
+                if continuation:
+                    has_partial = True
+                    has_indexing = True
+                else:
+                    has_indexed = True
             elif status == "INDEXED_PARTIAL":
                 has_partial = True
                 if continuation:
                     has_indexing = True
-            elif status == "SELECTED_PENDING" or "BUDGET" in reason:
-                has_budget = True
+            elif status == "SELECTED_PENDING" or "BUDGET" in reason or "INDEXING" in status:
                 has_indexing = True
             elif status == "QUARANTINED" or "QUARANTINE" in reason:
                 has_quarantine = True
+            elif status == "NOT_A_CASE_TABLE" or reason == "NOT_A_CASE_TABLE":
+                pass
+            elif status in ("PARSE_FAILED", "UNAVAILABLE", "UNSUPPORTED_TYPE") or any(
+                err in reason for err in ("TIMEOUT", "PARSE_FAILED", "PARSE_TIMEOUT", "DOWNLOAD_FAILED", "UNAVAILABLE", "UNSUPPORTED")
+            ):
+                has_failed = True
+            elif status == "NOT_SELECTED_METADATA":
+                # 아직 검토되지 않은 후보
+                has_indexing = True
 
         if total_indexed_rows == 0 and self._case_rows():
             total_indexed_rows = len(self._case_rows())
+            if any(v.get("structured_case_table") for v in self.eligible.values()):
+                has_indexed = True
 
-        if has_indexed and not has_partial and not has_indexing:
-            overall = "INDEXED"
-        elif has_indexed or has_partial:
-            overall = "PARTIAL" if (has_partial or has_indexing) else "INDEXED"
-        elif has_indexing or has_budget:
-            overall = "INDEXING"
-        elif has_quarantine:
-            overall = "QUARANTINED"
-        elif all(d["status"] in ("NOT_A_CASE_TABLE", "NOT_SELECTED_METADATA", "PARSE_FAILED", "UNSUPPORTED_TYPE") for d in cand_diagnostics):
+        # 종합 상태 판정:
+        # 1. 색인된 표가 있는 경우:
+        #    - 격리, 실패/타임아웃, 예산 대기/진행 중, 부분 색인 중 하나라도 있으면 PARTIAL (완료 표+격리/실패 후보 구분)
+        #    - 그렇지 않고 온전히 완료되었으면 INDEXED
+        if (has_indexed or has_partial or total_indexed_rows > 0):
+            if has_partial or has_indexing or has_quarantine or has_failed:
+                overall = "PARTIAL"
+            else:
+                overall = "INDEXED"
+        # 2. 색인된 표가 없는 경우:
+        #    - 모든 후보가 판례표가 아님으로 확인되었으면 NO_CASE_TABLE
+        #    - 격리 후보가 있으면 QUARANTINED
+        #    - 진행 중/예산 대기 후보가 있으면 INDEXING
+        #    - 읽기 실패/타임아웃 후보가 있으면 PARTIAL (완전 부재로 단정하지 않고 미검토 범위 구분)
+        elif all(d["status"] == "NOT_A_CASE_TABLE" or d.get("reason") == "NOT_A_CASE_TABLE" for d in cand_diagnostics):
             overall = "NO_CASE_TABLE"
+        elif has_quarantine and not has_indexing and not has_failed:
+            overall = "QUARANTINED"
+        elif has_indexing and not has_failed and not has_quarantine:
+            overall = "INDEXING"
         else:
-            overall = "PARTIAL" if total_indexed_rows > 0 else "NO_CASE_TABLE"
+            # 실패/타임아웃이 있거나 여러 미완료 상태가 혼합된 경우 -> PARTIAL
+            overall = "PARTIAL"
 
         return {
             "status": overall,
