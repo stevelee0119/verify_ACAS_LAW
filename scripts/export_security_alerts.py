@@ -6,6 +6,7 @@
 
 사용:
   python scripts/export_security_alerts.py --repo OWNER/REPO --out-dir out      (환경변수 GITHUB_TOKEN 필요)
+  python scripts/export_security_alerts.py --ref refs/pull/66/merge --out-dir out (PR의 새 경고 확인, 2026-10-10 추가)
   python scripts/export_security_alerts.py --from-file alerts.json --out-dir out (저장된 응답으로 요약만 다시 만들기)
 
   python scripts/export_security_alerts.py --print-locations out/code_scanning_alerts.json  (저장된 요약의 위치를 한 줄씩 출력)
@@ -21,6 +22,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import defaultdict
 from pathlib import Path
@@ -31,12 +33,14 @@ PER_PAGE = 100
 SEVERITY_ORDER = {"critical": 0, "high": 1, "medium": 2, "low": 3, "error": 1, "warning": 2, "note": 3}
 
 
-def fetch_alerts(repo: str, token: str, state: str = "open") -> list[dict[str, Any]]:
-    """열린 코드 스캔 경고를 모두 가져온다(기본 브랜치 기준). 접근이 거부되면 사유를 담아 종료한다."""
+def fetch_alerts(repo: str, token: str, state: str = "open", ref: str | None = None) -> list[dict[str, Any]]:
+    """열린 코드 스캔 경고를 모두 가져온다(기본 브랜치 기준, ref를 주면 그 참조 — 예: refs/pull/66/merge).
+    접근이 거부되면 사유를 담아 종료한다."""
     alerts: list[dict[str, Any]] = []
     page = 1
+    ref_query = f"&ref={urllib.parse.quote(ref, safe='')}" if ref else ""
     while True:
-        url = f"{API}/repos/{repo}/code-scanning/alerts?state={state}&per_page={PER_PAGE}&page={page}"
+        url = f"{API}/repos/{repo}/code-scanning/alerts?state={state}&per_page={PER_PAGE}&page={page}{ref_query}"
         request = urllib.request.Request(url, headers={
             "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28", "User-Agent": "acas-law-security-export"})
@@ -116,6 +120,7 @@ def main() -> int:
     parser.add_argument("--repo", help="OWNER/REPO (기본: 환경변수 GITHUB_REPOSITORY)")
     parser.add_argument("--out-dir", default="out")
     parser.add_argument("--from-file", help="이미 저장한 경고 응답(JSON 배열)으로 요약만 만든다")
+    parser.add_argument("--ref", help="경고를 읽을 참조(기본: 기본 브랜치). PR 경고는 refs/pull/<번호>/merge")
     args = parser.parse_args()
     if args.print_locations:
         saved = json.loads(Path(args.print_locations).read_text(encoding="utf-8"))
@@ -128,7 +133,7 @@ def main() -> int:
         token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
         if not repo or not token:
             raise SystemExit("--repo(또는 GITHUB_REPOSITORY)와 GITHUB_TOKEN이 필요하다")
-        alerts = fetch_alerts(repo, token)
+        alerts = fetch_alerts(repo, token, ref=args.ref or None)
     summary = summarise(alerts)
     out = Path(args.out_dir)
     out.mkdir(parents=True, exist_ok=True)
