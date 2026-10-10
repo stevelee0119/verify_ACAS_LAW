@@ -12,6 +12,10 @@ on:
         description: "경고의 파일·줄을 실행 로그에 출력한다(아티팩트를 내려받을 수 없을 때만 켠다)"
         type: boolean
         default: false
+      ref:
+        description: "경고를 읽을 참조(비우면 기본 브랜치). PR 경고는 refs/pull/<번호>/merge"
+        type: string
+        default: ""
   schedule:
     - cron: "17 3 * * 1"
   push:
@@ -47,8 +51,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+          ALERT_REF: ${{ inputs.ref }}
         run: |
-          python scripts/export_security_alerts.py --out-dir out | tee -a "$GITHUB_STEP_SUMMARY"
+          python scripts/export_security_alerts.py --out-dir out --ref "${ALERT_REF}" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: 경고 위치 출력(수동 실행에서 show_locations를 켠 경우만, 로그에만 남김)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.show_locations }}
