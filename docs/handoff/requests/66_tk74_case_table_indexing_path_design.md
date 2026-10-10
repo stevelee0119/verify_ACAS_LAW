@@ -3,7 +3,7 @@
 - 작성: 구현 에이전트 Antigravity, 2026-10-10
 - 기준: `Steve_ACASiaLAW` 최신 `6323400`
 - 브랜치: `antigravity/tk74-case-table-indexing`
-- 상태: 설계 메모 전용 (평가 측 승인 전 제품 코드 및 시험 수정 없음)
+- 상태: 평가 측 조건부 승인 반영 개정판 (구현 진행)
 
 ## 1. 문제와 원인
 
@@ -16,7 +16,7 @@
 ### 2.1 표 후보 식별 (파일명 무관)
 - 파일명이나 사건명이 아닌 메타데이터(확장자 `.xlsx`, `.csv` 및 Google Sheet MIME 타입 `application/vnd.google-apps.spreadsheet`, `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`, `text/csv`)와 파일 크기(96MB 이내)로 '표 후보(table candidate)'를 자동 감지한다.
 
-### 2.2 색인 시점과 우선순위
+### 2.2 색인 시점과 우선순위 (기존 격리 추출 유지 — 평가 측 조건 1)
 - `_sync_files` 동기화 루프에서 표 후보는 문서 단위 이름 선별(`metadata_gate`) 통과 여부와 무관하게 색인 검토 대상에 포함한다.
 - 동기화 순서(`ordered`):
   1. 캐시가 유효한 기존 표(재사용)
@@ -24,9 +24,10 @@
   3. 신규 표 후보(스프레드시트)
   4. 문서 선별을 통과한 일반 참고자료 (`chosen is True`)
   5. 미선별 일반 참고자료
-- 표 후보를 다운로드한 후 `extract_case_table`을 실행한다.
+- **격리 추출 및 다운로드 통제 준수**: `extract_case_table`을 직접 호출하는 우회 경로를 만들지 않고, 기존 `isolated_extract` 서브프로세스 추출 경로(`self.extractor`)를 그대로 거친다. 표 후보 다운로드 시에도 기존 권한 확인, 리비전 비교, 체크섬 검증, 다운로드 용량 및 시간 예산 검사를 동일하게 거친다.
+- 판례표 여부 판별 결과 캐싱:
   - 판례표 머리글(`_header_map`)이 확인되면: `case_rows`에 행별로 색인하고 구조화 표로 등록한다.
-  - 판례표 머리글이 아닌 일반 스프레드시트이고 문서 선별(`gate`)도 되지 않은 경우: 일반 RAG chunk로 색인하지 않고 `NOT_A_CASE_TABLE` 상태/사유로 캐시하여 이후 불필요한 재다운로드를 방지한다.
+  - 판례표 머리글이 없는 일반 스프레드시트이고 문서 선별(`gate`)도 되지 않은 경우: 일반 RAG chunk로 색인하지 않고 `NOT_A_CASE_TABLE` 상태와 사유를 로컬 `files` 테이블에 캐시한다. 이 캐시는 파일 리비전과 추출기 버전(`EXTRACTOR_VERSION`)에 엄격히 묶이며, 리비전/버전 변경 시 다시 판별된다.
 
 ## 3. 예산 통제 및 보안 격리
 
@@ -35,21 +36,29 @@
 - **용량 및 파일 수 예산**: 다운로드 누적 용량(`rag_download_mb`, 단일 96MB) 및 파일 수(`rag_max_files`) 예산에 정상 산입한다.
 - **보안 검사 격리**: `AdversarialScanner.scan`을 통한 행 단위 보안 검사를 유지하며, 격리 행 수 상한(`LV_CASE_TABLE_MAX_EXCLUDED_ROWS`, 기본 32) 초과 시 파일 전체 격리(`REFERENCE_QUARANTINED`)를 엄격히 적용한다.
 
-## 4. 상태 값 체계 및 결과/진단 분리
+## 4. 상태 값 체계 및 결과/진단 분리 (평가 측 조건 2)
 
-### 4.1 서면 검토 결과 (`review`)
+### 4.1 부분·미검토 상태와 완전 부재(`NO_CASE_TABLE`)의 분리
+- 예산 중단, 읽기 실패, 보안 격리, 0행 이어 읽기 등은 `NO_CASE_TABLE`로 확정하지 않고 해당 상태와 사유를 구분 기록한다.
+- 여러 표 후보가 존재할 경우 각 후보의 완료/부분/대기 상태를 종합하여 전체 `case_table_status`를 산출한다.
+- 부분 색인(`PARTIAL`) 상태에서 사건번호가 조회되지 않은 경우:
+  - 기존 `lookup_records`의 `"status": "NOT_IN_REFERENCE"` 계약은 그대로 유지한다.
+  - 동시에 `match` 결과에 `scope="PARTIAL_INDEX_RANGE"`, `partial_indexed=True`를 보강하여, '전체 표에 없는 것이 아니라 현재 색인된 범위 내 미조회'임을 결과 및 진단에서 명확히 구분할 수 있게 한다.
+
+### 4.2 서면 검토 결과 (`review`)
 - 판례 인용 서면(`citations` 존재)에서 표준판례 표의 상태를 `review["case_table_status"]`에 명시적으로 기록한다:
   - `INDEXED`: 표 색인이 완료되어 사건번호 정확 조회(`match_case`)가 정상 수행됨.
-  - `PARTIAL`: 시간/행 상한 등으로 일부 행만 색인됨 (`partial_rows: N`). 색인된 범위 내에서 조회를 수행하고 부분 색인 상태를 표시함.
-  - `INDEXING`: 표 후보가 발견되어 현재 색인 진행 중임 (`continuation` 존재, 다음 동기화에서 재개 예정).
-  - `NO_CASE_TABLE`: 참고자료 내에 유효한 표준판례 표가 없음.
-- 표가 `INDEXED` 또는 `PARTIAL`인 경우에만 `reference_case_matches`에 인용 판례 대조 결과를 기록하고, 표가 없거나 색인 중일 때는 상태 사유를 남겨 판례 부존재와 표 미색인을 명확히 구분한다.
+  - `PARTIAL`: 시간/행 상한 등으로 일부 행만 색인됨. 색인된 범위 내에서 조회를 수행하고 부분 색인 상태 및 사유를 남김.
+  - `INDEXING`: 표 후보가 발견되어 현재 색인 진행 중임 (`continuation` 존재 또는 예산 대기).
+  - `QUARANTINED`: 표 후보가 보안 검사에서 격리됨.
+  - `NO_CASE_TABLE`: 참고자료 내에 유효한 표준판례 표가 없음 (모든 후보가 판별 완료되었으나 판례표가 아님).
+- 일반 prose 발췌가 0건이어도 표가 색인되어 있으면(`has_case_tables()`), 사건번호 정확 조회가 실행된다 (평가 측 조건 3).
 
-### 4.2 manifest 참고자료 진단 (`summary["diagnostics"]`)
+### 4.3 manifest 참고자료 진단 (`summary["diagnostics"]`)
 - `diagnostics["case_table_candidates"]`에 표 후보별 상태를 남긴다:
   - `file_id`: 파일 식별자
   - `name`: 파일명
-  - `status`: `INDEXED`, `INDEXED_PARTIAL`, `INDEXING`, `NOT_A_CASE_TABLE`, `QUARANTINED`, `BUDGET_EXHAUSTED`
+  - `status`: `INDEXED`, `INDEXED_PARTIAL`, `INDEXING`, `NOT_A_CASE_TABLE`, `QUARANTINED`, `SELECTED_PENDING`
   - `indexed_rows`: 색인된 행 수
   - `continuation`: 이어 읽기 진행 여부 (bool)
   - `reason`: 사유 코드 (`TEXT_INDEXED`, `REFERENCE_PARTIALLY_READ`, `NOT_A_CASE_TABLE`, `SYNC_BUDGET_EXHAUSTED` 등)
@@ -59,12 +68,13 @@
 
 - 표 후보로 색인된 파일은 `case_rows`에 저장되어 사건번호 정확 조회(`match_case`) 및 주장별 판결요지 검색(`search_case_table`)에만 사용된다.
 - 일반 문서 단위 대조 묶음(`library.select()`의 prose chunks / `review["sources"]`)에는 표 조각이 주입되지 않는다 (TK-71 5절 범위 엄격 유지).
+- 문서 선별(`metadata_gate`)을 통과하지 않고 표 후보로만 색인된 파일은 `select()`의 FTS5 chunk 검색 대상에서 제외한다.
 
-## 6. 시험 계획
+## 6. 시험 계획 (실제 선별 경로 통합 시험 — 평가 측 조건 3)
 
 - **합성 Drive 대역 사용**: 실제 Drive 파일이나 비공개 판례 문구는 저장소에 넣지 않는다.
-- **양성 시험**: 서면과 파일명 낱말을 공유하지 않는 판례표가 있을 때, 서면이 인용한 사건번호가 표에서 정확히 조회됨 (일치, 법원/선고일 불일치, 자료 미포함 각 1건 이상).
-- **대조군 시험**: 판례표 머리글이 없는 일반 스프레드시트는 표로 색인되지 않음. 기존 `test_drive_rag_relevance.py` 불변 통과.
+- **실제 선별 경로 양성 시험**: `sync(query=...)`에서 서면 본문 및 파일명 낱말이 불일치하는 판례표가 주어졌을 때, 메타데이터 게이트에서 제외되더라도 표 후보로 식별되어 색인되고, 인용 문서 검토(`review_references`)까지 연결되어 사건번호가 정확히 조회됨 (일치, 법원/선고일 불일치, 자료 미포함 각 1건 이상). 일반 prose 발췌가 0건이어도 정확 조회가 정상 실행됨을 확인.
+- **대조군 시험**: 판례표 머리글이 없는 일반 스프레드시트는 `NOT_A_CASE_TABLE`로 판정되고 RAG chunk로 색인되지 않음. 기존 `test_drive_rag_relevance.py` 불변 통과.
 - **예산 및 이어 읽기**: 동기화 시간 예산 도달 시 중단되고, 다음 동기화에서 `continuation`으로 남은 행이 끝까지 색인됨. 추출기 버전 변경 후 첫 실행에서도 재색인됨.
-- **반복 입력 시간 시험**: 표 후보 감지 및 헤더 매핑 2,000회 이상 반복 실행 시 0.1초 이내 통과 검증.
+- **표 조각 미주입 검증**: 표가 색인된 상태에서 일반 문서 대조 묶음(`sources`)에 표 행 chunk가 주입되지 않음을 검증.
 - **회귀 방지**: TK-71 4절 6 회귀 금지 시험 및 고정 81.7/79.2/0 유지.

@@ -24,6 +24,28 @@ from .case_table import lookup_records
 
 SUPPORTED = {".pdf", ".docx", ".hwpx", ".hwp", ".xlsx", ".txt", ".md", ".csv"}
 
+# 표준판례 표 후보 메타데이터 기준 (TK-74)
+CASE_TABLE_EXTENSIONS = {".xlsx", ".csv"}
+CASE_TABLE_MIMES = {
+    "application/vnd.google-apps.spreadsheet",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "text/csv",
+}
+CASE_TABLE_MAX_BYTES = 96 * 1024 * 1024
+
+
+def is_case_table_candidate(item: dict) -> bool:
+    """파일명이나 서면 본문과의 낱말 일치 여부와 무관하게 메타데이터로 판례 표 후보를 식별한다 (TK-74)."""
+    name = str(item.get("name") or "")
+    ext = relevance.extension(name).lower()
+    mime = str(item.get("mimeType") or "").lower()
+    size = int(item.get("size") or 0)
+    if size > CASE_TABLE_MAX_BYTES:
+        return False
+    if ext in CASE_TABLE_EXTENSIONS or mime in CASE_TABLE_MIMES:
+        return True
+    return False
+
 
 def isolated_extract(data, filename, mime, *, directory, timeout, continuation=None):
     from apps.api.security import scan_upload
@@ -45,6 +67,7 @@ def isolated_extract(data, filename, mime, *, directory, timeout, continuation=N
             arguments.append(str(checkpoint))
         env = {k: v for k, v in os.environ.items() if k.upper() in {
             "PATH", "SYSTEMROOT", "WINDIR", "TEMP", "TMP", "LANG", "PYTHONUTF8",
+            "APPDATA", "USERPROFILE", "HOME",
             "LV_CASE_TABLE_MAX_EXCLUDED_ROWS"}}
         env.update(LV_ALLOW_NETWORK="0", LV_OCR_MAX_PAGES="0", LV_INDEPENDENT_OCR="off",
                    OPENBLAS_NUM_THREADS="1", OMP_NUM_THREADS="1", MKL_NUM_THREADS="1",
@@ -215,6 +238,11 @@ class ReferenceLibrary:
 
     def _finish(self, started, client):
         diagnostics = self.summary["diagnostics"]
+        status_info = self.case_table_status()
+        diagnostics["case_table_candidates"] = status_info["candidates"]
+        self.summary["case_table_status"] = status_info["status"]
+        if status_info["status"] != "NO_CASE_TABLE":
+            diagnostics["case_table_status"] = status_info["status"]
         diagnostics["finished_at"] = datetime.now(timezone.utc).isoformat()
         diagnostics["elapsed_ms"] = round((time.monotonic() - started) * 1000)
         diagnostics["outcome"] = self.summary["status"]
@@ -283,7 +311,11 @@ class ReferenceLibrary:
         cached = {row[0] for row in db.execute("SELECT id FROM files")}
         audit = {item["file_id"]: item for item in self.summary["inventory"]}
         chosen = (lambda file_id: True) if gate is None else (lambda file_id: gate[file_id]["selected"])
-        ordered = sorted(items, key=lambda i: (not chosen(i["id"]), gate[i["id"]].get("rank", 0) if gate else 0,
+        is_candidate = lambda file_id: is_case_table_candidate(audit[file_id])
+        ordered = sorted(items, key=lambda i: (
+            not (chosen(i["id"]) or is_candidate(i["id"])),
+            not is_candidate(i["id"]),
+            gate[i["id"]].get("rank", 0) if gate else 0,
             -audit[i["id"]]["metadata"]["score"],
             -(gate[i["id"]]["score"] if gate else 0), i["id"] in skip, i["id"] not in cached,
             int(i.get("size") or 0), i["id"]))
@@ -291,9 +323,9 @@ class ReferenceLibrary:
             self.notify(index, len(ordered))
             file_id = item["id"]
             entry = audit[file_id]
-            if not chosen(file_id) and file_id not in cached:
-                # 후보가 아니고 색인된 적도 없는 파일은 권한 확인·내려받기 없이 넘어간다.
-                entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"])
+            if not chosen(file_id) and not is_candidate(file_id) and file_id not in cached:
+                # 후보가 아니고 색인된 적도 없는 일반 파일은 권한 확인·내려받기 없이 넘어간다.
+                entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"] if gate else "NOT_SELECTED")
                 continue
             try:
                 client.remaining()
@@ -323,9 +355,9 @@ class ReferenceLibrary:
                     parsed = json.loads(row[0])
                     self.summary["files_reused"] += 1
                     entry["reused"] = True
-                elif not chosen(file_id):
-                    # 이름·경로·본문 검색 어느 쪽으로도 관련 후보가 아니면 열지 않는다(이미 색인된 파일은 위에서 재사용).
-                    entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"])
+                elif not chosen(file_id) and not is_candidate(file_id):
+                    # 이름·경로·본문 검색 어느 쪽으로도 관련 후보가 아니고 표 후보도 아니면 열지 않는다.
+                    entry.update(status="NOT_SELECTED_METADATA", reason=gate[file_id]["reason"] if gate else "NOT_SELECTED")
                     continue
                 else:
                     if new_files >= self.settings.rag_max_files:
@@ -394,6 +426,13 @@ class ReferenceLibrary:
                         diagnostics["extractions"]["ms"] += round((time.monotonic() - mark) * 1000)
                     chunks = parsed.pop("chunks", [])
                     case_records = parsed.pop("case_records", [])
+                    is_case_table = bool(parsed.get("structured_case_table"))
+                    # 표 후보로 다운로드되었으나 판례표가 아니고 문서 선별도 되지 않은 스프레드시트는 RAG chunk 격리
+                    if is_candidate(file_id) and not chosen(file_id) and not is_case_table:
+                        chunks = []
+                        case_records = []
+                        parsed["chunk_count"] = 0
+                        parsed["reason"] = "NOT_A_CASE_TABLE"
                     append_batch = bool(prior and parsed.get("resumed") and prior.get("sha256") == parsed.get("sha256")
                                         and parsed.get("reason") != "REFERENCE_QUARANTINED")
                     parsed["chunk_count"] = len(chunks) + (prior.get("chunk_count", 0) if append_batch else 0)
@@ -423,14 +462,31 @@ class ReferenceLibrary:
                                  json.dumps(r.get("quality_warnings", []), ensure_ascii=False),
                                  r.get("case_head"), r.get("indexed_text"),
                                  json.dumps(r.get("raw_cells", {}), ensure_ascii=False)) for r in case_records])
-                if parsed.get("partial") or not parsed.get("chunk_count"):
-                    self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
-                        "reason": parsed.get("reason") or "REFERENCE_EMPTY",
-                        "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
-                entry.update(status=("INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED")
-                             if parsed.get("chunk_count") else "PARSE_FAILED",
-                             reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
-                             read_pages=parsed.get("read_pages"))
+                is_case_table = bool(parsed.get("structured_case_table"))
+                is_non_case_candidate = bool(is_candidate(file_id) and not chosen(file_id) and not is_case_table)
+                if is_non_case_candidate:
+                    entry.update(status="NOT_A_CASE_TABLE", reason="NOT_A_CASE_TABLE")
+                elif is_case_table:
+                    entry["structured_case_table"] = True
+                    entry["case_table_stats"] = parsed.get("stats", {})
+                    entry["continuation"] = bool(parsed.get("continuation"))
+                    status = "INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED"
+                    entry.update(status=status,
+                                 reason=parsed.get("reason") or "TEXT_INDEXED",
+                                 pages=parsed.get("pages"), read_pages=parsed.get("read_pages"))
+                    if parsed.get("partial"):
+                        self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
+                            "reason": parsed.get("reason") or "REFERENCE_PARTIALLY_READ",
+                            "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
+                else:
+                    if parsed.get("partial") or not parsed.get("chunk_count"):
+                        self.summary["issues"].append({"file_id": file_id, "name": item.get("name"),
+                            "reason": parsed.get("reason") or "REFERENCE_EMPTY",
+                            "read_pages": parsed.get("read_pages"), "pages": parsed.get("pages")})
+                    entry.update(status=("INDEXED_PARTIAL" if parsed.get("partial") else "INDEXED")
+                                 if parsed.get("chunk_count") else "PARSE_FAILED",
+                                 reason=parsed.get("reason") or "TEXT_INDEXED", pages=parsed.get("pages"),
+                                 read_pages=parsed.get("read_pages"))
                 for key in ("excluded_pages", "scan_findings", "no_text_pages", "unprocessed_pages", "coverage_note",
                             "text_parser", "fallback_pages", "stats", "read_ranges", "excluded_rows", "table_version"):
                     if parsed.get(key):
@@ -440,19 +496,20 @@ class ReferenceLibrary:
                     entry["case_table_stats"] = parsed.get("stats", {})
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
                 entry["body_extraction_scope"] = parsed.get("body_extraction_scope")
-                if parsed.get("chunk_count"):
+                if parsed.get("chunk_count") or is_case_table:
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
                         "folder_path": folder_path,
                         "metadata_score": entry["metadata"]["score"],
                         "url": "https://drive.google.com/file/d/" + file_id + "/view",
                         "revision": version, "modified_time": item.get("modifiedTime"),
-                        "sha256": parsed["sha256"], "partial": bool(parsed.get("partial")),
+                        "sha256": parsed.get("sha256", ""), "partial": bool(parsed.get("partial")),
                         "pages": parsed.get("pages"), "read_pages": parsed.get("read_pages"),
                         "page_numbers_reliable": parsed.get("page_numbers_reliable", True),
                         "body_extraction_scope": parsed.get("body_extraction_scope"),
-                        "chunk_count": parsed["chunk_count"],
-                        "structured_case_table": bool(parsed.get("structured_case_table")),
-                        "case_table_stats": parsed.get("stats", {})}
+                        "chunk_count": parsed.get("chunk_count", 0),
+                        "structured_case_table": is_case_table,
+                        "case_table_stats": parsed.get("stats", {}),
+                        "case_table_only": bool(is_case_table and not chosen(file_id))}
             except ReferenceError as exc:
                 code = str(exc)
                 entry.update(status="UNSUPPORTED_TYPE" if code == "UNSUPPORTED_REFERENCE_FORMAT" else
@@ -499,18 +556,19 @@ class ReferenceLibrary:
                         or relevance.name_gate_passes(getattr(self, "_gate_weights", {}).get(item["file_id"], {}), text))]
         log["coverage"] = "INCOMPLETE_COVERAGE" if pending else "CHECKED_INDEXED_CORPUS"
         log["unreviewed_candidates"] = pending
-        if not self.eligible:
+        prose_eligible = {k: v for k, v in self.eligible.items() if not v.get("case_table_only")}
+        if not prose_eligible:
             if pending:
                 log["decision"] = "INCOMPLETE_COVERAGE"
             log["reason"] = "NO_ELIGIBLE_REFERENCE"
             return log
         mark = time.monotonic()
-        total = sum(v.get("chunk_count") or 0 for v in self.eligible.values())
+        total = sum(v.get("chunk_count") or 0 for v in prose_eligible.values())
         log["corpus_chunks"] = total
         counts = set(relevance.query_tokens(text[:24000]))
-        names = relevance.name_weights(self.eligible)
-        priority_ids = sorted(k for k, v in self.eligible.items() if relevance.priority_reference(v, text))
-        log["priority_references"] = [{"file_id": k, "title": self.eligible[k].get("title"),
+        names = relevance.name_weights(prose_eligible)
+        priority_ids = sorted(k for k, v in prose_eligible.items() if relevance.priority_reference(v, text))
+        log["priority_references"] = [{"file_id": k, "title": prose_eligible[k].get("title"),
                                       "searched": False, "search_reason": "NOT_EXECUTED" if i < 12 else "SEARCH_LIMIT"}
                                      for i, k in enumerate(priority_ids)]
         with self.connect() as db:
@@ -541,7 +599,7 @@ class ReferenceLibrary:
                 log["ms"] = round((time.monotonic() - mark) * 1000)
                 return log
             db.execute("CREATE TEMP TABLE eligible (id TEXT PRIMARY KEY, revision TEXT)")
-            db.executemany("INSERT INTO eligible VALUES (?,?)", [(k, v["revision"]) for k, v in self.eligible.items()])
+            db.executemany("INSERT INTO eligible VALUES (?,?)", [(k, v["revision"]) for k, v in prose_eligible.items()])
             rows = db.execute("SELECT file_id, page, start, text, terms FROM chunks "
                 "JOIN eligible e ON e.id=chunks.file_id AND e.revision=chunks.revision "
                 "WHERE chunks MATCH ? ORDER BY bm25(chunks) LIMIT ?",
@@ -551,7 +609,7 @@ class ReferenceLibrary:
                 rows.extend(db.execute("SELECT file_id, page, start, text, terms FROM chunks "
                     "WHERE chunks MATCH ? AND file_id=? AND revision=? ORDER BY bm25(chunks) LIMIT 40",
                     (" OR ".join('"' + term + '"' for term in present), file_id,
-                     self.eligible[file_id]["revision"])).fetchall())
+                     prose_eligible[file_id]["revision"])).fetchall())
                 log["priority_references"][index].update(searched=True, search_reason="SEARCH_COMPLETED")
         # A short query cannot share more terms than it has.
         required = min(relevance.MIN_MATCHED_TERMS, len(profile))
@@ -640,10 +698,81 @@ class ReferenceLibrary:
     def has_case_tables(self) -> bool:
         return any(v.get("structured_case_table") for v in self.eligible.values())
 
+    def case_table_status(self) -> dict[str, Any]:
+        """표 후보별 색인 상태 및 종합 판례표 상태를 반환한다 (TK-74)."""
+        inventory = self.summary.get("inventory", [])
+        candidates = [item for item in inventory if is_case_table_candidate(item)]
+        if not candidates:
+            if self._case_rows():
+                return {"status": "INDEXED", "candidates": [], "indexed_rows": len(self._case_rows())}
+            return {"status": "NO_CASE_TABLE", "candidates": [], "indexed_rows": 0}
+
+        cand_diagnostics = []
+        has_indexed = False
+        has_partial = False
+        has_indexing = False
+        has_quarantine = False
+        has_budget = False
+        total_indexed_rows = 0
+
+        for c in candidates:
+            fid = c.get("file_id")
+            status = c.get("status")
+            reason = str(c.get("reason") or "")
+            stats = c.get("case_table_stats") or {}
+            indexed = stats.get("indexed", 0)
+            total_indexed_rows += indexed
+            continuation = bool(c.get("continuation"))
+
+            diag = {
+                "file_id": fid,
+                "name": c.get("name"),
+                "status": status,
+                "indexed_rows": indexed,
+                "continuation": continuation,
+                "reason": reason,
+                "stats": stats,
+            }
+            cand_diagnostics.append(diag)
+
+            if status == "INDEXED":
+                has_indexed = True
+            elif status == "INDEXED_PARTIAL":
+                has_partial = True
+                if continuation:
+                    has_indexing = True
+            elif status == "SELECTED_PENDING" or "BUDGET" in reason:
+                has_budget = True
+                has_indexing = True
+            elif status == "QUARANTINED" or "QUARANTINE" in reason:
+                has_quarantine = True
+
+        if total_indexed_rows == 0 and self._case_rows():
+            total_indexed_rows = len(self._case_rows())
+
+        if has_indexed and not has_partial and not has_indexing:
+            overall = "INDEXED"
+        elif has_indexed or has_partial:
+            overall = "PARTIAL" if (has_partial or has_indexing) else "INDEXED"
+        elif has_indexing or has_budget:
+            overall = "INDEXING"
+        elif has_quarantine:
+            overall = "QUARANTINED"
+        elif all(d["status"] in ("NOT_A_CASE_TABLE", "NOT_SELECTED_METADATA", "PARSE_FAILED", "UNSUPPORTED_TYPE") for d in cand_diagnostics):
+            overall = "NO_CASE_TABLE"
+        else:
+            overall = "PARTIAL" if total_indexed_rows > 0 else "NO_CASE_TABLE"
+
+        return {
+            "status": overall,
+            "candidates": cand_diagnostics,
+            "indexed_rows": total_indexed_rows,
+        }
+
     def _case_rows(self) -> list[dict]:
         if self._case_rows_cache is not None:
             return self._case_rows_cache
-        if not self.has_case_tables() or not self.db_path.exists():
+        if not self.db_path.exists():
             return []
         try:
             with self.connect() as db:

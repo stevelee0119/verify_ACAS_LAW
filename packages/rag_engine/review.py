@@ -324,14 +324,25 @@ def review_document(result, library, router, context, pii):
     citation_by_id = {getattr(c, "citation_id", None) or (c.get("citation_id") if isinstance(c, dict) else None): c
                       for c in citations}
     reference_case_matches = {}
+    table_info = getattr(library, "case_table_status", lambda: {"status": "NO_CASE_TABLE", "candidates": [], "indexed_rows": 0})()
+    review["case_table_status"] = table_info.get("status", "NO_CASE_TABLE")
+    if table_info.get("candidates"):
+        review["case_table_candidates"] = table_info["candidates"]
+
     if getattr(library, "has_case_tables", lambda: False)():
+        is_partial = table_info.get("status") in ("PARTIAL", "INDEXING")
         for citation in citations:
             cid = getattr(citation, "citation_id", None) or (citation.get("citation_id") if isinstance(citation, dict) else None)
             case_number = getattr(citation, "canonical_case_number", None) or getattr(citation, "case_number", None)
             if isinstance(citation, dict):
                 case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
             if cid and case_number:
-                reference_case_matches[cid] = library.match_case(citation)
+                match = library.match_case(citation)
+                # 부분 색인인 경우 메타데이터 보강 (평가 측 조건 2)
+                if is_partial and match.get("status") == "NOT_IN_REFERENCE":
+                    match["scope"] = "PARTIAL_INDEX_RANGE"
+                    match["partial_indexed"] = True
+                reference_case_matches[cid] = match
         review["structured_case_search"] = {"enabled": True, "corpus": "ELIGIBLE_CASE_TABLE_ROWS",
                                              "holding_first": True}
     review["reference_case_matches"] = reference_case_matches
@@ -790,6 +801,8 @@ def report_lines(run_result):
         review = doc.engine_data.get("rag", {})
         used = "Drive 자료 활용" if review.get("drive_used") else "Drive 자료 미활용"
         lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {used} / {review.get('reason', '')}")
+        if review.get("case_table_status"):
+            lines.append(f"표준판례 표 상태: {review['case_table_status']}")
         for cid, match in (review.get("reference_case_matches") or {}).items():
             lines.append(f"사건정보 대조({cid}): {match.get('status', 'NOT_CHECKED')} / "
                          f"{match.get('sheet', '')}!{match.get('source_cell_range', '')}")
