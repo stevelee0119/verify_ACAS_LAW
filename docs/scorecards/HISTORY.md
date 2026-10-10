@@ -709,3 +709,8 @@
   - 로컬 전체 시험 직렬 9분 8초(4,609건). 가장 오래 걸린 것은 `test_tk71_structured_case_table` 대형 표 시험 80초, 브라우저 진행 시험 31초·11초.
   - CI 테스트 작업은 같은 전체 시험을 SQLite·PostgreSQL로 차례로 두 번 돈다.
   - pytest-xdist 4병렬은 14분을 넘겨도 끝나지 않았다(직렬보다 느림, OCR 동시 실행 경합). 지금 상태로는 쓸 수 없다.
+- **CI 테스트 작업 분리(2026-10-10, 사용자 지시):** `ci.yml`의 한 작업에서 차례로 돌던 SQLite·PostgreSQL 전체 시험을 두 작업(`테스트 (SQLite + 인프로세스 Worker)`·`테스트 (PostgreSQL/pgvector + Celery 브로커)`)으로 나눠 동시에 돌린다.
+  - 시험 범위·환경 변수·서비스(PostgreSQL·Redis)는 이전과 같다.
+  - 필수 상태 확인 이름 `테스트 (SQLite + PostgreSQL/pgvector + Redis)`는 두 작업 결과를 모으는 집계 작업이 이어받는다(둘 다 성공해야 성공). 그래서 `main`·Steve 보호 규칙은 바꾸지 않아도 된다.
+  - 예상: 테스트 작업 벽시계 시간 16~18분 → 약 11~12분. 실제 값은 이 변경을 담은 PR의 CI에서 확인한다.
+  - 확인: actionlint 통과, 보호 경로 시험·CI 실패 목록 도구 시험 통과.
