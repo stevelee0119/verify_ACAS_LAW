@@ -5,8 +5,10 @@
 """
 from __future__ import annotations
 
+import bisect
 import re
-from typing import Any, List, Optional, Tuple
+from functools import lru_cache
+from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.enums import CitationType
 from packages.common.schemas import Citation, NormalizedDocument
@@ -14,7 +16,11 @@ from packages.common.schemas import Citation, NormalizedDocument
 from packages.document_engine.reading_text import (QUOTE_SPAN_RE, build_reading_text, ensure_running_heads,
                                                     join_separator, sentence_bounds)
 
-from .normalize import (canonical_case_number, canonical_date, canonical_law_name, law_name_suffix)
+from .normalize import (canonical_case_number, canonical_date, canonical_law_name as _raw_canonical_law_name,
+                        law_name_suffix)
+
+# 법령명 정규화 결과 캐시 (문서 내 반복 인용 시 수십 개 정규식 재컴파일/탐색 방지, TK-72)
+canonical_law_name = lru_cache(maxsize=4096)(_raw_canonical_law_name)
 
 # 스캔 OCR은 '헌법 재판소'처럼 법원명을 띄어 읽기도 한다(추가지시 G2). 법원명 안의 공백은 표준화 때 없앤다.
 COURT_RE = r"(?:대법원|헌법\s?재판소|헌재|[가-힣]{2,10}(?:지방|고등|가정|행정|회생|특허|군사)?법원(?:\s*[가-힣]{2,6}지원)?|서울행정법원|특허법원|군사법원|중앙지역군사법원|고등군사법원)"
@@ -136,6 +142,9 @@ def _join_hard_wrapped_citations(text: str) -> str:
     1) 낫표(「」,『』) 안의 줄바꿈
     2) 한글 뒤의 줄바꿈 + 법령명 접미사(법/령/규칙/훈령 등)로 이어지는 줄바꿈
     """
+    # 개행 문자가 없는 텍스트는 결합 전처리를 생략한다
+    if "\n" not in text:
+        return text
     # 낫표 안의 줄바꿈 — 한 번의 줄바꿈만 허용(두 줄 이상 떨어진 것은 별도 인용)
     text = _BRACKET_NEWLINE_RE.sub(r"\1 \2", text)
     # 법령명 접미사 직전 줄바꿈
@@ -185,8 +194,9 @@ def _admin_rule_citation(text: str, anchor_start: int, anchor_end: int, *, agenc
 
 
 # 법령해석례 / 행정심판재결례
+# 기관명이 없을 때는 '법령해석' 또는 '유권해석'으로 직접 시작하도록 하여 공백 구간에서의 제곱 시간 역추적 방지 (TK-72)
 INTERPRETATION_RE = re.compile(
-    r"(?P<authority>법제처|법무부|국방부|행정안전부)?\s*(?:법령해석|유권해석)\s*(?:례)?\s*"
+    r"(?:(?P<authority>법제처|법무부|국방부|행정안전부)\s*)?(?:법령해석|유권해석)\s*(?:례)?\s*"
     r"(?P<no>\d{2}\s*-\s*\d{4}(?!\d))?"
 )
 # "국방부 법무관리관실 2025. 4. 31.자 유권해석", "○○부 2024. 3. 2. 질의회신"
@@ -211,8 +221,9 @@ DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
 # 국내 표기 관행은 논문에 「」, 단행본에 『』를 쓴다. 『』가 빠져 있어
 # 단행본 인용(예: 홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)이
 # 전혀 추출되지 않았다. 단행본은 권·호가 없으므로 그 부분도 선택으로 둔다.
+# 저자 목록 반복 상한을 9회(최대 10인)로 제한하여 가운뎃점·쉼표 반복 입력에서의 제곱 시간 역추적 방지 (TK-72)
 ACADEMIC_RE = re.compile(
-    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3})*)\s*,\s*"
+    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3}){0,9})\s*,\s*"
     r"(?:[「『\"“](?P<title>[^」』\"”]{5,120})[」』\"”])\s*,\s*"
     r"(?P<journal>[가-힣A-Za-z\s]{2,40}?)\s*"
     r"(?:제?\s*(?P<volume>\d+)\s*권)?\s*(?:제?\s*(?P<issue>\d+)\s*호)?\s*[,(]?\s*"
@@ -222,13 +233,58 @@ ACADEMIC_RE = re.compile(
 QUOTE_RE = re.compile(r"[“\"]([^”\"]{10,600})[”\"]")
 
 
+_LEAD_STRIP_RE = re.compile(r"^[\s\d가-하.)(]*[.)]\s*")
+
+
 def _quote_near(text: str, index: int, window: int = 400) -> Optional[str]:
     """인용 앞뒤에서 직접 인용문을 찾는다."""
     segment = text[max(0, index - window) : index + window]
+    if '"' not in segment and "“" not in segment:
+        return None
     offset = max(0, index - window)
     quotes = list(QUOTE_RE.finditer(segment))
     nearest = min(quotes, key=lambda m: min(abs(offset + m.start() - index), abs(offset + m.end() - index)), default=None)
     return nearest.group(1) if nearest else None
+
+
+class SpanTracker:
+    """구간 겹침 검사를 이진 탐색으로 수행하는 선형/로그 시간 색인 (TK-72).
+
+    이미 소비된 인용 구간들을 시작 위치 순으로 정렬 보존하여,
+    신규 구간과의 겹침 여부를 O(log N) 시간에 판정한다.
+    """
+    __slots__ = ("starts", "ends")
+
+    def __init__(self) -> None:
+        self.starts: List[int] = []
+        self.ends: List[int] = []
+
+    def overlaps(self, start: int, end: int) -> bool:
+        """기존 구간 중 [start, end)와 겹치는 구간이 있는지 판정한다."""
+        if not self.starts:
+            return False
+        idx = bisect.bisect_right(self.starts, start)
+        # 직전 구간이 start 이후까지 이어지는지 확인 (s <= start < e)
+        if idx > 0 and self.ends[idx - 1] > start:
+            return True
+        # 다음 구간이 end 이전에 시작하는지 확인 (start < s < end)
+        if idx < len(self.starts) and self.starts[idx] < end:
+            return True
+        return False
+
+    def add(self, start: int, end: int) -> None:
+        """새 구간을 색인에 추가한다."""
+        if not self.starts or start >= self.starts[-1]:
+            self.starts.append(start)
+            self.ends.append(end)
+        else:
+            idx = bisect.bisect_right(self.starts, start)
+            self.starts.insert(idx, start)
+            self.ends.insert(idx, end)
+
+    def append(self, span: Tuple[int, int]) -> None:
+        """기존 consumed.append((start, end)) 인터페이스와의 호환 래퍼."""
+        self.add(span[0], span[1])
 
 
 def extract_from_text(
@@ -237,10 +293,8 @@ def extract_from_text(
     # TK-07: 줄바꿈으로 갈라진 법령 인용을 공백으로 결합 (길이 불변)
     text = _join_hard_wrapped_citations(text)
     citations: List[Citation] = []
-    consumed: List[tuple] = []
-
-    def overlaps(start: int, end: int) -> bool:
-        return any(s <= start < e or s < end <= e for s, e in consumed)
+    consumed = SpanTracker()
+    overlaps = consumed.overlaps
 
     for pattern, kind in (
         (INTERPRETATION_FULL_RE, CitationType.INTERPRETATION),
@@ -459,27 +513,28 @@ def extract_from_text(
     _resolve_article_references(text, citations, consumed, overlaps, document_id=document_id,
                                 block_id=block_id, page=page)
 
-    # 5) 학술자료
-    for m in ACADEMIC_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        authors = [a.strip() for a in re.split(r"·", m.group("authors")) if a.strip()]
-        citations.append(
-            Citation.create(
-                CitationType.ACADEMIC,
-                m.group(0).strip(),
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(m.start(), m.end()),
-                title=m.group("title").strip(),
-                authors=authors,
-                journal=m.group("journal").strip(),
-                year=int(m.group("year")),
-                context=text[max(0, m.start() - 80) : m.end() + 120],
+    # 5) 학술자료: 제목 낫표/따옴표가 포함된 경우에만 탐색 (TK-72)
+    if any(q in text for q in ("「", "『", '"', "“")):
+        for m in ACADEMIC_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            authors = [a.strip() for a in re.split(r"·", m.group("authors")) if a.strip()]
+            citations.append(
+                Citation.create(
+                    CitationType.ACADEMIC,
+                    m.group(0).strip(),
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(m.start(), m.end()),
+                    title=m.group("title").strip(),
+                    authors=authors,
+                    journal=m.group("journal").strip(),
+                    year=int(m.group("year")),
+                    context=text[max(0, m.start() - 80) : m.end() + 120],
+                )
             )
-        )
-        consumed.append((m.start(), m.end()))
+            consumed.append((m.start(), m.end()))
 
     for m in DOI_RE.finditer(text):
         if overlaps(m.start(), m.end()):
@@ -510,14 +565,26 @@ def _resolve_article_references(text, citations, consumed, overlaps, *, document
     references = []
     for pattern in (SAME_ARTICLE_REF_RE, BARE_PARAGRAPH_REF_RE):
         references += [m for m in pattern.finditer(text) if not overlaps(m.start(), m.end())]
+    if not references:
+        return
+    # 법령 인용 목록의 종료 위치들을 정렬된 리스트로 유지하여 O(log N) 이진 탐색 (TK-72)
+    statute_citations = sorted(
+        [c for c in citations if c.type in _STATUTE_TYPES and c.span],
+        key=lambda c: c.span[1],
+    )
+    statute_ends = [c.span[1] for c in statute_citations]
+
     for m in sorted(references, key=lambda r: r.start()):
         if overlaps(m.start(), m.end()):
             continue
-        statutes = [c for c in citations if c.type in _STATUTE_TYPES and c.span and c.span[1] <= m.start()
-                    and m.start() - c.span[1] <= REFERENCE_WINDOW]
-        if not statutes:
+        if not statute_ends:
             continue
-        base = max(statutes, key=lambda c: c.span[1])
+        idx = bisect.bisect_right(statute_ends, m.start())
+        if idx == 0:
+            continue
+        base = statute_citations[idx - 1]
+        if m.start() - base.span[1] > REFERENCE_WINDOW:
+            continue
         bare = m.re is BARE_PARAGRAPH_REF_RE
         paragraph = m.group("paragraph") or (None if bare else base.paragraph)
         if bare and not paragraph:
@@ -532,6 +599,10 @@ def _resolve_article_references(text, citations, consumed, overlaps, *, document
                                     "reference_kind": "BARE_PARAGRAPH" if bare else "SAME_ARTICLE"})
         citations.append(citation)
         consumed.append((m.start(), m.end()))
+        # 추가된 참조 인용도 이후 참조의 기준이 될 수 있도록 이진 탐색 색인에 반영
+        ins_idx = bisect.bisect_right(statute_ends, m.end())
+        statute_ends.insert(ins_idx, m.end())
+        statute_citations.insert(ins_idx, citation)
 
 
 def attach_claim_text(text: str, citations: List[Citation]) -> None:
@@ -546,8 +617,19 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
         return
     # 한국어 하드 래핑 줄바꿈 결합: 종결 부호 없이 단순 개행된 줄을 공백으로 치환(길이 1:1 보존)하여 문장 단절 방지
     unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text)
+    c_idx = 0
+    n_located = len(located)
     for s_start, s_end in _sentences(unwrapped):
-        inside = [c for c in located if s_start <= c.span[0] < s_end]
+        # 문장 범위 [s_start, s_end)에 속하는 인용을 투 포인터로 분할 (TK-72)
+        while c_idx < n_located and located[c_idx].span[0] < s_start:
+            c_idx += 1
+        inside_end = c_idx
+        while inside_end < n_located and located[inside_end].span[0] < s_end:
+            inside_end += 1
+        inside = located[c_idx:inside_end]
+        c_idx = inside_end
+        if not inside:
+            continue
         for position, citation in enumerate(inside):
             if citation.type in (CitationType.CASE, CitationType.CONSTITUTIONAL):
                 # 판례를 근거로 서면이 말하는 내용: 같은 문장에서 인용 표시를 뺀 부분(의견 귀속·결론 방향 검사용)
@@ -569,7 +651,7 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
                 stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
                 claim = unwrapped[end:stop]
                 # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
-                lead = re.sub(r"^[\s\d가-하.)(]*[.)]\s*", "", unwrapped[s_start:start]).split()
+                lead = _LEAD_STRIP_RE.sub("", unwrapped[s_start:start]).split()
                 if lead:
                     subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
                     if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):
@@ -577,9 +659,9 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
             citation.attributes["claim_text"] = " ".join(claim.split())[:400]
 
 
-def _law_name_start(m: "re.Match") -> int:
-    """법령명 앞에 붙어 잡힌 문장 조각을 뺀 법령명의 시작 위치."""
-    raw = m.group("law")
+@lru_cache(maxsize=4096)
+def _law_name_offset(raw: str) -> int:
+    """법령명 앞에 붙어 잡힌 문장 조각을 뺀 법령명의 상대 시작 위치 (TK-72 캐시)."""
     suffix = law_name_suffix(raw)
     clean_raw = re.sub(r"[「」『』]", " ", raw or "")
     first_word = suffix.split()[0] if suffix else ""
@@ -588,15 +670,20 @@ def _law_name_start(m: "re.Match") -> int:
         if pos >= 0:
             if pos > 0 and raw[pos - 1] in "「『":
                 pos -= 1
-            return m.start("law") + pos
+            return pos
     kept = suffix.split()
     tokens = list(re.finditer(r"[^\s「」『』]+", raw))
     if not kept or len(kept) > len(tokens):
-        return m.start("law")
+        return 0
     start = tokens[-len(kept)].start()
     if start > 0 and raw[start - 1] in "「『":
         start -= 1
-    return m.start("law") + start
+    return start
+
+
+def _law_name_start(m: "re.Match") -> int:
+    """법령명 앞에 붙어 잡힌 문장 조각을 뺀 법령명의 시작 위치."""
+    return m.start("law") + _law_name_offset(m.group("law"))
 
 
 # --- 직접 인용문 결합 --------------------------------------------------------------
@@ -615,13 +702,27 @@ def bind_quotes(text: str, citations: List[Citation]) -> None:
     """
     for citation in citations:
         citation.quoted_text = None
-    located = [c for c in citations if c.span]
+    located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
     if not located:
         return
+    # 인용부호(“ 또는 ")가 텍스트에 전혀 없으면 직접 인용문 결합 탐색 생략 (TK-72)
+    if not any(q in text for q in ('"', "“")):
+        return
+    c_idx = 0
+    n_located = len(located)
     for s_start, s_end in _sentences(text):
-        for quote in QUOTE_SPAN_RE.finditer(text, s_start, s_end):
-            inside = [c for c in located if s_start <= c.span[0] < s_end]
-            after = sorted((c for c in inside if c.span[0] >= quote.end()), key=lambda c: c.span[0])
+        quotes = list(QUOTE_SPAN_RE.finditer(text, s_start, s_end))
+        while c_idx < n_located and located[c_idx].span[0] < s_start:
+            c_idx += 1
+        inside_end = c_idx
+        while inside_end < n_located and located[inside_end].span[0] < s_end:
+            inside_end += 1
+        inside = located[c_idx:inside_end]
+        c_idx = inside_end
+        if not quotes or not inside:
+            continue
+        for quote in quotes:
+            after = [c for c in inside if c.span[0] >= quote.end()]
             before = sorted((c for c in inside if c.span[1] <= quote.start()), key=lambda c: -c.span[1])
             target = None
             paren = re.match(r"[^(（]{0,40}?[(（]", text[quote.end():s_end])
@@ -729,12 +830,15 @@ def _attach_law_alias_candidates(text: str, citations: List[Citation]) -> None:
     어간(끝의 '법'을 뗀 4자 이상)으로 시작하는 경우이며, 후보가 하나일 때만 붙인다.
     """
     statutes = [c for c in citations if c.type == CitationType.STATUTE and c.law_name]
+    if not statutes:
+        return
     defined = {}
     for m in ALIAS_DEFINITION_RE.finditer(text):
         full, abbr = canonical_law_name(m.group("full")), m.group("abbr").strip()
         if abbr.endswith("법") and full.replace(" ", "") != abbr.replace(" ", ""):
             defined[abbr.replace(" ", "")] = full
     full_names = {c.law_name for c in statutes if " " in c.law_name}
+    clean_full_names = [(f.replace(" ", ""), f) for f in full_names]
     for citation in statutes:
         written = citation.law_name.replace(" ", "")
         if " " in citation.law_name or not written.endswith("법"):
@@ -745,6 +849,6 @@ def _attach_law_alias_candidates(text: str, citations: List[Citation]) -> None:
         stem = written[:-1]
         if len(stem) < 4:
             continue
-        candidates = sorted(f for f in full_names if f.replace(" ", "").startswith(stem) and f.replace(" ", "") != written)
+        candidates = sorted(f for clean_f, f in clean_full_names if clean_f.startswith(stem) and clean_f != written)
         if len(candidates) == 1:
             citation.attributes.update(law_alias_candidate=candidates[0], law_alias_basis="DOCUMENT_FULL_NAME_PREFIX")
