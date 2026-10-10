@@ -221,14 +221,16 @@ DOI_RE = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Za-z0-9]+\b")
 # 국내 표기 관행은 논문에 「」, 단행본에 『』를 쓴다. 『』가 빠져 있어
 # 단행본 인용(예: 홍길동, 『현대 계약법과 알고리즘 책임론』, 법문사, 2024, 312면)이
 # 전혀 추출되지 않았다. 단행본은 권·호가 없으므로 그 부분도 선택으로 둔다.
-# 저자 목록 반복 상한을 9회(최대 10인)로 제한하여 가운뎃점·쉼표 반복 입력에서의 제곱 시간 역추적 방지 (TK-72)
+# 저자 목록은 상한 없이 전원을 보존(* 복원)하며, 가운뎃점 반복 백트래킹은 제목 앵커 유한 창 탐색으로 해결한다 (TK-72).
 ACADEMIC_RE = re.compile(
-    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3}){0,9})\s*,\s*"
+    r"(?P<authors>[가-힣][가-힣○△□*]{1,3}(?:\s*[·,]\s*[가-힣][가-힣○△□*]{1,3})*)\s*,\s*"
     r"(?:[「『\"“](?P<title>[^」』\"”]{5,120})[」』\"”])\s*,\s*"
     r"(?P<journal>[가-힣A-Za-z\s]{2,40}?)\s*"
     r"(?:제?\s*(?P<volume>\d+)\s*권)?\s*(?:제?\s*(?P<issue>\d+)\s*호)?\s*[,(]?\s*"
     r"(?P<year>(?:19|20)\d{2})"
 )
+# 학술자료 제목 앵커 패턴: 제목 낫표/따옴표를 선행 탐색하여 O(1) 유한 창에서만 저자를 검사한다 (TK-72)
+ACADEMIC_TITLE_ANCHOR_RE = re.compile(r"[「『\"“][^」』\"”]{5,120}[」』\"”]")
 
 QUOTE_RE = re.compile(r"[“\"]([^”\"]{10,600})[”\"]")
 
@@ -250,17 +252,58 @@ def _quote_near(text: str, index: int, window: int = 400) -> Optional[str]:
 class SpanTracker:
     """구간 겹침 검사를 이진 탐색으로 수행하는 선형/로그 시간 색인 (TK-72).
 
-    이미 소비된 인용 구간들을 시작 위치 순으로 정렬 보존하여,
-    신규 구간과의 겹침 여부를 O(log N) 시간에 판정한다.
+    이미 소비된 인용 구간들을 정렬 보존하여, 신규 구간과의 겹침 여부를 O(log N) 시간에 판정한다.
+    패턴 간 구간 추가 시 list.insert의 O(N^2) 메모리 이동 비용을 없애기 위해,
+    대기 목록(pending)에 추가 후 O(N) 투 포인터 병합을 수행한다. (한국어 주석)
     """
-    __slots__ = ("starts", "ends")
+    __slots__ = ("starts", "ends", "pending_starts", "pending_ends")
 
     def __init__(self) -> None:
         self.starts: List[int] = []
         self.ends: List[int] = []
+        self.pending_starts: List[int] = []
+        self.pending_ends: List[int] = []
+
+    def _flush(self) -> None:
+        """대기 중인 신규 구간 목록을 기존 정렬 목록과 O(N) 투 포인터로 병합한다."""
+        if not self.pending_starts:
+            return
+        if not self.starts:
+            self.starts = self.pending_starts
+            self.ends = self.pending_ends
+            self.pending_starts = []
+            self.pending_ends = []
+            return
+        # 두 개의 이미 정렬된 구간 리스트를 O(N) 단일 패스로 병합 정렬
+        merged_starts: List[int] = []
+        merged_ends: List[int] = []
+        i, j = 0, 0
+        n_old = len(self.starts)
+        n_new = len(self.pending_starts)
+        while i < n_old and j < n_new:
+            if self.starts[i] <= self.pending_starts[j]:
+                merged_starts.append(self.starts[i])
+                merged_ends.append(self.ends[i])
+                i += 1
+            else:
+                merged_starts.append(self.pending_starts[j])
+                merged_ends.append(self.pending_ends[j])
+                j += 1
+        if i < n_old:
+            merged_starts.extend(self.starts[i:])
+            merged_ends.extend(self.ends[i:])
+        if j < n_new:
+            merged_starts.extend(self.pending_starts[j:])
+            merged_ends.extend(self.pending_ends[j:])
+        self.starts = merged_starts
+        self.ends = merged_ends
+        self.pending_starts = []
+        self.pending_ends = []
 
     def overlaps(self, start: int, end: int) -> bool:
         """기존 구간 중 [start, end)와 겹치는 구간이 있는지 판정한다."""
+        if self.pending_starts:
+            self._flush()
         if not self.starts:
             return False
         idx = bisect.bisect_right(self.starts, start)
@@ -273,14 +316,16 @@ class SpanTracker:
         return False
 
     def add(self, start: int, end: int) -> None:
-        """새 구간을 색인에 추가한다."""
-        if not self.starts or start >= self.starts[-1]:
+        """새 구간을 추가한다. 단조 증가 시 바로 append하여 insert 비용을 방지한다."""
+        if not self.starts and not self.pending_starts:
+            self.starts.append(start)
+            self.ends.append(end)
+        elif not self.pending_starts and start >= self.starts[-1]:
             self.starts.append(start)
             self.ends.append(end)
         else:
-            idx = bisect.bisect_right(self.starts, start)
-            self.starts.insert(idx, start)
-            self.ends.insert(idx, end)
+            self.pending_starts.append(start)
+            self.pending_ends.append(end)
 
     def append(self, span: Tuple[int, int]) -> None:
         """기존 consumed.append((start, end)) 인터페이스와의 호환 래퍼."""
@@ -296,262 +341,266 @@ def extract_from_text(
     consumed = SpanTracker()
     overlaps = consumed.overlaps
 
-    for pattern, kind in (
-        (INTERPRETATION_FULL_RE, CitationType.INTERPRETATION),
-        (DATED_INTERPRETATION_RE, CitationType.INTERPRETATION),
-        (INTERPRETATION_RE, CitationType.INTERPRETATION),
-        (ADMIN_APPEAL_RE, CitationType.ADMIN_APPEAL),
-    ):
-        for m in pattern.finditer(text):
-            if overlaps(m.start(), m.end()):
-                continue
-            number = re.sub(r"\s+", "", m.group("no")) if m.group("no") else None
-            citations.append(Citation.create(
-                kind, m.group(0).strip(), document_id=document_id, block_id=block_id,
-                page=page, span=(m.start(), m.end()), case_number=number,
-                canonical_case_number=number, court=m.group("authority"),
-                decision_date=canonical_date(m.groupdict().get("date") or ""),
-                quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, m.start() - 120):m.end() + 200],
-            ))
-            consumed.append((m.start(), m.end()))
+    has_quotes = any(q in text for q in ('"', "“"))
+    quote_near = (lambda idx: _quote_near(text, idx)) if has_quotes else (lambda idx: None)
 
-    # 1) 헌재
-    for m in CONST_RE.finditer(text):
-        citations.append(
-            Citation.create(
-                CitationType.CONSTITUTIONAL,
-                m.group(0).strip(),
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(m.start(), m.end()),
-                court="헌법재판소",
-                decision_date=canonical_date(m.group("date") or ""),
-                case_number=re.sub(r"\s+", "", m.group("case_no")),
-                canonical_case_number=canonical_case_number(m.group("case_no")),
-                case_kind=m.group("kind") or "결정",
-                quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, m.start() - 120) : m.end() + 120],
-                attributes=_merged_attributes(m.group("case_no"), m.group("merged")),
-            )
-        )
-        consumed.append((m.start(), m.end()))
+    # 해석례 및 행정심판: 관련 키워드가 있는 경우에만 정규식 탐색 수행 (TK-72)
+    if any(k in text for k in ("해석", "유권", "회신", "질의", "심판")):
+        for pattern, kind in (
+            (INTERPRETATION_FULL_RE, CitationType.INTERPRETATION),
+            (DATED_INTERPRETATION_RE, CitationType.INTERPRETATION),
+            (INTERPRETATION_RE, CitationType.INTERPRETATION),
+            (ADMIN_APPEAL_RE, CitationType.ADMIN_APPEAL),
+        ):
+            for m in pattern.finditer(text):
+                if overlaps(m.start(), m.end()):
+                    continue
+                number = re.sub(r"\s+", "", m.group("no")) if m.group("no") else None
+                citations.append(Citation.create(
+                    kind, m.group(0).strip(), document_id=document_id, block_id=block_id,
+                    page=page, span=(m.start(), m.end()), case_number=number,
+                    canonical_case_number=number, court=m.group("authority"),
+                    decision_date=canonical_date(m.groupdict().get("date") or ""),
+                    quoted_text=quote_near(m.end()),
+                    context=text[max(0, m.start() - 120):m.end() + 200],
+                ))
+                consumed.append((m.start(), m.end()))
 
-    # 2) 완전한 판례 인용
-    for m in FULL_CASE_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        case_no = m.group("case_no")
-        citations.append(
-            Citation.create(
-                CitationType.CASE,
-                # 법원명 뒤 조사("헌법재판소는")는 인용 표기가 아니다
-                (f"{m.group('court').strip()} {text[m.start('date'):m.end()].strip()}" if m.group("particle")
-                 else m.group(0).strip()),
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(m.start(), m.end()),
-                court=_court_name(m.group("court")),
-                decision_date=canonical_date(m.group("date")),
-                case_number=re.sub(r"\s+", "", case_no),
-                canonical_case_number=canonical_case_number(case_no),
-                case_kind=(m.group("kind") or "판결").replace("선고", "판결"),
-                quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, m.start() - 120) : m.end() + 200],
-            )
-        )
-        if m.group("case_name"):
-            citations[-1].attributes["case_name"] = m.group("case_name")
-        consumed.append((m.start(), m.end()))
-
-    # 3) 법원명 없는 판례 인용
-    for m in BARE_CASE_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        case_no = m.group("case_no")
-        citations.append(
-            Citation.create(
-                CitationType.CASE,
-                m.group(0).strip(),
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(m.start(), m.end()),
-                court=None,
-                decision_date=None,
-                case_number=re.sub(r"\s+", "", case_no),
-                canonical_case_number=canonical_case_number(case_no),
-                case_kind=m.group("kind"),
-                quoted_text=_quote_near(text, m.end()),
-                context=text[max(0, m.start() - 120) : m.end() + 200],
-            )
-        )
-        consumed.append((m.start(), m.end()))
-
-    # 4-1) 행정규칙: "OO부훈령 제N호"처럼 발령기관·종류·번호가 있는 인용
-    for m in ADMIN_RULE_REF_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        start, end = m.start(), m.end()
-        # 규칙 이름은 번호 바로 앞("「…」(OO부훈령 제N호")이나 바로 뒤("OO부훈령 제N호 「…」")에만
-        # 붙인다. 같은 문장의 다른 괄호(위임 근거 법령명 등)를 끌어오지 않는다.
-        name = None
-        before = list(BRACKET_NAME_RE.finditer(text, max(0, start - 70), start))
-        if before and re.fullmatch(r"[\s(（]*", text[before[-1].end():start]):
-            name, start = before[-1].group("name"), before[-1].start()
-        after = BRACKET_NAME_RE.match(text, end + len(re.match(r"[\s,]*", text[end:]).group(0)))
-        if name is None and after:
-            name, end = after.group("name"), after.end()
-        # 번호 뒤 "(…, 2025. 3. 1. 시행) 제12조 제2항"처럼 괄호·시행일을 건너 조항이 오면 범위에 넣는다.
-        trailing = re.match(rf"[\s,)]*(?:{DATE_RE}\s*(?:부터\s*)?시행\s*[,)]?\s*)?[\s)]*", text[end:end + 60])
-        article = ARTICLE_RE.match(text, end + (trailing.end() if trailing else 0))
-        located = {}
-        if article:
-            end = article.end()
-            located = {"article": article.group("article"), "sub": article.group("sub"),
-                       "paragraph": article.group("paragraph")}
-        citations.append(_admin_rule_citation(
-            text, start, end, agency=m.group("agency").strip(), kind=m.group("kind"),
-            number=m.group("number"), name=name, document_id=document_id, block_id=block_id, page=page,
-            **located))
-        consumed.append((start, end))
-
-    # 4) 법령
-    previous_law: Optional[str] = None
-    for m in LAW_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        raw_law = m.group("law")
-        same_law = SAME_LAW_RE.search(raw_law)
-        if same_law:
-            # "같은 법 제60조"는 앞서 인용한 법령을 가리킨다. 앞 법령이 없으면 식별할 수 없으므로 뺀다.
-            if previous_law is None:
-                continue
-            base = re.sub(r"\s*시행(?:령|규칙)$", "", previous_law)
-            law_name = f"{base} {same_law.group('sub')}" if same_law.group("sub") else previous_law
-            start = m.start("law") + same_law.start()
-        else:
-            law_name = canonical_law_name(raw_law)
-            start = _law_name_start(m)
-        if len(law_name) < 2:
-            continue
-        # "동법 시행령"을 읽은 뒤에도 다음 "동법"은 모법을 가리킨다.
-        previous_law = base if same_law and same_law.group("sub") else law_name
-        if law_name.endswith(ADMIN_RULE_KINDS):
-            # 이름이 훈령·예규·고시·지침으로 끝나면 법령이 아니라 행정규칙이다.
-            kind = next(k for k in ADMIN_RULE_KINDS if law_name.endswith(k))
-            if law_name == kind:
-                # "위 지침 제11조": 바로 앞(600자 안)에 낫표로 적은 같은 종류의 규정을 가리킨다. 없으면 그대로 둔다.
-                earlier = [n.group("name").strip() for n in BRACKET_NAME_RE.finditer(text, max(0, m.start() - 600), m.start())
-                           if n.group("name").strip().endswith(kind)]
-                if earlier:
-                    law_name = earlier[-1]
-            citations.append(_admin_rule_citation(
-                text, m.start(), m.end(), kind=kind, name=law_name,
-                article=m.group("article"), sub=m.group("article_sub"), paragraph=m.group("paragraph"),
-                document_id=document_id, block_id=block_id, page=page))
-            consumed.append((m.start(), m.end()))
-            continue
-        article = m.group("article")
-        if m.group("article_sub"):
-            article = f"{article}의{m.group('article_sub')}"
-
-        # TK-69: 목 인용('…제1호 가목') 뒤에 이어지는 복수 목(열거·범위) 확장
-        ext_end = m.end()
-        attr_dict: Dict[str, Any] = {}
-        if m.group("subitem") and m.group("item"):
-            from .temporal_review import parse_subitem_sequence
-            subitems_seq, consumed_len = parse_subitem_sequence(text[m.end():], m.group("subitem"))
-            if consumed_len > 0:
-                ext_end = m.end() + consumed_len
-            if subitems_seq:
-                attr_dict["subitem"] = subitems_seq[0]
-                attr_dict["subitems"] = subitems_seq
-
-        raw_cit = text[start:ext_end].strip()
-        citations.append(
-            Citation.create(
-                CitationType.STATUTE,
-                raw_cit,
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(start, ext_end),
-                law_name=law_name,
-                article=article,
-                paragraph=m.group("paragraph"),
-                item=(f"{m.group('item')}의{m.group('item_sub')}" if m.group("item_sub") else m.group("item")),
-                quoted_text=_quote_near(text, ext_end),
-                context=text[max(0, start - 100) : ext_end + 150],
-                attributes=attr_dict if attr_dict else {},
-            )
-        )
-        consumed.append((start, ext_end))
-        # "제750조 및 제751조", "제3조, 제4조": 법령명 없이 이어진 조문도 같은 법령의 인용이다.
-        head_id, position = citations[-1].citation_id, ext_end
-        while (more := CONTINUED_ARTICLE_RE.match(text, position)):
-            bridge = text[position:more.start("ref")]
-            # 사이에 다른 법령명('형법과')이 있으면 이어진 조문이 아니다('불법행위'의 '불법'은 법령명이 아니다).
-            if re.search(r"[가-힣]+법(?:률)?(?=[과와은는이가을를의에도만로]|[^가-힣]|$)|제\s*\d+\s*조", bridge):
-                break
-            number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
-            span_start = more.start("ref")
-            citations.append(Citation.create(
-                CitationType.STATUTE, f"{law_name} {text[span_start:more.end()].strip()}",
-                document_id=document_id, block_id=block_id, page=page, span=(span_start, more.end()),
-                law_name=law_name, article=number, paragraph=more.group("paragraph"), item=more.group("item"),
-                quoted_text=_quote_near(text, more.end()),
-                context=text[max(0, start - 100): more.end() + 150],
-                attributes={"continued_from": head_id}))
-            consumed.append((span_start, more.end()))
-            position = more.end()
-
-    # 4-2) 앞 인용의 조를 가리키는 표현을 그 조의 인용으로 푼다(추가지시 G3). 뒤따르는 수치가 가장 가까운
-    #      항·호 인용에 결합되도록, 가리킨 항을 별도 인용으로 둔다.
-    _resolve_article_references(text, citations, consumed, overlaps, document_id=document_id,
-                                block_id=block_id, page=page)
-
-    # 5) 학술자료: 제목 낫표/따옴표가 포함된 경우에만 탐색 (TK-72)
-    if any(q in text for q in ("「", "『", '"', "“")):
-        for m in ACADEMIC_RE.finditer(text):
-            if overlaps(m.start(), m.end()):
-                continue
-            authors = [a.strip() for a in re.split(r"·", m.group("authors")) if a.strip()]
+    # 1) 헌재 (헌법재판소/헌재/헌 관련 키워드가 있을 때만 수행)
+    if any(k in text for k in ("헌재", "헌법재판소", "헌")):
+        for m in CONST_RE.finditer(text):
             citations.append(
                 Citation.create(
-                    CitationType.ACADEMIC,
+                    CitationType.CONSTITUTIONAL,
                     m.group(0).strip(),
                     document_id=document_id,
                     block_id=block_id,
                     page=page,
                     span=(m.start(), m.end()),
-                    title=m.group("title").strip(),
-                    authors=authors,
-                    journal=m.group("journal").strip(),
-                    year=int(m.group("year")),
-                    context=text[max(0, m.start() - 80) : m.end() + 120],
+                    court="헌법재판소",
+                    decision_date=canonical_date(m.group("date") or ""),
+                    case_number=re.sub(r"\s+", "", m.group("case_no")),
+                    canonical_case_number=canonical_case_number(m.group("case_no")),
+                    case_kind=m.group("kind") or "결정",
+                    quoted_text=quote_near(m.end()),
+                    context=text[max(0, m.start() - 120) : m.end() + 120],
+                    attributes=_merged_attributes(m.group("case_no"), m.group("merged")),
                 )
             )
             consumed.append((m.start(), m.end()))
 
-    for m in DOI_RE.finditer(text):
-        if overlaps(m.start(), m.end()):
-            continue
-        citations.append(
-            Citation.create(
-                CitationType.ACADEMIC,
-                m.group(0),
-                document_id=document_id,
-                block_id=block_id,
-                page=page,
-                span=(m.start(), m.end()),
-                doi=m.group(0),
-                context=text[max(0, m.start() - 120) : m.end() + 120],
+    # 2) 완전한 판례 인용 및 3) 법원명 없는 판례 인용 (판결/결정/명령/선고 등 종결어가 있을 때만 수행)
+    if any(k in text for k in ("판결", "결정", "명령", "선고", "자")):
+        for m in FULL_CASE_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            case_no = m.group("case_no")
+            citations.append(
+                Citation.create(
+                    CitationType.CASE,
+                    (f"{m.group('court').strip()} {text[m.start('date'):m.end()].strip()}" if m.group("particle")
+                     else m.group(0).strip()),
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(m.start(), m.end()),
+                    court=_court_name(m.group("court")),
+                    decision_date=canonical_date(m.group("date")),
+                    case_number=re.sub(r"\s+", "", case_no),
+                    canonical_case_number=canonical_case_number(case_no),
+                    case_kind=(m.group("kind") or "판결").replace("선고", "판결"),
+                    quoted_text=quote_near(m.end()),
+                    context=text[max(0, m.start() - 120) : m.end() + 200],
+                )
             )
-        )
-        consumed.append((m.start(), m.end()))
+            if m.group("case_name"):
+                citations[-1].attributes["case_name"] = m.group("case_name")
+            consumed.append((m.start(), m.end()))
+
+        for m in BARE_CASE_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            case_no = m.group("case_no")
+            citations.append(
+                Citation.create(
+                    CitationType.CASE,
+                    m.group(0).strip(),
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(m.start(), m.end()),
+                    court=None,
+                    decision_date=None,
+                    case_number=re.sub(r"\s+", "", case_no),
+                    canonical_case_number=canonical_case_number(case_no),
+                    case_kind=m.group("kind"),
+                    quoted_text=quote_near(m.end()),
+                    context=text[max(0, m.start() - 120) : m.end() + 200],
+                )
+            )
+            consumed.append((m.start(), m.end()))
+
+    # 4-1) 행정규칙 (훈령, 예규, 고시, 지침이 있을 때만 수행)
+    if any(k in text for k in ADMIN_RULE_KINDS):
+        for m in ADMIN_RULE_REF_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            start, end = m.start(), m.end()
+            name = None
+            before = list(BRACKET_NAME_RE.finditer(text, max(0, start - 70), start))
+            if before and re.fullmatch(r"[\s(（]*", text[before[-1].end():start]):
+                name, start = before[-1].group("name"), before[-1].start()
+            after = BRACKET_NAME_RE.match(text, end + len(re.match(r"[\s,]*", text[end:]).group(0)))
+            if name is None and after:
+                name, end = after.group("name"), after.end()
+            trailing = re.match(rf"[\s,)]*(?:{DATE_RE}\s*(?:부터\s*)?시행\s*[,)]?\s*)?[\s)]*", text[end:end + 60])
+            article = ARTICLE_RE.match(text, end + (trailing.end() if trailing else 0))
+            located = {}
+            if article:
+                end = article.end()
+                located = {"article": article.group("article"), "sub": article.group("sub"),
+                           "paragraph": article.group("paragraph")}
+            citations.append(_admin_rule_citation(
+                text, start, end, agency=m.group("agency").strip(), kind=m.group("kind"),
+                number=m.group("number"), name=name, document_id=document_id, block_id=block_id, page=page,
+                **located))
+            consumed.append((start, end))
+
+    # 4) 법령 (조문 "조"가 있을 때만 수행)
+    previous_law: Optional[str] = None
+    if "조" in text:
+        for m in LAW_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            raw_law = m.group("law")
+            same_law = SAME_LAW_RE.search(raw_law) if ("법" in raw_law and ("같은" in raw_law or "동" in raw_law or "위" in raw_law)) else None
+            if same_law:
+                if previous_law is None:
+                    continue
+                base = re.sub(r"\s*시행(?:령|규칙)$", "", previous_law)
+                law_name = f"{base} {same_law.group('sub')}" if same_law.group("sub") else previous_law
+                start = m.start("law") + same_law.start()
+            else:
+                law_name = canonical_law_name(raw_law)
+                start = _law_name_start(m)
+            if len(law_name) < 2:
+                continue
+            previous_law = base if same_law and same_law.group("sub") else law_name
+            if law_name.endswith(ADMIN_RULE_KINDS):
+                kind = next(k for k in ADMIN_RULE_KINDS if law_name.endswith(k))
+                if law_name == kind:
+                    earlier = [n.group("name").strip() for n in BRACKET_NAME_RE.finditer(text, max(0, m.start() - 600), m.start())
+                               if n.group("name").strip().endswith(kind)]
+                    if earlier:
+                        law_name = earlier[-1]
+                citations.append(_admin_rule_citation(
+                    text, m.start(), m.end(), kind=kind, name=law_name,
+                    article=m.group("article"), sub=m.group("article_sub"), paragraph=m.group("paragraph"),
+                    document_id=document_id, block_id=block_id, page=page))
+                consumed.append((m.start(), m.end()))
+                continue
+            article = m.group("article")
+            if m.group("article_sub"):
+                article = f"{article}의{m.group('article_sub')}"
+
+            ext_end = m.end()
+            attr_dict: Dict[str, Any] = {}
+            if m.group("subitem") and m.group("item"):
+                from .temporal_review import parse_subitem_sequence
+                subitems_seq, consumed_len = parse_subitem_sequence(text[m.end():], m.group("subitem"))
+                if consumed_len > 0:
+                    ext_end = m.end() + consumed_len
+                if subitems_seq:
+                    attr_dict["subitem"] = subitems_seq[0]
+                    attr_dict["subitems"] = subitems_seq
+
+            raw_cit = text[start:ext_end].strip()
+            citations.append(
+                Citation.create(
+                    CitationType.STATUTE,
+                    raw_cit,
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(start, ext_end),
+                    law_name=law_name,
+                    article=article,
+                    paragraph=m.group("paragraph"),
+                    item=(f"{m.group('item')}의{m.group('item_sub')}" if m.group("item_sub") else m.group("item")),
+                    quoted_text=quote_near(ext_end),
+                    context=text[max(0, start - 100) : ext_end + 150],
+                    attributes=attr_dict if attr_dict else {},
+                )
+            )
+            consumed.append((start, ext_end))
+            head_id, position = citations[-1].citation_id, ext_end
+            while (more := CONTINUED_ARTICLE_RE.match(text, position)):
+                bridge = text[position:more.start("ref")]
+                if re.search(r"[가-힣]+법(?:률)?(?=[과와은는이가을를의에도만로]|[^가-힣]|$)|제\s*\d+\s*조", bridge):
+                    break
+                number = more.group("article") + (f"의{more.group('article_sub')}" if more.group("article_sub") else "")
+                span_start = more.start("ref")
+                citations.append(Citation.create(
+                    CitationType.STATUTE, f"{law_name} {text[span_start:more.end()].strip()}",
+                    document_id=document_id, block_id=block_id, page=page, span=(span_start, more.end()),
+                    law_name=law_name, article=number, paragraph=more.group("paragraph"), item=more.group("item"),
+                    quoted_text=quote_near(more.end()),
+                    context=text[max(0, start - 100): more.end() + 150],
+                    attributes={"continued_from": head_id}))
+                consumed.append((span_start, more.end()))
+                position = more.end()
+
+        # 4-2) 앞 인용의 조를 가리키는 표현 해결
+        _resolve_article_references(text, citations, consumed, overlaps, document_id=document_id,
+                                    block_id=block_id, page=page)
+
+    # 5) 학술자료: 제목 낫표/따옴표 앵커 기반 유한 창 탐색 (TK-72)
+    if any(q in text for q in ("「", "『", '"', "“")):
+        for tm in ACADEMIC_TITLE_ANCHOR_RE.finditer(text):
+            w_start = max(0, tm.start() - 600)
+            w_end = min(len(text), tm.end() + 200)
+            window = text[w_start:w_end]
+            for m in ACADEMIC_RE.finditer(window):
+                g_start = w_start + m.start()
+                g_end = w_start + m.end()
+                if overlaps(g_start, g_end):
+                    continue
+                authors = [a.strip() for a in re.split(r"·", m.group("authors")) if a.strip()]
+                citations.append(
+                    Citation.create(
+                        CitationType.ACADEMIC,
+                        m.group(0).strip(),
+                        document_id=document_id,
+                        block_id=block_id,
+                        page=page,
+                        span=(g_start, g_end),
+                        title=m.group("title").strip(),
+                        authors=authors,
+                        journal=m.group("journal").strip(),
+                        year=int(m.group("year")),
+                        context=text[max(0, g_start - 80) : g_end + 120],
+                    )
+                )
+                consumed.append((g_start, g_end))
+
+    # DOI (10. 키워드가 있을 때만 수행)
+    if "10." in text:
+        for m in DOI_RE.finditer(text):
+            if overlaps(m.start(), m.end()):
+                continue
+            citations.append(
+                Citation.create(
+                    CitationType.ACADEMIC,
+                    m.group(0),
+                    document_id=document_id,
+                    block_id=block_id,
+                    page=page,
+                    span=(m.start(), m.end()),
+                    doi=m.group(0),
+                    context=text[max(0, m.start() - 120) : m.end() + 120],
+                )
+            )
+            consumed.append((m.start(), m.end()))
 
     bind_quotes(text, citations)
     attach_claim_text(text, citations)
@@ -615,8 +664,8 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
     located = sorted((c for c in citations if c.span), key=lambda c: c.span[0])
     if not located:
         return
-    # 한국어 하드 래핑 줄바꿈 결합: 종결 부호 없이 단순 개행된 줄을 공백으로 치환(길이 1:1 보존)하여 문장 단절 방지
-    unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text)
+    # 한국어 하드 래핑 줄바꿈 결합: 종결 부호 없이 단순 개행된 줄을 공백으로 치환(길이 1:1 보존)하여 문장 단절 방지 (TK-72)
+    unwrapped = re.sub(r"(?<![.\?!:;])\n(?!\s*(?:\d+[\.)]|[가-하][\.)]|[-•*]))", " ", text) if "\n" in text else text
     c_idx = 0
     n_located = len(located)
     for s_start, s_end in _sentences(unwrapped):
@@ -641,21 +690,26 @@ def attach_claim_text(text: str, citations: List[Citation]) -> None:
             if citation.type not in _STATUTE_TYPES:
                 continue
             start, end = citation.span
-            before = unwrapped[s_start:start]
-            opened = before.rfind("(")
-            if opened > before.rfind(")"):
-                clause_start = max(before.rfind(",", 0, opened), before.rfind("，", 0, opened)) + 1
-                claim = before[clause_start:opened]
-                citation.attributes["claim_mode"] = "PARENTHETICAL_BASIS"
-            else:
+            if start == s_start:
+                # 문장 맨 앞에서 바로 인용이 시작되는 경우 앞부분 탐색 생략 (TK-72)
                 stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
                 claim = unwrapped[end:stop]
-                # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
-                lead = _LEAD_STRIP_RE.sub("", unwrapped[s_start:start]).split()
-                if lead:
-                    subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
-                    if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):
-                        citation.attributes["claim_subject"] = subject
+            else:
+                before = unwrapped[s_start:start]
+                opened = before.rfind("(")
+                if opened > before.rfind(")"):
+                    clause_start = max(before.rfind(",", 0, opened), before.rfind("，", 0, opened)) + 1
+                    claim = before[clause_start:opened]
+                    citation.attributes["claim_mode"] = "PARENTHETICAL_BASIS"
+                else:
+                    stop = inside[position + 1].span[0] if position + 1 < len(inside) else s_end
+                    claim = unwrapped[end:stop]
+                    # 문장 첫머리의 주어("정직은 …법 제57조에 따른 …")는 조문 안에서 비교할 구절을 고르는 데 쓴다.
+                    lead = _LEAD_STRIP_RE.sub("", before).split()
+                    if lead:
+                        subject = re.sub(r"(은|는|이|가|의|도)$", "", lead[0])
+                        if 2 <= len(subject) <= 10 and re.fullmatch(r"[가-힣]+", subject):
+                            citation.attributes["claim_subject"] = subject
             citation.attributes["claim_text"] = " ".join(claim.split())[:400]
 
 
