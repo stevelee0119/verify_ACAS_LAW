@@ -377,14 +377,30 @@ def _is_category_person_sentence_stopword(
     if particle is None or word[:particle.start()] not in PERSON_CATEGORY_STOPWORDS:
         return False
     # TK-43 개정 1: 한 음절 조사와 성명 끝 음절의 동일 입력을 보존한다.
-    if len(particle.group()) == 1 and _is_standard_person_word(word):
+    if _has_category_name_ambiguity(word):
         return False
+    # A compound particle may also begin with a name's final syllable. Inspect
+    # the same finite grammar for an alternative name + shorter particle split.
+    if len(particle.group()) > 1:
+        for shorter in _PERSON_PARTICLES:
+            if len(shorter) < len(particle.group()) and word.endswith(shorter):
+                if _has_category_name_ambiguity(word[:-len(shorter)]):
+                    return False
     return True
 
 
 def _is_standard_person_word(word: str) -> bool:
     return (len(word) == 3 and word[0] in SINGLE_SURNAMES) or (
         len(word) == 4 and word[:2] in DOUBLE_SURNAMES
+    )
+
+
+def _has_category_name_ambiguity(word: str) -> bool:
+    if not _is_standard_person_word(word):
+        return False
+    particle = _CATEGORY_JOSA_TAIL_RE.search(word)
+    return particle is not None and len(particle.group()) == 1 and (
+        word[:particle.start()] in PERSON_CATEGORY_STOPWORDS
     )
 
 

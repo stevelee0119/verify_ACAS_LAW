@@ -42,6 +42,9 @@ NAME_SENTENCES = [
     ('소득은', '에게', '자료를 전달하였다.'),
     ('신원이', '에서', '확인 절차를 시작하였다.'),
     ('경력도', '은', '첨부 문서를 확인하였다.'),
+    ('소득이', '라고', '자료에 기재하였다.'),
+    ('신원이', '라고', '별첨 문서에 기재하였다.'),
+    ('경력이', '라고', '확인 자료에 기재하였다.'),
 ]
 
 
@@ -163,7 +166,9 @@ def test_original_word_path_repeated_sentence_input_time():
         ('작성자 소득은 관련 자료와 무관하다.', 4, False),
         ('임차인 신원이 관련 자료와 무관하다.', 4, False),
         ('보호자 경력도 관련 자료와 무관하다.', 4, False),
-    ] * 1000
+        ('작성자 신원이라고 자료에 기재하였다.', 4, False),
+        ('임차인 소득이라고 별첨 문서에 기재하였다.', 4, False),
+    ] * 750
     started = perf_counter()
     results = [detector._is_category_person_sentence_stopword(text, start) for text, start, _ in cases]
     elapsed = perf_counter() - started
