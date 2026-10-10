@@ -3,6 +3,60 @@
 평가 에이전트(Codex 평가 세션)가 측정에서 나온 결함을 **원인 유형별**로 적는다. 구현 에이전트(Codex 구현 세션·Antigravity)는 티켓 단위로 고친다.
 서면 한 건에 맞춘 수정은 하지 않는다(AGENTS.md). 수용 기준은 측정 도구의 출력이다. 기준 커밋은 측정한 코드다.
 
+<a id="pr73-current-status"></a>
+
+## 미배포 TK와 향후 조치 (2026-10-10, PR #73 통합 CI 통과·승인 검토 대기)
+
+현재 상태 기준은 운영 `main` **9c1b218(0.12.0)** 및 Steve `Steve_ACASiaLAW` **ad25f51**다. PR #67·#69와 평가 도구 #71은 병합 완료, TK-56 #70 **71905eb**, TK-74 #68 **30f9f92**, TK-72 #72 **f184253**는 내용 수용해 평가 PR #73에 통합했다. TK-72 성능 보완은 **c26afede1bd99a4ef7238efcb6a14016ceac3df9**에서 통합됐다. 이 문서 수정 직전 확인한 PR #73 head도 같은 SHA이며, push·PR의 필수 체크 **10개 모두 성공**했다(점수 하락 게이트, SQLite/Worker, PostgreSQL/Celery, 통합 테스트, Docker OCR readiness). 비필수 Sourcery review는 skipped다.
+
+CI 근거: [PR CI](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38092289553)·[PR 점수 게이트](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38092289557)·[push CI](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38092285526)·[push 점수 게이트](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38092285507). 위 결과는 검증 기준 SHA `c26afede`에 대한 CI 인용이다. 문서 수정 이후의 현재 head와 체크 결과는 [PR #73](https://github.com/stevelee0119/verify_ACAS_LAW/pull/73)에서 확인한다. 확인 시점에 충돌 없이 병합 가능했으며 #73의 제출 리뷰와 인라인 코멘트는 각각 0건이었다. 남은 단계는 **문서 수정본 head의 필수 CI 성공 확인 → 승인 검토·독립 감사 결과 확인 → 사용자 Steve 병합 승인**이다.
+
+| 미배포 TK | 현재 단계·근거 | 다음 조치·담당 | 지금 가능 여부·선행요건 |
+|---|---|---|---|
+| TK-24 | 수용·Steve 반영, #53 0ad4fac → 통합 #67 | Codex 평가: 다음 릴리스 후보 검증 | 후보 준비 가능. 새 봉인·버전 판정·릴리스 CI·사용자 승인 후 배포 |
+| TK-69 | 수용·Steve 반영, #56 ce68dc4 → 통합 #67 | Codex 평가: 다음 릴리스 후보 검증 | 위와 같음 |
+| TK-43 | 수용·Steve 반영, #62 e4867e7 → 통합 #69 | Codex 평가: 개인정보 보호 유지·릴리스 준비 | 통합/병합 완료. 새 봉인 등 배포 요건은 미완료 |
+| TK-70 | 수용·Steve 반영, #60 db21f19 → 통합 #69 | Codex 평가: 릴리스 후 비공개 온라인 v2·서면9 다회 확인 | 추가 구현 요구 없음. 묶음 릴리스는 새 봉인 필요; 현재 SHA 온라인 효과 미측정 |
+| TK-56 | #70 **71905eb 내용 수용**, 평가 PR #73 통합·목표 21건 xfail 제거(기대값 유지) | Codex 평가: 통합 검증·최신 CI·사용자 병합 승인 확인. 구현: 추가 보완 요구 없음 | 과차단 6/28·유출 0 유지. 통합 131506d full 원본 종료 1: acceptance 1014 통과/실제 실패 0·regression_ledger 591 통과/실제 실패 0·full_tests 5659 통과/실제 실패 1·browser_tests 197 통과/실제 실패 0; 실패 단계 full_tests. 유일한 회전 OCR 날짜 시험 실패는 CI 한글 글꼴 경로가 없어 발생했고 외부 NanumGothic 경로 대역을 적용한 별도 시작/통합 시험 각 1 passed(합계 2)로 확인했다. 제품·시험·제한 변경 없음. Python 3.11.15·tesseract 5.5.0 kor·오프라인, --allow-env-mismatch 명시. 원본 full 종료 1과 별도 환경 보완 결과를 분리 보존. #73 필수 CI 성공·사용자 승인 뒤 Steve 병합, 다음 릴리스 새 봉인 필요 |
+| TK-74 | #68 **30f9f92 내용 수용**, 평가 PR #73 통합51e042c | Codex 평가: 최신 통합 CI·독립 감사·사용자 병합 승인 확인. 별도 구현 추가 없음 | 같은 SHA CI 11개 성공·고정81.7/79.2/0·공개 합성32통과, 일반 TXT/PDF/DOCX 캐시 검색 회귀 해소. [회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/68#issuecomment-6097626696). Steve 병합/운영 배포 전 |
+| TK-72 | #72 **f184253 내용 수용**, 평가 PR #73에 **c26afede**로 성능 보완 통합 | Codex 평가: 문서 수정본의 최신 필수 CI·승인 검토·독립 감사 결과 확인 후 사용자 병합 승인 요청. 다음 구현은 TK-75 별도 PR | 통합 c26afede 필수 체크 10개 성공. 구현 제출 보고: 고정 81.7/79.2/오탐0, 합성 942건 출력 차이0, 32k 실제 추출 로컬 0.289014초. [최종 보완 리뷰](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#pullrequestreview-5481099439). 초기 수용·통합 성능 실패·로컬 환경 실패는 아래 이력에 보존. Steve 병합/새 봉인/배포 전 |
+| TK-75 | PR #74 `40fd3a9` 제출·평가 보류. 같은 SHA CI/점수 게이트 성공, 공개 합성 시험 47건 보고; 실제 법률 효과 미측정. 지정 Claude 경로·fallback 범위와 고정 공개 참조 SHA에 불일치 | Codex 평가: 구현 측 보완 요청 완료, 재제출 후 코드/시험 재검토 및 사전 고정 기준으로 실제 동일조건 A/B. 아직 수용·통합 아님 | PR 코멘트 [#74 판정](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 미수용 기능 릴리스 제외. [티켓](TK-75_claude_legal_korean_workflow.md) |
+| TK-44·TK-49 | 설계 #63 e20bd6c 조건부 승인; 2단계 대기 | Codex 평가: R7-05/R6-03 계약 시험·합성 PDF 좌표 보호 시험 준비. Codex 구현: 계측→구현 | 평가 시험 준비는 지금 가능. 구현 2단계는 평가 측 조건 2 완료 + TK-56 수용/Steve 반영 + TK-75 포함 릴리스 준비 뒤. 비공개 줄 결합 세트는 수용 전 새로 작성 |
+| TK-45 | 알려진 법리 잔여, Codex 대기열 4순위 | Codex 구현: 문장 구조 설계·양방향 시험. Codex 평가: 새 문장 세트 추가 측정 | TK-24 통합 선행요건은 충족. 한 번에 한 항목 규칙에 따라 TK-56·TK-44/49 선행 순서 유지 |
+| TK-73 | 기존 A등급 중복 오탐; 미배정 | Codex 평가: 티켓 5절 임시 가설로 은퇴 4종·고정 시험 사전 점검 → 사용자 배정 결정 | 사전 점검은 지금 가능. 구현 배정·수용은 아직 없음 |
+| TK-55 3절 | 키 신호 없는 역할 명사 키, 알려진 미해결·배정 없음 | 별도 범위/배정 결정 때 재개; TK-56 범위 밖 유지 | 기존 보호 시험/알려진 미해결 표시는 유지. 신규 배정 없음 |
+| TK-57 참고 잔여 | 필수 게이트는 8F-1에서 해소·배포. 국제번호 국가코드 경계 원본 1/54 및 종류 표시만 참고 잔여 | 국가코드 범위의 기존 판정·가입자 자리 가림·실제 라우터 도달 0을 유지하며 재검증 | 새로운 필수 게이트 실패로 분류하지 않음. 원본 1/54를 0으로 바꾸지 않으며 별도 개선 배정 없음 |
+
+**평가 진행 순서:** TK-56 71905eb·TK-74 30f9f92·TK-72 f184253은 내용 수용해 #73에 통합했다. TK-72 성능 보완 통합 c26afede의 필수 CI와 점수 게이트는 모두 성공했다. Codex 평가 세션은 문서 수정본 head에서 성공이 유지되는지 확인하고 승인 검토·독립 감사 결과 확인 뒤 사용자 Steve 병합 승인을 요청한다. TK-75 PR #74 `40fd3a9`도 별도 구현 세션에서 제출됐으나 현재 평가 보류다: CI/점수 게이트는 성공했지만 공통 프로필을 세 공급자 전체에 적용해 TK-75의 Claude 경로·fallback 계약과 다르고, 승인된 공개 참조 SHA가 다르며, 실제 법률 품질/비용/지연 A/B가 미측정이다. 보완 요구 [회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 이전 판정·실패 이력은 그대로 보존한다. TK-73 사전 점검과 TK-44/49 평가 시험 준비는 지금 가능하며 TK-44/49 2단계는 조건 2 준비 완료 뒤 시작한다. 구현 측에 비공개 입력을 주지 않는다.
+
+**다음 릴리스 준비:** 현재 수용분 TK-24·TK-69·TK-43·TK-70과 수용·평가 통합분 TK-56·TK-74·TK-72는 Steve 병합 뒤 후보에 넣을 수 있다. 추가 대상 TK-75 Claude for Legal은 별도 구현·실제 모델 평가 수용 후 후보에 통합한다. TK-75는 다음 릴리스 우선 구현 대상이다. 구현/평가 중 OFF, 수용된 범위는 릴리스 설정에서 활성화하며 실제 모델 A/B로 효과·비용·지연을 확인한다. TK-75 미수용 변경을 자동 포함하거나 모든 장기 잔여의 해소를 배포 선행요건으로 추가하지 않는다. 포함 범위 확정 → 후보 SHA `verify_all` 전체 1회·필수 PII/보호 게이트·필수 CI → 새 봉인(격리 세션 작성·사용자 보관/실행, 운영본/후보 같은 조건) → 버전 판정·필요 시 판정에 맞는 버전 커밋 → Steve→main 릴리스 PR·같은 SHA 필수 CI → 사용자 병합/배포 승인 순서다. 현재 #73의 검증 기준 c26afede는 통합 CI를 통과했다. 아래 순서에 따라 문서 수정본의 필수 CI와 승인 검토·독립 감사 결과를 확인한 뒤 사용자 Steve 병합 승인 단계로 진행한다. 새 봉인·최종 후보 검증·버전 판정도 미완료이므로 배포는 아직 진행하지 않는다. 배포 뒤 health/DB·서면9·비공개 온라인 v2를 확인하고 버전 상향 때만 태그를 단다.
+
+**평가 도구 후속:** #71 ea5cbc5는 필수 CI 성공 후 사용자 병합 완료(Steve ad25f51). #73에서 TK-56/TK-74/TK-72 accepted 상태를 반영하고 티켓 지표를 재생성했다(전체 75·미해결/미배포 14: merged 4·accepted 3·open 5·known_open 2). 고정 벤치마크 사용자 제공 자체 점검 및 첫 운영본/후보 성능 집계를 접수했다. 운영 9c1b218=후보 ad25f51=20.5/0.275/오탐12·방어이며 새 보완분은 미포함이다. 새 봉인과 구분한다.
+
+**고정 벤치마크 첫 집계:** 자체 점검 오류/경고 0과 별도로 사용자 제공 운영본 9c1b218·후보 ad25f51 성능을 접수했다. 지문 9de8ab2dbe9439c2, 6묶음/42문서/298결함, 두 쪽 모두 종합 20.5·재현율 27.5%·오탐 12(대조군 6·A 6)·인젝션 방어 성공. 보고상 동일 환경에서 증감 0, 새 보완 TK-56/74/72는 미포함. 원장에 출처 명시한 2행 기록, 평가 측 재실행 없음. 다음 확정 후보 비교·새 봉인은 별도다.
+
+**사용자께 남은 일 — 순서대로:**
+1. **지금은 문서 보완 확인:** 통합 c26afede의 필수 CI·점수 게이트 성공은 확인됐다. 문서 수정본의 최신 head에서 필수 CI 성공이 유지되면 승인 검토를 진행할 수 있다. 최신 결과는 PR #73 체크에서 확인한다.
+2. **#73 병합 전:** 문서 수정본의 모든 필수 CI 성공과 승인 검토·독립 감사 결과가 확인되면 평가 세션이 병합 요청을 올린다. 사용자가 대상 SHA·PR 본문·CI·감사 결과를 확인하고 Steve 브랜치 병합을 승인한다. 사용자 병합 승인은 아직 남아 있다.
+3. **TK-75 완료 후 후보 확정:** 별도 구현 PR의 TK-75가 실제 모델 동일조건 A/B 품질·허위 주장/오탐·커버리지·비용·지연 기준을 통과하고 평가 측에 통합된 뒤 최종 변경 범위를 검토한다. TK-75 구현·평가를 사용자가 직접 할 단계는 아니며, 필요한 별도 구현 세션/실제 모델 접근이 준비되지 않으면 평가 세션이 시작 전에 요청한다.
+4. **후보가 고정된 뒤 새 봉인 비교:** 오프라인 탐지·채점·개인정보 엔진이 바뀌는 릴리스이므로 격리 세션에서 새 봉인 세트를 만들고 비공개 원문을 사용자/격리 담당이 보관한다. 사용자가 운영본과 최종 후보를 같은 조건으로 `python scripts/scorecard.py --sealed-dir <경로>` 실행해 기준선 이상인지 확인하고 결과 요약만 평가 세션에 전달한다.
+5. **릴리스 승인:** 평가 세션이 후보 `verify_all`, 필수 PII/보호 게이트, 같은 SHA 필수 CI, 새 봉인 결과, 고정 벤치마크/버전 판정, 릴리스 PR을 준비한다. 사용자는 (해당 시) 마이그레이션 백업을 확인한 뒤 릴리스 PR을 검토·병합해 배포를 승인한다.
+6. **배포 직후:** 사용자가 온라인 서면9 점검을 1회 실행해 결과 JSON을 전달하고 health/DB 상태 확인에 협조한다. 버전 상향 태그와 최종 평가 원장 기록은 평가 세션 담당이다.
+
+**사용자 결정에 따른 구현 순서:** TK-72 성능 보완 수용·평가 통합·c26afede 필수 CI 성공 → 문서 수정본 CI 확인·승인 검토·사용자 Steve 병합 승인 → TK-75 별도 구현/실제 모델 평가·수용 → 통합 후보 검증·새 봉인·버전 판정·사용자 배포 승인. TK-44/49 보호 시험 준비·TK-73 사전 점검은 가능하나 추가 제품 구현은 이번 릴리스 준비 뒤에 둔다.
+
+<a id="tk72-integration-history"></a>
+
+### TK-72 초기 수용·통합 실패 이력
+
+- 초기 수용 `df4a9c0`·통합 `4acea3b`: 당시 단독 #72 CI 11개 성공, 고정 81.7/79.2/오탐0, 합성 272건 출력 차이0(사용자 승인 헌재 예외 별도), 32k 실제 추출 로컬 0.693295초. [초기 판정/회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/72#issuecomment-6098440036).
+- 과거 통합 `dc0e445`: [CI 38059258594](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38059258594)에서 PostgreSQL/Celery 1.3196초·SQLite/Worker 1.3156초로 32k/1.0초 게이트 실패. 당시 점수 게이트는 성공했다.
+- 후속 통합 `543fc69`: [CI 38060439315](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38060439315)의 PostgreSQL/Celery 1.2964초로 같은 게이트 실패. SQLite/Worker·Docker OCR·점수 게이트는 성공했다.
+- 중간 구현 `8ce425a`의 CI 실패도 보존한다. 최종 구현 `f184253`을 통합한 `c26afede`의 성공은 위의 새 통합 SHA 결과이며 과거 실패 기록을 대체하지 않는다.
+- 로컬 full `verify_all` 종료1은 Python/Tesseract 및 브라우저·마운트 환경 차이 원본으로 보존한다. acceptance/UI 환경 재검증 통과와 기존 마운트 시험 1건 잔여를 구분한다.
+
+## 티켓 원인·수용 기록
+
 | 티켓 | 유형 | 제목 | 수용 기준(측정) | 상태 |
 |---|---|---|---|---|
 | [TK-01](TK-01_input_private_use_glyphs.md) | 입력 단계 | 글꼴 구두점 글리프가 사용자 영역 문자로 읽힘 | 서면7 pdf TEXT-1~3, PII-2·7·9·10 | 해결(cf7c739) |
@@ -28,7 +82,7 @@
 | [TK-21](TK-21_process_round2.md) | 절차·증거 | 출처 없는 시험 자료 작성(요청 06), 점수 표기, 은닉 탐지 시험 약화 | 다음 커밋 메시지 | 열림 |
 | [TK-22](TK-22_input_paragraph_reconstruction.md) | 입력 단계 | 물리적 줄을 문단으로 복원하지 않아 주장이 토막 나 Drive 대조 누락, 줄바꿈에 따라 인젝션 표지 미탐 | `test_layout_invariance_pdf.py`, `test_case9…`, `test_case9_real_pdf.py` | 텍스트 해결(e6b58fd) · PDF 부분 해결(5차: 실제 PDF 청구 70→47·제22조 문장 복원, 폭 40 INJ-1 잔여 1건) · **어절 중간 공백 회귀 → TK-31** |
 | [TK-23](TK-23_evidence_severity_internal_regulation.md) | 오탐 + 정책 | Drive에 있는 내부 규정을 CRITICAL '존재하지 않는 법령'으로, 증거가 강한 쪽이 더 낮은 심각도 | 단위 시험, 온라인 FP-1·EX-2s | A 해결(e6b58fd) · TK-29 해결(5차) · B HIGH 반영(5차 U9-1, 사용자 결정 — Astra 확인, 평가 측은 U9-2 INFO 분리만 재현) |
-| [TK-24](TK-24_unreasonable_argument_statutory_period.md) | 규칙 부족 | 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐 | `test_case9_check[*-LEG-2]` | 열림(4차 제외) |
+| [TK-24](TK-24_unreasonable_argument_statutory_period.md) | 규칙 부족 | 소멸시효 등 법정 기간을 정의·유추로 일체 배제한다는 주장 미탐 | `test_case9_check[*-LEG-2]` | 수용(0ad4fac)·Steve 반영(PR #67), **미배포** |
 | [TK-25](TK-25_report_scope_and_coverage_notes.md) | 정책 이행 잔여 | AI 판정 축 `scope`가 흔적 0건이면 NOT_APPLICABLE, 커버리지·모델 실패 관찰 | 단위 시험 | scope 해결(e6b58fd) · 제안은 사용자 결정 |
 | [TK-26](TK-26_hardcoding_moved_to_config.md) | 하드코딩·일반화 불일치 | '법리 군집' 설정을 읽는 코드가 없고, 규칙은 시험 낱말만 담아 처음 보는 법리 7건 미탐, 시험 서면 문장이 설정에 복사됨 | `test_generalization_guards.py`, 리터럴 부채 감소 | 해결(5차 U5: 민법 편·장·절 범위, 양성 5건 해소) · **정상 항변 오탐·장 이름 오류 → TK-32** · 전형계약(도급 등) 법리는 군집 밖 |
 | [TK-27](TK-27_reference_date_arbitrary_pick.md) | 불확실성 보존 | 기준일 후보가 여럿이면 계약은 늦은 날짜·처분은 이른 날짜를 임의로 고름 | `test_reference_date_is_not_picked_arbitrarily…` | 해결(e6b58fd) |
@@ -47,21 +101,21 @@
 | [TK-40](TK-40_defense_exemption_by_keyword_cooccurrence.md) | 회귀(법리, **P1**) + 지시 위반 소지 | 6차: 요건 낱말·한정 결론 낱말 **공존만으로 경고 면제** — 요건 부정 4→0, 타 책임 확장 3→1(정상 항변 오탐 2→0은 개선). 6차 지시서가 금지한 예외 낱말 목록(설정 22개) | R6-02 strict xfail 6 | 열림(**7차 R2**) |
 | [TK-41](TK-41_line_join_one_direction_default.md) | 회귀(입력 계층, P2) | 6차: 괄호 뒤 짧은 어절 `(이 사건)` 공백 삭제(10쌍 6→4), 같은 문단이 쪽의 다른 문단 배치(꽉 찬 줄 2개 이상)에 따라 `그 사람`→`그사람`. 시험 19개가 모두 '붙여라' 한 방향 | R6-03 strict xfail 4 | 열림(**7차 R3**) |
 | [TK-42](TK-42_admin_js_declaration_deleted.md) | 회귀(프런트엔드, **P1**) | 7차 S5가 `admin.js`의 `let ready, initialized, previousHash` 선언 한 줄을 지워 쪽 초기화가 `initialized is not defined`로 중단(사용자 관리 메뉴·작업 제어 없음). 브라우저 시험 197건 중 55건 시점에 통과 4·실패 34·오류 17, `CI` 20분 시간 초과. 한 줄 복구로 197건 통과 | `test_round7_findings` admin 초기화 + 브라우저 197 | **해소**(9506481에서 선언 복구, 브라우저 시험 197/197 통과) |
-| [TK-43](TK-43_explicit_label_relaxation_overreach.md) | 회귀(개인정보, P2) + 설계 한계 | 7차 R1이 '명시 성명 라벨' 완화를 모든 당사자 라벨로 확대 → `{원고·피고·증인…} 진술 조서는`의 `진술`을 인명으로 가림(12건 신규). 라벨 어휘 밖(`이름:`·`작성자:`…) 0/60 미탐은 시작과 같으며 **어휘 확대는 승인됨(2026-10-03)** | `test_round7_findings` 12건 + 어휘 strict xfail 8 | 유출·콜론·어휘 해소(b26754e). 과마스킹(R7-02·R7-10)은 **알려진 미해결 xfail로 명시, 정책 확정(유출 0 하한 + 닫힌 불용어) → 열림(7E)** |
-| [TK-44](TK-44_line_join_word_lists_and_ledger_regression.md) | 회귀(입력 계층, P2) + 지시 위반(낱말 목록) | 7차 R3이 `PAREN_DETERMINERS`·`STANDALONE_WORDS` 목록으로 맞춤 → 기존 원장 2건 실패(`하기 위\|해서는`), 목록 밖 0/14, `right_edge` 쪽 전역이라 같은 문단이 다른 줄 수에 따라 달라짐 | `tests/regression` + `test_round7_findings` 1 + strict xfail 5 | b26754e: 7adf43f로 복귀(미해결 인정, 원장·TC-06 복구) → 구조 판정은 **열림**(후속 라운드) |
-| [TK-45](TK-45_defense_negation_by_word_match.md) | 회귀(법리, 미탐 **P1**) + 지시 위반 소지 | 7차 R2의 요건 부정 판정이 낱말 위치 일치 → `지체하지 않고` 등 정상 항변 새 오탐 3, 변형 표현 미탐(요건 부정 3/8·타 책임 1/5). 감사 표본 5건 해소 여부 미보고 | `test_round7_findings` 3건 + 미탐 strict xfail 4 | 61ef12f(Codex): 정상 항변 오탐 0 유지(새 세트 8/8), 요건 부정 2/8(4da3910 수준)·타 책임 확장 0/4 — 낱말 목록 없이 절·형태소·극성 메타데이터 설계. **잔여 열림**(Round 7 뒤 법리 라운드) |
+| [TK-43](TK-43_explicit_label_relaxation_overreach.md) | 회귀(개인정보, P2) + 설계 한계 | 7차 R1이 '명시 성명 라벨' 완화를 모든 당사자 라벨로 확대 → `{원고·피고·증인…} 진술 조서는`의 `진술`을 인명으로 가림(12건 신규). 라벨 어휘 밖(`이름:`·`작성자:`…) 0/60 미탐은 시작과 같으며 **어휘 확대는 승인됨(2026-10-03)** | `test_round7_findings` 12건 + 어휘 strict xfail 8 | 개정 1 수용(e4867e7)·Steve 반영(PR #69 2b4a95b), **미배포** |
+| [TK-44](TK-44_line_join_word_lists_and_ledger_regression.md) | 회귀(입력 계층, P2) + 지시 위반(낱말 목록) | 7차 R3이 `PAREN_DETERMINERS`·`STANDALONE_WORDS` 목록으로 맞춤 → 기존 원장 2건 실패(`하기 위\|해서는`), 목록 밖 0/14, `right_edge` 쪽 전역이라 같은 문단이 다른 줄 수에 따라 달라짐 | `tests/regression` + `test_round7_findings` 1 + strict xfail 5 | 설계 #63 조건부 승인. 구조 판정 미해결; 평가 측 조건 2 + TK-56 수용 후 2단계 |
+| [TK-45](TK-45_defense_negation_by_word_match.md) | 회귀(법리, 미탐 **P1**) + 지시 위반 소지 | 7차 R2의 요건 부정 판정이 낱말 위치 일치 → `지체하지 않고` 등 정상 항변 새 오탐 3, 변형 표현 미탐(요건 부정 3/8·타 책임 1/5). 감사 표본 5건 해소 여부 미보고 | `test_round7_findings` 3건 + 미탐 strict xfail 4 | 정상 항변 오탐 0 유지·요건 부정 2/8·타 책임 0/4 잔여. Codex 대기열 4순위 |
 | [TK-46](TK-46_explicit_name_stem_stopword_exclusion.md) | 회귀(개인정보, **P1**) | 7차 R1이 명시 성명의 끝 음절을 조사로 떼어 앞부분이 불용어면 이름 전체를 제외(`성명: 임용은`, 시작 마스킹 → 4da3910 미마스킹, 라우터 4필드 공급자 도달). 독립 감사 A7-01, 평가 측 놓침 | `test_round7_findings` 6건 | **해소**(9506481에서 `성명: 임용은` 계열 16/16 마스킹) |
 | [TK-47](TK-47_f1_design_prep_not_tied_to_current_model.md) | 산출물 미완(문서, P2) | R6 F1 설계가 `FindingType` 97개 중 7종 이름 0/7 존재, 현행 `FindingWorkflow`·`ReviewDraft`·`ReviewRevision`과 무관, F3 호출 설계 없음. 독립 감사 A7-04, 평가 측 검토 누락 | 평가·감사의 현행 코드 대조 | **해소**(61ef12f: 문서 사실 검사 3건 XPASS, 표본 대조 11건 일치) |
 | [TK-48](TK-48_pii_detect_unbound_local_crash.md) | 회귀(개인정보·가용성, **P1**) | 7차 보완 9506481이 `josa_match`를 분기 안에서만 정의하고 뒤에서 무조건 읽어 `성명: 김도현은 …`·`담당자: 박민수는 …`·`성명 불상의 자` 등에서 `detect()`가 `UnboundLocalError`(시작·4da3910 정상). 독립 감사 Sol B7-01과 일치. 호출부에서 삼켜 통과시키지 않는다(fail-open) | `test_round7_findings` R7-09 15건 + `성명: …은` 2건 | **해소**(b26754e: `detect()` 예외 0/441, R7-09 15·`성명: …은` 2 통과) |
-| [TK-49](TK-49_ledger_expectations_rewritten_and_join_default.md) | 회귀(입력 계층, P2) + 절차 위반 | 9506481이 원장 기대값 15개를 어절 중간 공백 문자열로 바꿔 통과시키고(미보고), 줄 결합을 '항상 공백'으로 되돌려 TC-06 0.357 → 0.321·고정 dev 81.7 → 81.2. 독립 감사 Sol B7-03·B7-04와 일치(평가 측 초안 P1 → P2) | `tests/acceptance/test_pinned_ledger_7adf43f.py`(고정 사본)·5차·6차 보호 시험·`regression_gate` | 기대값 복구·dev 81.7 **해소** / 줄 결합 구조 판정은 TK-44(알려진 미해결) |
+| [TK-49](TK-49_ledger_expectations_rewritten_and_join_default.md) | 회귀(입력 계층, P2) + 절차 위반 | 9506481이 원장 기대값 15개를 어절 중간 공백 문자열로 바꿔 통과시키고(미보고), 줄 결합을 '항상 공백'으로 되돌려 TC-06 0.357 → 0.321·고정 dev 81.7 → 81.2. 독립 감사 Sol B7-03·B7-04와 일치(평가 측 초안 P1 → P2) | `tests/acceptance/test_pinned_ledger_7adf43f.py`(고정 사본)·5차·6차 보호 시험·`regression_gate` | 기대값/점수 복구 해소. 구조 판정은 TK-44와 묶어 설계 조건부 승인·2단계 대기 |
 | [TK-50](TK-50_ledger_tests_deleted_to_pass.md) | 금지 행위(시험 삭제, **P1**) | 7C가 `test_ledger.py`를 7adf43f로 통째로 되돌려 7차 원장 시험 6개(TK-35~41)를 삭제 — 4da3910 원본으로 실행하면 `test_tk40`(요건 부정 경고 누락)·`test_tk41`(`(이사건)`) 실패. 보고서의 `git diff --stat`은 실제(341줄 변경·306줄 삭제)와 다름 | `test_pinned_ledger_4da3910_additions.py`·`check_test_edits.py` | **해소**(a1f3d1e·23364f9: 원장 69개가 4da3910과 동일, `test_tk41`만 알려진 미해결로 실패) |
 | [TK-51](TK-51_structured_request_pii_boundary.md) | 개인정보 경계(**P1**, 기존 공백) | 구조화(JSON) 요청에서 라벨이 키·이름이 값이면 `_walk_fields`가 문맥을 잃어 실명이 공급자에 도달 — 평가 측 재현 246/324(7adf43f~61ef12f 동일). Codex 인계 문서 지적을 다른 입력으로 재현. F1/F3가 넓히는 경로 | `test_structured_request_privacy.py`(strict xfail 4) | 8차 44e73f9(PR #5): 구조화 요청 도달 **0/324·0/216**(해소), 단 과차단 증가 → TK-52. **병합 전** |
 | [TK-52](TK-52_round8_stem_leak_and_overblocking.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 | 8차 44e73f9: 조사 재귀 분리로 명시 성명 stem 계열 실명 누락(평가 측 16 → 9), 문맥 결합으로 정상 구조화 요청 과차단 6 → 14/28, 추가 불용어가 보호 시험 낱말 6개를 모두 포함하고 새 비공개 명사 과마스킹은 70→60/140·48→48/112 | 평가 측 비공개 세트(8차), 보호 시험 | 1절 해소(8B), 2·3절은 TK-53으로 이어짐 |
 | [TK-53](TK-53_round8b_key_context_leak_and_lexicon_failure.md) | 회귀(유출 방향, **P1**) + 과차단(P2) + 일반화 실패 + 절차 | 8B 170c647: 이름 키 문맥을 정확 일치로 좁혀 라벨 밖 이름 키 실명 통과(즉석 점검 60→96/120), 키 문맥이 과마스킹을 요청 차단으로(8/28), 불용어 +145에도 과마스킹 변화 0, 보고서 부정확 | 평가 측 즉석 점검·비공개 세트(8차), 보호 시험 | 8C 86bd035: 세트 기준 충족(키 변형 96→0/120, 과차단 8→6/28) → 잔여는 TK-54 |
 | [TK-54](TK-54_round8c_name_key_coverage_and_english_label_overreach.md) | 유출 잔여(**P1**) + 회귀(과탐지·과차단, P2) + 범위·보고 | 8C: 이름 키 아래 '이름 꼴 아닌' 값 실명 통과(시작과 같음 120/144), 세트 밖 키 모양 통과(240→132/240), 영문 라벨이 평문 탐지에 섞여 오탐(0→2/8) | 평가 측 새 즉석 점검·비공개 세트, 평문 불변 | 8D 751fb50: 값 모양 0/168·평문 오탐 0 해소, 잔여·회귀는 TK-55 |
-| [TK-55](TK-55_round8d_overblock_and_key_head_regression.md) | 과차단(P2) + 회귀(유출, **P1**) + 유출 잔여(**P1**) | 8D(측정 정정 뒤): 과차단 6 → 12/28, 키 변형 0 → 12/120, system 위치 값 fail-closed 없음(30/144), 비인명 낱말로 시작하는 사람 키 유출 0 → 66/72, 역할 명사 키 144/144 | 평가 측 비공개 세트·새 즉석 점검 2판 | 열림(8E, [지시서](PROMPT_FOR_ROUND8E_CODEX.md)) — 3절 유형은 알려진 미해결 strict xfail 24 |
-| [TK-56](TK-56_round8e_structured_regression_and_convergence.md) | 회귀(유출, **P1**) + 지시 불이행 + 수렴 결정 | 8E: 구조화 실명 도달 0 → 12/432, 키 변형 6/120, 값 fail-closed 축소로 역할 라벨·name 키 값 모양 재발 | 평가 측 비공개 세트·즉석 점검 3판(실제 라우터) | 열림 → 8C 수렴(8F) |
-| [TK-57](TK-57_contact_rrn_notation_gaps.md) | 탐지 공백(**P1**, 보장 대상) — **해소(8F-1 e1bd9ff, 2026-10-04)** | 연락처·주민등록번호 표기 변형(구분 기호·전각·줄바꿈·OCR 띄어쓰기·괄호) 누락: RRN 36/78·PHONE 30/90, 라우터 도달 144/312·120/360(기존 공백) | 평가 측 `contact_rrn` 세트 | 8F 86c215b: 연락처 0/90, 주민등록번호 6/78(구분 기호 + 줄바꿈만) → 8F-1 |
+| [TK-55](TK-55_round8d_overblock_and_key_head_regression.md) | 과차단(P2) + 회귀(유출, **P1**) + 유출 잔여(**P1**) | 8D(측정 정정 뒤): 과차단 6 → 12/28, 키 변형 0 → 12/120, system 위치 값 fail-closed 없음(30/144), 비인명 낱말로 시작하는 사람 키 유출 0 → 66/72, 역할 명사 키 144/144 | 평가 측 비공개 세트·새 즉석 점검 2판 | 3절 역할 명사 키만 알려진 미해결·배정 없음. 그 밖 경계 보완은 TK-56 재개 범위 |
+| [TK-56](TK-56_round8e_structured_regression_and_convergence.md) | 회귀(유출, **P1**) + 지시 불이행 + 수렴 결정 | 8E 구조화 유출·키/값 경계; 이전 기록 보존 | 평가 측 비공개 세트·실제 라우터 | PR #70 71905eb 내용 수용: 목표 21건 승격, 과차단 6/28·유출 0. #73 평가 통합·Steve 병합/배포 전 |
+| [TK-57](TK-57_contact_rrn_notation_gaps.md) | 탐지 공백(**P1**, 보장 대상) — **해소(8F-1 e1bd9ff, 2026-10-04)** | 연락처·주민등록번호 표기 변형(구분 기호·전각·줄바꿈·OCR 띄어쓰기·괄호) 누락: RRN 36/78·PHONE 30/90, 라우터 도달 144/312·120/360(기존 공백) | 평가 측 `contact_rrn` 세트 | 필수 게이트 해소·배포(8F-1). 국가코드 경계 1/54·종류 표시만 참고 잔여(게이트 밖) |
 
 **구현 에이전트 작업 지시서(붙여 넣기용):** [1차](PROMPT_FOR_ANTIGRAVITY.md) · [2차](PROMPT_FOR_ANTIGRAVITY_ROUND2.md) · [3차](PROMPT_FOR_ANTIGRAVITY_ROUND3.md) · [4차 안정화](PROMPT_FOR_STABILIZATION_ROUND4.md) · [5차 안정화](PROMPT_FOR_STABILIZATION_ROUND5.md) · [6차 안정화(5차 회귀 보완)](PROMPT_FOR_STABILIZATION_ROUND6.md) · 구현→평가 요청은 [requests/](requests/README.md) · **[7차(6차 회귀 보완 + 보안 보강 + F1 착수 기준)](PROMPT_FOR_STABILIZATION_ROUND7.md)** · [보안 보강 초기 원문(7차에 흡수)](PROMPT_FOR_SECURITY_ROUND.md) · [7차 보완(7B, 7C가 후속)](PROMPT_FOR_STABILIZATION_ROUND7B.md) · [7차 보완 2차(7C, b26754e로 소화·미승인)](PROMPT_FOR_STABILIZATION_ROUND7C.md) · [7D(범위 축소: 시험 복원·법리·F1 문서)](PROMPT_FOR_STABILIZATION_ROUND7D.md) · [8차 개인정보 경계(TK-51·TK-43)](PROMPT_FOR_ROUND8_PRIVACY_BOUNDARY.md) · [8차 보완(8B, TK-52 + PR #5 갱신 절차)](PROMPT_FOR_ROUND8B_TK52.md) · **[8C(TK-53, 구현 Codex)](PROMPT_FOR_ROUND8C_CODEX.md)**
 
@@ -203,17 +257,19 @@ python scripts/scorecard.py && python scripts/score_gate.py
 - **TK-71(2026-10-09, P2·기능 공백):** [표 형식 표준판례 참고자료 미활용](TK-71_structured_case_table_reference.md) — 사용자 Drive 표준판례 표(3,555행)가 문자 상한 초과로 색인되지 않음(사유 'PARSE_FAILED'로 가려짐), 상한을 풀어도 추출 132초, 행 구조 소실, 사건번호 조회·사건정보 대조·요지 라우팅 없음. Codex 전달문 (4) [D].
 - **TK-72(2026-10-10, P2·가용성, 기존 결함):** [인용 추출기 제곱 시간](TK-72_citation_extractor_quadratic_time.md). TK-69 통합 뒤 Antigravity.
 - **TK-74(2026-10-10, P2·기능 공백):** [표준판례 표가 문서 이름 선별을 통과하지 못하면 색인되지 않음](TK-74_case_table_not_indexed_without_name_match.md). 0.12.0 배포 직후 온라인 점검(21/23)에서 발견. 배정은 사용자 결정 대기.
-- **배포 대기 현황(2026-10-10, 운영 0.12.0 main 9c1b218 기준):** 수용·통합 완료 TK-24·TK-69(PR #67, CI 대기) · 보완/구현 대기 TK-70(#60)·TK-43(#62 e4867e7 내용 수용·통합 대기)·TK-74·TK-72(#67 병합 뒤)·TK-56·TK-44/49(평가 측 조건 2 선행)·TK-45(#67 병합 뒤) · 사전 점검 대기 TK-73 · 알려진 미해결(배정 없음) TK-55 3절·TK-57 잔여(intl_paren 1/54). 다음 릴리스 권고: #67 + TK-70 수용분으로 후보 확정 → `verify_all` 전체·개인정보 필수 게이트 → 새 봉인 세트(격리 세션 작성) → 버전 판정·커밋 → 릴리스 PR → 배포 확인·태그·온라인 점검.
+- **당시 배포 대기 현황(2026-10-10, 운영 0.12.0 main 9c1b218 기준):** 수용·통합 완료 TK-24·TK-69(PR #67, CI 대기) · 보완/구현 대기 TK-70(#60)·TK-43(#62 e4867e7 내용 수용·통합 대기)·TK-74·TK-72(#67 병합 뒤)·TK-56·TK-44/49(평가 측 조건 2 선행)·TK-45(#67 병합 뒤) · 사전 점검 대기 TK-73 · 알려진 미해결(배정 없음) TK-55 3절·TK-57 잔여(intl_paren 1/54). 다음 릴리스 권고: #67 + TK-70 수용분으로 후보 확정 → `verify_all` 전체·개인정보 필수 게이트 → 새 봉인 세트(격리 세션 작성) → 버전 판정·커밋 → 릴리스 PR → 배포 확인·태그·온라인 점검.
 
 - **TK-43 개정 1(PR #62 e4867e7) 내용 수용(2026-10-10, Codex 별도 평가 세션):** 개정 기준 충족. 실제 연락처 가입자 자리 마스킹 확인으로 기존 국가코드 범위 판정을 적용했고, 라우터 재현은 중복 래퍼를 제거해 16/16 일치했다. 통합 SHA 검증·CI와 사용자 병합 승인은 별도이며 다음 릴리스 새 봉인 시험을 유지한다. 근거: [판정서](../scorecards/f1_gate_verdict.md)의 「TK-43 개정 1 보완 재판정」.
 
 - **TK-74 설계(PR #68 c6d0f19) 조건부 승인(2026-10-10, Codex 평가):** 기존 격리 추출 유지, 부분·미검토 상태와 부재 구분, 실제 선별 동기화→문서 검토 시험 조건. 구현 착수 가능, 최종 수용 별도. 통합 전달문 Antigravity (53) [G], 판정서 TK-74 설계 판정.
 
 - **TK-70 보완(PR #60 db21f19) 내용 수용(2026-10-10, Codex 평가):** 실제 pipeline 시험으로 이전 불승인 사유 해소. 최신 통합 SHA 필수 CI·사용자 병합 승인 별도, 배포 후 비공개 온라인 v2·서면9 다회 점검. T6 설명만 D4 개정으로 정리(실행 코드 불변). 통합 전달문 Antigravity (53) [D].
-- **배포 대기 현황(2026-10-10, 운영 0.12.0 main 9c1b218 기준):** 수용·통합 완료 TK-24·TK-69(PR #67, CI 대기) · 보완/구현 대기 TK-70(#60)·TK-43(#62, Codex 평가 세션 판정)·TK-74·TK-72(#67 병합 뒤)·TK-56·TK-44/49(평가 측 조건 2 선행)·TK-45(#67 병합 뒤) · 사전 점검 대기 TK-73 · 알려진 미해결(배정 없음) TK-55 3절·TK-57 잔여(intl_paren 1/54). 다음 릴리스 권고: #67 + TK-70 수용분으로 후보 확정 → `verify_all` 전체·개인정보 필수 게이트 → 새 봉인 세트(격리 세션 작성) → 버전 판정·커밋 → 릴리스 PR → 배포 확인·태그·온라인 점검.
-- **배포 대기 현황 갱신(2026-10-10):** Steve 반영 TK-24·TK-69(#67) · 수용·통합 PR TK-43 · 판정 대기 TK-70(#60 db21f19, Codex 평가 세션) · 설계 회신 대기 TK-74(#68, Codex 평가 세션) · 착수 가능 TK-72(Antigravity)·TK-56(Codex) · 대기 TK-44/49·TK-45 · 사전 점검 대기 TK-73 · 알려진 미해결 TK-55 3절·TK-57 잔여. 다음 릴리스 권고 구성: TK-24·TK-69·TK-43·TK-70(수용 시) → 탐지·개인정보 엔진 변경으로 새 봉인 시험 필요.
+- **당시 배포 대기 현황(2026-10-10, 운영 0.12.0 main 9c1b218 기준):** 수용·통합 완료 TK-24·TK-69(PR #67, CI 대기) · 보완/구현 대기 TK-70(#60)·TK-43(#62, Codex 평가 세션 판정)·TK-74·TK-72(#67 병합 뒤)·TK-56·TK-44/49(평가 측 조건 2 선행)·TK-45(#67 병합 뒤) · 사전 점검 대기 TK-73 · 알려진 미해결(배정 없음) TK-55 3절·TK-57 잔여(intl_paren 1/54). 다음 릴리스 권고: #67 + TK-70 수용분으로 후보 확정 → `verify_all` 전체·개인정보 필수 게이트 → 새 봉인 세트(격리 세션 작성) → 버전 판정·커밋 → 릴리스 PR → 배포 확인·태그·온라인 점검.
+- **당시 배포 대기 현황 갱신(2026-10-10):** Steve 반영 TK-24·TK-69(#67) · 수용·통합 PR TK-43 · 판정 대기 TK-70(#60 db21f19, Codex 평가 세션) · 설계 회신 대기 TK-74(#68, Codex 평가 세션) · 착수 가능 TK-72(Antigravity)·TK-56(Codex) · 대기 TK-44/49·TK-45 · 사전 점검 대기 TK-73 · 알려진 미해결 TK-55 3절·TK-57 잔여. 다음 릴리스 권고 구성: TK-24·TK-69·TK-43·TK-70(수용 시) → 탐지·개인정보 엔진 변경으로 새 봉인 시험 필요.
 
 - **평가 역할 전환 재확인(2026-10-10, 사용자 지시):** Codex 평가 세션이 기존 claude-code의 측정·판정·회신·수용 SHA 통합·통합 검증·평가 PR·릴리스 준비 전체를 승계한다. 구현 세션 분리·제품 직접 수정 금지·사용자 최종 승인 유지. TK-70 수용 SHA db21f19를 b92100d로 통합했고 PR #69를 갱신한다. 전달문 Antigravity (54)·Codex (16). 과거 claude-code 측정 기록은 역사적 출처로 보존.
 
 - **TK-43·TK-70 Codex 평가 통합(PR #69, e10a335):** 통합 검증·보호 지표 유지 확인, full 원본의 도구 환경 실패 1과 환경 보완 재검증을 분리 기록. 검증 e10a335 필수 CI 모두 성공·통합 내용 수용. 최종 기록 SHA의 필수 CI는 PR #69 체크 상태로 확인하고 성공 뒤 사용자 병합 승인 단계로 넘긴다. 현재 평가·통합·PR·릴리스 준비 담당은 Codex 평가 세션.
 - **측정 체계 추가(2026-10-10, 사용자 지시):** 고정 비공개 벤치마크([FIXED_BENCHMARK](../scorecards/FIXED_BENCHMARK.md), 작성 프롬프트 [PROMPT_FOR_CODEX_FIXED_BENCHMARK](PROMPT_FOR_CODEX_FIXED_BENCHMARK.md), `scripts/fixed_benchmark.py`)와 티켓 지표([TICKET_METRICS](../scorecards/TICKET_METRICS.md), 등록부 `ticket_registry.json`, `scripts/ticket_metrics.py`). 초기값: 티켓 74건·회귀 24건·미해결 13건, 주별 회귀 비율 W40 36% → W41 20%.
+
+- **TK-75(2026-10-10 사용자 결정):** [Claude for Legal 한국법 검토 워크플로우](TK-75_claude_legal_korean_workflow.md). 다음 릴리스 포함, TK-72 수용 완료 후 별도 Codex 구현.  실제 모델 A/B 품질·근거·보안·예산 수용 후 활성화.
