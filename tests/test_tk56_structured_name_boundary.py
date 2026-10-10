@@ -77,6 +77,28 @@ def test_synthetic_name_shapes_block_in_inspection_and_actual_router(monkeypatch
 
 
 @pytest.mark.parametrize("position", ("system", "user"))
+@pytest.mark.parametrize("key", ("observerName", "beneficiaryName", "subscriberName"))
+@pytest.mark.parametrize("name", NAMES)
+@pytest.mark.parametrize("shape", SHAPES, ids=("spacing", "list", "title", "count", "particle"))
+def test_synthetic_unknown_name_subject_compounds_block_in_actual_router(monkeypatch, position, key, name, shape):
+    assert privacy._person_label_for_key(key) is None
+    request = _request({key: shape(name)}, position)
+    assert privacy.inspect_request(request)["status"] == "BLOCKED"
+    _, sent, reserved = _route(monkeypatch, request)
+    assert not sent and not reserved
+
+
+@pytest.mark.parametrize("position", ("system", "user"))
+@pytest.mark.parametrize("key", ("observerName", "beneficiaryName", "subscriberName"))
+@pytest.mark.parametrize("value", ("초록 관측소", "가람 문화원", "푸른 자료실"))
+def test_synthetic_unknown_name_subject_nonperson_compounds_keep_send(monkeypatch, position, key, value):
+    request = _request({key: value}, position)
+    assert privacy.inspect_request(request)["status"] == "PASSED"
+    _, sent, reserved = _route(monkeypatch, request)
+    assert len(sent) == len(reserved) == 1
+
+
+@pytest.mark.parametrize("position", ("system", "user"))
 @pytest.mark.parametrize("key", ("name", "claimantName", "담당관 성함"))
 @pytest.mark.parametrize("value", ("Taylor Morgan", 58213, {"value": "未確認"}, None, ["Casey", "River"]))
 def test_synthetic_uncertain_name_values_block_before_send(monkeypatch, position, key, value):
@@ -207,6 +229,16 @@ def test_synthetic_field_collection_thousands_under_point_one_second():
     elapsed = perf_counter() - started
     print(f"TK-56 collector 2,000 fields: {elapsed:.6f}s")
     assert len(blocked) == 1000 and len(texts) == 2000
+    assert elapsed < 0.1
+
+
+def test_synthetic_unknown_name_value_windows_thousands_under_point_one_second():
+    values = ("한예솔 회계책임자", "유 다린 회계책임자", "남궁서율께는", "푸른 자료실", "초록관측센터") * 600
+    started = perf_counter()
+    results = [privacy._uncertain_person_value(value, explicit_name=False, name_field=True) for value in values]
+    elapsed = perf_counter() - started
+    assert results == [True, True, True, False, False] * 600
+    print(f"TK-56 unknown name windows 3,000 values: {elapsed:.6f}s")
     assert elapsed < 0.1
 
 

@@ -65,6 +65,12 @@ _NAME_FIELD_SUFFIX_RE = re.compile(r"(?:성명|성함|이름|명의자|명)$")
 _SPACED_NAME_PARTICLE_RE = re.compile(
     rf"^(?P<name>(?:[가-힣][ \t]?){{1,3}}[가-힣])(?:{JOSA})$"
 )
+_LEADING_NAME_VALUE_RE = re.compile(
+    rf"^(?P<name>(?:[가-힣][ \t]?){{1,3}}[가-힣])(?:{JOSA}){{0,2}}(?=\s)"
+)
+_COMPOSITE_NAME_PARTICLE_RE = re.compile(
+    rf"^(?P<name>(?:[가-힣][ \t]?){{1,3}}[가-힣])(?:{JOSA}){{1,2}}$"
+)
 # Same token grammar as PseudonymStore, never a prefix-only exemption.
 _MASKED_NAME_VALUE_RE = re.compile(
     rf"[ \t]*(?:\[?(?:PERSON|COMPANY)_[0-9]{{3,}}\]?(?:{JOSA})?)"
@@ -188,7 +194,7 @@ def _name_like_value(value: str) -> str | None:
     return name if is_valid_korean_name_structure(name) else None
 
 
-def _uncertain_person_value(value: Any, *, explicit_name: bool) -> bool:
+def _uncertain_person_value(value: Any, *, explicit_name: bool, name_field: bool = False) -> bool:
     """Decide send safety separately from extracting a single name token."""
     if not isinstance(value, str):
         return True
@@ -200,7 +206,15 @@ def _uncertain_person_value(value: Any, *, explicit_name: bool) -> bool:
         return False
     if explicit_name:
         return True
-    # Preserve the role/unknown-subject contract for Korean non-name values.
+    if name_field:
+        # A grammatical name suffix supplies context even when its subject is
+        # unknown. Inspect only a bounded name window, not arbitrary titles or
+        # an exception vocabulary. Role-only keys retain their existing contract.
+        for pattern in (_LEADING_NAME_VALUE_RE, _COMPOSITE_NAME_PARTICLE_RE):
+            match = pattern.match(text)
+            if match and is_valid_korean_name_structure(match.group("name")):
+                return True
+    # Preserve the role-only contract for Korean non-name values.
     # A name-shaped first word alone cannot establish the type of a multiword
     # organization. Raw text is still scanned, with no new noun exemptions.
     compact = []
@@ -335,7 +349,7 @@ def _collect_texts_from_value(
             label = _person_label_for_key(key)
             marker = _has_name_field_marker(key)
             if (label or marker) and _uncertain_person_value(
-                item, explicit_name=bool(label and marker),
+                item, explicit_name=bool(label and marker), name_field=marker,
             ):
                 if _uncertain_paths is not None:
                     _uncertain_paths.append(current_path)
