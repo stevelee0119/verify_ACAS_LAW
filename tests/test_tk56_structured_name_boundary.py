@@ -128,6 +128,17 @@ def test_synthetic_nonperson_relaxation_does_not_allow_uncertain_names(monkeypat
     assert not sent and not reserved
 
 
+@pytest.mark.parametrize("position", ("system", "user", "schema", "metadata"))
+@pytest.mark.parametrize("key", ("name", "fullName", "수탁명의자"))
+@pytest.mark.parametrize("value", ("엘리오", "테오나", "루시아"))
+def test_synthetic_unfamiliar_short_korean_names_remain_uncertain(monkeypatch, position, key, value):
+    assert privacy._name_like_value(value) is None
+    request = _request({key: value}, position)
+    assert privacy.inspect_request(request)["status"] == "BLOCKED"
+    _, sent, reserved = _route(monkeypatch, request)
+    assert not sent and not reserved
+
+
 @pytest.mark.parametrize("position", ("system", "user"))
 @pytest.mark.parametrize("key", ("name", "claimantName", "담당관 성함"))
 @pytest.mark.parametrize("value", ("Taylor Morgan", 58213, {"value": "未確認"}, None, ["Casey", "River"]))
@@ -273,12 +284,12 @@ def test_synthetic_unknown_name_value_windows_thousands_under_point_one_second()
 
 
 def test_synthetic_shared_korean_value_boundary_thousands_under_point_one_second():
-    values = ("초록기상관측센터", "가람환경 사업본부", "푸른자료정리", "한예솔 회계책임자", "유 다린", "남궁서율께는") * 500
+    values = ("초록기상관측센터", "가람환경 사업본부", "푸른자료정리", "한예솔 회계책임자", "유 다린", "남궁서율께는", "엘리오") * 500
     started = perf_counter()
     results = [privacy._uncertain_person_value(value, explicit_name=True, name_field=True) for value in values]
     elapsed = perf_counter() - started
-    assert results == [False, False, False, True, True, True] * 500
-    print(f"TK-56 shared Korean value boundary 3,000 values: {elapsed:.6f}s")
+    assert results == [False, False, False, True, True, True, True] * 500
+    print(f"TK-56 shared Korean value boundary 3,500 values: {elapsed:.6f}s")
     assert elapsed < 0.1
 
 

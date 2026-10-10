@@ -224,7 +224,11 @@ def _uncertain_person_value(value: Any, *, explicit_name: bool, name_field: bool
                 compact.append(char)
         elif not char.isspace():
             return True
-    return len(compact) <= 4 and is_valid_korean_name_structure("".join(compact))
+    # A short explicit name can have an unfamiliar surname or be transliterated.
+    # Failure of the surname grammar is not proof of a non-person value.
+    return len(compact) <= 4 and (
+        explicit_name or is_valid_korean_name_structure("".join(compact))
+    )
 
 
 # ===========================================================================
