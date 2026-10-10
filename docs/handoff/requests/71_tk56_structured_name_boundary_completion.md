@@ -1,6 +1,6 @@
 # TK-56 구조화 성명 경계 과차단 보완 보고 (2026-10-10)
 
-PR #70, 기준 Steve `03fdcdb`, 브랜치 `codex/tk56-structured-name-boundary`. 최초 설계 `a3608de` 및 보완 설계 `2892b83`를 코드보다 먼저 커밋했다. 제출 SHA·최종 diff stat·같은 SHA CI 링크·scorecard 전후·푸시 전 시험 편집 점검 원문은 PR에 기록한다. 구현 PR은 직접 병합하지 않는다.
+PR #70, 기준 Steve `03fdcdb`, 브랜치 `codex/tk56-structured-name-boundary`. 최신 Steve `ad25f51`을 병합 커밋 `7a77b73`으로 반영했다. upstream의 TK-43·70·평가 기록과 시험은 원본 그대로이고, PR의 변경은 5파일의 TK-56 범위뿐이다. 최초 설계 `a3608de` 및 보완 설계 `2892b83`를 코드보다 먼저 커밋했다. 제출 SHA·최종 diff stat·같은 SHA CI 링크·scorecard 전후·푸시 전 시험 편집 점검 원문은 PR에 기록한다. 구현 PR은 직접 병합하지 않는다.
 
 초기 제출 `ef790e7`은 목표 21 strict XPASS와 유출 지표를 유지했지만, 평가 측 회신에서 정상 구조화 과차단 상한 초과로 불승인됐다. 비공개 입력은 요청하지 않고 공개 합성 값으로 원인을 재현했다. 명시 성명 필드에서 단일 이름 추출 실패를 무조건 불확실 값으로 취급해 한국어 기관명·업무·복합 값도 차단했다.
 
@@ -16,30 +16,30 @@ after working tree: nonperson actual router sent 72/72; names actual router sent
 
 관련 직접 시험 명령(LV_ALLOW_NETWORK=0, 외부 서비스 대역):
 ```sh
-LV_ALLOW_NETWORK=0 /workspace/venv/bin/python -m pytest -o addopts='' -q tests/test_tk56_structured_name_boundary.py tests/regression/test_r8a_structured_privacy.py tests/regression/test_r8c_key_context.py tests/regression/test_r8d_key_context.py tests/regression/test_r8e_key_context.py tests/regression/test_r8f_contact_rrn.py tests/regression/test_r8f1_rrn_linebreak.py tests/acceptance/test_structured_request_privacy.py tests/acceptance/test_pii_label_variants.py tests/acceptance/test_round6_regressions.py tests/acceptance/test_round7_findings.py tests/test_pii_and_claims.py tests/test_tk20_pii_layout_invariance.py tests/test_tk65_envelope_schema.py
+LV_ALLOW_NETWORK=0 /workspace/venv/bin/python -m pytest -o addopts='' -q tests/test_tk56_structured_name_boundary.py tests/regression/test_r8a_structured_privacy.py tests/regression/test_r8c_key_context.py tests/regression/test_r8d_key_context.py tests/regression/test_r8e_key_context.py tests/regression/test_r8f_contact_rrn.py tests/regression/test_r8f1_rrn_linebreak.py tests/acceptance/test_structured_request_privacy.py tests/acceptance/test_pii_label_variants.py tests/acceptance/test_round6_regressions.py tests/acceptance/test_round7_findings.py tests/test_pii_and_claims.py tests/test_tk20_pii_layout_invariance.py tests/test_tk65_envelope_schema.py tests/test_tk43_category_stopwords.py tests/test_tk43_particle_sentences.py
 ```
 ```text
-21 failed, 1163 passed, 8 xfailed in 5.89s
+21 failed, 2717 passed, 8 xfailed in 10.98s
 ```
 실패 집계 21건은 모두 목표 TK-56 strict XPASS이며 **XPASS(strict) 외 실패 0**이다. 표시는 평가 측이 통합할 때 지운다.
 
 추가 라우터·DOCX 마스킹·payload guard·기존 요청 통합 및 원장/고정 사본의 직접 관련 선택 시험:
 ```text
-44 passed in 0.91s
-34 passed, 274 deselected in 0.71s
+44 passed in 0.94s
+34 passed, 274 deselected in 0.84s
 ```
 추가 실행은 기존 로컬 sandbox의 asyncio.to_thread 완료 신호 문제를 피하도록 실행 환경 네트워크 권한을 부여했지만, LV_ALLOW_NETWORK=0과 서비스 대역을 유지했다. 원본 중단 실행을 통과로 집계하지 않는다. 로컬 verify_all은 실행하지 않았다.
 
 반복 시간 원문(새 경로 포함):
 ```text
-TK-56 key grammar 3,000 pairs: 0.025899s
-.TK-56 value boundary 3,000 pairs: 0.010776s
-.TK-56 collector 2,000 fields: 0.034552s
-.TK-56 unknown name windows 3,000 values: 0.010516s
-.TK-56 shared Korean value boundary 3,000 values: 0.011062s
-.TK-56 repeated long key/value: 0.005702s
+TK-56 key grammar 3,000 pairs: 0.028169s
+.TK-56 value boundary 3,000 pairs: 0.011531s
+.TK-56 collector 2,000 fields: 0.034388s
+.TK-56 unknown name windows 3,000 values: 0.010820s
+.TK-56 shared Korean value boundary 3,000 values: 0.010923s
+.TK-56 repeated long key/value: 0.005508s
 .
-6 passed, 639 deselected in 0.76s
+6 passed, 639 deselected in 0.78s
 ```
 
 남은 제한·평가: 성명과 같은 모양의 기관명, 비한글·구두점·비문자열 값에는 잔여 과차단이 가능하다. 이름 형태가 확인되지 않은 한국어 복합 값은 원문 검사에 맡기며 성명 자동 마스킹의 보장 범위를 확대하지 않는다. 비공개 정상 요청 과차단 ≤6/28와 유출 0·필수 PII 게이트의 회복 여부는 별도 평가 세션이 판정한다. 비공개 자료·evaluator 브랜치·판정서를 요청/열람/수정하지 않았다. 수용 SHA 전체 검증·표시 제거·통합 승인과 다음 릴리스 새 봉인 시험은 평가 측/사용자 단계다. TK-55 표지 없는 역할 명사 키·TK-44/49 2단계·TK-45에는 착수하지 않았다.
