@@ -4,7 +4,7 @@
 티켓 번호는 발견한 문제 수다. 해소 여부·회귀(구현 수정이 새로 만든 결함)·재발은 아래처럼 따로 센다.
 
 - 전체 74건 · 회귀 24건 · 미해결(open·accepted·merged·known_open) 13건
-- 상태별: open 7 · accepted 0 · merged 4 · known_open 2 · deployed 61 · closed 0
+- 상태별: open 6 · accepted 1 · merged 4 · known_open 2 · deployed 61 · closed 0
 - 해소일(deployed_on·closed_on)은 2026-10-10 이후 기록분만 있다. 그 전 해소 건은 날짜 미상이라 주간 해소 수에 들어가지 않는다.
 
 ## 주별
@@ -36,13 +36,13 @@
 | TK-45 | open | regression | 2026-10-03 | Codex 대기열 4순위. TK-24 통합 충족, TK-56→TK-44/49 수용 뒤 |
 | TK-49 | open | regression | 2026-10-03 | TK-44와 묶음. 평가 조건 2 + TK-56 수용 뒤 2단계 |
 | TK-55 | known_open | regression | 2026-10-04 | 3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음 |
-| TK-56 | open | regression | 2026-10-04 | PR #70 ef790e7 불승인·Codex 보완 요구. 목표 XPASS 21 충족, 정상 요청 과차단 6/28→10/28(상한 6). 수용/통합 전 |
+| TK-56 | accepted | regression | 2026-10-04 | PR #70 71905eb 내용 수용. 과차단 6/28·유출 0·목표 21건 승격, #73 평가 통합 131506d. Steve 병합/배포 전; 최신 필수 CI·사용자 승인·새 봉인 필요 |
 | TK-57 | known_open | existing | 2026-10-04 | 필수 게이트 8F-1 해소·배포. intl_paren 원본 1/54는 국가코드 범위 참고 잔여(가입자 가림·실제 도달 0), 신규 배정 없음 |
 | TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
 | TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
 | TK-72 | open | existing | 2026-10-10 | PR #72 보완 8e421c1 재불승인·Antigravity 보완 요구. 11/12명·로컬 32k 시간 회복, 종결어 없는 판례 누락·혼합 시간 회귀·긴 저자/해석 중복 잔여. 필수 CI 실패. 정상 경계/복잡도 설계 메모 후 보완, 수용/통합 전 |
 | TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
-| TK-74 | open | existing | 2026-10-10 | 설계 조건부 승인 유지. PR #68 39973f1 구현 불승인·Antigravity 보완 요구: MIME·미검토 범위·CSV 재선별 회귀. 수용/통합 전 |
+| TK-74 | open | existing | 2026-10-10 | PR #68 ed29027 재불승인. 이전 5 재현·제출 7 통과, 실제 sync 실패/타임아웃 음성 판별 잔여 2실패·보호 3통과. 시험 교체 1건 평가 최소 수정 승인(#73), 구현 수용/통합 전 |
 
 ## 읽는 법
 - 회귀 비율이 줄면 수정 과정의 품질 관리가 나아지는 것이다. 성능(처음 보는 문서의 탐지율)은 고정 비공개 벤치마크로 따로 본다(`FIXED_BENCHMARK.md`).

@@ -9,6 +9,7 @@
     {"test": "tests/regression/test_r8e_key_context.py::test_explicit_person_name_fields_keep_fail_closed_value_shapes", "mark": "xfail", "ticket": "TK-56", "approved": "2026-10-04", "reason": "8C 수렴(사용자 결정) — 8F 지시서 2절 C"},
     {"test": "tests/regression/test_r8e_key_context.py::test_name_field_fail_closed_blocks_actual_router_send_in_both_positions", "mark": "xfail", "ticket": "TK-56", "approved": "2026-10-04", "reason": "8C 수렴(사용자 결정) — 8F 지시서 2절 C"},
     {"test": "tests/test_upload_privacy_notice_api.py::test_unauthenticated_privacy_notice_get_returns_200_without_sensitive_data", "mark": "delete", "ticket": "업로드 안내 9절", "approved": "2026-10-04", "reason": "비인증 공개 되돌림(평가 측 지시) — 로그인 전 차단·로그인 뒤 재로드 시험으로 교체"},
-    {"test": "tests/test_upload_privacy_notice_browser.py::test_upload_blocked_when_privacy_notice_returns_401_unauthenticated", "mark": "delete", "ticket": "업로드 안내 9절", "approved": "2026-10-04", "reason": "로그인 뒤 재로드까지 검사하는 시험으로 교체(평가 측 지시)"}
+    {"test": "tests/test_upload_privacy_notice_browser.py::test_upload_blocked_when_privacy_notice_returns_401_unauthenticated", "mark": "delete", "ticket": "업로드 안내 9절", "approved": "2026-10-04", "reason": "로그인 뒤 재로드까지 검사하는 시험으로 교체(평가 측 지시)"},
+    {"test": "tests/test_tk74_case_table_indexing.py::test_non_case_table_spreadsheet_control_not_indexed_as_rag", "mark": "delete", "ticket": "TK-74", "approved": "2026-10-10", "reason": "평가 요구인 DB 캐시 보존·eligible 격리·질의 재선별 복구와 기존 chunk_count==0의 충돌을 직접 재현. ed29027의 test_non_case_table_spreadsheet_control_and_resync_recovery로 교체하는 1건만 승인. PR #68 코멘트 6096835381; 제품 구현 수용은 별도"}
   ]
 }
