@@ -171,8 +171,8 @@
    "note": "2026-10-10 기준 배포 대기 목록에 없음(배포 또는 대체). 해소일 미상"
   },
   "TK-43": {
-   "status": "accepted",
-   "note": "PR #62 e4867e7 수용, 평가 측 통합 PR #69"
+   "status": "merged",
+   "note": "PR #62 e4867e7, Steve 반영(PR #69). 다음 릴리스"
   },
   "TK-44": {
    "status": "open",
@@ -279,8 +279,8 @@
    "note": "PR #56, Steve 03fdcdb(PR #67). 다음 릴리스"
   },
   "TK-70": {
-   "status": "accepted",
-   "note": "PR #60 db21f19 수용, 평가 측 통합 PR #69"
+   "status": "merged",
+   "note": "PR #60 db21f19, Steve 반영(PR #69). 다음 릴리스"
   },
   "TK-71": {
    "status": "deployed",

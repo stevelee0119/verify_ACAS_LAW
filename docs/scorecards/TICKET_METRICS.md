@@ -4,7 +4,7 @@
 티켓 번호는 발견한 문제 수다. 해소 여부·회귀(구현 수정이 새로 만든 결함)·재발은 아래처럼 따로 센다.
 
 - 전체 74건 · 회귀 24건 · 미해결(open·accepted·merged·known_open) 13건
-- 상태별: open 7 · accepted 2 · merged 2 · known_open 2 · deployed 61 · closed 0
+- 상태별: open 7 · accepted 0 · merged 4 · known_open 2 · deployed 61 · closed 0
 - 해소일(deployed_on·closed_on)은 2026-10-10 이후 기록분만 있다. 그 전 해소 건은 날짜 미상이라 주간 해소 수에 들어가지 않는다.
 
 ## 주별
@@ -31,7 +31,7 @@
 | 티켓 | 상태 | 종류 | 발견일 | 메모 |
 |---|---|---|---|---|
 | TK-24 | merged | existing | 2026-10-01 | PR #53, Steve 03fdcdb(PR #67). 다음 릴리스 |
-| TK-43 | accepted | regression | 2026-10-03 | PR #62 e4867e7 수용, 평가 측 통합 PR #69 |
+| TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7, Steve 반영(PR #69). 다음 릴리스 |
 | TK-44 | open | regression | 2026-10-03 | 설계 조건부 승인(PR #63), 평가 측 조건 2 선행 |
 | TK-45 | open | regression | 2026-10-03 | Codex 구현 대기열 4순위 |
 | TK-49 | open | regression | 2026-10-03 | TK-44와 묶음 |
@@ -39,7 +39,7 @@
 | TK-56 | open | regression | 2026-10-04 | 착수 가능 · Codex 구현 |
 | TK-57 | known_open | existing | 2026-10-04 | 잔여(intl_paren 1/54) 알려진 미해결 |
 | TK-69 | merged | existing | 2026-10-07 | PR #56, Steve 03fdcdb(PR #67). 다음 릴리스 |
-| TK-70 | accepted | existing | 2026-10-09 | PR #60 db21f19 수용, 평가 측 통합 PR #69 |
+| TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19, Steve 반영(PR #69). 다음 릴리스 |
 | TK-72 | open | existing | 2026-10-10 | 착수 가능 · Antigravity |
 | TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
 | TK-74 | open | existing | 2026-10-10 | 설계 조건부 승인(PR #68), 구현 대기 · Antigravity |

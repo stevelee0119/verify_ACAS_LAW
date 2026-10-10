@@ -2,8 +2,7 @@
  "total": 74,
  "status": {
   "deployed": 61,
-  "merged": 2,
-  "accepted": 2,
+  "merged": 4,
   "open": 7,
   "known_open": 2
  },
@@ -17,10 +16,10 @@
   },
   {
    "id": "TK-43",
-   "status": "accepted",
+   "status": "merged",
    "kind": "regression",
    "found_on": "2026-10-03",
-   "note": "PR #62 e4867e7 수용, 평가 측 통합 PR #69"
+   "note": "PR #62 e4867e7, Steve 반영(PR #69). 다음 릴리스"
   },
   {
    "id": "TK-44",
@@ -73,10 +72,10 @@
   },
   {
    "id": "TK-70",
-   "status": "accepted",
+   "status": "merged",
    "kind": "existing",
    "found_on": "2026-10-09",
-   "note": "PR #60 db21f19 수용, 평가 측 통합 PR #69"
+   "note": "PR #60 db21f19, Steve 반영(PR #69). 다음 릴리스"
   },
   {
    "id": "TK-72",
