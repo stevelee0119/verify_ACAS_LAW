@@ -1,0 +1,158 @@
+{
+ "total": 74,
+ "status": {
+  "deployed": 61,
+  "merged": 4,
+  "open": 7,
+  "known_open": 2
+ },
+ "open": [
+  {
+   "id": "TK-24",
+   "status": "merged",
+   "kind": "existing",
+   "found_on": "2026-10-01",
+   "note": "PR #53, Steve 03fdcdb(PR #67). 다음 릴리스"
+  },
+  {
+   "id": "TK-43",
+   "status": "merged",
+   "kind": "regression",
+   "found_on": "2026-10-03",
+   "note": "PR #62 e4867e7, Steve 반영(PR #69). 다음 릴리스"
+  },
+  {
+   "id": "TK-44",
+   "status": "open",
+   "kind": "regression",
+   "found_on": "2026-10-03",
+   "note": "설계 조건부 승인(PR #63), 평가 측 조건 2 선행"
+  },
+  {
+   "id": "TK-45",
+   "status": "open",
+   "kind": "regression",
+   "found_on": "2026-10-03",
+   "note": "Codex 구현 대기열 4순위"
+  },
+  {
+   "id": "TK-49",
+   "status": "open",
+   "kind": "regression",
+   "found_on": "2026-10-03",
+   "note": "TK-44와 묶음"
+  },
+  {
+   "id": "TK-55",
+   "status": "known_open",
+   "kind": "regression",
+   "found_on": "2026-10-04",
+   "note": "3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음"
+  },
+  {
+   "id": "TK-56",
+   "status": "open",
+   "kind": "regression",
+   "found_on": "2026-10-04",
+   "note": "착수 가능 · Codex 구현"
+  },
+  {
+   "id": "TK-57",
+   "status": "known_open",
+   "kind": "existing",
+   "found_on": "2026-10-04",
+   "note": "잔여(intl_paren 1/54) 알려진 미해결"
+  },
+  {
+   "id": "TK-69",
+   "status": "merged",
+   "kind": "existing",
+   "found_on": "2026-10-07",
+   "note": "PR #56, Steve 03fdcdb(PR #67). 다음 릴리스"
+  },
+  {
+   "id": "TK-70",
+   "status": "merged",
+   "kind": "existing",
+   "found_on": "2026-10-09",
+   "note": "PR #60 db21f19, Steve 반영(PR #69). 다음 릴리스"
+  },
+  {
+   "id": "TK-72",
+   "status": "open",
+   "kind": "existing",
+   "found_on": "2026-10-10",
+   "note": "착수 가능 · Antigravity"
+  },
+  {
+   "id": "TK-73",
+   "status": "open",
+   "kind": "existing",
+   "found_on": "2026-10-10",
+   "note": "평가 측 사전 점검 대기, 미배정"
+  },
+  {
+   "id": "TK-74",
+   "status": "open",
+   "kind": "existing",
+   "found_on": "2026-10-10",
+   "note": "설계 조건부 승인(PR #68), 구현 대기 · Antigravity"
+  }
+ ],
+ "weekly": {
+  "2026-W40": {
+   "found": 59,
+   "regression": 21,
+   "recurrence": 0
+  },
+  "2026-W41": {
+   "found": 15,
+   "regression": 3,
+   "recurrence": 0
+  }
+ },
+ "daily_found": {
+  "2026-09-30": {
+   "found": 12,
+   "regression": 0
+  },
+  "2026-10-01": {
+   "found": 17,
+   "regression": 1
+  },
+  "2026-10-03": {
+   "found": 24,
+   "regression": 16
+  },
+  "2026-10-04": {
+   "found": 6,
+   "regression": 4
+  },
+  "2026-10-05": {
+   "found": 2,
+   "regression": 1
+  },
+  "2026-10-06": {
+   "found": 1,
+   "regression": 1
+  },
+  "2026-10-07": {
+   "found": 1,
+   "regression": 0
+  },
+  "2026-10-08": {
+   "found": 1,
+   "regression": 0
+  },
+  "2026-10-09": {
+   "found": 7,
+   "regression": 1
+  },
+  "2026-10-10": {
+   "found": 3,
+   "regression": 0
+  }
+ },
+ "regression_total": 24,
+ "unregistered": []
+}
