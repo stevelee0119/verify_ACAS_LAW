@@ -560,9 +560,9 @@ class ReferenceLibrary:
                     entry["structured_case_table"] = True
                     entry["case_table_stats"] = parsed.get("stats", {})
                 entry["page_numbers_reliable"] = parsed.get("page_numbers_reliable", True)
-                # 표 후보 중 판례표가 아니고 문서 선별도 되지 않은 파일은 eligible에서 제외하여 RAG select() 격리 (TK-74)
-                # 판례표이거나, 본문에서 선별된 일반 문서인 경우에만 eligible에 등록
-                if is_case_table or (chosen(file_id) and chunk_count > 0):
+                # 미선별 스프레드시트 후보만 일반 검색에서 격리한다. 권한·리비전 검사를 통과한
+                # 일반 문서 캐시는 현재 이름 선별과 무관하게 기존 본문 검색 대상으로 유지한다.
+                if is_case_table or (chunk_count > 0 and (not is_candidate(file_id) or chosen(file_id))):
                     self.eligible[file_id] = {"file_id": file_id, "title": item.get("name", ""),
                         "folder_path": folder_path,
                         "metadata_score": entry["metadata"]["score"],
