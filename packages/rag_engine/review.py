@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 
 from jsonschema import ValidationError, validate
@@ -370,42 +371,127 @@ def review_document(result, library, router, context, pii):
                           issues=link_observations(provision_obs, sources, masked_claims))
         return review
 
-    # 4. 문서 단위 배치 대조 (기존 경로 100% 보존)
-    batch_size = 6
-    batches = [sources[i:i + batch_size] for i in range(0, len(sources), batch_size)] or [sources]
+    # 4. 문서 단위 배치 대조 (TK-68 개정 1: 비용 비증가 조건 C1~C3 충족)
+    max_subdivision_depth = 1
+
+    def _split_sources_into_batches(
+        src_list: List[Dict[str, Any]],
+        max_chars_limit: int = 6000,
+        max_items_limit: int = 6,
+    ) -> List[List[Dict[str, Any]]]:
+        """참고자료 발췌 글자 수 합계와 개수 상한에 기초하여 고르게 균등 분할한다. (한국어 주석)
+        - 서면9 실증 근거: 참고자료 11개 중 앞 6개 합계 6,885자 묶음은 잘렸으나, 5개 묶음은 첫 시도에 성공함.
+        - 서면 본문 길이와 무관하게, 참고자료 발췌 글자 수 합계(상한 6,000자) 및 개수(최대 6개)에 따라 균등 분할함.
+        - 1개짜리 꼬리 묶음 없이 고르게 분할함 (예: 11개 -> 4·4·3 분할로 각 묶음 4개 이하 및 6,000자 이하 충족).
+        - 작은 참고자료 6개(N<=6)는 1개 묶음으로 유지하여 호출 수 1회 보장 (C1).
+        """
+        if not src_list:
+            return []
+        n = len(src_list)
+        # k = 1부터 n까지 균등 분할을 시도하여 모든 묶음이 개수(<=6) 및 발췌 합계(<=6000)를 만족하는 최소 k 탐색
+        for k in range(1, n + 1):
+            base = n // k
+            rem = n % k
+            batches = []
+            idx = 0
+            valid = True
+            for i in range(k):
+                size = base + (1 if i < rem else 0)
+                batch = src_list[idx:idx + size]
+                idx += size
+                batch_chars = sum(len(s.get("text") or "") for s in batch)
+                if len(batch) > max_items_limit or batch_chars > max_chars_limit:
+                    valid = False
+                    break
+                batches.append(batch)
+            if valid:
+                return batches
+
+        # 단일 참고자료 > 6,000자 등 극단적 경우 대비 최대 개수(max_items_limit) 기준 균등 분할 fallback
+        min_k = math.ceil(n / max_items_limit)
+        base = n // min_k
+        rem = n % min_k
+        fallback_batches = []
+        idx = 0
+        for i in range(min_k):
+            size = base + (1 if i < rem else 0)
+            fallback_batches.append(src_list[idx:idx + size])
+            idx += size
+        return fallback_batches
+
+    initial_batches = _split_sources_into_batches(sources) or [sources]
+    evaluated_batches: List[List[Dict[str, Any]]] = []
     all_observations = []
     executed_any = False
     accepted_any = False
-    outcome = None  # 변수 명시적 초기화 (한국어 주석: 권고 사항 반영)
+    outcome = None  # 변수 명시적 초기화 (한국어 주석)
 
-    for b_idx, s_batch in enumerate(batches):
+    # 큐 항목: (참고자료 묶음, 분할 깊이)
+    queue = [(b, 0) for b in initial_batches]
+    total_calls = 0
+    # C3 최악 상한: 전체 호출 수(재시도·분할 포함) <= 2 * ceil(N / 6)
+    max_total_calls = 2 * math.ceil(len(sources) / 6) if sources else 2
+
+    while queue and total_calls < max_total_calls:
+        s_batch, depth = queue.pop(0)
+        total_calls += 1
+
         request = LLMRequest(
             system=RAG_REVIEW_SYSTEM_PROMPT,
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
-            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": b_idx + 1})
+            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls})
         # One selected provider; the existing router bounds each call and its transient retries.
-        outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
-                                         policy=context.external_ai_policy, expected_task="참고자료 검토"))
-        result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in outcome.executions)
-        executed_any |= bool(outcome.executions or outcome.used)
-        failed = [e.provider for e in outcome.executions if getattr(e, "provider", "") and not e.ok]
-        if not outcome.used and failed:
-            # 한 공급자가 실패(형식 오류·잘림·일시 장애)하면 다른 공급자로 한 번만 다시 묻는다.
-            retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
-                                           exclude=failed, expected_task="참고자료 검토"))
-            result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
-            executed_any |= bool(retry.executions or retry.used)
-            if retry.executions:
-                review.setdefault("retried_after", []).extend(failed)
-                outcome = retry
-        batch_accepted = bool(outcome.used and not outcome.quarantined)
+        batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
+                                               policy=context.external_ai_policy, expected_task="참고자료 검토"))
+        outcome = batch_outcome
+        result.engine_data.setdefault("model_executions", []).extend(e.to_dict() for e in batch_outcome.executions)
+        executed_any |= bool(batch_outcome.executions or batch_outcome.used)
+
+        is_truncated = any("OUTPUT_TRUNCATED" in getattr(e, "error", "") for e in batch_outcome.executions)
+        remaining_calls = max_total_calls - total_calls
+
+        # TK-68: OUTPUT_TRUNCATED 발생 시 적응형 분할
+        # - 남은 호출 예산이 2회 이상이면 절반으로 분할(Adaptive Halving)
+        # - 남은 호출 예산이 1회뿐이면(N<=6 문서 등) 반으로 나누면 뒷부분이 누락되므로,
+        #   분할 대신 기존 대체 공급자 재시도(아래 failed 처리)로 넘어가 6개 전체를 온전히 대조함
+        if (not batch_outcome.used and is_truncated and len(s_batch) > 1
+                and depth < max_subdivision_depth and remaining_calls >= 2):
+            mid = len(s_batch) // 2
+            queue.insert(0, (s_batch[mid:], depth + 1))
+            queue.insert(0, (s_batch[:mid], depth + 1))
+            continue
+
+        failed = [e.provider for e in batch_outcome.executions if getattr(e, "provider", "") and not e.ok]
+        if not batch_outcome.used and failed:
+            if total_calls < max_total_calls:
+                total_calls += 1
+                retry = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request, policy=context.external_ai_policy,
+                                               exclude=failed, expected_task="참고자료 검토"))
+                result.engine_data["model_executions"].extend(e.to_dict() for e in retry.executions)
+                executed_any |= bool(retry.executions or retry.used)
+                if retry.executions:
+                    review.setdefault("retried_after", []).extend(failed)
+                    outcome = retry
+                    batch_outcome = retry
+
+        batch_accepted = bool(batch_outcome.used and not batch_outcome.quarantined)
         accepted_any |= batch_accepted
-        if batch_accepted and outcome.parsed:
-            b_obs = grounded_observations(outcome.parsed, document, s_batch,
-                                          rejected=review["rejected_observations"])
-            if b_obs:
-                all_observations.extend(b_obs)
+        if batch_accepted:
+            evaluated_batches.append(s_batch)
+            if batch_outcome.parsed:
+                b_obs = grounded_observations(batch_outcome.parsed, document, s_batch,
+                                              rejected=review["rejected_observations"])
+                if b_obs:
+                    all_observations.extend(b_obs)
+
+    # C3 최악 상한 등에 도달하여 검토되지 못한 참고자료를 기록 (분모 보존)
+    reviewed_source_ids = {s.get("source_id") for b in evaluated_batches for s in b if s.get("source_id")}
+    unreviewed_sources = [s for s in sources if s.get("source_id") not in reviewed_source_ids]
+    if unreviewed_sources:
+        review["unreviewed_drive_sources"] = [s.get("source_id") for s in unreviewed_sources]
+
+    batches = evaluated_batches or initial_batches
 
     # 5. 주장 단위 검색 및 대조 (F3b, 19b 5.2/6.1, TK-63 개정 1)
     from packages.common.config import get_settings
@@ -721,4 +807,6 @@ def report_lines(run_result):
                          f"{values['penalty']}원 / 기재 일수 일치: {calc['stated_days_match']} / {calc['note']}")
         if review.get("observation_limit_reached"):
             lines.append("참고 의견 5건 한도에 도달했다. 전체 주장 검토 완료를 의미하지 않는다.")
+        if review.get("unreviewed_drive_sources"):
+            lines.append(f"미대조 참고자료({len(review['unreviewed_drive_sources'])}건): {', '.join(review['unreviewed_drive_sources'])}")
     return lines
