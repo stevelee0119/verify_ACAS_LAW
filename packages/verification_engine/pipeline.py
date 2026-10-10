@@ -415,15 +415,77 @@ class VerificationPipeline:
                         document_result.unverified_items.append({"kind": "reference_review",
                             "document_id": document_result.document_id,
                             "reason": "Drive 참고자료 AI 대조 미완료: " + review.get("reason", "")})
-                    # TK-09: RAG 관찰 결과 중 모순(CONTRADICTS) 후보를 결정적으로 검증하여 정식 Finding으로 승격
-                    # (사용자 승인 전 기본 꺼짐: candidate_promotion_enabled 플래그로 제어, exhibit_facts 결정론 관찰은 승격 제외)
+                    # TK-70: Drive 참고자료 '모순' 의견의 조건부 finding 승격 (D4 개정, 사용자 결정: 기본 켬)
                     from packages.common.config import get_settings
-                    if get_settings().candidate_promotion_enabled and review and review.get("observations") and document_result.normalized:
+                    settings = get_settings()
+                    if settings.rag_contradiction_promotion_enabled and review and review.get("observations") and document_result.normalized:
+                        from packages.verification_engine.candidate_verifier import ModelCandidate, verify_rag_candidate
+                        doc_text = document_result.normalized.visible_text
+                        sources = review.get("sources", [])
+                        claims_by_id = {c.get("claim_id"): c for c in getattr(document_result, "claims", []) if isinstance(c, dict) and c.get("claim_id")}
+
+                        promoted_groups: Dict[Tuple[str, str], Any] = {}
+                        for obs in review.get("observations", []):
+                            # exhibit_facts 등 결정론 정규식 관찰은 승격 대상에서 제외 (한국어 주석)
+                            if obs.get("engine") == "exhibit_facts" or obs.get("source_type") == "deterministic":
+                                continue
+                            if obs.get("relationship") == "CONTRADICTS":
+                                c_id = obs.get("claim_id") or ""
+                                c_text = ""
+                                if c_id and c_id in claims_by_id:
+                                    c_text = claims_by_id[c_id].get("text", "")
+                                if not c_text and getattr(document_result, "claims", []):
+                                    c_quote = obs.get("claim_quote", "")
+                                    for cl in document_result.claims:
+                                        if isinstance(cl, dict) and c_quote and c_quote in cl.get("text", ""):
+                                            c_id = c_id or cl.get("claim_id", "")
+                                            c_text = cl.get("text", "")
+                                            break
+                                if not c_text:
+                                    c_text = obs.get("claim_quote", "")
+
+                                candidate = ModelCandidate(
+                                    candidate_id=obs.get("source_id", ""),
+                                    claim_quote=obs.get("claim_quote", ""),
+                                    defect_type="FACT_CONTRADICTION",
+                                    basis_quote=obs.get("source_quote", ""),
+                                    source_id=obs.get("source_id"),
+                                    explanation=obs.get("explanation", ""),
+                                    model_name=obs.get("model_name", "rag_primary_reasoner"),
+                                )
+                                f, rej = verify_rag_candidate(
+                                    candidate, doc_text, sources,
+                                    document_id=document_result.document_id,
+                                    is_reference_contradiction=True,
+                                    claim_id=c_id,
+                                    claim_text=c_text,
+                                )
+                                if f:
+                                    # 동일 주장(claim_id 없으면 정규화된 claim_quote) 및 동일 참고자료(source_id) 중복 합치기
+                                    group_claim = c_id or " ".join(candidate.claim_quote.split())
+                                    group_key = (group_claim, candidate.source_id or "")
+                                    if group_key in promoted_groups:
+                                        existing_f = promoted_groups[group_key]
+                                        # 설명 및 근거 병합
+                                        if candidate.explanation and candidate.explanation not in existing_f.detail:
+                                            existing_f.detail += f" / [추가 대조 의견]: {candidate.explanation.strip()}"
+                                        for ev in f.evidence:
+                                            if not any(ev.excerpt == e.excerpt for e in existing_f.evidence):
+                                                existing_f.evidence.append(ev)
+                                    else:
+                                        promoted_groups[group_key] = f
+                                elif rej:
+                                    review.setdefault("rejected_observations", []).append(rej)
+
+                        for pf in promoted_groups.values():
+                            document_result.findings.append(pf)
+
+                    elif settings.candidate_promotion_enabled and review and review.get("observations") and document_result.normalized:
+                        # 기존 TK-09 일반 후보 승격 경로
                         from packages.verification_engine.candidate_verifier import ModelCandidate, verify_rag_candidate
                         doc_text = document_result.normalized.visible_text
                         sources = review.get("sources", [])
                         for obs in review.get("observations", []):
-                            # exhibit_facts 등 결정론 정규식 관찰 및 RAG 주장 단위 참고 의견(advisory_only)은 정식 Finding 후보 승격에서 원천 제외 (D4, 설계 4.1)
                             if obs.get("engine") == "exhibit_facts" or obs.get("source_type") == "deterministic":
                                 continue
                             if obs.get("advisory_only", False):

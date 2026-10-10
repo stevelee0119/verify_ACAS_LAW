@@ -9,7 +9,10 @@ import re
 import unicodedata
 from bisect import bisect_right
 from dataclasses import dataclass
+from itertools import chain
 from typing import List, Optional, Tuple
+
+from .name_stopwords import PERSON_CATEGORY_STOPWORDS
 
 # ---------------------------------------------------------------------------
 # 법률 식별자 Guard — 이 패턴에 걸리는 구간은 PII로 마스킹하지 않는다
@@ -185,16 +188,36 @@ COMMON_DELIMITER_STR = (
     r")"
 )
 
+# 기존 보조 인명 탐지와 통합 라벨 탐지가 같은 문법 조사 집합을 쓴다.
+_PERSON_PARTICLES = (
+    "은", "는", "이", "가", "을", "를", "과", "와", "의", "에게서", "에게",
+    "에서", "에", "도", "만", "께서", "께", "으로", "로", "라고", "이라고",
+)
+JOSA = "(?:" + "|".join(_PERSON_PARTICLES) + ")"
+_COMPOUND_JOSA = "(?:" + "|".join(p for p in _PERSON_PARTICLES if len(p) > 1) + ")"
+
 # 라벨 어휘군 × 구분자군 결합 정규식 (이름 2~4글자 포착, 조사는 이름 외부에서 분리)
-LABELLED_PARTY_PERSON_RE = re.compile(
+_LABELLED_PERSON_PREFIX = (
     rf"(?<![가-힣])"
     rf"(?:[\[(（［【〈《][ \t]*)?"
     rf"{LABEL_PATTERN_STR}"
     rf"(?:[\])）］】〉》][ \t]*)?"
     rf"{COMMON_DELIMITER_STR}"
-    rf"((?:[가-힣][ \t]?){{1,3}}[가-힣])"
+)
+_LABELLED_PERSON_SUFFIX = (
     rf"(?:[)）\]］])?"
     rf"(?=[ \t\r\n)）\]］,.;:]|$)"
+)
+LABELLED_PARTY_PERSON_RE = re.compile(
+    _LABELLED_PERSON_PREFIX +
+    rf"((?:[가-힣][ \t]?){{1,3}}[가-힣])"
+    + _LABELLED_PERSON_SUFFIX
+)
+# Preserve the existing plain-label regex contract; only extend compound tails.
+_LABELLED_COMPOUND_PERSON_RE = re.compile(
+    _LABELLED_PERSON_PREFIX +
+    rf"((?:[가-힣][ \t]?){{1,3}}[가-힣]){_COMPOUND_JOSA}"
+    + _LABELLED_PERSON_SUFFIX
 )
 
 def is_valid_korean_name_structure(raw_name: str, after_text: str = "", is_explicit_label: bool = False) -> bool:
@@ -314,6 +337,73 @@ PARTY_HEADER_STOPWORDS = {
     "연락처", "주민번호", "전화번호", "휴대전화", "생년월일",
     "이메일", "개인정보", "인적사항", "주소", "직업", "직위",
 }
+
+
+def _is_category_person_stopword(candidate: str, *, explicit_name: bool = False) -> bool:
+    """Only complete nouns; ambiguous explicit fields and name stems stay private."""
+    return not explicit_name and candidate in PERSON_CATEGORY_STOPWORDS
+
+
+_CATEGORY_JOSA_TAIL_RE = re.compile(JOSA + r"$")
+# Maximum category noun plus one grammatical particle, without truncating a word.
+_CATEGORY_WORD_LIMIT = max(map(len, PERSON_CATEGORY_STOPWORDS)) + max(map(len, _PERSON_PARTICLES))
+_CATEGORY_WORD_RE = re.compile(
+    rf"[가-힣]{{2,{_CATEGORY_WORD_LIMIT}}}(?=$|[\s)）\]］,.;:!?])"
+)
+
+
+def _is_category_person_sentence_stopword(
+    text: str, start: int, *, explicit_name: bool = False, candidate_end: int | None = None,
+) -> bool:
+    """One complete original word; ambiguous standard names remain private."""
+    if explicit_name:
+        return False
+    word_match = _CATEGORY_WORD_RE.match(text, start)
+    if word_match is None:
+        return False
+    # A regex candidate spanning whitespace can be a partially spaced name.
+    # Do not discard its first word merely because it spells a category noun.
+    if candidate_end is not None and word_match.end() < candidate_end:
+        joined = text[start:candidate_end].replace(" ", "").replace("\t", "")
+        if _is_standard_person_word(joined):
+            return False
+        tail = _CATEGORY_JOSA_TAIL_RE.search(joined)
+        if tail is not None and _is_standard_person_word(joined[:tail.start()]):
+            return False
+    word = word_match.group()
+    if word in PERSON_CATEGORY_STOPWORDS:
+        return True
+    particle = _CATEGORY_JOSA_TAIL_RE.search(word)
+    if particle is None or word[:particle.start()] not in PERSON_CATEGORY_STOPWORDS:
+        return False
+    # TK-43 개정 1: 한 음절 조사와 성명 끝 음절의 동일 입력을 보존한다.
+    if _has_category_name_ambiguity(word):
+        return False
+    # A compound particle may also begin with a name's final syllable. Inspect
+    # the same finite grammar for an alternative name + shorter particle split.
+    if len(particle.group()) > 1:
+        for shorter in _PERSON_PARTICLES:
+            if len(shorter) < len(particle.group()) and word.endswith(shorter):
+                if _has_category_name_ambiguity(word[:-len(shorter)]):
+                    return False
+    return True
+
+
+def _is_standard_person_word(word: str) -> bool:
+    return (len(word) == 3 and word[0] in SINGLE_SURNAMES) or (
+        len(word) == 4 and word[:2] in DOUBLE_SURNAMES
+    )
+
+
+def _has_category_name_ambiguity(word: str) -> bool:
+    if not _is_standard_person_word(word):
+        return False
+    particle = _CATEGORY_JOSA_TAIL_RE.search(word)
+    return particle is not None and len(particle.group()) == 1 and (
+        word[:particle.start()] in PERSON_CATEGORY_STOPWORDS
+    )
+
+
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
     r"\s*(?:장교|간부|병사|병력|부대|복무|당국|사법|검찰|수사|형법|인사|기밀|시설|부사관|병원|조직|내부|전산|보안|의무)")
@@ -363,7 +453,6 @@ LAWYER_NAME_RE = re.compile(
     r"(?=[ \t]*(?:[(（\n\r,.;]|$|[ \t]+(?:귀하|배석|소송|인|변호사|법무법인)))"
 )
 # 이름 뒤에 붙는 조사를 이름으로 오인하지 않도록 조사 목록을 두고 non-greedy로 잡는다.
-JOSA = r"(?:은|는|이|가|을|를|과|와|의|에게서|에게|에서|에|도|만|께서|께|으로|로|라고|이라고)"
 # R8-B: 불용어 검사 시 조사 분리에 사용하는 꼬리 조사 정규식 (성능 최적화를 위해 모듈 수준에 정의)
 _JOSA_TAIL_RE = re.compile(r"(?:은|는|이|가|을|를|의|과|와|에게|에|도|로|으로|에서)$")
 
@@ -754,7 +843,7 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         matches.append(PIIMatch("BUSINESS_REGISTRATION", m.group(1), start, end, block_id, page, 1.0, "사업자등록번호 라벨 문맥"))
 
     # 라벨 문맥 인명(PERSON) 통합 탐지: 당사자/직책/성명/변호사 라벨 × 공통 구분자 (TK-28, TK-39)
-    for m in LABELLED_PARTY_PERSON_RE.finditer(text):
+    for m in chain(LABELLED_PARTY_PERSON_RE.finditer(text), _LABELLED_COMPOUND_PERSON_RE.finditer(text)):
         raw_name = m.group(1).strip()
         clean_name = re.sub(r"\s+", "", raw_name)
         start, end = m.start(1), m.end(1)
@@ -783,6 +872,15 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
 
         # 2. clean_name 자체 불용어 검사
         if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
+            continue
+
+        # Inspect the original word, not a name regex's partial/concatenated view.
+        # A one-syllable particle spelling a standard name is kept ambiguous.
+        if _is_category_person_sentence_stopword(
+            text, start, explicit_name=is_name_label, candidate_end=end,
+        ):
+            continue
+        if _is_category_person_stopword(clean_name, explicit_name=is_name_label):
             continue
 
         # 3. 단일 조사 분리 및 stem 불용어 검사 (TK-52 1절: 재귀 분리 폐지, 1회만 분리):
@@ -834,6 +932,10 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 if stem in LEGAL_MILITARY_STOPWORDS or stem in PARTY_HEADER_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
                     continue
             if name in LEGAL_MILITARY_STOPWORDS or name in PARTY_HEADER_STOPWORDS or name in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
+            if _is_category_person_sentence_stopword(text, start, candidate_end=end):
+                continue
+            if _is_category_person_stopword(name):
                 continue
             after_text = text[end:end + 30]
             if not is_valid_korean_name_structure(name, after_text, is_explicit_label=False):
