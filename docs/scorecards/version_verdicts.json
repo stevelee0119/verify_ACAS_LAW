@@ -61,5 +61,37 @@
   "decided_by": "evaluator(claude-code)",
   "decided_at": "2026-10-09",
   "note": "TK-63·TK-65 릴리스는 같은 조건의 오프라인 성능 상승이 측정되지 않아 0.10.0 유지였다. 이번에는 봉인·은퇴 세트에서 같은 조건의 오탐 감소·종합점수 상승이 측정되었다. 여러 기준 중 가장 높은 등급(첫째 자리) 하나만 적용."
+ },
+ {
+  "version": "0.12.0",
+  "from": "0.11.0",
+  "level": "minor",
+  "measured_commit": "0bf4ccc2f625c2bacbfefbc1c73164049a463b34",
+  "conditions": {
+   "network": false,
+   "os": "Linux",
+   "python": "3.11.15",
+   "tesseract": "5.3.4",
+   "scoring": "scripts/scorecard.py(dev·holdout) 평가 측 재실행; 봉인 sealed_20261010은 사용자 환경(Python 3.12.14, tesseract 5.5.0 kor 없음)에서 운영본·후보 같은 조건"
+  },
+  "evidence": {
+   "M1": {
+    "baseline": "main a8b2a7e dev 81.7 / holdout 79.2 / 오탐 0",
+    "candidate": "dev 81.7 / holdout 79.2 / 오탐 0",
+    "delta": "0 (상향 근거 아님)"
+   },
+   "M2": "봉인 sealed_20261010(문서 8·결함 53, 지문 cb5789b33d3c6655, 별도 세션 자체 점검 오류 0): 운영본 a8b2a7e 15.2/0.302/오탐 3(대조군 3, A 3) = 후보 0bf4ccc 15.2/0.302/오탐 3(대조군 3, A 3), 인젝션 방어 — 후보가 낮지 않음. 은퇴 sealed_20261009(평가 측 표준 환경, TK-67 수용 시): 34.2/오탐 1 → 36.2/오탐 0",
+   "M3": "인계 티켓 TK-67(증거 목록 결번 판정 범위) 수용 기준 모두 충족·해소 → 첫째 자리 기준('인계 티켓 1건이 수용 기준을 모두 충족하며 해소'). 함께 해소: TK-58(계좌번호 종류), TK-71(표준판례 표 행 단위 색인·사건정보 대조), TK-68(문서 단위 Drive 대조 잘림)",
+   "P1": "verify_all regression_gate --base a8b2a7e 회귀 없음",
+   "P2": "점수 게이트 통과, 봉인 종합점수·오탐 운영본과 같음",
+   "P3": "하드코딩 변경분 점검 통과",
+   "P4": "verify_all 전체 모드 종료 0(0bf4ccc: acceptance 1002·원장 527·전체 3,340·브라우저 197), 같은 SHA CI 필수 3개 성공(PR #59 병합 전 5e9f339 기준)",
+   "P5": "열린 신규 회귀 티켓 0",
+   "P6": "판정서 f1_gate_verdict 'TK-67'·'TK-58'·'TK-71 2차 보완'·'TK-68 3차 보완'·'릴리스 후보 0bf4ccc'",
+   "not_measured": "AI 작성 판별·공식 DB 대조·Drive 대조(오프라인, 배포 직후 온라인 점검). 봉인 대조군 A등급 오탐 3은 운영본에도 있는 기존 결함 — 세트 개발용 이동 뒤 원인 확인"
+  },
+  "decided_by": "evaluator(claude-code)",
+  "decided_at": "2026-10-10",
+  "note": "봉인 점수는 운영본과 같아 상향 근거로 쓰지 않았다. 0.11.0(TK-64)과 같은 기준인 '인계 티켓 수용 기준 충족·해소'로 첫째 자리 하나만 적용."
  }
 ]

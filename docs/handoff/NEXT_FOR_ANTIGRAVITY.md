@@ -1,9 +1,9 @@
 # Antigravity 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-10 평가 측(TK-68 PR #59 병합). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-10 평가 측(버전 판정 0.12.0, 릴리스 준비). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Antigravity 작업 — 통합 지시 2026-10-10 (49)]
+[Antigravity 작업 — 통합 지시 2026-10-10 (50)]
 
 0. 규칙(AGENTS.md)
  - 시작: 평가 측 기록 PR #51이 Steve_ACASiaLAW에 병합된 뒤 최신 Steve_ACASiaLAW에서 작업 브랜치를 만든다(새 티켓이 거기 들어 있다).
@@ -48,5 +48,13 @@
    - 확인: 서면9 실제 양상 호출 3 → 3회·잘림 없음, verify_all 전체 종료 0, 관련 263 passed.
    - 사용자 결정(티켓 개정 3): 실제 크기 발췌 6개 이상 문서의 호출 1회 증가 가능성 감수. 배포 뒤 평가 측이 온라인 비용 증감을 확인한다.
    - 참고: PR 안에서 시험을 바꿀 때는 지우지 말고 고쳐 쓴다(push 실행 시험 삭제 점검이 직전 커밋 기준으로 걸린다).
+
+[E] (높음, 지금 — 평가 측 기록 PR 병합 뒤) 버전 커밋 0.11.0 → 0.12.0 (VERSION_POLICY 6절 3단계, 0.11.0 때 PR #48과 같은 방식)
+   - 근거: docs/scorecards/version_verdicts.json의 0.12.0 판정서(measured_commit 0bf4ccc, level minor). 평가 측 기록 PR이 Steve_ACASiaLAW에 병합된 뒤 최신 Steve에서 브랜치를 만든다
+     (브랜치 antigravity/version-0.12.0).
+   - 바꾸는 것만: packages/common/config.py의 version, docs/releases.json 항목(판정서의 근거 수치와 포함 티켓 TK-58·TK-67·TK-71·TK-68),
+     python scripts/update_readme.py가 갱신하는 README 표. 다른 변경을 섞지 않는다. 커밋 1개.
+   - 푸시 전 python scripts/check_version_policy.py --base origin/Steve_ACASiaLAW 출력(위반 없음)과 check_test_edits 출력을 PR에 붙인다.
+   - CI 필수 3개 성공 뒤 '검토 요청'. 평가 측 확인 → 사용자 병합 → 평가 측이 릴리스 PR(Steve → main)을 연다.
 
 ```
