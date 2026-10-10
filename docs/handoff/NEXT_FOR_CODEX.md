@@ -1,9 +1,9 @@
 # Codex 전달문 (통합본 — 이 파일 하나만 전달한다)
 
-갱신: 2026-10-10 평가 측(TK-43 '구별 불가 입력' 질의 회신 — 수용 기준 개정 1, TK-24 평가 측 통합 착수). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
+갱신: 2026-10-10 평가 측(평가 에이전트 전환: 판정은 별도 Codex 평가 세션, TK-24 통합 PR #67). 이전 전달문을 모두 대체한다. 이 파일에 없는 지시는 없다.
 
 ```
-[Codex 작업 — 통합 지시 2026-10-10 (13)]
+[Codex 작업 — 통합 지시 2026-10-10 (14)]
 
 0. 규칙(AGENTS.md)
  - 시작: 최신 Steve_ACASiaLAW에서 항목마다 새 작업 브랜치를 만든다. 티켓의 '재개(2026-10-10)' 절이 이번 기준이다.
@@ -21,13 +21,15 @@
  - 보고: PR 코멘트 3줄(바꾼 것·남은 것·'검토 요청') + `python scripts/scorecard.py` 전후 출력 원문 + 관련 시험 pytest 요약 줄 원문
    + 푸시 전 `python scripts/check_test_edits.py --base origin/Steve_ACASiaLAW` 출력.
  - 평가 측 비공개 세트는 주지 않는다. 수용은 그 세트의 건수로 판정한다(평가 측이 PR 코멘트에 건수만 적는다).
+ - 평가 에이전트 전환(사용자 결정 2026-10-10): 이 구현 세션은 구현만 한다. 판정은 별도 Codex 평가 세션이 한다.
+   이 세션은 평가 세션의 비공개 자료를 요청·열람하지 않고, evaluator/* 브랜치와 docs/scorecards/**를 고치지 않는다.
  - 수용되면 평가 측이 자기 브랜치에서 병합해 표시를 지우고 verify_all 전체 모드를 돌려 평가 측 PR로 들인다. 구현 PR은 직접 병합하지 않는다.
  - 다른 구현 담당(Antigravity)이 같은 시기에 packages/legal_engine/temporal_review.py(TK-69),
    packages/verification_engine/pipeline.py·candidate_verifier.py·gate.py, packages/common/config.py(TK-70·버전 커밋),
    docs/releases.json을 고친다. 이 파일들은 건드리지 않는다.
 
 [A] TK-58 — 수용·병합(Steve 3daf7b6). 0.12.0 릴리스로 배포 예정. 할 일 없음.
-[B] TK-24 — PR #53(0ad4fac) 수용. 0.12.0 배포 확인 뒤 평가 측이 TK-69(#56)와 함께 통합 중이다. PR #53에 커밋을 올리지 않는다.
+[B] TK-24 — PR #53(0ad4fac) 수용. 평가 측 통합 PR #67(TK-69와 함께, verify_all 전체 종료 0)로 들어간다. PR #53에 커밋을 올리지 않는다.
 [C] CodeQL 로그 정리 — 수용·병합(Steve 5d7ac6c). 할 일 없음.
 [D] TK-71 — 수용·병합(Steve 3c89a4e). 할 일 없음.
 
@@ -76,7 +78,7 @@
    R7-04 유지, TC-06 0.357·고정 dev 81.7 이상·holdout 79.2 이상, Google Docs PDF 47/19/1·DOCX 40/19/1·폭 변형 9 유지,
    평가 측 새 비공개 줄 결합 세트(수용 판정 전에 새로 짓는다)에서 어절 중간 대조 시작 이상, 목록 밖 쌍·쪽 배치 불변 개선 또는 유지.
 
-[H] (4순위, 평가 측 TK-24 통합 PR 병합 뒤) TK-45 요건 부정·타 책임 확장 미탐 — 정상 항변 오탐 0 유지
+[H] (4순위, 평가 측 통합 PR #67 병합 뒤) TK-45 요건 부정·타 책임 확장 미탐 — 정상 항변 오탐 0 유지
  - 티켓: docs/handoff/TK-45_defense_negation_by_word_match.md '재개' 절. 대상: packages/legal_engine/legal_rules.py
    (claim_review.py는 TK-24와 같은 경로이므로 통합 병합 뒤 최신 Steve에서 시작).
  - 시작(평가 측 비공개, 0bf4ccc·0ad4fac 같음): 요건 부정 경고 2/8, 정상 한정 항변 오탐 없음 8/8, 타 책임 확장 경고 0/4.
