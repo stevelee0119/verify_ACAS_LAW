@@ -11,6 +11,8 @@ from bisect import bisect_right
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
+from .name_stopwords import PERSON_CATEGORY_STOPWORDS
+
 # ---------------------------------------------------------------------------
 # 법률 식별자 Guard — 이 패턴에 걸리는 구간은 PII로 마스킹하지 않는다
 # ---------------------------------------------------------------------------
@@ -314,6 +316,13 @@ PARTY_HEADER_STOPWORDS = {
     "연락처", "주민번호", "전화번호", "휴대전화", "생년월일",
     "이메일", "개인정보", "인적사항", "주소", "직업", "직위",
 }
+
+
+def _is_category_person_stopword(candidate: str, *, explicit_name: bool = False) -> bool:
+    """Only complete nouns; ambiguous explicit fields and name stems stay private."""
+    return not explicit_name and candidate in PERSON_CATEGORY_STOPWORDS
+
+
 # '군'이 호칭(홍길동 군)이 아니라 군(軍)인 경우("유능한 군 장교", "현역 군 간부")
 MILITARY_NOUN_AFTER_GUN_RE = re.compile(
     r"\s*(?:장교|간부|병사|병력|부대|복무|당국|사법|검찰|수사|형법|인사|기밀|시설|부사관|병원|조직|내부|전산|보안|의무)")
@@ -785,6 +794,13 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
         if clean_name in PARTY_HEADER_STOPWORDS or clean_name in LEGAL_MILITARY_STOPWORDS or clean_name in REPRESENTATIVE_NAME_STOPWORDS:
             continue
 
+        # New categories exclude complete words only. A particle-like final
+        # syllable can belong to a real name beginning with one of these nouns;
+        # do not expand the legacy stem exclusions. Explicit name fields are
+        # also ambiguous when a name happens to spell a common noun.
+        if _is_category_person_stopword(clean_name, explicit_name=is_name_label):
+            continue
+
         # 3. 단일 조사 분리 및 stem 불용어 검사 (TK-52 1절: 재귀 분리 폐지, 1회만 분리):
         #    명시적 라벨이 아닌 경우에만 조사를 1회 분리하여 stem이 불용어인지 대조한다.
         josa_match = _JOSA_TAIL_RE.search(clean_name)
@@ -834,6 +850,8 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 if stem in LEGAL_MILITARY_STOPWORDS or stem in PARTY_HEADER_STOPWORDS or stem in REPRESENTATIVE_NAME_STOPWORDS:
                     continue
             if name in LEGAL_MILITARY_STOPWORDS or name in PARTY_HEADER_STOPWORDS or name in REPRESENTATIVE_NAME_STOPWORDS:
+                continue
+            if _is_category_person_stopword(name):
                 continue
             after_text = text[end:end + 30]
             if not is_valid_korean_name_structure(name, after_text, is_explicit_label=False):
