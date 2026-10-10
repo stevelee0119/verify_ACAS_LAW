@@ -1409,3 +1409,46 @@
 - 로컬 `verify_all --base 0bf4ccc --allow-env-mismatch` **전체 모드 원본 종료 1**: acceptance 1,003·회귀 원장 527·브라우저 197 통과, 전체 시험 4,885 통과·2 실패. strict XPASS 0. 점수·회귀·하드코딩·시험 편집·보호 경로·버전 정책 점검 통과.
 - 원본 실패 2건은 환경 조건이다. `test_mount_detection_uses_the_filesystem_not_the_path`는 `/tmp`가 별도 장치인 이 환경에서 실패하고 루트와 같은 장치의 workspace 임시 경로에서 통과했다. `test_manifest_records_every_engine_with_counts_and_reasons`는 한국어 OCR 데이터가 없어서 OCR 실행 0으로 실패하고 workspace에 `kor.traineddata`를 설치한 재검증에서 통과했다. 원본 `verify_all` 결과는 실패 그대로 보존한다. 두 시험은 환경 보완 후 함께 **2 passed in 8.55s**로 재검증했다. 원본 전체 검증과 별도 기록하며, 로컬 전체 모드 종료 0으로 기재하지 않는다.
 - 측정 못 함: 온라인 모델·공식 DB·Drive 효과, 새 봉인 세트, 평가 측 통합 SHA. 이번 결과는 보완 SHA 자체의 내용 수용이다. 통합 SHA의 필수 CI·최종 검증과 사용자 병합 승인을 분리한다. 배포 전 새 봉인 시험은 필수다.
+
+
+# TK-74 설계 판정 (2026-10-10, PR #68 c6d0f19)
+
+**판정: 설계 조건부 승인, 구현 착수 가능.** 대상 `c6d0f19cdfc40ab3143e3c5ef8c65a94d100824e`, 요청 메모 `requests/66_tk74_case_table_indexing_path_design.md`. 제품 구현의 최종 수용은 별도다. [PR 회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/68#issuecomment-6095774531). 평가 Codex 별도 세션, 구현 모델 계열은 제출 정보만으로 확인하지 않았다.
+
+| 항목 | 검토 결과 | 구현 조건 |
+|---|---|---|
+| 파일명 무관 후보·머리글 판별·색인 우선순위 | 티켓 방향 충족 | 이름 선별·prose chunk 수와 구조화 조회 자격 분리 |
+| 예산·이어 읽기·보안 | 방향 충족 | 기존 isolated_extract 경로·권한/리비전/체크섬 검사·행 주입 검사 유지. NOT_A_CASE_TABLE 캐시도 리비전/추출기 버전 변경 시 재판별 |
+| 결과·manifest 상태 | 조건부 | 예산/읽기 실패/격리/0행 대기를 NO_CASE_TABLE로 확정하지 않음. 여러 후보 상태와 범위 반영. 부분 조회 미발견은 전체 부재로 단정하지 않음 |
+| 합성 시험 | 계획만 있음 | sync(query) 차가운 캐시/버전 변경 → 실제 문서 검토, 여러 인용 문서, prose 발췌 0에서도 정확 조회, 예산 재개·불일치·미포함·문서 묶음 미주입 |
+
+근거: **CI 결과 인용 + 평가 측 사전 재실행**. 대상 SHA 필수 CI 테스트·점수 게이트·Docker OCR 모두 성공. 기존 TK-71·Drive relevance·Drive gate·Drive RAG 101건 중 100 통과/1 브라우저 실행 파일 경로 환경 실패. PLAYWRIGHT_BROWSERS_PATH 설정 보완 후 해당 시험만 별도 1 passed in 1.47s. 기존 기대값·제품 코드 변경 없음. 현재 `_sync_files`의 미선별 신규 파일 건너뛰기, `has_case_tables`의 eligible 의존, `lookup_records`의 NOT_IN_REFERENCE 계약을 확인했다. 기존 조회 계약을 바꾸도록 요구하지 않고 review/manifest의 범위·사유로 부분 미발견을 구분한다.
+
+측정 못 함: 신규 구현, 실제 사용자 Drive 표의 선별 경로, 배포 후 온라인 효과. 최종 수용은 티켓 5·6절에 따르며 실제 표는 저장소 밖에서 평가한다. 최신 Steve 병합 후 같은 브랜치에서 구현·시험 제출 가능.
+
+
+# TK-70 보완 재판정 (2026-10-10, PR #60 db21f19)
+
+**판정: 내용 수용.** 대상 `db21f19d9a9ec2cc1903e236f4c08c51e786eac6`. 이전 356b5ad 불승인 사유(시험이 제품 반복문을 복사하고 pipeline 블록을 실행하지 않음) 해소. [PR 회신](https://github.com/stevelee0119/verify_ACAS_LAW/pull/60#issuecomment-6095845168). 평가 Codex 별도 세션, 구현 모델 계열은 제출 정보만으로 확인하지 않았다.
+
+근거: **CI 결과 인용 + 평가 측 재실행**. 대상 head push CI 테스트·점수 게이트·Docker OCR 모두 성공. [점수 작업](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38028223895/job/114143518910) 현재 db21f19·81.7/79.2/0 확인, [SQLite/PostgreSQL 작업](https://github.com/stevelee0119/verify_ACAS_LAW/actions/runs/38028223892/job/114143562525) 성공. PR merge CI와 head push CI를 구분했다.
+
+| 항목 | 평가 측 결과 | 판정 |
+|---|---|---|
+| 실제 VerificationPipeline.run 시험 | 제출 9건 + 외부 보충 1건 통과. 호환 함수 3개는 시나리오 재실행으로 독립 양성 수에 더하지 않음 | 충족 |
+| 양성·대조 | 양성 3건 LOW/C·SUSPICIOUS·FACT_CONTRADICTION, 대조 4건 승격 0/인용 거부 2건 | 충족 |
+| 중복·스위치·지수/게이트 | 주장 단위·문서 단위 1건으로 합침/설명·근거 보존, 켬 1→끔 0, 위험지수 0·게이트 PASS 불변 | 충족 |
+| 보충 계약 | CONTEXT·각 결정론 표지 단독 제외, 주장 전체 원문·두 인용·제목·원본 관찰 보존 | 충족 |
+| 공식 상태·대조율·기존 TK-09·개인정보·선별 | 변경 diff 제한과 기존 보호 시험 확인. 기본 TK-09 꺼짐·TK-70 켬 유지 | 충족 |
+| 고정 dev/holdout/오탐·A등급 오탐 | 평가 측 81.7/79.2/0·0, CI 같음 | 충족 |
+| verify_all full 원본 | 종료 1, acceptance 1,003·원장 527·전체 3,345 통과/1 실패·브라우저 197, strict XPASS 0 | 아래 환경 재현과 CI 병기 |
+
+## 원본 실패와 환경 재검증
+
+유일한 원본 실패는 `test_v5_ocr_dates.py::test_rotated_scan_page_impossible_date_is_found`다. 시작 928b242와 보완 db21f19를 같은 환경에서 해당 시험만 다시 돌려 모두 실패(각 2.85·2.65초)했다. 해당 OCR·날짜 코드와 시험·이미지 생성기는 이번 diff에 없다. CI가 설치하는 `/usr/share/fonts/truetype/nanum/NanumGothic.ttf`가 이 환경에는 없어서 `scripts/audit/corpus.py::_scan_image`가 작은 기본 글꼴로 대체하는 것을 확인했다.
+
+Google Fonts NanumGothic을 workspace에만 두고(지문 `76f45ef4a6bcff34`), 외부 pytest 환경 대역에서 해당 CI 글꼴 경로만 연결해 원래 시험을 별도 재실행했다. 시작 **1 passed in 3.29s**, 보완 **1 passed in 3.22s**. 제품·시험 파일이나 기대값을 바꾸지 않았다. 이 결과는 원본 full과 별도이며 원본 종료 1을 유지한다. 기준에서도 같다는 사실만으로 통과 처리하지 않고 글꼴 조건 재현 및 대상 SHA CI 성공을 함께 적용했다.
+
+점수·회귀·하드코딩·시험 편집·보호 경로·버전 정책은 원본 full에서 통과. 로컬 오프라인 Linux/Python 3.11.15/tesseract 5.5.0 kor이며 CI 5.3.4와 다르다. 전체 검증은 한 번만 실행했다.
+
+측정 못 함: 현재 SHA 실제 Drive/모델 온라인 효과·최신 통합 SHA. 과거 비공개 온라인 12/12는 이번 값으로 재기록하지 않는다. 0.12.0 배포 선행요건은 충족됐으나 최신 통합 SHA 필수 CI·사용자 병합 승인은 별도. TK-70 단독 RAG 변경에는 봉인이 없지만 다음 릴리스에 TK-24·TK-69·TK-43이 포함되면 새 봉인이 필요하다. 배포 후 비공개 온라인 세트 v2·서면9를 여러 실행으로 확인한다. 평가 측 T6 설명문만 D4 개정에 맞췄고 실행 AST·단언·skip/xfail은 불변이다.
