@@ -1370,3 +1370,9 @@
 - TK-69 판정 중 발견했다. 운영본 a8b2a7e와 같은 코드다.
   - 합성 80KB 한 줄 42초, 인용 32,000건 960KB 92초
 - 0.12.0을 막지 않는다(나빠지지 않음). TK-69 통합 뒤 Antigravity에 배정한다.
+
+# TK-24·TK-69 평가 측 통합 (2026-10-10)
+- 대상: PR #53(0ad4fac, TK-24)·PR #56(ce68dc4, TK-69). 둘 다 앞서 수용(판정서 'TK-24 보완'·'TK-69'). 0.12.0 배포 확인 뒤 평가 측 브랜치에서 병합.
+- 평가 측 변경: LEG-2 strict xfail 3개 삭제(`tests/acceptance/test_case9_state_compensation.py`·`test_case9_real_pdf.py`). 서면9 docx·text·실제 PDF 28/28.
+- 근거: 평가 측 재실행. `verify_all` 전체 모드(c17e09b, 기준 Steve 6323400) 종료 0 — 전체 3,394·브라우저 197·acceptance 1,005·원장 570, 실제 실패 0. 고정 81.7/79.2/0. 은퇴 세트 4종 통합 전과 같음.
+- 판정: 통합 수용. 평가 측 PR(evaluator/round8-promotion → Steve_ACASiaLAW)로 들인다. CI 결과는 PR에서 확인한다.

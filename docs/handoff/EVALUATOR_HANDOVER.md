@@ -1,0 +1,41 @@
+# 평가 에이전트 인계 (claude-code → Codex 평가 세션, 2026-10-10)
+
+사용자 지시(2026-10-10): "Codex가 TK-71 구현 후에는 평가 에이전트로 전환(claude-code 토큰 소진)". 이 문서는 새 평가 세션이 처음 읽는 문서다.
+
+## 1. 새 평가 세션의 시작
+- Codex는 기본으로 `AGENTS.md`(구현 지침)를 읽는다. 평가 세션은 **`CLAUDE.md`와 `docs/AGENT_ROLES.md`를 자기 지침으로** 삼는다(아래 시작 문구를 첫 메시지로 준다).
+- 작업 브랜치: `evaluator/round8-promotion`(평가 측 PR은 이 브랜치 → `Steve_ACASiaLAW`). 커밋 메시지 끝에 `Agent: evaluator`(보호 경로 자동 점검이 이 표지를 본다).
+- 시작 문구(사용자가 Codex 평가 세션에 붙인다):
+  > 너는 이 저장소의 평가 에이전트다. `CLAUDE.md`·`docs/AGENT_ROLES.md`·`docs/handoff/EVALUATOR_HANDOVER.md`를 먼저 읽고 그 규칙을 따른다. `AGENTS.md`의 구현 지침은 너에게 적용되지 않는다. 제품 코드(`packages/`, `apps/`, `workers/`, `config/`, `migrations/`, `docker/`)를 고치지 않는다. 작업 브랜치는 `evaluator/round8-promotion`, 커밋 끝에 `Agent: evaluator`.
+
+## 2. 독립성(사용자 결정 필요)
+- 같은 손이 구현하고 판정하지 않는다(AGENT_ROLES 1절). Codex가 구현한 PR은 Codex 평가 세션이 판정하지 않는다.
+  - 열려 있는 Codex 구현: **TK-43 PR #62**(불승인 뒤 보완 대기, 전달문 Codex (13) [E]), TK-44·49 설계 PR #63(조건부 승인). 대기 항목 TK-56·TK-45.
+  - 이 항목들을 Antigravity로 넘길지, 보류할지, 판정만 다른 세션(감사자 등)에 맡길지 사용자가 정한다.
+- 평가 측 비공개 세트는 구현을 함께 하는 세션에 주지 않는다. Codex 평가 세션이 구현을 더 하지 않는 경우에만 받는다.
+- 봉인 세트 작성은 지금처럼 **저장소를 연결하지 않은 별도 격리 세션**이 한다. 작성·자체 점검·채점은 서로 다른 세션이다.
+
+## 3. 비공개 자료(저장소 밖)
+- `evaluator_private_sets_2026-10-10.tar.gz`(SHA-256 앞 16자 `00fe78da42fbf3cd`) — 사용자에게 전달했다. 내용: 개인정보 경계·연락처·법리·줄 결합 비공개 세트, D4 비공개 온라인 측정 세트(2판), 실행 스크립트, 과거 측정 결과. 안의 `README.md`에 실행법과 지표가 있다.
+- 사용자 Drive 표준판례 xlsx는 저장소에 넣지 않는다.
+- 판정·티켓·PR에는 건수와 유형만 적는다.
+
+## 4. 현재 상태(2026-10-10)
+- 운영: `main` 9c1b218 = 0.12.0(태그 `v.0.12.0`). 배포 확인(health 9c1b218·db ok). 배포 직후 온라인 서면9 21/23(규칙 2판, 처음 보는 실패 0).
+- 고정 81.7/79.2/0. 은퇴 세트 4종(통합 head): 19.0/0 · 29.6/0.296/0 · 36.2/0.362/0 · 15.2/0.302/3(A 3).
+- 평가 측 통합 PR(TK-24 #53 + TK-69 #56, LEG-2 xfail 3개 삭제): `verify_all` 전체 모드 종료 0(c17e09b). 평가 측 PR CI 확인 뒤 사용자 병합.
+- 측정 조건 기본값: 오프라인(`LV_ALLOW_NETWORK=0`), Linux, Python 3.11.15, tesseract 5.3.4 kor. 다른 조건의 점수를 증감으로 비교하지 않는다.
+
+## 5. 남은 평가 측 일(순서대로)
+1. 통합 PR CI 확인 → 사용자 병합 요청. 병합 뒤 `[F]` TK-72를 Antigravity가 시작할 수 있음을 전달문에 반영.
+2. **TK-73 사전 점검**(티켓 5절): 임시 패치로 은퇴 세트 4종·고정 시험을 잰 뒤 배정 결정을 사용자에게 받는다.
+3. **TK-44·49 조건 2**: R7-05 5건·R6-03 3건을 boundary_signal 계약 시험으로 고치고, 합성 PDF 글자 좌표 → `parse_document` 보호 시험(strict xfail)을 신설한다(전달문 Codex (13) [G]).
+4. 판정 대기: TK-70 보완(PR #60, Antigravity), TK-74 설계 메모(Antigravity), TK-43 보완(PR #62 — 2절 결정 뒤).
+5. 다음 릴리스: 탐지 엔진 변경(TK-24·TK-69 등)이 들어가므로 새 봉인 세트로 봉인 시험(작성 프롬프트 `docs/handoff/PROMPT_FOR_CODEX_SEALED_*`, 자체 점검 `PROMPT_FOR_CODEX_SEALED_SELFCHECK.md`).
+6. 비공개 줄 결합 세트(`hidden_join`)는 오염 — TK-44·49 수용 판정 전에 새로 짓는다.
+
+## 6. 보고 규칙(사용자 지시, CLAUDE.md 요약)
+- 평가 결과마다 `docs/scorecards/DAILY_TREND.md` 갱신, 최근 행 제시.
+- 구현 측 전달문은 `NEXT_FOR_ANTIGRAVITY.md`·`NEXT_FOR_CODEX.md`를 통째로 갱신하고 그 내용을 보인다.
+- '사용자께 남은 일'은 항목마다 지금 가능 여부와 선행요건 충족 여부를 적는다.
+- 판정서에 'CI 결과 인용'인지 '평가 측 재실행'인지 적는다. 기준선은 사용자 승인 없이 낮추지 않는다.
