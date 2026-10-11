@@ -2,7 +2,7 @@
 
 UNKNOWN retains legacy behavior. Explicit evidence determines only the separator;
 absence of a source whitespace glyph does not establish JOIN_CONFIRMED.
-Pending markers are removed by the evaluator after candidate verification.
+Evaluator promotion: all 49 structural and existing boundary checks passed.
 """
 from __future__ import annotations
 
@@ -15,9 +15,6 @@ import pytest
 from packages.document_engine import paragraph_reconstruction as reconstruction
 
 
-PENDING = pytest.mark.xfail(strict=True, raises=TypeError, reason="TK44 boundary_signal API pending evaluator promotion")
-
-
 def _require_contract():
     parameter = inspect.signature(reconstruction.join_lines).parameters.get("boundary_signal")
     if parameter is None:
@@ -26,7 +23,6 @@ def _require_contract():
     assert parameter.default == "UNKNOWN"
 
 
-@PENDING
 @pytest.mark.parametrize("prev,nxt", [
     ("자료는 (새", "문서)로 정리된다."),
     ("검토 대상", "에 관한 기록이다."),
@@ -45,7 +41,6 @@ def test_signal_controls_separator_before_legacy_heuristics(prev, nxt, signal):
                                      boundary_signal=signal) == expected
 
 
-@PENDING
 @pytest.mark.parametrize("signal", ["JOIN_CONFIRMED", "SPACE_CONFIRMED", "UNKNOWN"])
 @pytest.mark.parametrize("prev,nxt,expected", [("", "Ｂ", "B"), ("Ａ", "", "A"), ("", "", "")])
 def test_empty_operands_keep_normalized_identity(signal, prev, nxt, expected):
@@ -53,7 +48,6 @@ def test_empty_operands_keep_normalized_identity(signal, prev, nxt, expected):
     assert reconstruction.join_lines(prev, nxt, boundary_signal=signal) == expected
 
 
-@PENDING
 @pytest.mark.parametrize("signal", [None, "", "SPACE", "join_confirmed", 1])
 def test_invalid_signal_is_rejected(signal):
     _require_contract()
@@ -77,7 +71,6 @@ def _make_pdf(path, *, trailing_space, page_width, extra_paragraph):
     page.save()
 
 
-@PENDING
 @pytest.mark.parametrize("trailing_space", [False, True])
 @pytest.mark.parametrize("page_width,extra_paragraph", [(420, False), (595, False), (720, True)])
 def test_real_pdf_boundary_evidence_reaches_joiner(tmp_path, monkeypatch, trailing_space,

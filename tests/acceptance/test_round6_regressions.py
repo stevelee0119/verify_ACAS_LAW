@@ -144,12 +144,9 @@ def test_specific_requirements_with_a_limited_conclusion_are_not_flagged(text):
 
 # ------------------------------------------------------------------------------ R6-03 줄 결합 ---
 @pytest.mark.parametrize("prev, nxt, joined, boundary_signal", [
-    pytest.param("계약에 따라 (이", "사건) 채무를 이행하여야 한다", "계약에 따라 (이 사건) 채무를 이행하여야 한다", "SPACE_CONFIRMED", id="paren-short-word-1",
-                 marks=[REGRESSION("R6-03 괄호 뒤 짧은 어절 사이 공백 삭제(시작은 공백 유지)")]),
-    pytest.param("피고는 (해당", "채무)를 변제하였다", "피고는 (해당 채무)를 변제하였다", "SPACE_CONFIRMED", id="paren-short-word-2",
-                 marks=[REGRESSION("R6-03 괄호 뒤 짧은 어절 사이 공백 삭제(시작은 공백 유지)")]),
-    pytest.param("그 계약은 (위", "계약)에 따라 해제되었다", "그 계약은 (위 계약)에 따라 해제되었다", "SPACE_CONFIRMED", id="paren-short-word-3",
-                 marks=[REGRESSION("R6-03 괄호 뒤 짧은 어절 사이 공백 삭제(시작은 공백 유지)")]),
+    pytest.param("계약에 따라 (이", "사건) 채무를 이행하여야 한다", "계약에 따라 (이 사건) 채무를 이행하여야 한다", "SPACE_CONFIRMED", id="paren-short-word-1"),
+    pytest.param("피고는 (해당", "채무)를 변제하였다", "피고는 (해당 채무)를 변제하였다", "SPACE_CONFIRMED", id="paren-short-word-2"),
+    pytest.param("그 계약은 (위", "계약)에 따라 해제되었다", "그 계약은 (위 계약)에 따라 해제되었다", "SPACE_CONFIRMED", id="paren-short-word-3"),
     pytest.param("원고는 그", "사람에게 돈을 빌려주었다", "원고는 그 사람에게 돈을 빌려주었다", None, id="word-boundary-1"),
     pytest.param("이 사건에서 법", "적용이 문제된다", "이 사건에서 법 적용이 문제된다", None, id="word-boundary-2"),
     pytest.param("계약은 두", "종류로 나뉜다", "계약은 두 종류로 나뉜다", None, id="word-boundary-3"),
