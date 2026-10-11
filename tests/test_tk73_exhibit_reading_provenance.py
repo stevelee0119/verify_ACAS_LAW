@@ -197,6 +197,37 @@ def test_synthetic_repeated_complete_locator_identity_still_corroborates(tmp_pat
     assert not _duplicates(doc)
 
 
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("character", ["\u200d", "\u200b", "\x01", "±", "★", "‿", "\u200e"])
+def test_synthetic_uncertain_source_character_never_certifies_coordinate(tmp_path, extension, section, character):
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        f"갑 제1호증 기록, 제7행{character}성 탐사.", "갑 제1호증 기록: 탐사 경로를 설명한다.",
+    ])
+    reading = build_reading_text(doc)
+    if extension == "txt":
+        assert character in reading.text
+    elif character not in reading.text:
+        # The public PDF font omits some format/control glyphs. Verify the
+        # actual extracted lexical word without claiming original glyph survival.
+        assert "제7행성" in reading.text
+    for row in exhibit_rows(doc):
+        _assert_source_projection(doc, row, _duplicate_mention_view(row))
+    found = _duplicates(doc)
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("delimiter", [" ", "\u3000", ",", ";"])
+def test_synthetic_observed_delimiter_certifies_complete_coordinate(tmp_path, extension, section, delimiter):
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        f"갑 제1호증 대장, 부록7행{delimiter}확인 부분.", "갑 제1호증 대장: 순서를 설명한다.",
+    ])
+    assert not _duplicates(doc)
+
+
 def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # Measure the new source projection/comparison work on thousands of
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
