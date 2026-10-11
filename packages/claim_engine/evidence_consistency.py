@@ -671,6 +671,13 @@ def _duplicate_title_key(row: Dict[str, Any]) -> str:
     return _duplicate_title_parts(row)[0]
 
 
+def _complete_prose_identity(key: str) -> str:
+    """Equate one final declarative/emphatic mark, retaining full content."""
+    if len(key) > 1 and key[-1] in ".!。！" and key[-2] not in ".!?。！？":
+        return key[:-1]
+    return key
+
+
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
     # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
@@ -701,7 +708,7 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
             if kind == "locator":
                 weak_identities.setdefault(proposed, set()).add(key)
             elif kind == "prose":
-                prose_identities.setdefault(proposed, set()).add(key)
+                prose_identities.setdefault(proposed, set()).add(_complete_prose_identity(key))
         locators = {proposed for proposed, identities in weak_identities.items() if len(identities) == 1}
         prose = {proposed for proposed, identities in prose_identities.items() if len(identities) == 1}
         # A numeric coordinate with qualifiers may itself be a true subtitle.
