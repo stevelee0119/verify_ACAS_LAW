@@ -691,19 +691,23 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
         title_parts = [_duplicate_title_parts(r) for r in same]
         anchors = {key for key, proposed, _ in title_parts if proposed is None and key}
-        weak_identities = {}
+        weak_identities, prose_identities = {}, {}
         for key, proposed, kind in title_parts:
             if kind == "locator":
                 weak_identities.setdefault(proposed, set()).add(key)
+            elif kind == "prose":
+                prose_identities.setdefault(proposed, set()).add(key)
         locators = {proposed for proposed, identities in weak_identities.items() if len(identities) == 1}
-        prose = {proposed for _, proposed, kind in title_parts if kind == "prose"}
+        prose = {proposed for proposed, identities in prose_identities.items() if len(identities) == 1}
         # A numeric coordinate with qualifiers may itself be a true subtitle.
         # Only exact agreement with a separate prose candidate corroborates it;
         # conflicting weak captions or a complete generic prefix cannot confirm it.
         corroborated = locators & prose
-        anchors.update(corroborated)
+        # Predicate wording does not establish title/narrative role either.
+        # Even a locator cannot erase conflicting complete prose identities.
+        prose_anchors = (anchors & prose) | corroborated
         distinct_names = {
-            proposed if proposed in (corroborated if kind == "locator" else anchors) else key
+            proposed if proposed in (corroborated if kind == "locator" else prose_anchors) else key
             for key, proposed, kind in title_parts
         }
         distinct_names.discard("")

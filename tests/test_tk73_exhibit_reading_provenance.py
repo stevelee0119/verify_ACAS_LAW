@@ -242,7 +242,9 @@ def test_synthetic_conflicting_prose_identities_remain_ambiguous(tmp_path, exten
     lines = [f"갑 제1호증 {title}", f"갑 제1호증 {title}: {first}", f"갑 제1호증 {title}: {second}"]
     if locator:
         lines.append(f"갑 제1호증 {title}, 부록7쪽 확인 부분.")
-    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + lines)
+    # An explicit following section keeps the generator's one-page footer
+    # outside the final item under the unchanged continuation parser.
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + lines + ["첨부서류"])
     for row in exhibit_rows(doc):
         _assert_source_projection(doc, row, _duplicate_mention_view(row))
     found = _duplicates(doc)
@@ -258,7 +260,11 @@ def test_synthetic_repeated_complete_prose_identity_still_corroborates(tmp_path,
                                                                      title, first, second):
     anchor = f"갑 제1호증 {title}" + (", 부록7쪽 확인 부분." if locator else "")
     narrative = f"갑 제1호증 {title}: {first}"
-    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [anchor, narrative, narrative])
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        anchor, narrative, narrative, "첨부서류",
+    ])
+    rows = exhibit_rows(doc)
+    assert _duplicate_mention_view(rows[1])["fallback"] == _duplicate_mention_view(rows[2])["fallback"]
     assert not _duplicates(doc)
 
 
