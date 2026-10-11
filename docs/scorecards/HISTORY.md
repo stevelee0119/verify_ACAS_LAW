@@ -824,3 +824,17 @@
 **판정: 보류·미수용·미통합.** 티켓 TK-75 2절은 기존 법률 참고 검토 중 수용된 Claude 경로에만 워크플로우를 적용하고 다른 provider/fallback 계약을 유지하도록 한다. 제출은 `argument_validity_verifier._attach_ai_opinions`의 공통 경로를 Anthropic/OpenAI/Gemini에 모두 적용하고, 지정된 `review_document → LLMRouter.run` 경로와 Claude/fallback 경계를 실제 요청 경로에서 시험하지 않았다. 티켓이 고정한 공개 참조 `95bdacc803aa5cfdb10f35e5b9fb2d4b11100133` 대신 PR 설계·출처표는 `4a6c651889c97cc9140580363c73e0eb17379c2b`를 사용한다. 근거 있는 출처 갱신 또는 티켓 기준에 맞춘 정합이 필요하다.
 
 실제 온라인 한국법 품질·근거·반론·무근거 주장/오탐·누락/유보와 모델별 실제 비용·지연 OFF/ON 평가는 제출에서 미측정이다. 실제 모델·변호사 품질 판정, provider별 토큰/비용/지연 수치, 허용 회귀/비용/지연 임계치 사전고정, 평가 인계 세션 결과는 미수령/미실행. 같은 SHA CI·점수 게이트·새 합성 대역 시험은 이 필수 증거를 대체하지 않는다. 구현 경로/provider 범위와 출처 기록 보완 후 결과 미리보기 전에 평가 기준·표본·반복을 고정하고 실제 동일조건 비교를 해야 한다. PR 회신 [6098611209](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 사용자 병합/릴리스 미승인, 별도 독립 평가·통합 미완료.
+
+
+## #73·#74 독립 감사 표본 (2026-10-11 한국 시각)
+- 별도gpt-6-astra 공개 합성 실측(Python3.12.14): 문법20,000개 차이0(0.8278초), ad25f51→46774df 전체필드500문장×직접/문서1,000비교 차이0(0.8613초). 32k/992,000자 GC ON 실제추출0.295740초(동일인용 중복제거 반환1). 고유조문2k→8k 0.038941→0.170614초(4.38배). 단회표본이며 CI SLA/전체 일반화 증명은 아님.
+- 감사 Python3.11.15: #74 exact3805e949 공개profile70건 통과; 통합2eb56ec 실제경로/PII·예산·timeout/fallback/snapshot25 passed in2.05s. 통합tree는Steveba12d25와 동일. 기존 제출942비교/0.289014초와 별도 측정이며 합산하지 않는다.
+- 실제 법률품질·과금·지연은 미측정. 새봉인/최종8TK 고정벤치마크도 미측정; 이전 사용자fixed20.5/27.5%/FP12는9c1b218 vs ad25f51에 한정된다.
+
+## 제품 후보 full 1회·실패 환경 재확인 (2026-10-11 한국 시각)
+
+- 대상 ba12d25c7f1a877d9d3083dcad460816c718faf6, 기준 운영9c1b21848110a8df6ba0e6308b49e6947c0d6feb. clean tree·오프라인, Python3.11.15/Tesseract5.5.0 kor(저장소CI5.3.4와 다름), `--allow-env-mismatch` 명시. 기존 Playwright 캐시·외부 NanumGothic 경로 대역으로 글꼴 위치만 보완했다. 제품/시험/기준/시간상한 변경 없음.
+- **원본 verify_all full 종료1:** acceptance1014/실제실패0, regression_ledger591/0, full_tests6207/실제실패1, browser_tests197/0. score/regression/hardcoding/test-edit/protected/version 게이트 모두 통과. raw JSON/log는 평가 artifact에 그대로 보존한다. 이 원본을 종료0으로 덮어쓰지 않았다.
+- 유일한 실패는 `tests/test_durability.py::test_mount_detection_uses_the_filesystem_not_the_path`. 운영9c1b218·후보ba12d25의 해당제품/시험 diff0이며 같은 환경의 기본 `/tmp`에서 양쪽 모두 같은assertion 실패를 직접 재현했다. stat device `/`=27, `/tmp`=33, `/workspace`=27: `/tmp`가 별도파일시스템이라 시험의 비마운트 가정이 맞지 않았다.
+- 제품/시험 수정이나 가짜 mount 응답 없이 pytest `--basetemp=/workspace/scratch/<대상>-pytest`로 실패1건만 재검증했다. 운영본exit0/후보exit0 **각1건 통과**. 통과한 나머지 묶음은 재실행하지 않았다. 전체원본1·별도환경보완2통과를 구분하며 full명령 전체종료0으로 표현하지 않는다. 현재 확인된 후보 고유 코드 실패0; 최종같은SHA CI 및 새봉인/버전/사용자배포승인은 별도다.
+- 고정 성적표 후보 dev81.7/holdout79.2/FP0, A0·인젝션방어. 환경이 다른 사용자 고정비공개벤치마크20.5와 같은 측정으로 합치지 않는다. 실제법률품질/과금/지연·새봉인·최종고정비공개벤치마크 미측정.

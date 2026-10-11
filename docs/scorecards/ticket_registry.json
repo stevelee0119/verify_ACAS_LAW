@@ -96,7 +96,7 @@
   },
   "TK-24": {
    "status": "merged",
-   "note": "PR #53 0ad4fac 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 9c1b218 미배포"
+   "note": "PR #53 0ad4fac 수용·통합 #67 병합. Steve 통합 반영, 운영 main 9c1b218 미배포"
   },
   "TK-25": {
    "status": "deployed",
@@ -172,7 +172,7 @@
   },
   "TK-43": {
    "status": "merged",
-   "note": "PR #62 e4867e7 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포"
+   "note": "PR #62 e4867e7 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포"
   },
   "TK-44": {
    "status": "open",
@@ -223,8 +223,8 @@
    "note": "3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음"
   },
   "TK-56": {
-   "status": "accepted",
-   "note": "PR #70 71905eb 내용 수용. 과차단 6/28·유출 0·목표 21건 승격, #73 평가 통합 131506d. Steve 병합/배포 전; 최신 필수 CI·사용자 승인·새 봉인 필요"
+   "status": "merged",
+   "note": "#70 71905eb 기술 수용·#73 head46774df 동일 SHA CI 성공·Steve8ed13e8 병합. 목표21 strict xfail 제거·기대값 유지. 과차단6/28·유출0. 이전 local full 환경 실패 원본 보존. 아직 운영 배포 전."
   },
   "TK-57": {
    "status": "known_open",
@@ -276,33 +276,33 @@
   },
   "TK-69": {
    "status": "merged",
-   "note": "PR #56 ce68dc4 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 미배포"
+   "note": "PR #56 ce68dc4 수용·통합 #67 병합. Steve 통합 반영, 운영 main 미배포"
   },
   "TK-70": {
    "status": "merged",
-   "note": "PR #60 db21f19 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인"
+   "note": "PR #60 db21f19 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인"
   },
   "TK-71": {
    "status": "deployed",
    "note": "2026-10-10 기준 배포 대기 목록에 없음(배포 또는 대체). 해소일 미상"
   },
   "TK-72": {
-   "status": "accepted",
-   "note": "PR #72 df4a9c003b0f42cb4faf180fa05b86bafb286d42 내용 수용·평가 PR #73 통합4acea3b. 동일 SHA CI 11개 성공·고정81.7/79.2/오탐0·합성272건 차이0(승인된 헌재 예외 별도)·32k 실제 추출0.693295초. full verify_all 종료1은 환경 실패 원본으로 보존; 3 acceptance UI와 UI 시험 묶음은 허용 환경에서 통과, 마운트 시험 1건은 로컬 실행환경 실패. Steve 병합·새 봉인·배포 전. 이전 불승인 SHA 유지."
+   "status": "merged",
+   "note": "#72 최종f184253 수용·c26afede 통합·#73 head46774df 필수 CI 성공·Steve8ed13e8 병합. 기존32k/1초 게이트 유지. 과거543fc69 성능 실패와 local full 종료1 보존. 독립 합성 문법20k/전체필드1000 차이0·32k0.295740초는 별도 감사 표본. 새 봉인/운영 배포 전."
   },
   "TK-73": {
    "status": "open",
    "note": "평가 측 사전 점검 대기, 미배정"
   },
   "TK-74": {
-   "status": "accepted",
-   "note": "PR #68 30f9f92 내용 수용·평가 #73 통합51e042c. 공개 합성32통과·필수 CI11개 성공·고정81.7/79.2/0. 일반 TXT/PDF/DOCX 캐시 검색 회귀 해소; 이전 실패/교체1건 승인 유지. Steve 병합/운영 배포 전. 별도 Codex 구현은 TK-72로 진행, 평가 환경 독립 유지"
+   "status": "merged",
+   "note": "#68 30f9f92 수용·#73 head46774df CI 성공·Steve8ed13e8 병합. 표 색인·일반TXT/PDF/DOCX 캐시 복구. 기존 교체1건 최소 승인·불승인 이력 유지. 실제 온라인 효과/운영 배포 전."
   },
   "TK-75": {
-   "status": "open",
+   "status": "merged",
    "kind": "existing",
-   "note": "사용자 2026-10-10 다음 릴리스 배정. PR #74 40fd3a9 제출; CI/점수 게이트 성공·공개 합성 47건은 제출 보고. 1차 Codex 판정 보류/미수용/미통합: 지정 Claude review_document 경로 대신 공통 argument-validity 경로를 Anthropic/OpenAI/Gemini에 적용, TK-75 고정 참조 SHA와 제출 출처 SHA 불일치, 실제 모델 법률 품질·비용·지연 A/B 미측정. 보완/평가 전 릴리스 제외. 판정 코멘트6098611209."
+   "note": "#74 최종3805e949 기술 수용 리뷰5481214189·CI38094767858/점수38094767864 성공·Steveba12d25 병합. Claude 전용/fallback 유지·수용 참조4a6c651·공개70건. 기본OFF 기술 릴리스, 품질은 배포 후 실제 프로그램OFF/ON 온라인 대조·독립한국변호사1명 조건가림·제3판정 없음. 비용/p95+20% 참고. 실제 개선 미측정; 운영 미배포. 40fd3a9 불승인 이력 보존/사전A/B 조건 대체."
   }
  },
- "updated_on": "2026-10-10"
+ "updated_on": "2026-10-11"
 }
