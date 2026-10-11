@@ -51,3 +51,14 @@ def test_synthetic_genuine_subtitles_remain_distinct_in_each_table_route(tmp_pat
     doc = _pdf(tmp_path, [('table', cells)])
     found = _duplicates(doc)
     assert len(found) == 1 and str(found[0].evidence_grade) == 'A'
+
+
+@pytest.mark.parametrize('title', ['점검대장', '배치기록', '장비목록'])
+def test_synthetic_two_column_explicit_title_ownership_survives_inference_route(tmp_path, title):
+    doc = _pdf(tmp_path, [('table', [['호증', '서증명'],
+        ['갑 제1호증', f'{title}, 부록7쪽 확인 부분.'],
+        ['갑 제1호증', f'{title}: 순서를 설명한다.']])])
+    rows = exhibit_rows(doc)
+    assert len(rows) == 2 and all(not row['from_lines'] for row in rows)
+    found = _duplicates(doc)
+    assert len(found) == 1 and str(found[0].evidence_grade) == 'A'
