@@ -20,7 +20,8 @@ def test_local_extent_blocks_new_whole_requirement_support_at_every_position(tmp
     evidence = rows[0]['predicate_semantics']
     assert not evidence['supports_asserted_fulfillment']
     assert not evidence['total_completion_asserted']
-    assert any(source[slice(*row['span'])] == qualifier for row in evidence['scope_limitations'])
+    extent = next(row for row in evidence['scope_limitations'] if source[slice(*row['span'])] == qualifier)
+    assert extent['attachment'] == ('ARGUMENT_PREFIX' if source.startswith(qualifier) else 'PREDICATE_CHAIN')
     findings = _pipeline_warnings(tmp_path, LEAD + source + LIMIT)
     assert findings and all('요건 확인 요청' in row.confidence_features['verdict'] for row in findings)
 

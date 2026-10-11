@@ -319,6 +319,34 @@ def _finite_negative_attachment(after: str, match: re.Match | None) -> bool:
     return bool(token and _has_requirement_predicate(token.group()))
 
 
+def _requirement_extent_observations(
+    text: str, argument_start: int, argument_end: int, predicate_end: int,
+) -> List[Dict[str, Any]]:
+    """Retain extent inside this predicate and immediately on this argument.
+
+    A qualifier inside the same chain can have ambiguous attachment. It blocks
+    whole-fulfillment support without proving denial. Prefix attachment never
+    skips an intervening subject, object, action or arbitrary word.
+    """
+    rows = assertion_extent_evidence(text[argument_end:predicate_end])
+    for row in rows:
+        row['span'] = [argument_end + offset for offset in row['span']]
+        row['attachment'] = 'PREDICATE_CHAIN'
+    prefix_start = max((boundary.end() for boundary in _REQUIREMENT_CLAUSE_END_RE.finditer(
+        text, 0, argument_start)), default=0)
+    prefix = text[prefix_start:argument_start]
+    cursor = len(prefix)
+    attached = []
+    for row in reversed(assertion_extent_evidence(prefix)):
+        if prefix[row['span'][1]:cursor].strip():
+            break
+        cursor = row['span'][0]
+        row['span'] = [prefix_start + offset for offset in row['span']]
+        row['attachment'] = 'ARGUMENT_PREFIX'
+        attached.append(row)
+    return list(reversed(attached)) + rows
+
+
 def _defense_requirement_observations(
     unit: str, requirements: List[str], limited_conclusions: List[str],
     polarities: Dict[str, str], *, quotation_uncertain: bool = False,
@@ -445,10 +473,8 @@ def _defense_requirement_observations(
                     semantic_evidence = past_predicate_evidence(final_token.group(), event_object=False)
                     semantic_evidence['frame_conflict'] = True
                 if semantic_evidence:
-                    extent_start = first_end - match.end() if chain else 0
-                    extent = assertion_extent_evidence(after[extent_start:final_token.start()])
-                    for evidence in extent:
-                        evidence['span'] = [match.end() + extent_start + offset for offset in evidence['span']]
+                    extent = _requirement_extent_observations(
+                        masked, match.start(), match.end(), match.end() + final_token.start())
                     if extent:
                         semantic_evidence['scope_limitations'] = extent
                         semantic_evidence['supports_asserted_fulfillment'] = False
