@@ -173,12 +173,11 @@ UNLISTED_BOUNDARY_PAIRS = [
 ]
 
 
-@pytest.mark.xfail(strict=True, reason="TK-44: 괄호 뒤 관형어·꽉 찬 줄 끝 1음절 어절을 낱말 목록으로만 판정 — 목록 밖 낱말은 한 방향 기본값으로 돌아간다")
 @pytest.mark.parametrize("index", range(len(UNLISTED_BOUNDARY_PAIRS)))
 def test_word_boundary_join_does_not_depend_on_a_word_list(index):
     from packages.document_engine.paragraph_reconstruction import join_lines
     prev, nxt, kwargs, expected = UNLISTED_BOUNDARY_PAIRS[index]
-    assert join_lines(prev, nxt, **kwargs) == expected
+    assert join_lines(prev, nxt, boundary_signal="SPACE_CONFIRMED", **kwargs) == expected
 
 
 # ---------------------------------------------------------------------------
