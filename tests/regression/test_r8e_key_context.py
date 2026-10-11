@@ -56,7 +56,6 @@ def test_multiword_nonperson_structure_under_role_label_is_not_contextualized(va
         ("defendantName", "노다은께는"),
     ],
 )
-@pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")
 def test_explicit_person_name_fields_keep_fail_closed_value_shapes(key, value):
     assert _inspect_payload({key: value})["status"] == "BLOCKED"
 
@@ -68,8 +67,8 @@ def test_generic_unmarked_role_noun_remains_outside_key_inference():
 @pytest.mark.parametrize(
     "position",
     [
-        pytest.param("user", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
-        pytest.param("original_system", marks=pytest.mark.xfail(strict=True, reason="TK-56 알려진 미해결: 8C 수렴(사용자 결정 2026-10-04)")),
+        pytest.param("user"),
+        pytest.param("original_system"),
     ],
 )
 def test_name_field_fail_closed_blocks_actual_router_send_in_both_positions(monkeypatch, position):

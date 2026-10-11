@@ -11,6 +11,7 @@ from jsonschema import ValidationError, validate
 from packages.common.enums import ExternalAIPolicy, LLMRole, VerificationProfile
 from packages.document_engine.analysis_text import analysis_text
 from packages.llm_router.providers import LLMRequest
+from .review_profile import KOREAN_REVIEW_METHOD, with_review_context
 
 import re
 
@@ -45,6 +46,7 @@ RAG_REVIEW_SYSTEM_PROMPT = (
     "응답 최상위는 반드시 observations 키를 가진 객체 하나여야 하며, 검토 의견이 단 하나여도 observations 배열에 넣어 반환하라. "
     "출력 형식: " + json.dumps(SCHEMA, ensure_ascii=False)
 )
+KOREAN_RAG_REVIEW_SYSTEM_PROMPT = RAG_REVIEW_SYSTEM_PROMPT + KOREAN_REVIEW_METHOD
 
 
 def _clean_str(s: str) -> str:
@@ -301,6 +303,7 @@ def review_document(result, library, router, context, pii):
         review.update(status="SKIPPED", reason="NO_TEXT_AFTER_REMOVING_INSTRUCTIONS")
         return review
     review["document_truncated"] = bool(review["input"]["omitted_chars"])
+    korean_profile = bool(getattr(getattr(router, "settings", None), "korean_law_review_profile", False))
     selection = library.select(document + "\n" + "\n".join(context.requested_issues))
     hits = selection.pop("sources")
     selection["sources_used"] = [{k: h.get(k) for k in ("source_id", "file_id", "title", "folder_path", "page",
@@ -324,16 +327,30 @@ def review_document(result, library, router, context, pii):
     citation_by_id = {getattr(c, "citation_id", None) or (c.get("citation_id") if isinstance(c, dict) else None): c
                       for c in citations}
     reference_case_matches = {}
-    if getattr(library, "has_case_tables", lambda: False)():
+    table_info = getattr(library, "case_table_status", lambda: {"status": "NO_CASE_TABLE", "candidates": [], "indexed_rows": 0})()
+    review["case_table_status"] = table_info.get("status", "NO_CASE_TABLE")
+    if table_info.get("candidates"):
+        review["case_table_candidates"] = table_info["candidates"]
+
+    has_tables = getattr(library, "has_case_tables", lambda: False)()
+    is_partial = table_info.get("status") in ("PARTIAL", "INDEXING", "QUARANTINED")
+    # 표가 색인되었거나, 후보가 부분/진행/격리 상태인 경우 사건번호 대조 수행 (TK-74 평가 측 조건 2)
+    if has_tables or (is_partial and citations):
         for citation in citations:
             cid = getattr(citation, "citation_id", None) or (citation.get("citation_id") if isinstance(citation, dict) else None)
             case_number = getattr(citation, "canonical_case_number", None) or getattr(citation, "case_number", None)
             if isinstance(citation, dict):
                 case_number = case_number or citation.get("canonical_case_number") or citation.get("case_number")
             if cid and case_number:
-                reference_case_matches[cid] = library.match_case(citation)
-        review["structured_case_search"] = {"enabled": True, "corpus": "ELIGIBLE_CASE_TABLE_ROWS",
-                                             "holding_first": True}
+                match = library.match_case(citation)
+                # 부분 색인 또는 미완료/격리 후보가 있을 때 미조회 사건 메타데이터 보강
+                if is_partial and match.get("status") == "NOT_IN_REFERENCE":
+                    match["scope"] = "QUARANTINED_RANGE" if table_info.get("status") == "QUARANTINED" else "PARTIAL_INDEX_RANGE"
+                    match["partial_indexed"] = True
+                reference_case_matches[cid] = match
+        if has_tables:
+            review["structured_case_search"] = {"enabled": True, "corpus": "ELIGIBLE_CASE_TABLE_ROWS",
+                                                 "holding_first": True}
     review["reference_case_matches"] = reference_case_matches
     if selection["decision"] == "INCOMPLETE_COVERAGE":
         review.update(status="INCOMPLETE_COVERAGE", reason="RELEVANT_REFERENCES_NOT_FULLY_READ")
@@ -441,6 +458,7 @@ def review_document(result, library, router, context, pii):
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
             schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls})
+        request = with_review_context(request, enabled=korean_profile, reference_date=getattr(context, "case_date", None))
         # One selected provider; the existing router bounds each call and its transient retries.
         batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
                                                policy=context.external_ai_policy, expected_task="참고자료 검토"))
@@ -634,6 +652,7 @@ def review_document(result, library, router, context, pii):
             max_tokens=4000,
             metadata={"stage": "claim_rag_advisory", "claim_id": c_id},
         )
+        claim_req = with_review_context(claim_req, enabled=korean_profile, reference_date=getattr(context, "case_date", None))
 
         c_outcome = asyncio.run(router.run(
             LLMRole.PRIMARY_REASONER, claim_req,
@@ -790,6 +809,8 @@ def report_lines(run_result):
         review = doc.engine_data.get("rag", {})
         used = "Drive 자료 활용" if review.get("drive_used") else "Drive 자료 미활용"
         lines.append(f"{doc.filename}: {review.get('status', '미실행')} / {used} / {review.get('reason', '')}")
+        if review.get("case_table_status"):
+            lines.append(f"표준판례 표 상태: {review['case_table_status']}")
         for cid, match in (review.get("reference_case_matches") or {}).items():
             lines.append(f"사건정보 대조({cid}): {match.get('status', 'NOT_CHECKED')} / "
                          f"{match.get('sheet', '')}!{match.get('source_cell_range', '')}")

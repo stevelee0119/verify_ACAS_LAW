@@ -154,16 +154,27 @@ class Settings:
         int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
     rule_version: str = "2026.09.30.1"
     prompt_version: str = "v0.2"
+    korean_law_review_profile: bool = field(
+        default_factory=lambda: os.getenv("LV_KOREAN_LAW_REVIEW_PROFILE", "0").strip() == "1"
+    )
     seal_meta_message_content: bool = field(default_factory=lambda: _flag("LV_SEAL_META", True))
     allow_sealed_reveal: bool = field(default_factory=lambda: _flag("LV_ALLOW_SEALED_REVEAL", True))
     candidate_promotion_enabled: bool = field(
         default_factory=lambda: _flag("LV_CANDIDATE_PROMOTION_ENABLED", False)
     )
     """TK-09 모델 의견 후보 승격 기능 활성화 여부 (사용자 승인 전 기본 꺼짐: False)."""
+    # TK-70: Drive 참고자료 '모순' 의견의 조건부 승격 (D4 개정, 사용자 결정: 기본 켬)
+    rag_contradiction_promotion_enabled: bool = field(
+        default_factory=lambda: _flag("LV_RAG_CONTRADICTION_PROMOTION", True)
+    )
+    """TK-70 Drive 참고자료 '모순' 의견의 조건부 LOW/C등급 Finding 승격 여부 (기본 켬: True)."""
     providers: Dict[str, ProviderConfig] = field(default_factory=dict)
     pricing: Dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        # 켬/끔 결과를 동일 verification_key로 재사용하지 않는다. 프로그램 버전은 유지한다.
+        if self.korean_law_review_profile and not self.prompt_version.endswith("+kr2"):
+            self.prompt_version = self.prompt_version.removesuffix("+kr1") + "+kr2"
         data_dir().mkdir(parents=True, exist_ok=True)
         self.storage_root.mkdir(parents=True, exist_ok=True)
         if not self.providers:

@@ -359,6 +359,10 @@ class LLMRouter:
         if provider is None:
             return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
 
+        from packages.rag_engine.review_profile import select_review_profile
+        request = select_review_profile(request, provider_name=provider.name, role=role,
+                                        enabled=getattr(self.settings, "korean_law_review_profile", False))
+
         # R8-A (TK-51): SYSTEM_BASE 조립 전 원본 system을 보존하여
         # JSON 구조가 깨지지 않은 상태에서 개인정보 검사를 수행한다.
         original_system = request.system

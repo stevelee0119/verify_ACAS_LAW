@@ -4,7 +4,7 @@
 F3 구현(PR #34 2e02c94)에서 16건 모두 XPASS가 되어 2026-10-08 표시를 지웠다(평가 측 승격). 이제 모두 일반 회귀 시험이다.
 
 - T6 참고자료 위계: 공식 미발견 인용이 참고자료 본문에 같은 인용으로 있으면 `reference_status`만 SUPPORTED가 되고
-  `official_status=OFFICIAL_NOT_FOUND`·finding·심각도는 그대로다(D4). 제목에만 있거나 읽지 못한 파일로는 올리지 않는다(TK-29 U1).
+  `official_status=OFFICIAL_NOT_FOUND`·기존 finding·심각도는 그대로다(D4 개정: TK-70 참고자료 모순 LOW/C 승격 외에는 불변). 제목에만 있거나 읽지 못한 파일로는 올리지 않는다(TK-29 U1).
 - T7 대조율 표시: `claim_coverage`의 분모는 대조 대상 주장 수이고, 상한(문서당 10주장, 19b 5.2) 초과 주장은
   `REASON_BUDGET_EXCEEDED`(19b 5.2) 사유로 분모에 남는다. 화면은 데이터 값을 그대로 보인다.
 - T8 다른 분야 동작: 분야가 다른 합성 자료 2세트에서 같은 절차·같은 구조의 결과.
@@ -266,7 +266,7 @@ def test_t6_official_absent_case_found_in_reference_body_is_supported_without_to
 
 
 def test_t6_reference_never_changes_official_status_findings_or_severity(monkeypatch, tmp_path):
-    """D4: 참고자료에 같은 인용이 있든 없든 공식 상태·finding·행 심각도는 같다(지금도 통과, F3 뒤에도 유지)."""
+    """D4 개정: TK-70 모순 승격 외에는 불변. 같은 인용의 참고자료 유무로 공식 상태·기존 finding·행 심각도를 바꾸지 않는다."""
     case = DOMAINS["safety"]["case"]
     _, with_ref, _, _ = _domain_run(monkeypatch, tmp_path / "with", "safety")
     _, without_ref, _, _ = _domain_run(monkeypatch, tmp_path / "without", "safety", body_key="without_case")
