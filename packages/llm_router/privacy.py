@@ -449,6 +449,9 @@ def inspect_request(request, *, _original_system: str = None):
     R8-A (TK-51):
     - _original_system이 주어지면 조립 전 원본 system을 별도 검사한다.
     """
+    from .input_contracts import valid_input_contract
+
+    contract_valid = valid_input_contract(request, original_system=_original_system)
     payload = asdict(request)
     serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
 
@@ -513,6 +516,9 @@ def inspect_request(request, *, _original_system: str = None):
     if blocked_kinds:
         status = "BLOCKED"
         failure_code = "PII_INPUT_BLOCKED"
+    elif not contract_valid:
+        status = "BLOCKED"
+        failure_code = "INPUT_CONTRACT_VIOLATION"
     elif static_fp_kinds:
         status = "PASSED"
         failure_code = "STATIC_PROMPT_FALSE_POSITIVE"

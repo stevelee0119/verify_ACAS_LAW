@@ -565,7 +565,8 @@ async def _retry_truncated_singly(router: Any, replies: List[Any], batch: List[D
         others = [p for p in providers if p != provider]
         for item in batch:
             single = LLMRequest(system=_OPINION_SYSTEM, user=json.dumps({"items": [item]}, ensure_ascii=False),
-                                temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA)
+                                temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA,
+                                input_contract="argument_review_v1")
             reply = await router.run(LLMRole.PRIMARY_REASONER, single, policy=policy, exclude=others,
                                      expected_task="법률 주장 타당성 검토")
             if _answer_provider(reply) == provider or not reply.executions:
@@ -596,7 +597,8 @@ async def _attach_ai_opinions(result: ArgumentValidityResult, unverified_cases: 
     for start in range(0, len(items), _OPINION_BATCH):
         request = LLMRequest(system=_OPINION_SYSTEM,
                              user=json.dumps({"items": items[start:start + _OPINION_BATCH]}, ensure_ascii=False),
-                             temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA)
+                             temperature=0.1, max_tokens=4096, schema=_OPINION_SCHEMA,
+                             input_contract="argument_review_v1")
         try:
             batch = items[start:start + _OPINION_BATCH]
             replies = await router.consult_all(LLMRole.PRIMARY_REASONER, request, policy=policy,
