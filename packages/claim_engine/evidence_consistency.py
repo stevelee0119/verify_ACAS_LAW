@@ -454,21 +454,22 @@ _TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "�
 _TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
 
 
-def _description_clause(text: str) -> bool:
+def _description_clause(text: str) -> Optional[str]:
     """Only structural prose/location evidence permits dropping a title suffix."""
     clause = text.strip()
     stop = next((index for index, char in enumerate(clause) if char in ".!?。！？"), None)
     sentence = clause[:stop].strip() if stop is not None else clause
     if _TITLE_LOCATION_RE.search(sentence):
-        return True
+        return "location"
     # Requiring punctuation avoids treating noun subtitles as complete sentences.
     if stop is not None:
         word = sentence.split()
-        return bool(word and word[-1].endswith(_TITLE_PREDICATE_ENDINGS))
-    return False
+        if word and word[-1].endswith(_TITLE_PREDICATE_ENDINGS):
+            return "prose"
+    return None
 
 
-def _duplicate_title_key(row: Dict[str, Any]) -> str:
+def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     """Extract a comparison-only title; dates and all original row fields survive.
 
     Scan disjoint clauses once rather than repeatedly searching growing suffixes.
@@ -476,11 +477,15 @@ def _duplicate_title_key(row: Dict[str, Any]) -> str:
     """
     name = unicodedata.normalize("NFKC", row.get("name") or "")
     if not row.get("from_lines"):
-        return "".join(name.split())
+        return "".join(name.split()), None
     tail = unicodedata.normalize("NFKC", row.get("duplicate_tail", name)).lstrip(" :")
+    found_date = DATE_RE.search(tail)
+    date_protected = False
     stack: List[str] = []
     separators = []
     for index, char in enumerate(tail):
+        if found_date and index == found_date.start():
+            date_protected = bool(stack)
         if stack and char == stack[-1]:
             stack.pop()
         elif stack and stack[-1] in ('"', "'", "”", "’", "」", "』"):
@@ -491,15 +496,35 @@ def _duplicate_title_key(row: Dict[str, Any]) -> str:
             stack.append(char)
         elif char in ",:" and not stack:
             separators.append(index)
+    if found_date and not date_protected:
+        preceding = [pos for pos in separators if pos < found_date.start()]
+        explicit_caption_date = bool(preceding and not tail[preceding[-1] + 1:found_date.start()].strip())
+        if not explicit_caption_date:
+            # An actual title segment followed by a date has the existing
+            # creation-date boundary, even if the segment contains a colon.
+            tail = tail[:found_date.start()].rstrip()
+            separators = preceding
+    # Without title-boundary proof, preserve the existing name. Explicit
+    # date captions can survive the legacy date extraction, but later unknown
+    # metadata separators do not justify expanding an unprotected caption.
+    caption_fallback = bool(separators or date_protected)
+    if found_date and not date_protected and any(pos > found_date.start() for pos in separators):
+        caption_fallback = False
+    fallback = "".join((tail if caption_fallback else name.lstrip(" :")).split())
     for position, start in enumerate(separators):
         end = separators[position + 1] if position + 1 < len(separators) else len(tail)
-        if _description_clause(tail[start + 1:end]):
+        kind = _description_clause(tail[start + 1:end])
+        if kind:
             title = tail[:start].strip().rstrip(".!?。！？")
             if title:
-                return "".join(title.split())
-    # Keep explicitly separated noun/date captions even if the legacy date
-    # extractor ended the display name before the caption's date.
-    return "".join((tail if separators else name.lstrip(" :")).split())
+                key = "".join(title.split())
+                return (key, None) if kind == "location" else (fallback, key)
+    return fallback, None
+
+
+def _duplicate_title_key(row: Dict[str, Any]) -> str:
+    """Standalone comparison key; a prose cut needs a cross-row anchor."""
+    return _duplicate_title_parts(row)[0]
 
 
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
@@ -525,7 +550,9 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         if len(same) < 2:
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
-        distinct_names = {_duplicate_title_key(r) for r in same}
+        title_parts = [_duplicate_title_parts(r) for r in same]
+        anchors = {key for key, proposed in title_parts if proposed is None and key}
+        distinct_names = {proposed if proposed in anchors else key for key, proposed in title_parts}
         distinct_names.discard("")
         if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
             continue

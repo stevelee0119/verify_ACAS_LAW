@@ -76,6 +76,80 @@ def test_synthetic_protected_title_and_multiple_description_clauses():
     assert not _duplicates(doc)
 
 
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("label,title,date,first,second", [
+    ("갑 제1호증", "검수표", "2032. 4. 5.", "비고: 원본", "비고: 사본"),
+    ("을 제2호증의 1", "장비목록", "2033-06-07", "상태, 초안", "상태, 수정본"),
+    ("병 제3호증", "배치도", "2034년 8월 9일", "형태: 첨부입니다.", "상태: 보관합니다."),
+])
+def test_synthetic_post_creation_date_metadata(section, label, title, date, first, second):
+    doc = _doc([f"{label} {title} {date} {first}", f"{label} {title} {date} {second}"], section)
+    rows = exhibit_rows(doc)
+    assert len(rows) == 2
+    assert rows[0]["name"] == rows[1]["name"] == title
+    assert rows[0]["date"] == rows[1]["date"]
+    assert not _duplicates(doc)
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("label,first,second,date", [
+    ("갑 제1호증", "검수표", "운송장", "2032. 4. 5."),
+    ("을 제2호증의 1", "장비목록", "정비목록", "2033-06-07"),
+    ("병 제3호증", "배치도", "노선도", "2034년 8월 9일"),
+])
+def test_synthetic_genuine_duplicate_with_post_date_metadata(section, label, first, second, date):
+    found = _duplicates(_doc([f"{label} {first} {date} 비고: 원본", f"{label} {second} {date} 비고: 사본"], section))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("first,second", [
+    ("도면: 2035. 1. 2. 북쪽", "도면: 2035. 1. 2. 남쪽"),
+    ("도면 [2036. 3. 4.]: 북쪽", "도면 [2036. 3. 4.]: 남쪽"),
+    ('도면 "2037. 5. 6.": 북쪽', '도면 "2037. 5. 6.": 남쪽'),
+])
+def test_synthetic_dates_inside_explicit_title_caption(section, first, second):
+    found = _duplicates(_doc([f"갑 제1호증 {first}", f"갑 제1호증 {second}"], section))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+def test_public_audit_original_post_date_counterexample():
+    """The auditor supplied this public synthetic counterexample, not a corpus row."""
+    assert not _duplicates(_doc(["갑 제1호증 합의서 2025. 3. 4. 비고: 원본",
+                                 "갑 제1호증 합의서 2025. 3. 4. 비고: 사본"]))
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("label,title,date,first,second", [
+    ("갑 제1호증", "기록: 동쪽", "2038. 7. 8.", "비고: 원본", "비고: 사본"),
+    ("을 제2호증의 1", "계획: 오후", "2039-09-10", "상태, 초안", "상태, 수정본"),
+    ("병 제3호증", "도면: 입구", "2040년 11월 12일", "형태: 첨부입니다.", "상태: 보관합니다."),
+])
+def test_synthetic_subtitle_before_creation_date_metadata(section, label, title, date, first, second):
+    doc = _doc([f"{label} {title} {date} {first}", f"{label} {title} {date} {second}"], section)
+    rows = exhibit_rows(doc)
+    assert rows[0]["name"] == rows[1]["name"] == title
+    assert not _duplicates(doc)
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("label,first,second", [
+    ("갑 제1호증", "기록: 동쪽에 있다.", "기록: 서쪽에 있다."),
+    ("을 제2호증의 1", "지침: 개방을 허용한다.", "지침: 개방을 금지한다."),
+    ("병 제3호증", "보고서, 배관을 교체합니다.", "보고서, 기둥을 수리합니다."),
+])
+def test_synthetic_unanchored_sentence_subtitles_remain_genuine(section, label, first, second):
+    found = _duplicates(_doc([f"{label} {first}", f"{label} {second}"], section))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+def test_synthetic_complete_title_can_anchor_description():
+    assert not _duplicates(_doc(["갑 제1호증 순회표", "갑 제1호증 순회표: 이동을 표시합니다."]))
+
+
 def test_synthetic_table_title_cells_are_complete():
     doc = _doc([])
     doc.structure["tables"] = [{"cells": [["호증", "서증명", "작성일"],
@@ -91,4 +165,13 @@ def test_synthetic_linear_boundary_runtime(tail):
     started = time.perf_counter()
     for _ in range(2000 if len(tail) < 100 else 1):
         _duplicate_title_key(row)
+    assert time.perf_counter() - started < 0.1
+
+
+def test_synthetic_cross_row_anchor_runtime_is_bounded():
+    from packages.claim_engine.evidence_consistency import _numbering
+
+    rows = exhibit_rows(_doc(["갑 제1호증 순회표, 부록 3쪽.", "갑 제1호증 순회표: 이동을 표시합니다."])) * 2000
+    started = time.perf_counter()
+    assert not _numbering(_doc([]), rows)
     assert time.perf_counter() - started < 0.1
