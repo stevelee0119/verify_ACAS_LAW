@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import date
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -222,6 +223,32 @@ _EXHIBIT_REF_SENTENCE_RE = re.compile(
 )
 
 
+def _exhibit_source_spans(reading, start: int, end: int, cursor: List[int]) -> List[Dict[str, Any]]:
+    """Project forward ranges; cursor also caches the last block's indent."""
+    if len(cursor) == 1:
+        cursor.extend((-1, 0))
+    segments = reading.segments
+    while cursor[0] < len(segments) and segments[cursor[0]].end <= start:
+        cursor[0] += 1
+    out = []
+    index = cursor[0]
+    while index < len(segments) and segments[index].start < end:
+        segment = segments[index]
+        left, right = max(start, segment.start), min(end, segment.end)
+        if left < right:
+            block = segment.block
+            if cursor[1] != index:
+                cursor[1] = index
+                cursor[2] = len(block.text) - len(block.text.lstrip())
+            leading = cursor[2]
+            out.append({"block_id": block.block_id, "page": block.page,
+                        "reading_span": (left, right),
+                        "block_span": (leading + left - segment.start, leading + right - segment.start),
+                        "physical_lines": block.attributes.get("lines") or []})
+        index += 1
+    return out
+
+
 def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """표가 없을 때: 문단 첫머리가 호증 번호인 목록(입증방법·증거설명 목록)을 행으로 읽는다.
 
@@ -233,8 +260,13 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     reading = build_reading_text(doc)
     previous_was_item = False
     in_exhibit_section = False
+    reading_offset = 0
+    source_cursor = [0]
+    previous_group: List[Dict[str, Any]] = []
 
     for paragraph_index, paragraph in enumerate(reading.text.split("\n")):
+        paragraph_start = reading_offset
+        reading_offset += len(paragraph) + 1
         stripped = paragraph.strip()
         if not stripped:
             continue
@@ -252,6 +284,10 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         is_leading_exhibit = bool(cand_refs and cand_refs[0]["span"][0] == 0)
 
         raw_items = split_items(cand_text) if is_leading_exhibit else []
+        cand_start = paragraph_start + paragraph.find(cand_text) if cand_text else paragraph_start
+        spans = sorted({ref["span"] for ref, _ in raw_items})
+        ends = {span: spans[index + 1][0] if index + 1 < len(spans) else len(cand_text)
+                for index, span in enumerate(spans)}
         items = []
         for ref, rest in raw_items:
             # 입증방법 구역 안이면 제목에 '발췌'가 있어도 정식 목록으로 수용
@@ -273,22 +309,42 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         if not items:
             if (previous_was_item and rows and stripped and len(stripped) <= 40 and not DATE_RE.search(stripped)
                     and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped)):
-                group = rows[-1].get("line_group")
-                for row in rows:
-                    if row.get("line_group") == group and not row.get("date"):
+                left = paragraph_start + len(paragraph) - len(paragraph.lstrip())
+                source = {"text": stripped, "reading_span": (left, left + len(stripped)),
+                          "origin": "continuation", "sources": _exhibit_source_spans(
+                              reading, left, left + len(stripped), source_cursor)}
+                for row in previous_group:
+                    if not row.get("date"):
                         row["name"] = (row["name"] + join_separator(row["name"], stripped) + stripped).strip()
+                        old_tail = row.get("duplicate_tail", "")
+                        row["duplicate_tail"] = old_tail + join_separator(old_tail, stripped) + stripped
+                        row["duplicate_sources"].append(source)
                 continue
             previous_was_item = False
             continue
         previous_was_item = True
+        previous_group = []
+        last_span = items[-1][0]["span"]
+        item_sources = {}
         for index, (ref, rest) in enumerate(items):
+            span = ref["span"]
+            if span not in item_sources:
+                left, right = cand_start + span[1], cand_start + ends[span]
+                item_sources[span] = {"text": reading.text[left:right],
+                                     "reading_span": (left, right), "origin": "item",
+                                     "reference_span": (cand_start + span[0], cand_start + span[1]),
+                                     "sources": _exhibit_source_spans(reading, left, right, source_cursor)}
             found = DATE_RE.search(rest)
             name = rest[:found.start()].strip() if found else rest
             tail = rest[found.end():].strip() if found else ""
             rows.append(_row({"id": ref["label"], "name": name, "date": found.group(0) if found else "",
                               "author": tail, "purpose": tail}, ref, table_ref=None, page=None, from_lines=True,
                              in_section=in_exhibit_section,
+                             duplicate_tail=rest,
+                             duplicate_sources=[item_sources[span]],
                              line_group=(paragraph_index, ref["span"])))
+            if span == last_span:
+                previous_group.append(rows[-1])
     return rows
 
 
@@ -445,6 +501,208 @@ def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> 
     return out
 
 
+_TITLE_COORDINATE_RE = re.compile(
+    r"(?<!\d)\d{1,4}(?:\s*[-–—~∼〜]\s*\d{1,4})?\s*(?:페이지|쪽|행)"
+)
+_TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "이다", "있다", "없다", "었다", "았다", "해요", "어요", "아요")
+_TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
+
+
+def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
+    """A coordinate is a weak token, not proof of exhibit identity."""
+    clause = text.strip()
+    stop = next((index for index, char in enumerate(clause) if char in ".!?。！？"), None)
+    sentence = clause[:stop].strip() if stop is not None else clause
+    matches = iter(_TITLE_COORDINATE_RE.finditer(sentence))
+    coordinate = next(matches, None)
+    stack = []
+    leading = len(text) - len(text.lstrip())
+    for index, char in enumerate(sentence):
+        if coordinate and index == coordinate.start():
+            edge = coordinate.end()
+            category = unicodedata.category(sentence[edge]) if edge < len(sentence) else ""
+            complete = (edge == len(sentence)
+                        or sentence[edge] in " \t\r\n" or category.startswith("Z")
+                        or category in ("Pd", "Ps", "Pe", "Pi", "Pf", "Po"))
+            if not stack and complete:
+                return "locator", (leading + coordinate.start(), leading + coordinate.end())
+            coordinate = next(matches, None)
+        if stack and char == stack[-1]:
+            stack.pop()
+        elif stack and stack[-1] in ('"', "'", "”", "’", "」", "』"):
+            pass
+        elif char in _TITLE_BRACKETS:
+            stack.append(_TITLE_BRACKETS[char])
+        elif char in ('"', "'"):
+            stack.append(char)
+    # Requiring punctuation avoids treating noun subtitles as complete sentences.
+    if stop is not None:
+        word = sentence.split()
+        if word and word[-1].endswith(_TITLE_PREDICATE_ENDINGS):
+            return "prose", (leading, leading + len(sentence))
+    return None, None
+
+
+_REFERENCE_TITLE_PREFIX_RE = re.compile(r"^[\s:.)\]\-]*(?:각\s+)?")
+
+
+def _duplicate_comparison_text(row: Dict[str, Any]) -> Tuple[str, str, List[Dict[str, Any]], bool]:
+    """Preserve item/continuation origins independently of display-name joining.
+
+    Raw local spans map exactly to their reading ranges. Normalized spans are
+    fragment projections, not a claim of character precision across Unicode
+    expansion or composition.
+    """
+    sources = row.get("duplicate_sources") or []
+    if not sources:
+        raw = row.get("duplicate_tail", row.get("name") or "")
+        return raw, unicodedata.normalize("NFKC", raw).lstrip(" :"), [], True
+    raw_parts, normalized_parts, origins = [], [], []
+    raw_offset = normalized_offset = 0
+    previous = ""
+    for source in sources:
+        text = source["text"]
+        separator = join_separator(previous, text) if raw_parts else ""
+        normalized = unicodedata.normalize("NFKC", text)
+        raw_parts.extend((separator, text))
+        normalized_parts.extend((separator, normalized))
+        raw_offset += len(separator)
+        normalized_offset += len(separator)
+        origins.append({**source, "raw_span": (raw_offset, raw_offset + len(text)),
+                        "normalized_span": (normalized_offset, normalized_offset + len(normalized)),
+                        "normalization_precision": "fragment"})
+        raw_offset += len(text)
+        normalized_offset += len(normalized)
+        previous = text
+    raw = "".join(raw_parts)
+    normalized = unicodedata.normalize("NFKC", raw)
+    mapping_verified = normalized == "".join(normalized_parts)
+    legacy_left = len(normalized) - len(normalized.lstrip(" :"))
+    left = legacy_left
+    first = sources[0]
+    reference = first.get("reference_span")
+    reading = first.get("reading_span")
+    if (mapping_verified and first.get("origin") == "item" and reference and reading
+            and reference[1] == reading[0] and first.get("sources")):
+        # Match only the original first item fragment: NFKC punctuation and
+        # join_separator whitespace do not prove consumed reference grammar.
+        prefix_end = _REFERENCE_TITLE_PREFIX_RE.match(first["text"]).end()
+        prefix = first["text"][:prefix_end]
+        projected_prefix = unicodedata.normalize("NFKC", prefix)
+        if normalized.startswith(projected_prefix):
+            left = max(left, len(projected_prefix))
+            origins[0]["reference_title_prefix"] = {
+                "text": prefix, "raw_span": (0, prefix_end),
+                "reading_span": (reading[0], reading[0] + prefix_end),
+                "normalized_span": (0, len(projected_prefix)),
+                "normalized_text": projected_prefix,
+                "comparison_offset": left, "prior_comparison_offset": legacy_left,
+            }
+    for origin in origins:
+        start, end = origin["normalized_span"]
+        origin["normalized_source_span"] = (start, end)
+        origin["normalized_span_before_prefix"] = (max(0, start - legacy_left), max(0, end - legacy_left))
+        origin["normalized_span"] = (max(0, start - left), max(0, end - left))
+    return raw, normalized[left:], origins, mapping_verified
+
+
+def _duplicate_mention_view(row: Dict[str, Any]) -> Dict[str, Any]:
+    """Extract a comparison-only title; dates and all original row fields survive.
+
+    Scan disjoint clauses once rather than repeatedly searching growing suffixes.
+    Ambiguous noun captions remain whole, including their commas and colons.
+    """
+    name = unicodedata.normalize("NFKC", row.get("name") or "")
+    view = {"fallback": "".join(name.split()), "title_key": None, "kind": None,
+            "group": (row.get("party"), row.get("number"), tuple(row.get("branches") or [])),
+            "origins": [], "title_span": None, "location_span": None, "narrative_span": None}
+    if not row.get("from_lines"):
+        view["origin_kind"] = "table_title"
+        return view
+    raw, tail, origins, verified = _duplicate_comparison_text(row)
+    view.update({"origin_kind": "line_item", "comparison_text": tail, "raw_comparison_text": raw, "origins": origins,
+                 "source_mapping_verified": verified})
+    if not verified:
+        return view
+    dates = iter(DATE_RE.finditer(tail))
+    next_date = next(dates, None)
+    caption_dates = []
+    creation_date_start = None
+    previous_nonspace = -1
+    stack: List[str] = []
+    separators = []
+    for index, char in enumerate(tail):
+        if next_date and index == next_date.start():
+            if not stack:
+                if separators and previous_nonspace == separators[-1]:
+                    caption_dates.append(index)
+                else:
+                    creation_date_start = index
+                    break
+            next_date = next(dates, None)
+        if stack and char == stack[-1]:
+            stack.pop()
+        elif stack and stack[-1] in ('"', "'", "”", "’", "」", "』"):
+            pass
+        elif char in _TITLE_BRACKETS:
+            stack.append(_TITLE_BRACKETS[char])
+        elif char in ('"', "'"):
+            stack.append(char)
+        elif char in ",;:" and not stack:
+            separators.append(index)
+        if not char.isspace():
+            previous_nonspace = index
+    if creation_date_start is not None:
+        # Keep the actual raw title prefix, including every protected date.
+        # The display name may have ended at an earlier date inside the title.
+        tail = tail[:creation_date_start].rstrip()
+    view["creation_date_boundary"] = creation_date_start
+    if stack:
+        # Unbalanced protection gives no independent boundary proof. Preserve
+        # the old comparison rather than guessing where the title ended.
+        view["fallback"] = "".join(name.lstrip(" :").split())
+        return view
+    ambiguous_caption_tail = (creation_date_start is None and caption_dates and separators
+                              and separators[-1] > caption_dates[0])
+    fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
+    view["fallback"] = fallback
+    for position, start in enumerate(separators):
+        end = separators[position + 1] if position + 1 < len(separators) else len(tail)
+        kind, token_span = _description_token(tail[start + 1:end])
+        if kind:
+            title = tail[:start].strip().rstrip(".!?。！？")
+            if title:
+                key = "".join(title.split())
+                view.update({"title_key": key, "kind": kind, "title_span": (0, start),
+                             "delimiter_span": (start, start + 1)})
+                if token_span:
+                    token_span = (start + 1 + token_span[0], start + 1 + token_span[1])
+                    view["location_span" if kind == "locator" else "narrative_span"] = token_span
+                    if kind == "locator":
+                        view.update({"location_context_span": (start + 1, end),
+                                     "location_prefix_span": (start + 1, token_span[0]),
+                                     "location_qualifier_span": (token_span[1], end)})
+                return view
+    return view
+
+
+def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
+    view = _duplicate_mention_view(row)
+    return view["fallback"], view["title_key"], view["kind"]
+
+
+def _duplicate_title_key(row: Dict[str, Any]) -> str:
+    """Standalone comparison key; a prose cut needs a cross-row anchor."""
+    return _duplicate_title_parts(row)[0]
+
+
+def _complete_prose_identity(key: str) -> str:
+    """Equate one final declarative/emphatic mark, retaining full content."""
+    if len(key) > 1 and key[-1] in ".!。！" and key[-2] not in ".!?。！？":
+        return key[:-1]
+    return key
+
+
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
     # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
@@ -464,11 +722,43 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         keys = [(row["party"], row["number"], b) for b in row.get("branches") or []] or [(row["party"], row["number"], None)]
         for key in keys:
             seen.setdefault(key, []).append(row)
+    title_cache, title_values = {}, {}
     for (party, number, branch), same in seen.items():
         if len(same) < 2:
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
-        distinct_names = {re.sub(r"\s", "", r.get("name") or "") for r in same}
+        title_parts = []
+        for row in same:
+            row_key = id(row)
+            if row_key not in title_cache:
+                key, proposed, kind = _duplicate_title_parts(row)
+                key = title_values.setdefault(key, key)
+                if proposed is not None:
+                    proposed = title_values.setdefault(proposed, proposed)
+                identity = _complete_prose_identity(key) if kind == "prose" else key
+                identity = title_values.setdefault(identity, identity)
+                title_cache[row_key] = (key, proposed, kind, identity)
+            title_parts.append(title_cache[row_key])
+        anchors = {key for key, proposed, _, _ in title_parts if proposed is None and key}
+        weak_identities, prose_identities = {}, {}
+        for key, proposed, kind, identity in title_parts:
+            if kind == "locator":
+                weak_identities.setdefault(proposed, set()).add(key)
+            elif kind == "prose":
+                prose_identities.setdefault(proposed, set()).add(identity)
+        locators = {proposed for proposed, identities in weak_identities.items() if len(identities) == 1}
+        prose = {proposed for proposed, identities in prose_identities.items() if len(identities) == 1}
+        # A numeric coordinate with qualifiers may itself be a true subtitle.
+        # Only exact agreement with a separate prose candidate corroborates it;
+        # conflicting weak captions or a complete generic prefix cannot confirm it.
+        corroborated = locators & prose
+        # Predicate wording does not establish title/narrative role either.
+        # Even a locator cannot erase conflicting complete prose identities.
+        prose_anchors = (anchors & prose) | corroborated
+        distinct_names = {
+            proposed if proposed in (corroborated if kind == "locator" else prose_anchors) else key
+            for key, proposed, kind, _ in title_parts
+        }
         distinct_names.discard("")
         if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
             continue
