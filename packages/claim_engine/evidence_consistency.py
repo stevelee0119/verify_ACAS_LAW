@@ -25,6 +25,9 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, join_separator, sentence_bounds
 
 from .exhibits import exhibit_keys, parse_exhibits, split_items
+from .exhibit_provenance import (
+    ExhibitSourceIndex, SourceParagraph, extend_mention, mention_identity, source_mention, source_tail,
+)
 
 ENGINE_NAME = "claim_engine.evidence_consistency"
 
@@ -232,10 +235,21 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
     """
     rows: List[Dict[str, Any]] = []
     reading = build_reading_text(doc)
+    source_index = ExhibitSourceIndex(reading)
     previous_was_item = False
     in_exhibit_section = False
+    comparison_rows = []
 
+    def extend_comparison(fragments):
+        for row in comparison_rows:
+            if row.get("duplicate_source") and fragments:
+                extend_mention(row["duplicate_source"], fragments)
+            else:
+                row.pop("duplicate_source", None)
+
+    paragraph_start = 0
     for paragraph_index, paragraph in enumerate(reading.text.split("\n")):
+        start, paragraph_start = paragraph_start, paragraph_start + len(paragraph) + 1
         stripped = paragraph.strip()
         if not stripped:
             continue
@@ -244,6 +258,7 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         if _EXHIBIT_SECTION_HEAD_RE.search(stripped):
             in_exhibit_section = True
             previous_was_item = False
+            comparison_rows = []
             continue
 
         # 앞머리의 번호/불릿(예: '1. ', '5. ', '- ', '가. ')을 정규화하여 호증 시작 판별
@@ -251,8 +266,41 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
         cand_text = stripped[bullet_m.end():].strip() if bullet_m else stripped
         cand_refs = parse_exhibits(cand_text[:24]) if cand_text else []
         is_leading_exhibit = bool(cand_refs and cand_refs[0]["span"][0] == 0)
+        source = source_index.paragraph(start, start + len(paragraph)) if is_leading_exhibit or comparison_rows else None
+
+        if not is_leading_exhibit and comparison_rows and source:
+            # A location continuation can finish before another list definition.
+            # Require source proof and a definition boundary, not an arbitrary inline citation.
+            next_refs = parse_exhibits(source.text)
+            next_definition = False
+            if next_refs:
+                next_start, next_end = next_refs[0]["span"]
+                next_tail = source.text[next_end:].lstrip(" :")
+                next_definition = source.text[next_end:].lstrip().startswith(":")
+                if not next_definition and next_start in source.starts:
+                    # A body heading can be merged with the previous physical
+                    # line. Its own source line plus title:prose proves a new extent.
+                    next_source = {"tail": next_tail, "fragments": []}
+                    _, _, kind = _duplicate_title_parts({"name": next_tail, "from_lines": True,
+                                                        "duplicate_source": next_source})
+                    next_definition = kind == "prose"
+            current_refs = parse_exhibits(cand_text) if next_definition else []
+            if next_definition and current_refs:
+                prefix = source.between(0, next_refs[0]["span"][0])
+                previous = comparison_rows[-1]
+                prior_source = previous.get("duplicate_source")
+                if prior_source and not _NOT_CONTINUATION_RE.match(stripped):
+                    probe_source = source_mention(prior_source["fragments"] + prefix)
+                    _duplicate_title_parts({**previous, "duplicate_source": probe_source})
+                    if any(role["kind"] in ("location", "qualified_location")
+                           for role in probe_source.get("roles", [])):
+                        extend_comparison(prefix)
+                        source = SourceParagraph(source.between(next_refs[0]["span"][0], len(source.text)))
+                        cand_text = cand_text[current_refs[0]["span"][0]:]
+                        is_leading_exhibit = True
 
         raw_items = split_items(cand_text) if is_leading_exhibit else []
+        source_items = source.mentions(raw_items) if source and raw_items else {}
         items = []
         for ref, rest in raw_items:
             # 입증방법 구역 안이면 제목에 '발췌'가 있어도 정식 목록으로 수용
@@ -272,6 +320,11 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                     items.append((ref, rest))
 
         if not items:
+            if comparison_rows:
+                if stripped and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped):
+                    extend_comparison(source.fragments if source else [])
+                else:
+                    comparison_rows = []
             if (previous_was_item and rows and stripped and len(stripped) <= 40 and not DATE_RE.search(stripped)
                     and not _NOT_CONTINUATION_RE.match(stripped) and not parse_exhibits(stripped)):
                 group = rows[-1].get("line_group")
@@ -292,7 +345,12 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                               "author": tail, "purpose": tail}, ref, table_ref=None, page=None, from_lines=True,
                              in_section=in_exhibit_section,
                              duplicate_tail=rest,
+                             duplicate_source=source_items.get(mention_identity(ref)),
                              line_group=(paragraph_index, ref["span"])))
+        comparison_rows = [row for row in rows[-len(items):] if row["line_group"] == rows[-1]["line_group"]]
+    for row in rows:
+        if row.get("duplicate_source"):
+            source_tail(row["duplicate_source"])
     return rows
 
 
@@ -455,6 +513,25 @@ _TITLE_QUALIFIED_LOCATION_RE = re.compile(
 )
 _TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "이다", "있다", "없다", "었다", "았다", "해요", "어요", "아요")
 _TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
+_SOURCE_LOCATION_RE = re.compile(
+    r"^(?:[^\W\d_](?:\s*[^\W\d_]){0,15}\s*)?(?:제\s*)?\d{1,4}\s*(?:쪽|페\s*이\s*지|행)"
+    r"(?:\s+\d{1,4}\s*행)?(?=\s|[([]|$)"
+)
+
+
+def _source_description_clause(text: str) -> Optional[str]:
+    """Interpret an aligned source field rather than a JOIN-altered row suffix."""
+    clause = text.strip().rstrip(".!?。！？").strip()
+    if clause.startswith("(") and clause.endswith(")"):
+        clause = clause[1:-1].strip()
+    location = _SOURCE_LOCATION_RE.match(clause)
+    if location:
+        return "qualified_location" if clause[location.end():].strip() else "location"
+    # Spaces at physical boundaries can split a sentence-ending morpheme.
+    stop = next((i for i, char in enumerate(text) if char in ".!?。！？"), None)
+    if stop is not None and "".join(text[:stop].split()).endswith(_TITLE_PREDICATE_ENDINGS):
+        return "prose"
+    return None
 
 
 def _description_clause(text: str) -> Optional[str]:
@@ -474,7 +551,7 @@ def _description_clause(text: str) -> Optional[str]:
     return None
 
 
-def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
+def _title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
     """Extract a comparison-only title; dates and all original row fields survive.
 
     Scan disjoint clauses once rather than repeatedly searching growing suffixes.
@@ -483,7 +560,10 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Opt
     name = unicodedata.normalize("NFKC", row.get("name") or "")
     if not row.get("from_lines"):
         return "".join(name.split()), None, None
-    tail = unicodedata.normalize("NFKC", row.get("duplicate_tail", name)).lstrip(" :")
+    source = row.get("duplicate_source")
+    if source:
+        source["roles"] = []
+    tail = unicodedata.normalize("NFKC", source_tail(source) if source else row.get("duplicate_tail", name)).lstrip(" :")
     dates = iter(DATE_RE.finditer(tail))
     next_date = next(dates, None)
     caption_dates = []
@@ -520,18 +600,39 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Opt
         # Unbalanced protection gives no independent boundary proof. Preserve
         # the old comparison rather than guessing where the title ended.
         return "".join(name.lstrip(" :").split()), None, None
+    if source and creation_date_start is not None:
+        source["roles"] = [{"kind": "title", "start": 0, "end": len(tail)},
+                           {"kind": "creation_metadata", "start": creation_date_start,
+                            "end": len(source["tail"])}]
     ambiguous_caption_tail = (creation_date_start is None and caption_dates and separators
                               and separators[-1] > caption_dates[0])
     fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
     for position, start in enumerate(separators):
         end = separators[position + 1] if position + 1 < len(separators) else len(tail)
-        kind = _description_clause(tail[start + 1:end])
+        kind = (_source_description_clause if source else _description_clause)(tail[start + 1:end])
+        if source and kind == "location" and end < len(tail):
+            kind = "qualified_location"
         if kind:
             title = tail[:start].strip().rstrip(".!?。！？")
             if title:
                 key = "".join(title.split())
+                if source:
+                    source["roles"] = [{"kind": "title", "start": 0, "end": start},
+                                       {"kind": kind, "start": start + 1, "end": len(tail)}]
+                    if creation_date_start is not None:
+                        source["roles"].append({"kind": "creation_metadata", "start": creation_date_start,
+                                                "end": len(source["tail"])})
                 return (key, None, None) if kind == "location" else (fallback, key, kind)
     return fallback, None, None
+
+
+def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
+    parts = _title_parts(row)
+    source = row.get("duplicate_source")
+    if source and not source.get("roles"):
+        # Unproved continuation must not alter the legacy interpretation.
+        return _title_parts({key: value for key, value in row.items() if key != "duplicate_source"})
+    return parts
 
 
 def _duplicate_title_key(row: Dict[str, Any]) -> str:
@@ -558,11 +659,16 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         keys = [(row["party"], row["number"], b) for b in row.get("branches") or []] or [(row["party"], row["number"], None)]
         for key in keys:
             seen.setdefault(key, []).append(row)
+    title_cache = {}
     for (party, number, branch), same in seen.items():
         if len(same) < 2:
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
-        title_parts = [_duplicate_title_parts(r) for r in same]
+        title_parts = []
+        for row in same:
+            if id(row) not in title_cache:
+                title_cache[id(row)] = _duplicate_title_parts(row)
+            title_parts.append(title_cache[id(row)])
         anchors = {key for key, proposed, _ in title_parts if proposed is None and key}
         qualified = {proposed for _, proposed, kind in title_parts if kind == "qualified_location"}
         prose = {proposed for _, proposed, kind in title_parts if kind == "prose"}
