@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from datetime import date
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -277,6 +278,8 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
                 for row in rows:
                     if row.get("line_group") == group and not row.get("date"):
                         row["name"] = (row["name"] + join_separator(row["name"], stripped) + stripped).strip()
+                        old_tail = row.get("duplicate_tail", "")
+                        row["duplicate_tail"] = old_tail + join_separator(old_tail, stripped) + stripped
                 continue
             previous_was_item = False
             continue
@@ -288,6 +291,7 @@ def _exhibit_lines(doc: NormalizedDocument) -> List[Dict[str, Any]]:
             rows.append(_row({"id": ref["label"], "name": name, "date": found.group(0) if found else "",
                               "author": tail, "purpose": tail}, ref, table_ref=None, page=None, from_lines=True,
                              in_section=in_exhibit_section,
+                             duplicate_tail=rest,
                              line_group=(paragraph_index, ref["span"])))
     return rows
 
@@ -445,6 +449,59 @@ def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> 
     return out
 
 
+_TITLE_LOCATION_RE = re.compile(r"(?:^|\s)(?:제\s*)?\d{1,4}\s*(?:쪽|페이지|행)(?:\s*\d{1,4}\s*행)?\s*$")
+_TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "이다", "있다", "없다", "었다", "았다", "해요", "어요", "아요")
+_TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
+
+
+def _description_clause(text: str) -> bool:
+    """Only structural prose/location evidence permits dropping a title suffix."""
+    clause = text.strip()
+    stop = next((index for index, char in enumerate(clause) if char in ".!?。！？"), None)
+    sentence = clause[:stop].strip() if stop is not None else clause
+    if _TITLE_LOCATION_RE.search(sentence):
+        return True
+    # Requiring punctuation avoids treating noun subtitles as complete sentences.
+    if stop is not None:
+        word = sentence.split()
+        return bool(word and word[-1].endswith(_TITLE_PREDICATE_ENDINGS))
+    return False
+
+
+def _duplicate_title_key(row: Dict[str, Any]) -> str:
+    """Extract a comparison-only title; dates and all original row fields survive.
+
+    Scan disjoint clauses once rather than repeatedly searching growing suffixes.
+    Ambiguous noun captions remain whole, including their commas and colons.
+    """
+    name = unicodedata.normalize("NFKC", row.get("name") or "")
+    if not row.get("from_lines"):
+        return "".join(name.split())
+    tail = unicodedata.normalize("NFKC", row.get("duplicate_tail", name)).lstrip(" :")
+    stack: List[str] = []
+    separators = []
+    for index, char in enumerate(tail):
+        if stack and char == stack[-1]:
+            stack.pop()
+        elif stack and stack[-1] in ('"', "'", "”", "’", "」", "』"):
+            continue
+        elif char in _TITLE_BRACKETS:
+            stack.append(_TITLE_BRACKETS[char])
+        elif char in ('"', "'"):
+            stack.append(char)
+        elif char in ",:" and not stack:
+            separators.append(index)
+    for position, start in enumerate(separators):
+        end = separators[position + 1] if position + 1 < len(separators) else len(tail)
+        if _description_clause(tail[start + 1:end]):
+            title = tail[:start].strip().rstrip(".!?。！？")
+            if title:
+                return "".join(title.split())
+    # Keep explicitly separated noun/date captions even if the legacy date
+    # extractor ended the display name before the caption's date.
+    return "".join((tail if separators else name.lstrip(" :")).split())
+
+
 def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Finding]:
     out: List[Finding] = []
     # 같은 호증 번호(가지번호까지 같음)가 목록에 두 번 이상 나온다(v4 P4)
@@ -468,7 +525,7 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         if len(same) < 2:
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
-        distinct_names = {re.sub(r"\s", "", r.get("name") or "") for r in same}
+        distinct_names = {_duplicate_title_key(r) for r in same}
         distinct_names.discard("")
         if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
             continue
