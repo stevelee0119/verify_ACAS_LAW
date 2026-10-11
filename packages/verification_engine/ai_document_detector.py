@@ -347,6 +347,7 @@ async def detect_ai_document(
         # 서면에서도 한도의 90%를 넘겨 잘리곤 했다. 과금은 실제 생성량 기준이다.
         max_tokens=4096,
         schema=_DETECTOR_SCHEMA,
+        input_contract="ai_document_v1",
     )
     try:
         answers = await router.consult_all(LLMRole.PRIMARY_REASONER, req, policy=external_ai_policy,

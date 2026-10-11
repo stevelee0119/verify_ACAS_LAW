@@ -21,6 +21,8 @@ class LLMRequest:
     temperature: float = 0.0
     schema: Optional[Dict[str, Any]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # First-party input envelope, independent of the provider output schema.
+    input_contract: Optional[str] = None
 
 
 @dataclass
