@@ -479,38 +479,45 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     if not row.get("from_lines"):
         return "".join(name.split()), None
     tail = unicodedata.normalize("NFKC", row.get("duplicate_tail", name)).lstrip(" :")
-    found_date = DATE_RE.search(tail)
-    date_protected = False
+    dates = iter(DATE_RE.finditer(tail))
+    next_date = next(dates, None)
+    caption_dates = []
+    creation_date_start = None
+    previous_nonspace = -1
     stack: List[str] = []
     separators = []
     for index, char in enumerate(tail):
-        if found_date and index == found_date.start():
-            date_protected = bool(stack)
+        if next_date and index == next_date.start():
+            if not stack:
+                if separators and previous_nonspace == separators[-1]:
+                    caption_dates.append(index)
+                else:
+                    creation_date_start = index
+                    break
+            next_date = next(dates, None)
         if stack and char == stack[-1]:
             stack.pop()
         elif stack and stack[-1] in ('"', "'", "”", "’", "」", "』"):
-            continue
+            pass
         elif char in _TITLE_BRACKETS:
             stack.append(_TITLE_BRACKETS[char])
         elif char in ('"', "'"):
             stack.append(char)
         elif char in ",:" and not stack:
             separators.append(index)
-    if found_date and not date_protected:
-        preceding = [pos for pos in separators if pos < found_date.start()]
-        explicit_caption_date = bool(preceding and not tail[preceding[-1] + 1:found_date.start()].strip())
-        if not explicit_caption_date:
-            # An actual title segment followed by a date has the existing
-            # creation-date boundary, even if the segment contains a colon.
-            tail = tail[:found_date.start()].rstrip()
-            separators = preceding
-    # Without title-boundary proof, preserve the existing name. Explicit
-    # date captions can survive the legacy date extraction, but later unknown
-    # metadata separators do not justify expanding an unprotected caption.
-    caption_fallback = bool(separators or date_protected)
-    if found_date and not date_protected and any(pos > found_date.start() for pos in separators):
-        caption_fallback = False
-    fallback = "".join((tail if caption_fallback else name.lstrip(" :")).split())
+        if not char.isspace():
+            previous_nonspace = index
+    if creation_date_start is not None:
+        # Keep the actual raw title prefix, including every protected date.
+        # The display name may have ended at an earlier date inside the title.
+        tail = tail[:creation_date_start].rstrip()
+    if stack:
+        # Unbalanced protection gives no independent boundary proof. Preserve
+        # the old comparison rather than guessing where the title ended.
+        return "".join(name.lstrip(" :").split()), None
+    ambiguous_caption_tail = (creation_date_start is None and caption_dates and separators
+                              and separators[-1] > caption_dates[0])
+    fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
     for position, start in enumerate(separators):
         end = separators[position + 1] if position + 1 < len(separators) else len(tail)
         kind = _description_clause(tail[start + 1:end])

@@ -150,6 +150,65 @@ def test_synthetic_complete_title_can_anchor_description():
     assert not _duplicates(_doc(["갑 제1호증 순회표", "갑 제1호증 순회표: 이동을 표시합니다."]))
 
 
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("title,first_date,second_date", [
+    ("관측 [2030. 1. 2.]", "2040. 9. 10.", "2041. 11. 12."),
+    ("「분석: 2031. 3. 4.」", "2042-01-02", "2043-03-04"),
+    ('대장 "2032-05-06" (2033년 7월 8일)', "2044년 5월 6일", "2045년 7월 8일"),
+])
+def test_synthetic_multiple_protected_dates_before_creation_metadata(section, title, first_date, second_date):
+    doc = _doc([f"갑 제1호증 {title} {first_date} 비고: 원본",
+                f"갑 제1호증 {title} {second_date} 비고: 사본"], section)
+    rows = exhibit_rows(doc)
+    assert rows[0]["name"] == rows[1]["name"]  # Legacy display extraction remains intact.
+    assert [_duplicate_title_key(row) for row in rows] == ["".join(title.split())] * 2
+    assert not _duplicates(doc)
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("first,second", [
+    ("관측 [2030. 1. 2. 북쪽]", "관측 [2030. 1. 2. 남쪽]"),
+    ("「분석: 2031. 3. 4. 오전」", "「분석: 2031. 3. 4. 오후」"),
+    ('대장 "2032-05-06" (2033년 7월 8일 입구)', '대장 "2032-05-06" (2033년 7월 8일 출구)'),
+])
+def test_synthetic_genuine_title_difference_after_protected_dates(section, first, second):
+    doc = _doc([f"갑 제1호증 {first} 2040. 9. 10. 비고: 원본",
+                f"갑 제1호증 {second} 2040. 9. 10. 비고: 원본"], section)
+    rows = exhibit_rows(doc)
+    assert rows[0]["name"] == rows[1]["name"]
+    assert [_duplicate_title_key(row) for row in rows] == ["".join(title.split()) for title in (first, second)]
+    found = _duplicates(doc)
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("first,second", [
+    ("관측 [2030. 1. 2.]", "관측 [2030. 1. 3.]"),
+    ("「분석: 2031. 3. 4.」", "「분석: 2031. 3. 5.」"),
+    ('대장 "2032-05-06"', '대장 "2032-05-07"'),
+])
+def test_synthetic_genuine_protected_title_date_difference(section, first, second):
+    found = _duplicates(_doc([f"갑 제1호증 {first} 2040. 9. 10. 비고: 원본",
+                              f"갑 제1호증 {second} 2040. 9. 10. 비고: 원본"], section))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("title", ["관측 [2030. 1. 2.]", "「분석: 2031. 3. 4.」", '대장 "2032-05-06"'])
+def test_synthetic_multi_date_title_still_has_location_anchor(title):
+    assert not _duplicates(_doc([f"갑 제1호증 {title}, 부록 3쪽. 2040. 9. 10. 비고: 원본",
+                                 f"갑 제1호증 {title}: 위치를 표시합니다. 2041. 11. 12. 비고: 사본"]))
+
+
+@pytest.mark.parametrize("opening", ["[", "「", '"'])
+def test_synthetic_unbalanced_protection_preserves_legacy_genuine_duplicate(opening):
+    found = _duplicates(_doc([f"갑 제1호증 기록 {opening}동쪽 2030. 1. 2.",
+                              f"갑 제1호증 기록 {opening}서쪽 2030. 1. 2."]))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
 def test_synthetic_table_title_cells_are_complete():
     doc = _doc([])
     doc.structure["tables"] = [{"cells": [["호증", "서증명", "작성일"],
@@ -159,7 +218,8 @@ def test_synthetic_table_title_cells_are_complete():
 
 
 @pytest.mark.parametrize("tail", ["자료" + ", 항목" * 4000, "자료" + ": (구획, 설명)" * 3000,
-                                 '자료 "' + ", 항목" * 4000, "자료, 부록 3쪽."])
+                                 '자료 "' + ", 항목" * 4000, "자료, 부록 3쪽.",
+                                 "자료" + " [2030. 1. 2.]" * 3000 + " 2040. 9. 10. 비고: 사본"])
 def test_synthetic_linear_boundary_runtime(tail):
     row = {"name": tail, "duplicate_tail": tail, "from_lines": True}
     started = time.perf_counter()
