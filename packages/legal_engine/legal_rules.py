@@ -16,10 +16,11 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
+from .predicate_semantics import assertion_extent_evidence, past_predicate_evidence, sense_evidence
 from .polarity import asserted
 from .defense_scope import (
     categorical_patterns, clause_end, conclusion_scopes, linked_conclusion_text, mask_quotations,
-    quotation_projection,
+    quotation_projection, structural_effect_pattern,
 )
 
 ENGINE_NAME = "legal_engine.legal_rules"
@@ -85,7 +86,7 @@ def get_defense_overclaim_pattern() -> re.Pattern[str]:
     c_alt = "|".join(categorical_patterns(signals.get("categorical_conclusions", ["당연(?:히)?\\s*무효", "허용될\\s*수\\s*없", "전면\\s*면책", "전액\\s*면제"])))
     # One effect per match lets a later independent authored statement survive
     # a preceding reported claim; effects are scoped separately below.
-    p3 = rf"(?:{c_alt})"
+    p3 = rf"(?:{c_alt}|{structural_effect_pattern()})"
 
     return re.compile(rf"{p1}[^.\n]{{0,100}}?{p2}[^.\n]{{0,100}}?{p3}")
 
@@ -286,6 +287,7 @@ _REQUIREMENT_ADJUNCT_RE = re.compile(
 )
 _REQUIREMENT_BARE_SUFFIX_RE = re.compile(r"[\s이가은는을를도만의,;.!?]*")
 _ARGUMENT_CASE_RE = re.compile(r"(?<![가-힣])[가-힣]{2,}(?:이|가|은|는|을|를)(?=\s|[,;.!?]|$)")
+_SEMANTIC_ARGUMENT_CASE_RE = re.compile(r"(?<![가-힣])[가-힣]+(?:이|가|은|는|을|를)(?=\s|[,;.!?]|$)")
 _DIRECT_NEGATIVE_AUXILIARY_RE = re.compile(
     r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?"
     r"(?P<predicate>[가-힣]+?)(?:지는|지도|지)\s*(?P<auxiliary>않|아니|못)"
@@ -359,11 +361,16 @@ def _defense_requirement_observations(
                 if masked[first_end:end].strip():
                     chain = {"negative_span": [match.end(), first_end],
                              "continuation_span": [first_end, end],
-                             "relation": "UNRESOLVED", "fulfillment_certified": False}
+                             "relation": "UNRESOLVED", "asserted_fulfillment_supported": False}
                 else:
                     end = first_end
             after = masked[match.end():end]
             state, reason = "UNCERTAIN", "UNBOUND_PREDICATE"
+            semantic_evidence = None
+            changed_argument = False
+            finite_auxiliary = False
+            negations = []
+            requires_absence = polarities.get(pattern) == 'absent'
             auxiliary = None
             if _REQUIREMENT_ADJUNCT_RE.match(after):
                 state, reason = "CONTEXT", "ADJUNCT"
@@ -390,7 +397,6 @@ def _defense_requirement_observations(
                     finite_auxiliary
                     or existential and existential.group("predicate") == "없"
                 )
-                requires_absence = polarities.get(pattern) == "absent"
                 if len(negations) > 1:
                     reason = "NESTED_NEGATION"
                 elif len(negations) == 1 and direct_negative:
@@ -412,12 +418,77 @@ def _defense_requirement_observations(
                     reason = "UNBOUND_PREDICATE"
                 else:
                     state, reason = "POSITIVE", "ASSERTED_PREDICATE"
-            if chain and state != "CONTEXT":
+            syntax_state = state
+            if chain and state != "CONTEXT" and reason != "NEGATIVE_MODIFIER":
                 state, reason = "UNCERTAIN", "PREDICATE_CHAIN_RELATION_UNRESOLVED"
+            # Public lexical senses may support the final assertion, never an
+            # arbitrary positive act sharing the object. Changed arguments,
+            # embedding, prospectivity and reported scope remain unresolved.
+            tokens = list(re.finditer(r"[가-힣]+", after))
+            independent_argument = any(
+                not (finite_auxiliary and auxiliary
+                     and auxiliary.start('predicate') <= candidate.start()
+                     and candidate.end() <= auxiliary.start('auxiliary'))
+                for candidate in _SEMANTIC_ARGUMENT_CASE_RE.finditer(after))
+            object_case = re.match(r"^\s*(?P<case>[을를])(?:도|만)?(?=\s)", after)
+            event_object = bool(object_case
+                                and not changed_argument and not independent_argument
+                                and not _EMBEDDED_PREDICATE_RE.search(after)
+                                and not requires_absence
+                                and not _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(masked[:match.start()])
+                                and state != "CONTEXT" and reason != "NEGATIVE_MODIFIER")
+            final_token = tokens[-1] if tokens else None
+            if final_token:
+                semantic_evidence = past_predicate_evidence(final_token.group(), event_object=event_object)
+                if (semantic_evidence and any(sense['frame'] == 'STATE_SUBJECT' for sense in semantic_evidence['senses'])
+                        and re.search(r"[가-힣]+(?:으로|로)(?=\s)", after)):
+                    semantic_evidence = past_predicate_evidence(final_token.group(), event_object=False)
+                    semantic_evidence['frame_conflict'] = True
+                if semantic_evidence:
+                    extent_start = first_end - match.end() if chain else 0
+                    extent = assertion_extent_evidence(after[extent_start:final_token.start()])
+                    for evidence in extent:
+                        evidence['span'] = [match.end() + extent_start + offset for offset in evidence['span']]
+                    if extent:
+                        semantic_evidence['scope_limitations'] = extent
+                        semantic_evidence['supports_asserted_fulfillment'] = False
+                        semantic_evidence['total_completion_asserted'] = False
+                    semantic_evidence['argument_span'] = list(match.span())
+                    semantic_evidence['case_span'] = ([match.end() + offset for offset in object_case.span('case')]
+                                                      if object_case else None)
+                    semantic_evidence['argument_binding'] = ('MATCHED_REQUIREMENT_DIRECT_OBJECT'
+                                                             if event_object else 'UNRESOLVED')
+                    semantic_evidence['span'] = [match.end() + offset for offset in final_token.span()]
+                    prior_predicate = first_auxiliary.group('predicate') if chain and first_auxiliary else ''
+                    prior_meaning = sense_evidence(prior_predicate + '다', event_object=event_object)
+                    prior_head = prior_predicate[:-1] if prior_predicate.endswith('하') else prior_predicate
+                    same_event_denial = (prior_predicate == '하'
+                                         or prior_meaning['supports_asserted_fulfillment']
+                                         or bool(prior_head and match.group().endswith(prior_head)))
+                    if chain and (event_object and len(negations) == 1
+                                  and semantic_evidence['supports_asserted_fulfillment']
+                                  and not same_event_denial and not uncertain_quote):
+                        state, reason = "POSITIVE", "ASSERTED_REQUIREMENT_REALIZATION"
+                        chain['relation'] = 'FINAL_REQUIREMENT_REALIZATION'
+                        chain['asserted_fulfillment_supported'] = True
+                    elif state == 'POSITIVE' and not negations:
+                        if semantic_evidence['supports_asserted_fulfillment']:
+                            reason = 'ASSERTED_REQUIREMENT_REALIZATION'
+                        elif (event_object and not extent
+                              and any(sense['category'] in {'COMPLETION', 'REALIZATION'}
+                                      for sense in semantic_evidence['selected_senses'])):
+                            # Preserve existing normal single-clause assertions.
+                            # An unresolved transitive homonym is not a new
+                            # source-backed fulfillment certificate.
+                            reason = 'LEGACY_ASSERTED_PREDICATE_SENSE_UNRESOLVED'
+                        else:
+                            state, reason = 'UNCERTAIN', 'FINAL_ACT_NOT_REQUIREMENT_REALIZATION'
             if uncertain_quote and state != "CONTEXT":
                 state, reason = "UNCERTAIN", "UNRESOLVED_QUOTATION"
             observations.append({"span": list(match.span()), "predicate_span": [match.end(), end],
-                                 "state": state, "reason": reason})
+                                 "state": state, "reason": reason, "legacy_syntax_state": syntax_state})
+            if semantic_evidence:
+                observations[-1]['predicate_semantics'] = semantic_evidence
             if chain:
                 observations[-1]["predicate_chain"] = chain
             if auxiliary and reason == "ATTACHED_NEGATIVE_PREDICATE":
@@ -472,7 +543,11 @@ def _review_defense_statement(
                                   _REQUIREMENT_CLAUSE_END_RE, previous=prior,
                                   start=local_match.end("concession"), speaker_prefix=masked[:match.start()],
                                   excluded_spans=excluded, projected_text=local_masked,
-                                  quotation_uncertain=uncertain_quote)
+                                  quotation_uncertain=uncertain_quote, structural_anchor=True)
+        if context_link and not any(
+            row['authored'] and row['span'][0] + match.start() >= context_link['current_sentence_span'][0]
+            for row in scopes):
+            continue
         if not scopes or (not any(row["authored"] for row in scopes) and not uncertain_quote):
             continue
         scope_uncertain = any(row['authored'] and row.get('scope_uncertain', False) for row in scopes)
@@ -500,7 +575,7 @@ def _review_defense_statement(
         if needs_scope_review:
             mod_rule['verdict'] = "요건 확인 요청 (연결된 결론의 법적 효과·범위 확인 필요)"
             mod_rule['explanation'] = (
-                "한정된 항변 뒤에 다른 논항의 부정적 결론이 연결되어 있으나, "
+                "법적 항변과 연결된 부정적 결론이 있으나, "
                 "사실행위 부정인지 별도 법적 효과의 주장인지 확정되지 않아 결론의 범위를 확인해야 합니다."
             )
         key = (rule["rule_id"], claim[:80])

@@ -77,6 +77,11 @@ _OBJECT_CASE_RE = re.compile(r"(?<![가-힣])(?P<argument>[가-힣]+?)(?:을|를
 _EXPLICIT_CONCLUSION_LINK_RE = re.compile(r"^\s*(?:따라서|그러므로|그렇기에|이에)(?=\s|,)")
 
 
+def structural_effect_pattern() -> str:
+    """Finite candidates for an independently established legal/concession anchor."""
+    return re.sub(r"\(\?P<[^>]+>", "(?:", _FINITE_NEGATIVE_EFFECT_RE.pattern)
+
+
 def linked_conclusion_text(
     previous_text: str, text: str, categorical: list[str], limited: list[str],
     breaks: re.Pattern[str], anchor: re.Pattern[str],
@@ -96,7 +101,7 @@ def linked_conclusion_text(
         return None
     prior_scopes = conclusion_scopes(previous_text, categorical, limited, breaks,
                                     start=match.end('concession'), projected_text=projected)
-    if not any(row['authored'] for row in prior_scopes):
+    if not any(row['authored'] and not row.get('scope_uncertain', False) for row in prior_scopes):
         return None
     current, _ = quotation_projection(text, previous=previous_text)
     subjects = list(SUBJECT_CASE_RE.finditer(current[link.end():]))
@@ -120,6 +125,7 @@ def conclusion_scopes(
     *, previous: str = '', start: int = 0, speaker_prefix: str = '',
     excluded_spans: list[tuple[int, int]] | None = None,
     projected_text: str | None = None, quotation_uncertain: bool = False,
+    structural_anchor: bool = False,
 ) -> list[dict[str, Any]]:
     """Classify each configured effect's speaker and its own limit span."""
     if projected_text is None:
@@ -160,9 +166,10 @@ def conclusion_scopes(
         if any(row['span'][0] < match.end() and match.start() < row['span'][1] for row in observed):
             continue
         earlier = [row for row in anchors if row['span'][1] <= match.start()]
-        if not earlier:
+        if not earlier and not structural_anchor:
             continue
-        anchor = max(earlier, key=lambda row: row['span'][1])
+        anchor = (max(earlier, key=lambda row: row['span'][1]) if earlier
+                  else {'span': [start, start], 'clause_end': start})
         # Preserve independent subjects and stated facts; a matrix attribution
         # or topic reset is not merely another effect of the old argument.
         between = masked[anchor['clause_end']:match.start()]
@@ -172,10 +179,18 @@ def conclusion_scopes(
         speaker = polarity(speaker_prefix + masked[:end],
                            (len(speaker_prefix) + match.start(), len(speaker_prefix) + match.end()),
                            previous=previous)
+        # A configured limit can end at the negative connective -지; the
+        # following finite auxiliary still belongs to that same predicate.
+        # Extend only grammatical material, never another effect's argument.
+        limited_effect = any(
+            left <= match.start() and (match.end() <= right or (
+                match.start('predicate') < right
+                and re.fullmatch(r"\s*(?:않는다|않습니다|못한다)", masked[right:match.end()])))
+            for left, right in limits)
         observed.append({'span': list(match.span()), 'clause_end': end,
                          'candidate_kind': 'FINITE_NEGATIVE', 'scope_uncertain': True,
                          'speaker': speaker, 'uncertain_quotation': uncertain_quote,
-                         'limited': any(left <= match.start() and match.end() <= right for left, right in limits),
+                         'limited': limited_effect,
                          'authored': speaker == ASSERTED,
                          'argument_span': list(match.span('argument')),
                          'predicate_span': list(match.span('predicate')),
