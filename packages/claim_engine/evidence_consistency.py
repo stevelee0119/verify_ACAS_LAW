@@ -450,6 +450,9 @@ def _attached_originals(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> 
 
 
 _TITLE_LOCATION_RE = re.compile(r"(?:^|\s)(?:제\s*)?\d{1,4}\s*(?:쪽|페이지|행)(?:\s*\d{1,4}\s*행)?\s*$")
+_TITLE_QUALIFIED_LOCATION_RE = re.compile(
+    r"^(?:[^\W\d_]{1,16}\s+)?(?:제\s*)?\d{1,4}\s*(?:쪽|페이지|행)\s+\S.*$"
+)
 _TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "이다", "있다", "없다", "었다", "았다", "해요", "어요", "아요")
 _TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
 
@@ -461,6 +464,8 @@ def _description_clause(text: str) -> Optional[str]:
     sentence = clause[:stop].strip() if stop is not None else clause
     if _TITLE_LOCATION_RE.search(sentence):
         return "location"
+    if stop is not None and len(sentence) <= 128 and _TITLE_QUALIFIED_LOCATION_RE.fullmatch(sentence):
+        return "qualified_location"
     # Requiring punctuation avoids treating noun subtitles as complete sentences.
     if stop is not None:
         word = sentence.split()
@@ -469,7 +474,7 @@ def _description_clause(text: str) -> Optional[str]:
     return None
 
 
-def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
+def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str], Optional[str]]:
     """Extract a comparison-only title; dates and all original row fields survive.
 
     Scan disjoint clauses once rather than repeatedly searching growing suffixes.
@@ -477,7 +482,7 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     """
     name = unicodedata.normalize("NFKC", row.get("name") or "")
     if not row.get("from_lines"):
-        return "".join(name.split()), None
+        return "".join(name.split()), None, None
     tail = unicodedata.normalize("NFKC", row.get("duplicate_tail", name)).lstrip(" :")
     dates = iter(DATE_RE.finditer(tail))
     next_date = next(dates, None)
@@ -514,7 +519,7 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
     if stack:
         # Unbalanced protection gives no independent boundary proof. Preserve
         # the old comparison rather than guessing where the title ended.
-        return "".join(name.lstrip(" :").split()), None
+        return "".join(name.lstrip(" :").split()), None, None
     ambiguous_caption_tail = (creation_date_start is None and caption_dates and separators
                               and separators[-1] > caption_dates[0])
     fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
@@ -525,8 +530,8 @@ def _duplicate_title_parts(row: Dict[str, Any]) -> Tuple[str, Optional[str]]:
             title = tail[:start].strip().rstrip(".!?。！？")
             if title:
                 key = "".join(title.split())
-                return (key, None) if kind == "location" else (fallback, key)
-    return fallback, None
+                return (key, None, None) if kind == "location" else (fallback, key, kind)
+    return fallback, None, None
 
 
 def _duplicate_title_key(row: Dict[str, Any]) -> str:
@@ -558,8 +563,18 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
         title_parts = [_duplicate_title_parts(r) for r in same]
-        anchors = {key for key, proposed in title_parts if proposed is None and key}
-        distinct_names = {proposed if proposed in anchors else key for key, proposed in title_parts}
+        anchors = {key for key, proposed, _ in title_parts if proposed is None and key}
+        qualified = {proposed for _, proposed, kind in title_parts if kind == "qualified_location"}
+        prose = {proposed for _, proposed, kind in title_parts if kind == "prose"}
+        # A numeric coordinate with qualifiers may itself be a true subtitle.
+        # Only exact agreement with a separate prose candidate corroborates it;
+        # two weak captions or a complete generic prefix cannot confirm it.
+        corroborated = qualified & prose
+        anchors.update(corroborated)
+        distinct_names = {
+            proposed if proposed in (corroborated if kind == "qualified_location" else anchors) else key
+            for key, proposed, kind in title_parts
+        }
         distinct_names.discard("")
         if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
             continue

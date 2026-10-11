@@ -7,8 +7,20 @@ from packages.claim_engine.evidence_consistency import _duplicate_title_key, che
 from packages.common.schemas import Block, NormalizedDocument, Page
 
 
+_QUALIFIED_CONTROLS = [
+    ("갑 제8호증: 보관목록, 부록 7쪽 발췌 부분.", "갑 제8호증 보관목록: 저장 위치를 설명한다."),
+    ("을 제9호증의 1: 연결도, 제 5페이지 하단 영역.", "을 제9호증의 1 연결도: 연결 경로를 표시한다."),
+    ("병 제10호증: 관찰표, 첨부 12행 일부.", "병 제10호증 관찰표: 관측 순서를 기록한다."),
+]
+_QUALIFIED_POSITIVES = [
+    ("갑 제8호증 사진, 부록 4쪽 풍경.", "갑 제8호증 사진, 부록 4쪽 입구."),
+    ("을 제9호증의 1 지도, 제 5페이지 동쪽 영역.", "을 제9호증의 1 지도, 제 5페이지 서쪽 영역."),
+    ("병 제10호증 표, 첨부 12행 요약.", "병 제10호증 표, 첨부 12행 전체."),
+]
+
+
 def _doc(lines, section=False):
-    text = "\n".join((["입증방법"] if section else []) + lines)
+    text = "\n".join((["입증방법"] if section else []) + list(lines))
     return NormalizedDocument("synthetic", "synthetic.txt", "text/plain", "0" * 64,
                               pages=[Page(1, blocks=[Block("b1", text, 1)])])
 
@@ -209,6 +221,58 @@ def test_synthetic_unbalanced_protection_preserves_legacy_genuine_duplicate(open
     assert str(found[0].evidence_grade) == "A"
 
 
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("lines", _QUALIFIED_CONTROLS)
+def test_public_synthetic_qualified_location_controls(section, lines):
+    assert not _duplicates(_doc(lines, section))
+
+
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("lines", _QUALIFIED_POSITIVES)
+def test_public_synthetic_qualified_subtitle_positives(section, lines):
+    found = _duplicates(_doc(lines, section))
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("lines", [
+    ["갑 제1호증 사진", "갑 제1호증 사진, 부록 4쪽 풍경."],
+    ["갑 제1호증 작업기록, 부록 4쪽 수정 부분.", "갑 제1호증 작업기록추가: 변경을 기록한다."],
+    ["갑 제1호증 작업기록, 부록 4쪽 수정 부분.", "갑 제1호증 작업기록: 오후: 변경을 기록한다."],
+])
+def test_synthetic_weak_location_requires_corroboration(lines):
+    # A complete generic prefix or partially matching prose title cannot
+    # corroborate the weak qualified-location candidate.
+    assert len(_duplicates(_doc(lines))) == 1
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("lines,expected", [(lines, False) for lines in _QUALIFIED_CONTROLS]
+                         + [(lines, True) for lines in _QUALIFIED_POSITIVES])
+def test_synthetic_qualified_boundary_through_reading_path(tmp_path, extension, section, lines, expected):
+    from packages.document_engine.registry import parse_document
+    from scripts.audit.corpus import build_pdf
+
+    content = (["입증방법"] if section else []) + list(lines)
+    path = tmp_path / f"synthetic_qualified.{extension}"
+    if extension == "pdf":
+        build_pdf({"name": path.name, "header": "합성 경계 시험", "footer": "가상 자료",
+                   "body": [("p", line) for line in content]}, path)
+    else:
+        path.write_text("\n".join(content), encoding="utf-8")
+    doc = parse_document(str(path), document_id="synthetic_qualified", filename=path.name,
+                         mime_type="application/pdf" if extension == "pdf" else "text/plain", sha256="0" * 64)
+    assert not doc.parse_warnings
+    rows = exhibit_rows(doc)
+    assert len(rows) == 2
+    found = _duplicates(doc)
+    assert bool(found) == expected
+    if expected:
+        assert len(found) == 1
+        assert str(found[0].evidence_grade) == "A"
+
+
 def test_synthetic_table_title_cells_are_complete():
     doc = _doc([])
     doc.structure["tables"] = [{"cells": [["호증", "서증명", "작성일"],
@@ -232,6 +296,16 @@ def test_synthetic_cross_row_anchor_runtime_is_bounded():
     from packages.claim_engine.evidence_consistency import _numbering
 
     rows = exhibit_rows(_doc(["갑 제1호증 순회표, 부록 3쪽.", "갑 제1호증 순회표: 이동을 표시합니다."])) * 2000
+    started = time.perf_counter()
+    assert not _numbering(_doc([]), rows)
+    assert time.perf_counter() - started < 0.1
+
+
+def test_synthetic_qualified_cross_row_anchor_runtime_is_bounded():
+    from packages.claim_engine.evidence_consistency import _numbering
+
+    rows = exhibit_rows(_doc(["갑 제1호증: 순회표, 부록 3쪽 발췌 부분.",
+                              "갑 제1호증 순회표: 이동을 표시합니다."])) * 2000
     started = time.perf_counter()
     assert not _numbering(_doc([]), rows)
     assert time.perf_counter() - started < 0.1
