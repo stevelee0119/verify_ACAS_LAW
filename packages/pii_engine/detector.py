@@ -596,12 +596,18 @@ def _covered_by_span(spans: List[Tuple[int, int]], start: int, end: int) -> bool
     return span_start <= start and end <= span_end
 
 
-def _normalise_contact_view(text: str) -> Tuple[str, List[int]]:
-    """숫자 사이 표기를 정리한 연락처 탐지 뷰와 문자별 원문 위치를 만든다."""
+def _width_normalized_positions(text: str) -> List[Tuple[str, int]]:
+    """Keep punctuation and an original offset for every NFKC character."""
     expanded: List[Tuple[str, int]] = []
     for source_index, source_char in enumerate(text):
         for char in unicodedata.normalize("NFKC", source_char):
             expanded.append((char, source_index))
+    return expanded
+
+
+def _normalise_contact_view(text: str) -> Tuple[str, List[int]]:
+    """숫자 사이 표기를 정리한 연락처 탐지 뷰와 문자별 원문 위치를 만든다."""
+    expanded = _width_normalized_positions(text)
 
     def is_separator(char: str) -> bool:
         category = unicodedata.category(char)
@@ -640,6 +646,73 @@ def _normalise_contact_view(text: str) -> Tuple[str, List[int]]:
         index = end
 
     return "".join(normalized), source_positions
+
+
+_INTERNATIONAL_PREFIX_RE = re.compile(
+    r"(?<![\w+(\[])(?:\([ \t]*\+[1-9]\d{0,2}[ \t]*\)(?=[ \t(]*\d)|"
+    r"\+[1-9]\d{0,2}(?=[ \t]+\(?\d|\(\d))"
+)
+
+
+def _extend_international_prefix_spans(
+    text: str, matches: List[PIIMatch], guard_spans: List[Tuple[int, int]],
+) -> None:
+    """Extend existing numeric spans; never detect or reclassify a number.
+
+    Contact normalization collapses a closing country-prefix parenthesis into
+    a separator. Keep a width-only view here to prove balanced attachment and
+    map the complete prefix back to the original text.
+    """
+    if not any(match.kind in {"PHONE", "ACCOUNT", "RRN", "PII"} for match in matches):
+        return
+    expanded = _width_normalized_positions(text)
+    normalized = "".join(char for char, _ in expanded)
+    positions = [position for _, position in expanded]
+    prefixes = list(_INTERNATIONAL_PREFIX_RE.finditer(normalized))
+    prefix_starts = [positions[prefix.start()] for prefix in prefixes]
+    for match in matches:
+        if match.kind not in {"PHONE", "ACCOUNT", "RRN", "PII"}:
+            continue
+        index = bisect_right(prefix_starts, match.start) - 1
+        if index < 0:
+            continue
+        prefix = prefixes[index]
+        norm_start = bisect_right(positions, match.start - 1)
+        norm_end = bisect_right(positions, match.end - 1)
+        if norm_end <= prefix.end():
+            continue
+        # The existing detector may start inside the country prefix, or at
+        # the subscriber. Only horizontal spacing / an area-code opener may
+        # lie between them. Prose, independent numbers and line breaks stop it.
+        if norm_start >= prefix.end():
+            gap = normalized[prefix.end():norm_start]
+            if not re.fullmatch(r"[ \t]*(?:\([ \t]*)?", gap):
+                continue
+        segment = normalized[prefix.end():norm_end]
+        depth = 0
+        attached = True
+        for char in segment:
+            if char == "(":
+                depth += 1
+                if depth > 1:
+                    attached = False
+            elif char == ")":
+                depth -= 1
+                if depth < 0:
+                    attached = False
+            elif not (char.isdigit() or char in " \t" or unicodedata.category(char)[0] in {"P", "S"}):
+                attached = False
+            elif char in "+[]{}" or (not char.isdigit() and char.isspace() and char not in " \t"):
+                attached = False
+        if not attached or depth:
+            continue
+        start = positions[prefix.start()]
+        guard_index = bisect_right(guard_spans, (start, float("inf")))
+        neighbors = guard_spans[max(0, guard_index - 1):guard_index + 1]
+        if any(guard_start < match.end and start < guard_end for guard_start, guard_end in neighbors):
+            continue
+        match.start = start
+        match.text = text[start:match.end]
 
 
 def _original_span(source_positions: List[int], start: int, end: int) -> Tuple[int, int]:
@@ -976,6 +1049,8 @@ def detect(text: str, *, block_id: Optional[str] = None, page: Optional[int] = N
                 continue
             matches.append(PIIMatch("COMPANY", name, m.start(index), m.end(index),
                                     block_id, page, 0.8, "법인 표기"))
+
+    _extend_international_prefix_spans(text, matches, guard_spans)
 
     # 중복 span 정리 (긴 매치 우선).
     # start 오름차순이므로 앞선 항목의 start는 모두 현재 start 이하다. 따라서
