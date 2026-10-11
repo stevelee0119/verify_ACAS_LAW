@@ -515,9 +515,10 @@ def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, in
     for index, char in enumerate(sentence):
         if coordinate and index == coordinate.start():
             edge = coordinate.end()
+            category = unicodedata.category(sentence[edge]) if edge < len(sentence) else ""
             complete = (edge == len(sentence)
-                        or not (sentence[edge].isalnum() or sentence[edge] == "_"
-                                or unicodedata.category(sentence[edge]).startswith("M")))
+                        or sentence[edge] in " \t\r\n" or category.startswith("Z")
+                        or category in ("Pd", "Ps", "Pe", "Pi", "Pf", "Po"))
             if not stack and complete:
                 return "locator", (leading + coordinate.start(), leading + coordinate.end())
             coordinate = next(matches, None)
