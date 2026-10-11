@@ -96,3 +96,17 @@ def test_single_longest_endpoint_is_not_a_full_line_signal(width):
     result = reconstruct_page_blocks(lines, page_width=width)
     assert result[0].text == "가나다 라 마바사."
     assert result[0].attributes["boundary_observations"][0]["boundary_signal"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("width", [420, 595, 720])
+@pytest.mark.parametrize("endpoint", [300, 500])
+def test_unknown_repeated_endpoints_keep_baseline_fullness(width, endpoint):
+    lines = [Block(block_id="a", text="가나다 라", page=1, bbox=BBox(50, 50, endpoint, 62)),
+             Block(block_id="b", text="마바사 내용을", page=1, bbox=BBox(50, 64, endpoint, 76)),
+             Block(block_id="c", text="안내하였다.", page=1, bbox=BBox(50, 78, 200, 90))]
+    result = reconstruct_page_blocks(lines, page_width=width)
+    legacy_joined = endpoint == 500 and width in (420, 595)
+    assert result[0].text == "가나다 라" + ("" if legacy_joined else " ") + "마바사 내용을 안내하였다."
+    assert result[0].attributes["paragraph_right_edge"] == endpoint
+    assert result[0].attributes["char_wrap_state"] == "UNKNOWN"
+    assert all(item["boundary_signal"] == "UNKNOWN" for item in result[0].attributes["boundary_observations"])

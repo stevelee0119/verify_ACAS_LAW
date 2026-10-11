@@ -277,6 +277,22 @@ def reconstruct_paragraphs_from_text(raw_text: str, page_num: int = 1) -> List[B
     return blocks
 
 
+def _legacy_paragraph_fullness(group_x1: List[float], page_width: float) -> Tuple[float, bool]:
+    """Reproduce baseline UNKNOWN arguments; never establish boundary evidence.
+
+    Historical reconstruction includes a page-width floor. Keep it isolated for
+    compatibility, while measured geometry and explicit signals exclude it.
+    """
+    right_edge = 0.0
+    if group_x1:
+        repeated = [value for value, count in Counter(group_x1).items() if count >= 2]
+        right_edge = max(repeated) if repeated else max(group_x1)
+        if page_width > 0:
+            right_edge = max(right_edge, 0.75 * page_width)
+    full_count = sum(1 for value in group_x1 if right_edge > 0 and abs(value - right_edge) <= 4.0)
+    return right_edge, full_count >= 2
+
+
 def reconstruct_page_blocks(
     blocks: List[Block],
     page_num: int = 1,
@@ -300,17 +316,9 @@ def reconstruct_page_blocks(
             active_closer = None
             return
 
-        # 문단 내부 줄들의 레이아웃 신호 분석 (TK-41, TK-44: 쪽 전체가 아닌 해당 문단 내부 줄들에서만 도출)
+        # Legacy fullness is compatibility input, not a confirmed boundary signal.
         group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
-        right_edge = 0.0
-        if group_x1:
-            repeated = [value for value, count in Counter(group_x1).items() if count >= 2]
-            # A lone longest line does not establish this paragraph's full edge.
-            # Keep sparse layouts uncertain instead of importing the page width.
-            right_edge = max(repeated) if repeated else 0.0
-
-        group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
-        group_char_wrap = group_full_count >= 2
+        legacy_right_edge, legacy_char_wrap = _legacy_paragraph_fullness(group_x1, page_width)
         observations = [
             observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
             for i in range(len(curr_group) - 1)
@@ -321,14 +329,14 @@ def reconstruct_page_blocks(
         for i in range(len(curr_group) - 1):
             prev_b = curr_group[i]
             next_b = curr_group[i + 1]
-            prev_full = False
-            if prev_b.bbox is not None and right_edge > 0:
-                prev_full = (right_edge - prev_b.bbox.x1) <= 4.0
+            legacy_prev_full = False
+            if prev_b.bbox is not None and legacy_right_edge > 0:
+                legacy_prev_full = (legacy_right_edge - prev_b.bbox.x1) <= 4.0
             combined_text = join_lines(
                 combined_text,
                 next_b.text,
-                prev_full=prev_full,
-                char_wrap_context=group_char_wrap,
+                prev_full=legacy_prev_full,
+                char_wrap_context=legacy_char_wrap,
                 boundary_signal=observations[i]["boundary_signal"],
             )
 
