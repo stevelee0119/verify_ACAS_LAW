@@ -503,7 +503,7 @@ _TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "�
 _TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
 
 
-def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
+def _description_token(text: str, source_boundaries=()) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
     """A coordinate is a weak token, not proof of exhibit identity."""
     clause = text.strip()
     stop = next((index for index, char in enumerate(clause) if char in ".!?。！？"), None)
@@ -511,10 +511,14 @@ def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, in
     matches = iter(_TITLE_COORDINATE_RE.finditer(sentence))
     coordinate = next(matches, None)
     stack = []
+    leading = len(text) - len(text.lstrip())
     for index, char in enumerate(sentence):
         if coordinate and index == coordinate.start():
-            if not stack:
-                leading = len(text) - len(text.lstrip())
+            edge = coordinate.end()
+            complete = (edge == len(sentence) or leading + edge in source_boundaries
+                        or not (sentence[edge].isalnum() or sentence[edge] == "_"
+                                or unicodedata.category(sentence[edge]).startswith("M")))
+            if not stack and complete:
                 return "locator", (leading + coordinate.start(), leading + coordinate.end())
             coordinate = next(matches, None)
         if stack and char == stack[-1]:
@@ -529,7 +533,6 @@ def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, in
     if stop is not None:
         word = sentence.split()
         if word and word[-1].endswith(_TITLE_PREDICATE_ENDINGS):
-            leading = len(text) - len(text.lstrip())
             return "prose", (leading, leading + len(sentence))
     return None, None
 
@@ -632,9 +635,16 @@ def _duplicate_mention_view(row: Dict[str, Any]) -> Dict[str, Any]:
                               and separators[-1] > caption_dates[0])
     fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
     view["fallback"] = fallback
+    source_edges = iter(origin["normalized_span"][1] for origin in origins)
+    next_edge = next(source_edges, None)
     for position, start in enumerate(separators):
         end = separators[position + 1] if position + 1 < len(separators) else len(tail)
-        kind, token_span = _description_token(tail[start + 1:end])
+        clause_edges = set()
+        while next_edge is not None and next_edge <= end:
+            if next_edge > start:
+                clause_edges.add(next_edge - start - 1)
+            next_edge = next(source_edges, None)
+        kind, token_span = _description_token(tail[start + 1:end], clause_edges)
         if kind:
             title = tail[:start].strip().rstrip(".!?。！？")
             if title:
@@ -687,11 +697,15 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
         title_parts = [_duplicate_title_parts(r) for r in same]
         anchors = {key for key, proposed, _ in title_parts if proposed is None and key}
-        locators = {proposed for _, proposed, kind in title_parts if kind == "locator"}
+        weak_identities = {}
+        for key, proposed, kind in title_parts:
+            if kind == "locator":
+                weak_identities.setdefault(proposed, set()).add(key)
+        locators = {proposed for proposed, identities in weak_identities.items() if len(identities) == 1}
         prose = {proposed for _, proposed, kind in title_parts if kind == "prose"}
         # A numeric coordinate with qualifiers may itself be a true subtitle.
         # Only exact agreement with a separate prose candidate corroborates it;
-        # two weak captions or a complete generic prefix cannot confirm it.
+        # conflicting weak captions or a complete generic prefix cannot confirm it.
         corroborated = locators & prose
         anchors.update(corroborated)
         distinct_names = {
