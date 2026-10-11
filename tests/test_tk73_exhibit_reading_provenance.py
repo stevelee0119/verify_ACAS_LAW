@@ -151,6 +151,47 @@ def test_synthetic_authoritative_table_title_never_uses_locator_splitting(tmp_pa
     assert len(_duplicates(doc)) == 1
 
 
+_AMBIGUOUS_ANCHOR_CONTROLS = [
+    ["갑 제1호증 사진, 부록7쪽 동쪽 풍경.", "갑 제1호증 사진, 부록7쪽 서쪽 풍경.",
+     "갑 제1호증 사진: 촬영 위치를 설명한다."],
+    ["갑 제1호증 지도, 부록7-9쪽 동쪽.", "갑 제1호증 지도, 부록7-9쪽 서쪽.",
+     "갑 제1호증 지도: 이동 경로를 표시한다."],
+    ["갑 제1호증 요약표; 제12행 상단.", "갑 제1호증 요약표; 제12행 하단.",
+     "갑 제1호증 요약표: 작업 순서를 기록한다."],
+    ["갑 제1호증 기록, 제7행성 탐사.", "갑 제1호증 기록: 탐사 경로를 설명한다."],
+    ["갑 제1호증 기록, 제7행성 탐사.", "갑 제1호증 기록, 제8행성 탐사.",
+     "갑 제1호증 기록: 탐사 경로를 설명한다."],
+    ["갑 제1호증 장치, 7페이지형 부품.", "갑 제1호증 장치: 부품 위치를 설명한다."],
+    ["갑 제1호증 표본, 7쪽빛 분류.", "갑 제1호증 표본: 분류 위치를 설명한다."],
+    ["갑 제1호증 공정표, 부록7쪽일부.", "갑 제1호증 공정표: 공정 위치를 설명한다."],
+]
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("lines", _AMBIGUOUS_ANCHOR_CONTROLS)
+def test_synthetic_generic_anchor_cannot_erase_weak_or_lexical_identity(tmp_path, extension, section, lines):
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + lines)
+    for row in exhibit_rows(doc):
+        _assert_source_projection(doc, row, _duplicate_mention_view(row))
+    found = _duplicates(doc)
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("title,locator", [("장비표", "부록7쪽 일부."),
+                                           ("배선도", "도면7-9페이지 하단."),
+                                           ("요약표", "첨부제12행 확인 부분.")])
+def test_synthetic_repeated_complete_locator_identity_still_corroborates(tmp_path, extension, section, title, locator):
+    line = f"갑 제1호증 {title}, {locator}"
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        line, line, f"갑 제1호증 {title}: 위치를 설명한다.",
+    ])
+    assert not _duplicates(doc)
+
+
 def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # Measure the new source projection/comparison work on thousands of
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
