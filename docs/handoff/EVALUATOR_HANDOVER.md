@@ -4,9 +4,9 @@
 
 ## 1. 새 평가 세션의 시작
 - Codex는 기본으로 `AGENTS.md`(구현 지침)를 읽는다. 평가 세션은 **`CLAUDE.md`와 `docs/AGENT_ROLES.md`를 자기 지침으로** 삼는다(아래 시작 문구를 첫 메시지로 준다).
-- 작업 브랜치: `evaluator/round8-promotion`(평가 측 PR은 이 브랜치 → `Steve_ACASiaLAW`). 커밋 메시지 끝에 `Agent: evaluator`(보호 경로 자동 점검이 이 표지를 본다).
+- 작업 브랜치: 최신 Steve에서 새 `evaluator/*` 브랜치를 만든다. 기존 `evaluator/round8-promotion`은 #73으로 병합 완료, 이번 기록은 `evaluator/release-readiness-final` → Steve #76이다. 다른 세션의 dirty 작업은 보존한다. 커밋 메시지 끝에 `Agent: evaluator`(보호 경로 자동 점검이 이 표지를 본다).
 - 시작 문구(사용자가 Codex 평가 세션에 붙인다):
-  > 너는 이 저장소의 평가 에이전트다. `CLAUDE.md`·`docs/AGENT_ROLES.md`·`docs/handoff/EVALUATOR_HANDOVER.md`를 먼저 읽고 그 규칙을 따른다. `AGENTS.md`의 구현 지침은 너에게 적용되지 않는다. 제품 코드(`packages/`, `apps/`, `workers/`, `config/`, `migrations/`, `docker/`)를 고치지 않는다. 작업 브랜치는 `evaluator/round8-promotion`, 커밋 끝에 `Agent: evaluator`.
+  > 너는 이 저장소의 평가 에이전트다. `CLAUDE.md`·`docs/AGENT_ROLES.md`·`docs/handoff/EVALUATOR_HANDOVER.md`를 먼저 읽고 그 규칙을 따른다. `AGENTS.md`의 구현 지침은 너에게 적용되지 않는다. 제품 코드(`packages/`, `apps/`, `workers/`, `config/`, `migrations/`, `docker/`)를 고치지 않는다. 최신 Steve에서 새 evaluator 브랜치를 만들고 다른 세션 작업을 보존하며 커밋 끝에 `Agent: evaluator`를 적는다.
 
 ## 2. 독립성과 담당 범위(사용자 결정 완료)
 - 구현 세션과 평가 세션은 분리한다. Codex 구현 세션은 제품 구현을 계속하고 **별도 Codex 평가 세션**이 기존 claude-code의 평가 업무 전체를 승계한다.
