@@ -14,7 +14,7 @@
 | 버전 | 0.12.0 유지 상태, 최종 판정 대기. TK56 알려진미해결21해소 등M3와기존수용근거를검토하되 P1~P6/새봉인·최종CI 확인 전 상향을 확정하지 않음. 상향이면 별도 구현버전커밋1개 후 releasePR갱신 |
 | DB | 운영main 대비 migrations/ 변경0. 이번diff 기준 별도DB마이그레이션 없음 |
 | Render 기본 OFF | 배포 전 API·worker의 LV_KOREAN_LAW_REVIEW_PROFILE=0 또는 미설정 기본OFF 확인. 코드 기본값만으로 기존 환경변수ON을 배제하지 않음. 현재 실제 설정 조회 미실행 |
-| TK75 활용 | 기본OFF 포함. 실제 법률개선 미확인. 배포 후 [온라인전체OFF/ON](../handoff/requests/TK75_ONLINE_OFF_ON_CHECK.md), 독립한국변호사1명 조건가림·제3판정 없음·비용/p95+20%참고 |
+| TK75 활용 | 기본OFF 포함. 실제 법률개선 미확인. 배포 후 [온라인전체OFF/ON](../handoff/requests/TK75_ONLINE_OFF_ON_CHECK.md), 독립한국변호사1명 조건가림·제3판정 없음·비용평가절차 삭제·기존USD40예산보호 유지 |
 | 배포 승인 | 미요청. main병합이Render자동배포; 사용자 새봉인집계·후보/CI·버전판정 확인후 마지막 승인 |
 
 **현재 준비PR은 검토용 draft다.** 봉인/후보 필수 조건 미충족 상태에서main병합·Render배포·기본ON으로 변경하지 않는다. 문서/등록부만 업데이트한 것과 실제검증/배포를 구분한다. 30개 서면은법률검증전provisional 기준 후보이고 새봉인 대체불가.
