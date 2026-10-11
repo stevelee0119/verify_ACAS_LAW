@@ -82,3 +82,28 @@ def test_actual_txt_negated_report_of_a_predicate_is_uncertain(tmp_path, require
     findings = _pipeline_warnings(tmp_path, LEAD + requirement + LIMIT)
     assert findings
     assert all("요건 확인 요청" in f.confidence_features["verdict"] for f in findings)
+
+
+@pytest.mark.parametrize("requirement", [
+    "상계의 의사표시가 도달하지는 않았지만",
+    "변제공탁을 완료하지는 않았으나",
+    "변제공탁을 이행하지도 않았으므로",
+])
+def test_actual_txt_auxiliary_focus_is_not_a_new_argument(tmp_path, requirement):
+    findings = _pipeline_warnings(tmp_path, LEAD + requirement + LIMIT)
+    assert findings
+    assert all("요건 확인 요청" not in f.confidence_features["verdict"] for f in findings)
+    assert any(row['state'] == 'DENIED' for finding in findings
+               for row in finding.confidence_features['defense_scope']['requirements'])
+
+
+@pytest.mark.parametrize("requirement", [
+    "변제공탁 관련 서류는 정리하지는 않았으나",
+    "상계의 의사표시 관련 기록은 확인하지는 않았으나",
+    "변제공탁을 늦추지는 않게 준비하였으므로",
+    "상계의 의사표시를 지연하지는 않도록 하였으므로",
+])
+def test_actual_txt_focus_does_not_resolve_changed_or_nonfinite_predicates(tmp_path, requirement):
+    findings = _pipeline_warnings(tmp_path, LEAD + requirement + LIMIT)
+    assert findings
+    assert all("요건 확인 요청" in f.confidence_features["verdict"] for f in findings)

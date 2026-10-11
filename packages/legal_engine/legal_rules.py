@@ -351,16 +351,23 @@ def _defense_requirement_observations(
                 reason = "NEGATIVE_MODIFIER"
             else:
                 negations = list(_REQUIREMENT_NEGATION_RE.finditer(after))
-                argument = _ARGUMENT_CASE_RE.search(after)
+                auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(after)
+                finite_auxiliary = _finite_negative_attachment(after, auxiliary)
+                # -지는 is the focused negative connective of this predicate,
+                # not a new noun taking the topic particle -는. Independent
+                # arguments before the governing token remain visible.
+                argument = next((candidate for candidate in _ARGUMENT_CASE_RE.finditer(after)
+                                 if not (finite_auxiliary and auxiliary
+                                         and auxiliary.start('predicate') <= candidate.start()
+                                         and candidate.end() <= auxiliary.start('auxiliary'))), None)
                 changed_argument = bool(argument and (not negations or argument.start() < negations[0].start()))
                 existential = _DIRECT_EXISTENTIAL_RE.match(after) if not changed_argument else None
-                auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(after)
                 if auxiliary and not negations:
                     # Nonfinite -지 않게/-지 않도록 still needs scope review;
                     # it is not an asserted positive governing predicate.
                     negations = [auxiliary]
                 direct_negative = not changed_argument and (
-                    _finite_negative_attachment(after, auxiliary)
+                    finite_auxiliary
                     or existential and existential.group("predicate") == "없"
                 )
                 requires_absence = polarities.get(pattern) == "absent"
