@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
@@ -303,8 +304,10 @@ def reconstruct_page_blocks(
         group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
         right_edge = 0.0
         if group_x1:
-            repeated = [v for v in set(group_x1) if group_x1.count(v) >= 2]
-            right_edge = max(repeated) if repeated else max(group_x1)
+            repeated = [value for value, count in Counter(group_x1).items() if count >= 2]
+            # A lone longest line does not establish this paragraph's full edge.
+            # Keep sparse layouts uncertain instead of importing the page width.
+            right_edge = max(repeated) if repeated else 0.0
 
         group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
         group_char_wrap = group_full_count >= 2

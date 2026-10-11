@@ -4,6 +4,8 @@ import pytest
 from packages.document_engine.boundary_signals import glyph_line_evidence, observe_boundary
 from packages.document_engine import parse_document
 from packages.document_engine.paragraph_reconstruction import join_lines
+from packages.document_engine.paragraph_reconstruction import reconstruct_page_blocks
+from packages.common.schemas import BBox, Block
 
 
 def _glyphs(text, *, upright=True):
@@ -85,3 +87,12 @@ def test_valid_signals_preserve_empty_identity(signal):
 def test_invalid_signal_raises_even_for_empty_inputs(signal):
     with pytest.raises(ValueError):
         join_lines("", "", boundary_signal=signal)
+
+
+@pytest.mark.parametrize("width", [320, 600, 900])
+def test_single_longest_endpoint_is_not_a_full_line_signal(width):
+    lines = [Block(block_id="a", text="가나다 라", page=1, bbox=BBox(50, 50, 200, 62)),
+             Block(block_id="b", text="마바사.", page=1, bbox=BBox(50, 64, 150, 76))]
+    result = reconstruct_page_blocks(lines, page_width=width)
+    assert result[0].text == "가나다 라 마바사."
+    assert result[0].attributes["boundary_observations"][0]["boundary_signal"] == "UNKNOWN"
