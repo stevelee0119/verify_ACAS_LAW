@@ -543,6 +543,9 @@ def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, in
     return None, None
 
 
+_REFERENCE_TITLE_PREFIX_RE = re.compile(r"^[\s:.)\]\-]*(?:각\s+)?")
+
+
 def _duplicate_comparison_text(row: Dict[str, Any]) -> Tuple[str, str, List[Dict[str, Any]], bool]:
     """Preserve item/continuation origins independently of display-name joining.
 
@@ -574,9 +577,31 @@ def _duplicate_comparison_text(row: Dict[str, Any]) -> Tuple[str, str, List[Dict
     raw = "".join(raw_parts)
     normalized = unicodedata.normalize("NFKC", raw)
     mapping_verified = normalized == "".join(normalized_parts)
-    left = len(normalized) - len(normalized.lstrip(" :"))
+    legacy_left = len(normalized) - len(normalized.lstrip(" :"))
+    left = legacy_left
+    first = sources[0]
+    reference = first.get("reference_span")
+    reading = first.get("reading_span")
+    if (mapping_verified and first.get("origin") == "item" and reference and reading
+            and reference[1] == reading[0] and first.get("sources")):
+        # Match only the original first item fragment: NFKC punctuation and
+        # join_separator whitespace do not prove consumed reference grammar.
+        prefix_end = _REFERENCE_TITLE_PREFIX_RE.match(first["text"]).end()
+        prefix = first["text"][:prefix_end]
+        projected_prefix = unicodedata.normalize("NFKC", prefix)
+        if normalized.startswith(projected_prefix):
+            left = max(left, len(projected_prefix))
+            origins[0]["reference_title_prefix"] = {
+                "text": prefix, "raw_span": (0, prefix_end),
+                "reading_span": (reading[0], reading[0] + prefix_end),
+                "normalized_span": (0, len(projected_prefix)),
+                "normalized_text": projected_prefix,
+                "comparison_offset": left, "prior_comparison_offset": legacy_left,
+            }
     for origin in origins:
         start, end = origin["normalized_span"]
+        origin["normalized_source_span"] = (start, end)
+        origin["normalized_span_before_prefix"] = (max(0, start - legacy_left), max(0, end - legacy_left))
         origin["normalized_span"] = (max(0, start - left), max(0, end - left))
     return raw, normalized[left:], origins, mapping_verified
 
