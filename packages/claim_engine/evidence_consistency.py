@@ -503,7 +503,7 @@ _TITLE_PREDICATE_ENDINGS = ("니다", "한다", "된다", "했다", "였다", "�
 _TITLE_BRACKETS = {"(": ")", "[": "]", "{": "}", "<": ">", "「": "」", "『": "』", "【": "】", "“": "”", "‘": "’"}
 
 
-def _description_token(text: str, source_boundaries=()) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
+def _description_token(text: str) -> Tuple[Optional[str], Optional[Tuple[int, int]]]:
     """A coordinate is a weak token, not proof of exhibit identity."""
     clause = text.strip()
     stop = next((index for index, char in enumerate(clause) if char in ".!?。！？"), None)
@@ -515,7 +515,7 @@ def _description_token(text: str, source_boundaries=()) -> Tuple[Optional[str], 
     for index, char in enumerate(sentence):
         if coordinate and index == coordinate.start():
             edge = coordinate.end()
-            complete = (edge == len(sentence) or leading + edge in source_boundaries
+            complete = (edge == len(sentence)
                         or not (sentence[edge].isalnum() or sentence[edge] == "_"
                                 or unicodedata.category(sentence[edge]).startswith("M")))
             if not stack and complete:
@@ -635,16 +635,9 @@ def _duplicate_mention_view(row: Dict[str, Any]) -> Dict[str, Any]:
                               and separators[-1] > caption_dates[0])
     fallback = "".join((name.lstrip(" :") if ambiguous_caption_tail else tail).split())
     view["fallback"] = fallback
-    source_edges = iter(origin["normalized_span"][1] for origin in origins)
-    next_edge = next(source_edges, None)
     for position, start in enumerate(separators):
         end = separators[position + 1] if position + 1 < len(separators) else len(tail)
-        clause_edges = set()
-        while next_edge is not None and next_edge <= end:
-            if next_edge > start:
-                clause_edges.add(next_edge - start - 1)
-            next_edge = next(source_edges, None)
-        kind, token_span = _description_token(tail[start + 1:end], clause_edges)
+        kind, token_span = _description_token(tail[start + 1:end])
         if kind:
             title = tail[:start].strip().rstrip(".!?。！？")
             if title:

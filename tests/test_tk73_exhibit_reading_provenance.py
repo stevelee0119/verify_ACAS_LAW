@@ -59,7 +59,7 @@ def _assert_source_projection(doc, row, view):
 
 
 _REFLOW_CONTROLS = [
-    (["갑 제1호증 보관목록, 부록 7쪽", "발췌 부분.", "갑 제1호증 보관목록: 저장 위치를 설명한다."], "7쪽"),
+    (["갑 제1호증 보관목록, 부록 7쪽,", "발췌 부분.", "갑 제1호증 보관목록: 저장 위치를 설명한다."], "7쪽"),
     (["갑 제1호증 대여대장, 부록 7", "쪽 하단 영역.", "갑 제1호증 대여대장: 이동 경로를 표시한다."], "7쪽"),
     (["갑 제1호증 승인표, 부록 7-", "9쪽 확인 부분.", "갑 제1호증 승인표: 승인 순서를 기록한다."], "7-9쪽"),
     (["갑 제1호증 공정표, 부록7쪽 일부.", "갑 제1호증 공정표: 공정 위치를 설명한다."], "7쪽"),
@@ -126,7 +126,7 @@ def test_synthetic_reflow_opposites_preserve_genuine_duplicate(tmp_path, extensi
 @pytest.mark.parametrize("extension", ["pdf", "txt"])
 def test_synthetic_multi_item_continuations_keep_separate_source_groups(tmp_path, extension):
     doc = _parsed(tmp_path, extension, [
-        "갑 제1호증: 첫 대장, 부록7쪽 일부. 갑 제2호증: 둘째 대장, 부록9-11쪽", "발췌 부분.",
+        "갑 제1호증: 첫 대장, 부록7쪽 일부. 갑 제2호증: 둘째 대장, 부록9-11쪽,", "발췌 부분.",
         "갑 제1호증 첫 대장: 순서를 설명한다.", "갑 제2호증 둘째 대장: 위치를 기록한다.",
     ])
     rows = exhibit_rows(doc)
@@ -202,7 +202,7 @@ def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
     # 0.1-second rule budget; the full reading path is verified above.
     doc = _parsed(tmp_path, "txt", [
-        line for _ in range(1000) for line in ("갑 제1호증 대장, 부록7-9쪽", "발췌 부분.",
+        line for _ in range(1000) for line in ("갑 제1호증 대장, 부록7-9쪽,", "발췌 부분.",
                                              "갑 제1호증 대장: 저장 위치를 설명한다.")
     ])
     rows = exhibit_rows(doc)
