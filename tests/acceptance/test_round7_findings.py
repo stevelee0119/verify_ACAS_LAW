@@ -178,7 +178,7 @@ UNLISTED_BOUNDARY_PAIRS = [
 def test_word_boundary_join_does_not_depend_on_a_word_list(index):
     from packages.document_engine.paragraph_reconstruction import join_lines
     prev, nxt, kwargs, expected = UNLISTED_BOUNDARY_PAIRS[index]
-    assert join_lines(prev, nxt, **kwargs) == expected
+    assert join_lines(prev, nxt, boundary_signal="SPACE_CONFIRMED", **kwargs) == expected
 
 
 # ---------------------------------------------------------------------------

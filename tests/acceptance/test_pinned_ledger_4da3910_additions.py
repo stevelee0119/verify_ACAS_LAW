@@ -340,7 +340,7 @@ def test_tk41_line_join_bidirectional_and_layout_invariance():
         ("계약당사자는 그", "사람에게 금원을 교부하였다", "계약당사자는 그 사람에게 금원을 교부하였다"),
     ]
     for p, n, expected in keep_space_cases:
-        res = join_lines(p, n)
+        res = join_lines(p, n, boundary_signal="SPACE_CONFIRMED")
         assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
 
     # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)
