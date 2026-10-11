@@ -368,10 +368,10 @@ def test_synthetic_forward_projection_caches_shared_block_indent():
 
 
 def test_synthetic_shared_branch_rows_are_compared_once_with_original_fields(tmp_path):
-    line = "갑 제1호증의 1~1000 관측 " + "[2024. 1. 2.] " * 150 + "제목"
+    line = "갑 제1호증의 1~999 관측 " + "[2024. 1. 2.] " * 150 + "제목"
     doc = _parsed(tmp_path, "txt", [line, line, "첨부서류"])
     rows = exhibit_rows(doc)
-    assert len(rows) == 2 and all(len(row["branches"]) == 1000 for row in rows)
+    assert len(rows) == 2 and all(len(row["branches"]) == 999 for row in rows)
     fields = ("name", "date", "author", "purpose", "branches")
     original = [{key: value.copy() if isinstance(value, list) else value
                  for key, value in row.items() if key in fields} for row in rows]

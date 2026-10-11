@@ -697,18 +697,30 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         keys = [(row["party"], row["number"], b) for b in row.get("branches") or []] or [(row["party"], row["number"], None)]
         for key in keys:
             seen.setdefault(key, []).append(row)
+    title_cache, title_values = {}, {}
     for (party, number, branch), same in seen.items():
         if len(same) < 2:
             continue
         # 서증명이 실질적으로 상이한 증거에 부여된 경우만 중복 번호로 확정 (단순 반복 기재 제외, FP-01)
-        title_parts = [_duplicate_title_parts(r) for r in same]
-        anchors = {key for key, proposed, _ in title_parts if proposed is None and key}
+        title_parts = []
+        for row in same:
+            row_key = id(row)
+            if row_key not in title_cache:
+                key, proposed, kind = _duplicate_title_parts(row)
+                key = title_values.setdefault(key, key)
+                if proposed is not None:
+                    proposed = title_values.setdefault(proposed, proposed)
+                identity = _complete_prose_identity(key) if kind == "prose" else key
+                identity = title_values.setdefault(identity, identity)
+                title_cache[row_key] = (key, proposed, kind, identity)
+            title_parts.append(title_cache[row_key])
+        anchors = {key for key, proposed, _, _ in title_parts if proposed is None and key}
         weak_identities, prose_identities = {}, {}
-        for key, proposed, kind in title_parts:
+        for key, proposed, kind, identity in title_parts:
             if kind == "locator":
                 weak_identities.setdefault(proposed, set()).add(key)
             elif kind == "prose":
-                prose_identities.setdefault(proposed, set()).add(_complete_prose_identity(key))
+                prose_identities.setdefault(proposed, set()).add(identity)
         locators = {proposed for proposed, identities in weak_identities.items() if len(identities) == 1}
         prose = {proposed for proposed, identities in prose_identities.items() if len(identities) == 1}
         # A numeric coordinate with qualifiers may itself be a true subtitle.
@@ -720,7 +732,7 @@ def _numbering(doc: NormalizedDocument, rows: List[Dict[str, Any]]) -> List[Find
         prose_anchors = (anchors & prose) | corroborated
         distinct_names = {
             proposed if proposed in (corroborated if kind == "locator" else prose_anchors) else key
-            for key, proposed, kind in title_parts
+            for key, proposed, kind, _ in title_parts
         }
         distinct_names.discard("")
         if len(distinct_names) < 2 and len(same) >= 2 and all(r.get("name") for r in same):
