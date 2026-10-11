@@ -224,7 +224,9 @@ _EXHIBIT_REF_SENTENCE_RE = re.compile(
 
 
 def _exhibit_source_spans(reading, start: int, end: int, cursor: List[int]) -> List[Dict[str, Any]]:
-    """Project a reading range onto original blocks with a forward-only cursor."""
+    """Project forward ranges; cursor also caches the last block's indent."""
+    if len(cursor) == 1:
+        cursor.extend((-1, 0))
     segments = reading.segments
     while cursor[0] < len(segments) and segments[cursor[0]].end <= start:
         cursor[0] += 1
@@ -235,7 +237,10 @@ def _exhibit_source_spans(reading, start: int, end: int, cursor: List[int]) -> L
         left, right = max(start, segment.start), min(end, segment.end)
         if left < right:
             block = segment.block
-            leading = len(block.text) - len(block.text.lstrip())
+            if cursor[1] != index:
+                cursor[1] = index
+                cursor[2] = len(block.text) - len(block.text.lstrip())
+            leading = cursor[2]
             out.append({"block_id": block.block_id, "page": block.page,
                         "reading_span": (left, right),
                         "block_span": (leading + left - segment.start, leading + right - segment.start),
