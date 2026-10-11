@@ -20,6 +20,7 @@ from .base import DocumentParser, ParserError
 from .line_tables import rebuild_line_tables
 from .ocr import get_ocr_adapter, page_quality
 from .rasterize import render_pages
+from .boundary_signals import glyph_line_evidence
 
 HIDDEN_MIN_FONT_SIZE = 3.5
 WHITE_THRESHOLD = 0.92
@@ -285,6 +286,7 @@ class PdfParser(DocumentParser):
 
                 page_texts[index] = "".join(str(c.get("text") or "") for c in chars)
                 lines = self._group_chars_to_lines(chars)
+                glyph_indices = {id(char): i for i, char in enumerate(chars)}
                 # 스캔본은 쪽 전체 이미지 위에 Tr 3 OCR 글자층을 얹는 것이 정상이다. 그 쪽의 Tr 3은 숨김이 아니다.
                 scan_like = _image_coverage(page) >= 0.5
                 # 흰색이 아닌 채움 도형 위의 글자는 글자색이 어두워도 배경과 대비를 봐야 한다(어두운 글자·어두운 상자).
@@ -321,6 +323,14 @@ class PdfParser(DocumentParser):
                         "size": round(float(line[0].get("size", 0)), 2),
                         "hidden_reason": hidden_reason,
                     }
+                    attributes["glyph_boundary_evidence"] = glyph_line_evidence(
+                        line, [glyph_indices[id(char)] for char in line],
+                    )
+                    if hidden_reason or scan_like or any(
+                        unicodedata.category(str(char.get("text", ""))) == "Co"
+                        for char in line if len(str(char.get("text", ""))) == 1
+                    ):
+                        attributes["glyph_boundary_evidence"]["usable"] = False
                     segments = _column_segments(line)
                     if len(segments) > 1:
                         # 칸 사이가 크게 벌어진 줄은 괘선 없는 표의 한 줄일 수 있다(표 복원에 쓴다).
@@ -465,6 +475,13 @@ class PdfParser(DocumentParser):
         if disagreement:
             doc.structure["parser_disagreement"] = disagreement
             doc.structure["parser_chain"].append("pypdf(대조)")
+            disputed_pages = {entry["page"] for entry in disagreement}
+            for page in doc.pages:
+                if page.page_number in disputed_pages:
+                    for block in page.blocks:
+                        evidence = block.attributes.get("glyph_boundary_evidence")
+                        if evidence:
+                            evidence["usable"] = False
         self._apply_ocr(doc, path, rendered_parts)
 
         doc.raw_layers["rendered_text"] = "\n".join(rendered_parts)

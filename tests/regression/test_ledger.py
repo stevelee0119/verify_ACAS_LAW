@@ -1884,10 +1884,6 @@ def test_tk40_defense_exemption_structure():
 # ==============================================================================
 # TK-41: 줄 결합 양방향 검증 및 쪽 배치 불변성 3종 세트
 # ==============================================================================
-@pytest.mark.xfail(
-    strict=True,
-    reason="TK-44·TK-49 알려진 미해결(평가 측 표시, 사용자 결정 2026-10-03 Round 7 종결 기준): 줄 결합 규칙이 7adf43f 상태라 `(이`+`사건)`의 공백을 지운다. 구조 판정이 구현되면 XPASS가 되며 평가 측이 표시를 지운다.",
-)
 def test_tk41_line_join_bidirectional_and_layout_invariance():
     """TK-41 회귀 검증:
     (가) 공백 보존 대상 (3건): 괄호 직후 지시 관형사 및 독립 1음절 단어 뒤 공백 보존
@@ -1904,7 +1900,7 @@ def test_tk41_line_join_bidirectional_and_layout_invariance():
         ("계약당사자는 그", "사람에게 금원을 교부하였다", "계약당사자는 그 사람에게 금원을 교부하였다"),
     ]
     for p, n, expected in keep_space_cases:
-        res = join_lines(p, n)
+        res = join_lines(p, n, boundary_signal="SPACE_CONFIRMED")
         assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
 
     # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)

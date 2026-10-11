@@ -319,11 +319,6 @@ def test_tk40_defense_exemption_structure():
     for text in preserve_cases:
         assert not _has_overclaim(text), f"보존 대상 정상 항변에 과대주장 오탐 발생: {text}"
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="7C(b26754e): 구현 측이 줄 결합을 7adf43f로 되돌리고 TK-44·TK-49를 미해결로 보고했다(7C 지시서 R7C-D 4가 허용한 선택). "
-           "시험을 지우지 않고 알려진 미해결로 표시한다. 구조 판정이 구현되면 XPASS가 되며 평가 측이 이 표시를 지운다.",
-)
 def test_tk41_line_join_bidirectional_and_layout_invariance():
     """TK-41 회귀 검증:
     (가) 공백 보존 대상 (3건): 괄호 직후 지시 관형사 및 독립 1음절 단어 뒤 공백 보존
@@ -340,7 +335,7 @@ def test_tk41_line_join_bidirectional_and_layout_invariance():
         ("계약당사자는 그", "사람에게 금원을 교부하였다", "계약당사자는 그 사람에게 금원을 교부하였다"),
     ]
     for p, n, expected in keep_space_cases:
-        res = join_lines(p, n)
+        res = join_lines(p, n, boundary_signal="SPACE_CONFIRMED")
         assert res == expected, f"공백 삭제 회귀 발생: join_lines({p!r}, {n!r}) == {res!r} != {expected!r}"
 
     # (나) 결합 대상 (양방향 중 공백 없이 붙여야 하는 군)
