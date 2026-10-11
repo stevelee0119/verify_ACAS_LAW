@@ -475,6 +475,13 @@ class PdfParser(DocumentParser):
         if disagreement:
             doc.structure["parser_disagreement"] = disagreement
             doc.structure["parser_chain"].append("pypdf(대조)")
+            disputed_pages = {entry["page"] for entry in disagreement}
+            for page in doc.pages:
+                if page.page_number in disputed_pages:
+                    for block in page.blocks:
+                        evidence = block.attributes.get("glyph_boundary_evidence")
+                        if evidence:
+                            evidence["usable"] = False
         self._apply_ocr(doc, path, rendered_parts)
 
         doc.raw_layers["rendered_text"] = "\n".join(rendered_parts)

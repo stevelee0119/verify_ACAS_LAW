@@ -14,7 +14,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
-from .boundary_signals import UNKNOWN, observe_boundary
+from .boundary_signals import BOUNDARY_SIGNALS, JOIN_CONFIRMED, SPACE_CONFIRMED, UNKNOWN, observe_boundary
 
 # 새 문단 또는 번호 목록/목차를 여는 패턴
 ENUMERATOR_RE = re.compile(
@@ -142,14 +142,23 @@ def get_unclosed_delimiter(text: str) -> Optional[str]:
 
 
 
-def join_lines(prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False) -> str:
-    """두 줄의 텍스트를 올바른 공백 보존 규칙 및 구조 신호에 기반하여 결합한다 (TK-31)."""
+def join_lines(
+    prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False,
+    *, boundary_signal: str = UNKNOWN,
+) -> str:
+    """Apply confirmed boundary evidence, or retain the legacy UNKNOWN behavior."""
+    if not isinstance(boundary_signal, str) or boundary_signal not in BOUNDARY_SIGNALS:
+        raise ValueError(f"Invalid boundary_signal: {boundary_signal!r}")
     p = unicodedata.normalize("NFKC", prev or "").rstrip()
     n = unicodedata.normalize("NFKC", nxt or "").lstrip()
     if not p:
         return n
     if not n:
         return p
+    if boundary_signal == JOIN_CONFIRMED:
+        return p + n
+    if boundary_signal == SPACE_CONFIRMED:
+        return p + " " + n
     last = p[-1]
     first = n[0]
     # 열림 기호 직후나 닫힘 기호 직전은 공백 없이 연결
@@ -296,11 +305,13 @@ def reconstruct_page_blocks(
         if group_x1:
             repeated = [v for v in set(group_x1) if group_x1.count(v) >= 2]
             right_edge = max(repeated) if repeated else max(group_x1)
-            if page_width > 0:
-                right_edge = max(right_edge, 0.75 * page_width)
 
         group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
         group_char_wrap = group_full_count >= 2
+        observations = [
+            observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
+            for i in range(len(curr_group) - 1)
+        ]
 
         # 여러 줄 블록을 결합 (해당 문단의 구조 신호 반영)
         combined_text = curr_group[0].text
@@ -315,6 +326,7 @@ def reconstruct_page_blocks(
                 next_b.text,
                 prev_full=prev_full,
                 char_wrap_context=group_char_wrap,
+                boundary_signal=observations[i]["boundary_signal"],
             )
 
         # 외접 bounding box 계산
@@ -335,10 +347,7 @@ def reconstruct_page_blocks(
              "glyph_boundary_evidence": b.attributes.get("glyph_boundary_evidence", {})}
             for b in curr_group
         ]
-        merged_attributes["boundary_observations"] = [
-            observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
-            for i in range(len(curr_group) - 1)
-        ]
+        merged_attributes["boundary_observations"] = observations
         local_right_edge = max(group_x1) if group_x1 else None
         merged_attributes["paragraph_right_edge"] = local_right_edge
         for i, observation in enumerate(merged_attributes["boundary_observations"]):
