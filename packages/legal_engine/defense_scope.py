@@ -4,11 +4,16 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .polarity import ASSERTED, polarity
+from .polarity import ASSERTED, REPORTED, REPORT_VERB_RE, polarity
 
 
-def mask_quotations(text: str) -> tuple[str, list[tuple[int, int]], bool]:
-    """Mask delimited speech while keeping offsets into the original statement."""
+def quotation_projection(text: str, *, previous: str = '') -> tuple[str, list[dict[str, Any]]]:
+    """Exclude confirmed speech, retaining authored terminology and emphasis.
+
+    Quote punctuation establishes a span, not a speaker. Its matrix speech
+    relation uses the same report/citation evidence as the other legal rules.
+    All coordinates stay in this input string; no document-global claim is made.
+    """
     pairs = {'"': '"', "'": "'", '“': '”', '‘': '’', '「': '」', '『': '』'}
     stack: list[tuple[str, int]] = []
     spans = []
@@ -22,12 +27,32 @@ def mask_quotations(text: str) -> tuple[str, list[tuple[int, int]], bool]:
                 spans.append((start, index + 1))
         elif character in pairs:
             stack.append((pairs[character], index))
-    # Preserve unclosed speech for uncertain review; masking it would erase a
-    # potentially authored claim instead of acknowledging missing structure.
     masked = list(text)
+    observations = []
     for start, end in spans:
-        masked[start:end] = [' '] * (end - start)
-    return ''.join(masked), spans, bool(stack)
+        # Neutralize delimiters before asking about the outer predicate. The
+        # quoted proposition itself remains the trigger, not its own negation.
+        outer = text[:start] + ' ' + text[start + 1:end - 1] + ' ' + text[end:]
+        tail = text[end:].lstrip()
+        quotative = bool(re.match(r'(?:라고|다고|라는|다는|고)(?=\s|[가-힣]|[,;.!?]|$)', tail))
+        speech_relation = quotative or bool(REPORT_VERB_RE.match(tail))
+        reported = speech_relation and polarity(outer, (start, end), previous=previous) == REPORTED
+        role = 'REPORTED' if reported else 'UNCERTAIN' if quotative else 'AUTHORED'
+        if reported:
+            masked[start:end] = [' '] * (end - start)
+        else:
+            masked[start] = masked[end - 1] = ' '
+        observations.append({'span': [start, end], 'role': role})
+    if stack:
+        observations.append({'span': [stack[0][1], len(text)], 'role': 'UNCLOSED'})
+    return ''.join(masked), observations
+
+
+def mask_quotations(text: str) -> tuple[str, list[tuple[int, int]], bool]:
+    """Compatibility view of the role-aware, source-preserving projection."""
+    masked, rows = quotation_projection(text)
+    return masked, [tuple(row['span']) for row in rows], any(
+        row['role'] in {'UNCERTAIN', 'UNCLOSED'} for row in rows)
 
 
 def clause_end(text: str, anchor_end: int, breaks: re.Pattern[str]) -> int:
@@ -43,10 +68,15 @@ def conclusion_scopes(
     text: str, categorical: list[str], limited: list[str], breaks: re.Pattern[str],
     *, previous: str = '', start: int = 0, speaker_prefix: str = '',
     excluded_spans: list[tuple[int, int]] | None = None,
+    projected_text: str | None = None, quotation_uncertain: bool = False,
 ) -> list[dict[str, Any]]:
     """Classify each configured effect's speaker and its own limit span."""
-    masked, _, uncertain_quote = mask_quotations(text)
-    uncertain_quote = uncertain_quote or mask_quotations(speaker_prefix + text)[2]
+    if projected_text is None:
+        projected, rows = quotation_projection(speaker_prefix + text, previous=previous)
+        masked = projected[len(speaker_prefix):]
+        uncertain_quote = any(row['role'] in {'UNCERTAIN', 'UNCLOSED'} for row in rows)
+    else:
+        masked, uncertain_quote = projected_text, quotation_uncertain
     limits = [match.span() for pattern in limited for match in re.finditer(pattern, masked)]
     observed = []
     for pattern in categorical_patterns(categorical):

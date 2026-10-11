@@ -17,7 +17,10 @@ from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
 from .polarity import asserted
-from .defense_scope import categorical_patterns, clause_end, conclusion_scopes, mask_quotations
+from .defense_scope import (
+    categorical_patterns, clause_end, conclusion_scopes, mask_quotations,
+    quotation_projection,
+)
 
 ENGINE_NAME = "legal_engine.legal_rules"
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "rules.json"
@@ -284,12 +287,16 @@ _REQUIREMENT_ADJUNCT_RE = re.compile(
 _REQUIREMENT_BARE_SUFFIX_RE = re.compile(r"[\s이가은는을를도만의,;.!?]*")
 _ARGUMENT_CASE_RE = re.compile(r"(?<![가-힣])[가-힣]{2,}(?:이|가|은|는|을|를)(?=\s|[,;.!?]|$)")
 _DIRECT_NEGATIVE_AUXILIARY_RE = re.compile(
-    r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?(?:하|되)(?:지|지는|지도)\s*(?:않|아니|못)"
+    r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?"
+    r"(?P<predicate>[가-힣]+?)(?:지는|지도|지)\s*(?P<auxiliary>않|아니|못)"
 )
 _DIRECT_EXISTENTIAL_RE = re.compile(r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?(?P<predicate>없|있)")
 _FINITE_PREDICATE_RE = re.compile(
     rf"[{_PAST_STEM_FINALS}](?:다|습니다)(?=\s|[,;.!?]|$)|"
     r"(?:한다|된다|이다|있다)(?=\s|[,;.!?]|$)"
+)
+_EMBEDDED_PREDICATE_RE = re.compile(
+    rf"(?:다고|라고|다는|라는|[{_ADNOMINAL_FINALS}])(?=\s|$)"
 )
 
 
@@ -299,12 +306,27 @@ def _has_requirement_predicate(text: str) -> bool:
     ))
 
 
+def _finite_negative_attachment(after: str, match: re.Match | None) -> bool:
+    """The auxiliary itself must end the governing clause, not modify a later verb."""
+    if match is None:
+        return False
+    if _EMBEDDED_PREDICATE_RE.search(after[:match.start('predicate')]):
+        return False
+    auxiliary = after[match.start('auxiliary'):]
+    token = re.match(r'[가-힣]+', auxiliary)
+    return bool(token and _has_requirement_predicate(token.group()))
+
+
 def _defense_requirement_observations(
     unit: str, requirements: List[str], limited_conclusions: List[str],
     polarities: Dict[str, str], *, quotation_uncertain: bool = False,
+    projected_text: str | None = None,
 ) -> List[Dict[str, Any]]:
     """Attach polarity to governing predicates; retain unbound scope as uncertain."""
-    masked, _, uncertain_quote = mask_quotations(unit)
+    if projected_text is None:
+        masked, _, uncertain_quote = mask_quotations(unit)
+    else:
+        masked, uncertain_quote = projected_text, False
     uncertain_quote = uncertain_quote or quotation_uncertain
     conclusions = [
         m.span() for pat in limited_conclusions for m in re.finditer(pat, masked)
@@ -322,6 +344,7 @@ def _defense_requirement_observations(
                 continue
             after = masked[match.end():end]
             state, reason = "UNCERTAIN", "UNBOUND_PREDICATE"
+            auxiliary = None
             if _REQUIREMENT_ADJUNCT_RE.match(after):
                 state, reason = "CONTEXT", "ADJUNCT"
             elif _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(masked[:match.start()]):
@@ -331,8 +354,13 @@ def _defense_requirement_observations(
                 argument = _ARGUMENT_CASE_RE.search(after)
                 changed_argument = bool(argument and (not negations or argument.start() < negations[0].start()))
                 existential = _DIRECT_EXISTENTIAL_RE.match(after) if not changed_argument else None
+                auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(after)
+                if auxiliary and not negations:
+                    # Nonfinite -지 않게/-지 않도록 still needs scope review;
+                    # it is not an asserted positive governing predicate.
+                    negations = [auxiliary]
                 direct_negative = not changed_argument and (
-                    _DIRECT_NEGATIVE_AUXILIARY_RE.match(after)
+                    _finite_negative_attachment(after, auxiliary)
                     or existential and existential.group("predicate") == "없"
                 )
                 requires_absence = polarities.get(pattern) == "absent"
@@ -358,9 +386,12 @@ def _defense_requirement_observations(
                 else:
                     state, reason = "POSITIVE", "ASSERTED_PREDICATE"
             if uncertain_quote and state != "CONTEXT":
-                state, reason = "UNCERTAIN", "UNCLOSED_QUOTATION"
+                state, reason = "UNCERTAIN", "UNRESOLVED_QUOTATION"
             observations.append({"span": list(match.span()), "predicate_span": [match.end(), end],
                                  "state": state, "reason": reason})
+            if auxiliary and reason == "ATTACHED_NEGATIVE_PREDICATE":
+                observations[-1]['governing_predicate_span'] = [match.end() + offset for offset in auxiliary.span('predicate')]
+                observations[-1]['negative_auxiliary_span'] = [match.end() + offset for offset in auxiliary.span('auxiliary')]
             if reason == "NEGATIVE_MODIFIER":
                 start = max((m.end() for m in _REQUIREMENT_CLAUSE_END_RE.finditer(masked)
                              if m.end() <= match.start()), default=0)
@@ -380,32 +411,36 @@ def _review_defense_statement(
     prior: str, sources: Dict[str, Any], seen: set,
 ) -> List[Finding]:
     """Review independent authored spans; a reported statement cannot mask a rebuttal."""
-    masked, _, unit_uncertain_quote = mask_quotations(unit)
+    masked, unit_quotes = quotation_projection(unit, previous=prior)
     matches = list(pattern.finditer(masked))
     signals = load_defense_groups().get("structural_signals", {})
     req_list, lim_list = signals.get("stated_requirements", []), signals.get("limited_conclusions", [])
     findings = []
     for index, match in enumerate(matches):
         stop = matches[index + 1].start() if index + 1 < len(matches) else len(unit)
-        claim = unit[match.start():stop].strip()
-        local_match = pattern.search(claim)
+        claim = unit[match.start():stop]
+        local_masked = masked[match.start():stop]
+        quote_rows = [{'span': [max(0, row['span'][0] - match.start()), min(len(claim), row['span'][1] - match.start())],
+                       'role': row['role']} for row in unit_quotes
+                      if row['span'][0] < stop and row['span'][1] > match.start()]
+        uncertain_quote = any(row['role'] in {'UNCERTAIN', 'UNCLOSED'} for row in quote_rows)
+        local_match = pattern.search(local_masked)
         if local_match is None:
             continue
         observations = _defense_requirement_observations(
             claim, req_list, lim_list, signals.get("requirement_polarities", {}),
-            quotation_uncertain=unit_uncertain_quote,
+            quotation_uncertain=uncertain_quote, projected_text=local_masked,
         )
         states = {row["state"] for row in observations}
         positive, denied, uncertain = "POSITIVE" in states, "DENIED" in states, "UNCERTAIN" in states
-        local_masked, quote_spans, uncertain_quote = mask_quotations(claim)
-        uncertain_quote = uncertain_quote or unit_uncertain_quote
         has_lim = any(re.search(pat, local_masked) for pat in lim_list)
         excluded = [(row["span"][0], row["predicate_span"][1]) for row in observations]
         excluded.extend(tuple(row["modifier_span"]) for row in observations if "modifier_span" in row)
         scopes = conclusion_scopes(claim, signals.get("categorical_conclusions", []), lim_list,
                                   _REQUIREMENT_CLAUSE_END_RE, previous=prior,
                                   start=local_match.end("concession"), speaker_prefix=masked[:match.start()],
-                                  excluded_spans=excluded)
+                                  excluded_spans=excluded, projected_text=local_masked,
+                                  quotation_uncertain=uncertain_quote)
         if not scopes or (not any(row["authored"] for row in scopes) and not uncertain_quote):
             continue
         is_extended = has_lim and any(row["authored"] and not row["limited"] for row in scopes)
@@ -414,7 +449,8 @@ def _review_defense_statement(
         mod_rule = dict(rule)
         mod_rule["defense_scope"] = {"requirements": observations, "conclusions": scopes,
                                      "uncertain": uncertain or uncertain_quote or not (positive or denied),
-                                     "quotation_spans": [list(span) for span in quote_spans],
+                                     "quotation_spans": [row['span'] for row in quote_rows],
+                                     "quotations": quote_rows,
                                      "uncertain_quotation": uncertain_quote,
                                      "statement_span": [match.start(), stop]}
         if uncertain_quote or (has_lim and not denied and not is_extended and (not positive or uncertain)):
