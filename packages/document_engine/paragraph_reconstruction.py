@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
 from .boundary_signals import BOUNDARY_SIGNALS, JOIN_CONFIRMED, SPACE_CONFIRMED, UNKNOWN, observe_boundary
+from .boundary_candidates import boundary_decision, align_boundary_sources
 
 # 새 문단 또는 번호 목록/목차를 여는 패턴
 ENUMERATOR_RE = re.compile(
@@ -143,6 +144,47 @@ def get_unclosed_delimiter(text: str) -> Optional[str]:
 
 
 
+def _join_separator_selection(
+    p: str, n: str, prev_full: bool, char_wrap_context: bool, boundary_signal: str,
+) -> Tuple[str, str]:
+    """Describe the selected branch without promoting legacy guesses to evidence."""
+    if not p:
+        return "", "EMPTY_PREVIOUS"
+    if not n:
+        return "", "EMPTY_FOLLOWING"
+    if boundary_signal == JOIN_CONFIRMED:
+        return "", "CONFIRMED_JOIN"
+    if boundary_signal == SPACE_CONFIRMED:
+        return " ", "CONFIRMED_SPACE"
+    last = p[-1]
+    first = n[0]
+    # 열림 기호 직후나 닫힘 기호 직전은 공백 없이 연결
+    if last in "([{「『“‘<《〈【":
+        return "", "LEGACY_OPEN_DELIMITER"
+    if first in ")]}」』”’>》〉】,.;:!?%·":
+        return "", "LEGACY_CLOSE_DELIMITER"
+
+    # 1. 괄호/따옴표 바로 뒤에 1~2음절만 걸치고 줄바꿈된 경우 (예: '판시하였습니다(대' + '법원') -> 공백 없이 연결
+    if re.search(r"[\(\[\{“\"'‘「『<《〈【][가-힣]{1,2}$", p) and re.match(r"[가-힣]", first):
+        return "", "LEGACY_DELIMITER_FRAGMENT"
+
+    # 2. 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임 (예: '징계권자' + '에게', '대하' + '여')
+    words = n.split()
+    first_word = words[0].rstrip(".,;:)]」』”’'\"") if words else ""
+    if re.match(r"[가-힣]", last) and first_word in MID_WORD_STARTS:
+        return "", "LEGACY_GRAMMATICAL_FRAGMENT"
+
+    # 3. 꽉 찬 줄(prev_full) 또는 글자 단위 줄바꿈 쪽에서 앞 줄 끝이 1음절 한글 단어로 끊긴 경우
+    # (예: '어떠한 처' + '분을', '하기 위' + '해서는') -> 어절 중간 분절이므로 공백 없이 연결
+    words_p = p.split()
+    last_word = words_p[-1] if words_p else ""
+    if (prev_full or char_wrap_context) and len(last_word) == 1 and re.match(r"[가-힣]", last) and re.match(r"[가-힣]", first):
+        return "", "LEGACY_FULLNESS_FRAGMENT"
+
+    # 일반적인 단어 경계 줄바꿈: 한글 낱말 사이 공백 1개 유지
+    return " ", "LEGACY_DEFAULT_SPACE"
+
+
 def join_lines(
     prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False,
     *, boundary_signal: str = UNKNOWN,
@@ -152,41 +194,8 @@ def join_lines(
         raise ValueError(f"Invalid boundary_signal: {boundary_signal!r}")
     p = unicodedata.normalize("NFKC", prev or "").rstrip()
     n = unicodedata.normalize("NFKC", nxt or "").lstrip()
-    if not p:
-        return n
-    if not n:
-        return p
-    if boundary_signal == JOIN_CONFIRMED:
-        return p + n
-    if boundary_signal == SPACE_CONFIRMED:
-        return p + " " + n
-    last = p[-1]
-    first = n[0]
-    # 열림 기호 직후나 닫힘 기호 직전은 공백 없이 연결
-    if last in "([{「『“‘<《〈【":
-        return p + n
-    if first in ")]}」』”’>》〉】,.;:!?%·":
-        return p + n
-
-    # 1. 괄호/따옴표 바로 뒤에 1~2음절만 걸치고 줄바꿈된 경우 (예: '판시하였습니다(대' + '법원') -> 공백 없이 연결
-    if re.search(r"[\(\[\{“\"'‘「『<《〈【][가-힣]{1,2}$", p) and re.match(r"[가-힣]", first):
-        return p + n
-
-    # 2. 조사/어미로 시작하면 어절 중간 줄바꿈이므로 공백 없이 붙임 (예: '징계권자' + '에게', '대하' + '여')
-    words = n.split()
-    first_word = words[0].rstrip(".,;:)]」』”’'\"") if words else ""
-    if re.match(r"[가-힣]", last) and first_word in MID_WORD_STARTS:
-        return p + n
-
-    # 3. 꽉 찬 줄(prev_full) 또는 글자 단위 줄바꿈 쪽에서 앞 줄 끝이 1음절 한글 단어로 끊긴 경우
-    # (예: '어떠한 처' + '분을', '하기 위' + '해서는') -> 어절 중간 분절이므로 공백 없이 연결
-    words_p = p.split()
-    last_word = words_p[-1] if words_p else ""
-    if (prev_full or char_wrap_context) and len(last_word) == 1 and re.match(r"[가-힣]", last) and re.match(r"[가-힣]", first):
-        return p + n
-
-    # 일반적인 단어 경계 줄바꿈: 한글 낱말 사이 공백 1개 유지
-    return p + " " + n
+    separator, _ = _join_separator_selection(p, n, prev_full, char_wrap_context, boundary_signal)
+    return p + separator + n
 
 
 def reconstruct_paragraphs_from_text(raw_text: str, page_num: int = 1) -> List[Block]:
@@ -319,6 +328,7 @@ def reconstruct_page_blocks(
         # Legacy fullness is compatibility input, not a confirmed boundary signal.
         group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
         legacy_right_edge, legacy_char_wrap = _legacy_paragraph_fullness(group_x1, page_width)
+        legacy_content_edge, _ = _legacy_paragraph_fullness(group_x1, 0.0)
         observations = [
             observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
             for i in range(len(curr_group) - 1)
@@ -332,6 +342,17 @@ def reconstruct_page_blocks(
             legacy_prev_full = False
             if prev_b.bbox is not None and legacy_right_edge > 0:
                 legacy_prev_full = (legacy_right_edge - prev_b.bbox.x1) <= 4.0
+            separator, selection_reason = _join_separator_selection(
+                unicodedata.normalize("NFKC", combined_text or "").rstrip(),
+                unicodedata.normalize("NFKC", next_b.text or "").lstrip(),
+                legacy_prev_full, legacy_char_wrap, observations[i]["boundary_signal"],
+            )
+            observations[i]["decision"] = boundary_decision(
+                i, observations[i]["boundary_signal"], separator, selection_reason,
+                legacy_prev_full=legacy_prev_full, legacy_char_wrap=legacy_char_wrap,
+                legacy_right_edge=legacy_right_edge, page_width=page_width,
+                legacy_content_edge=legacy_content_edge,
+            )
             combined_text = join_lines(
                 combined_text,
                 next_b.text,
@@ -354,11 +375,14 @@ def reconstruct_page_blocks(
         first_block = curr_group[0]
         merged_attributes = dict(first_block.attributes)
         merged_attributes["lines"] = [
-            {"text": b.text, "bbox": b.bbox.as_tuple() if b.bbox else None,
+            {"text": b.text, "source_block_id": b.block_id, "bbox": b.bbox.as_tuple() if b.bbox else None,
              "glyph_boundary_evidence": b.attributes.get("glyph_boundary_evidence", {})}
             for b in curr_group
         ]
         merged_attributes["boundary_observations"] = observations
+        merged_attributes["boundary_source_runs"] = align_boundary_sources(
+            merged_attributes["lines"], observations, combined_text,
+        )
         local_right_edge = max(group_x1) if group_x1 else None
         merged_attributes["paragraph_right_edge"] = local_right_edge
         for i, observation in enumerate(merged_attributes["boundary_observations"]):
