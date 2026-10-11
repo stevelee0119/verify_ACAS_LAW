@@ -228,6 +228,40 @@ def test_synthetic_observed_delimiter_certifies_complete_coordinate(tmp_path, ex
     assert not _duplicates(doc)
 
 
+_PROSE_IDENTITY_CONTROLS = [("기록", "동쪽에 있다.", "서쪽에 있다."),
+                            ("관찰표", "상단에 있다.", "하단에 있다."),
+                            ("안내문", "북쪽을 표시한다.", "남쪽을 표시한다.")]
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("locator", [False, True])
+@pytest.mark.parametrize("title,first,second", _PROSE_IDENTITY_CONTROLS)
+def test_synthetic_conflicting_prose_identities_remain_ambiguous(tmp_path, extension, section, locator,
+                                                               title, first, second):
+    lines = [f"갑 제1호증 {title}", f"갑 제1호증 {title}: {first}", f"갑 제1호증 {title}: {second}"]
+    if locator:
+        lines.append(f"갑 제1호증 {title}, 부록7쪽 확인 부분.")
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + lines)
+    for row in exhibit_rows(doc):
+        _assert_source_projection(doc, row, _duplicate_mention_view(row))
+    found = _duplicates(doc)
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("locator", [False, True])
+@pytest.mark.parametrize("title,first,second", _PROSE_IDENTITY_CONTROLS)
+def test_synthetic_repeated_complete_prose_identity_still_corroborates(tmp_path, extension, section, locator,
+                                                                     title, first, second):
+    anchor = f"갑 제1호증 {title}" + (", 부록7쪽 확인 부분." if locator else "")
+    narrative = f"갑 제1호증 {title}: {first}"
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [anchor, narrative, narrative])
+    assert not _duplicates(doc)
+
+
 def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # Measure the new source projection/comparison work on thousands of
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
