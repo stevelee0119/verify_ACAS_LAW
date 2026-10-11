@@ -8,6 +8,8 @@ from packages.claim_engine.evidence_consistency import (
     _duplicate_mention_view, _exhibit_source_spans, _numbering, check_exhibits, exhibit_rows,
 )
 from packages.document_engine.reading_text import SPACE_MAP, build_reading_text
+from packages.document_engine.reading_text import ReadingText, Segment
+from packages.common.schemas import Block
 from packages.document_engine.registry import parse_document
 from scripts.audit.corpus import build_pdf
 
@@ -306,4 +308,15 @@ def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
             assert _exhibit_source_spans(reading, start, end, cursor) == source["sources"]
     assert len(rows) == 2000
     assert not _numbering(empty, rows)
+    assert time.perf_counter() - started < 0.1
+
+
+def test_synthetic_forward_projection_caches_shared_block_indent():
+    block = Block("public_long_indent", " " * 100000 + "가" * 3000, 1)
+    reading = ReadingText("가" * 3000, [Segment(0, 3000, block)])
+    started = time.perf_counter()
+    cursor = [0]
+    for index in range(3000):
+        source = _exhibit_source_spans(reading, index, index + 1, cursor)
+        assert source[0]["block_span"] == (100000 + index, 100001 + index)
     assert time.perf_counter() - started < 0.1
