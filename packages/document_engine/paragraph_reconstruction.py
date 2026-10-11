@@ -14,6 +14,7 @@ import unicodedata
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
+from .boundary_signals import UNKNOWN, observe_boundary
 
 # 새 문단 또는 번호 목록/목차를 여는 패턴
 ENUMERATOR_RE = re.compile(
@@ -330,9 +331,25 @@ def reconstruct_page_blocks(
         first_block = curr_group[0]
         merged_attributes = dict(first_block.attributes)
         merged_attributes["lines"] = [
-            {"text": b.text, "bbox": b.bbox.as_tuple() if b.bbox else None}
+            {"text": b.text, "bbox": b.bbox.as_tuple() if b.bbox else None,
+             "glyph_boundary_evidence": b.attributes.get("glyph_boundary_evidence", {})}
             for b in curr_group
         ]
+        merged_attributes["boundary_observations"] = [
+            observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
+            for i in range(len(curr_group) - 1)
+        ]
+        local_right_edge = max(group_x1) if group_x1 else None
+        merged_attributes["paragraph_right_edge"] = local_right_edge
+        for i, observation in enumerate(merged_attributes["boundary_observations"]):
+            previous = curr_group[i]
+            advance = previous.attributes.get("glyph_boundary_evidence", {}).get("char_advance", 0)
+            observation["end_gap_em"] = (
+                (local_right_edge - previous.bbox.x1) / advance
+                if local_right_edge is not None and previous.bbox and advance > 0 else None
+            )
+        # Layout is diagnostic: packed endpoints do not prove a wrap mode.
+        merged_attributes["char_wrap_state"] = UNKNOWN
 
         merged_block = Block(
             block_id=new_id("B"),
