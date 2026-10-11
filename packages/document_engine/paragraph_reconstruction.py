@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from collections import Counter
 from typing import Any, Dict, List, Optional, Tuple
 
 from packages.common.schemas import BBox, Block, new_id
+from .boundary_signals import BOUNDARY_SIGNALS, JOIN_CONFIRMED, SPACE_CONFIRMED, UNKNOWN, observe_boundary
 
 # 새 문단 또는 번호 목록/목차를 여는 패턴
 ENUMERATOR_RE = re.compile(
@@ -141,14 +143,23 @@ def get_unclosed_delimiter(text: str) -> Optional[str]:
 
 
 
-def join_lines(prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False) -> str:
-    """두 줄의 텍스트를 올바른 공백 보존 규칙 및 구조 신호에 기반하여 결합한다 (TK-31)."""
+def join_lines(
+    prev: str, nxt: str, prev_full: bool = False, char_wrap_context: bool = False,
+    *, boundary_signal: str = UNKNOWN,
+) -> str:
+    """Apply confirmed boundary evidence, or retain the legacy UNKNOWN behavior."""
+    if not isinstance(boundary_signal, str) or boundary_signal not in BOUNDARY_SIGNALS:
+        raise ValueError(f"Invalid boundary_signal: {boundary_signal!r}")
     p = unicodedata.normalize("NFKC", prev or "").rstrip()
     n = unicodedata.normalize("NFKC", nxt or "").lstrip()
     if not p:
         return n
     if not n:
         return p
+    if boundary_signal == JOIN_CONFIRMED:
+        return p + n
+    if boundary_signal == SPACE_CONFIRMED:
+        return p + " " + n
     last = p[-1]
     first = n[0]
     # 열림 기호 직후나 닫힘 기호 직전은 공백 없이 연결
@@ -266,6 +277,22 @@ def reconstruct_paragraphs_from_text(raw_text: str, page_num: int = 1) -> List[B
     return blocks
 
 
+def _legacy_paragraph_fullness(group_x1: List[float], page_width: float) -> Tuple[float, bool]:
+    """Reproduce baseline UNKNOWN arguments; never establish boundary evidence.
+
+    Historical reconstruction includes a page-width floor. Keep it isolated for
+    compatibility, while measured geometry and explicit signals exclude it.
+    """
+    right_edge = 0.0
+    if group_x1:
+        repeated = [value for value, count in Counter(group_x1).items() if count >= 2]
+        right_edge = max(repeated) if repeated else max(group_x1)
+        if page_width > 0:
+            right_edge = max(right_edge, 0.75 * page_width)
+    full_count = sum(1 for value in group_x1 if right_edge > 0 and abs(value - right_edge) <= 4.0)
+    return right_edge, full_count >= 2
+
+
 def reconstruct_page_blocks(
     blocks: List[Block],
     page_num: int = 1,
@@ -289,31 +316,28 @@ def reconstruct_page_blocks(
             active_closer = None
             return
 
-        # 문단 내부 줄들의 레이아웃 신호 분석 (TK-41, TK-44: 쪽 전체가 아닌 해당 문단 내부 줄들에서만 도출)
+        # Legacy fullness is compatibility input, not a confirmed boundary signal.
         group_x1 = [round(b.bbox.x1, 1) for b in curr_group if b.bbox is not None]
-        right_edge = 0.0
-        if group_x1:
-            repeated = [v for v in set(group_x1) if group_x1.count(v) >= 2]
-            right_edge = max(repeated) if repeated else max(group_x1)
-            if page_width > 0:
-                right_edge = max(right_edge, 0.75 * page_width)
-
-        group_full_count = sum(1 for v in group_x1 if right_edge > 0 and abs(v - right_edge) <= 4.0)
-        group_char_wrap = group_full_count >= 2
+        legacy_right_edge, legacy_char_wrap = _legacy_paragraph_fullness(group_x1, page_width)
+        observations = [
+            observe_boundary(curr_group[i].attributes, curr_group[i + 1].attributes)
+            for i in range(len(curr_group) - 1)
+        ]
 
         # 여러 줄 블록을 결합 (해당 문단의 구조 신호 반영)
         combined_text = curr_group[0].text
         for i in range(len(curr_group) - 1):
             prev_b = curr_group[i]
             next_b = curr_group[i + 1]
-            prev_full = False
-            if prev_b.bbox is not None and right_edge > 0:
-                prev_full = (right_edge - prev_b.bbox.x1) <= 4.0
+            legacy_prev_full = False
+            if prev_b.bbox is not None and legacy_right_edge > 0:
+                legacy_prev_full = (legacy_right_edge - prev_b.bbox.x1) <= 4.0
             combined_text = join_lines(
                 combined_text,
                 next_b.text,
-                prev_full=prev_full,
-                char_wrap_context=group_char_wrap,
+                prev_full=legacy_prev_full,
+                char_wrap_context=legacy_char_wrap,
+                boundary_signal=observations[i]["boundary_signal"],
             )
 
         # 외접 bounding box 계산
@@ -330,9 +354,22 @@ def reconstruct_page_blocks(
         first_block = curr_group[0]
         merged_attributes = dict(first_block.attributes)
         merged_attributes["lines"] = [
-            {"text": b.text, "bbox": b.bbox.as_tuple() if b.bbox else None}
+            {"text": b.text, "bbox": b.bbox.as_tuple() if b.bbox else None,
+             "glyph_boundary_evidence": b.attributes.get("glyph_boundary_evidence", {})}
             for b in curr_group
         ]
+        merged_attributes["boundary_observations"] = observations
+        local_right_edge = max(group_x1) if group_x1 else None
+        merged_attributes["paragraph_right_edge"] = local_right_edge
+        for i, observation in enumerate(merged_attributes["boundary_observations"]):
+            previous = curr_group[i]
+            advance = previous.attributes.get("glyph_boundary_evidence", {}).get("char_advance", 0)
+            observation["end_gap_em"] = (
+                (local_right_edge - previous.bbox.x1) / advance
+                if local_right_edge is not None and previous.bbox and advance > 0 else None
+            )
+        # Layout is diagnostic: packed endpoints do not prove a wrap mode.
+        merged_attributes["char_wrap_state"] = UNKNOWN
 
         merged_block = Block(
             block_id=new_id("B"),

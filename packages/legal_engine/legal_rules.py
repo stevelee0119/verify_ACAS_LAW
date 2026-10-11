@@ -16,7 +16,12 @@ from packages.common.enums import EvidenceGrade, FindingType, Severity, Verifica
 from packages.common.schemas import Evidence, Finding, NormalizedDocument
 from packages.document_engine.reading_text import build_reading_text, sentence_bounds
 
+from .predicate_semantics import assertion_extent_evidence, past_predicate_evidence, sense_evidence
 from .polarity import asserted
+from .defense_scope import (
+    categorical_patterns, clause_end, conclusion_scopes, linked_conclusion_text, mask_quotations,
+    quotation_projection, structural_effect_pattern,
+)
 
 ENGINE_NAME = "legal_engine.legal_rules"
 RULES_PATH = Path(__file__).resolve().parents[2] / "config" / "legal_rules" / "rules.json"
@@ -68,16 +73,20 @@ def get_defense_overclaim_pattern() -> re.Pattern[str]:
         all_terms.update(c.get("terms", []))
 
     concessions = "|".join(signals.get("hypothetical_concessions", ["설령", "가사", "백보\\s*양보하여", "가령", "만일", "만약"]))
-    verbs = "|".join(signals.get("concession_verbs", ["인정되", "문제\\s*된다", "있", "해당한"]))
     connectors = "|".join(signals.get("concession_connectors", ["하더라도", "되더라도", "더라도", "으나", "지만"]))
-    p1 = rf"(?:(?:{concessions})[^.\n]{{0,50}}?(?:{verbs})[가-힣\s]{{0,10}}?(?:{connectors})[^.\n]{{0,20}}?)"
+    p1 = rf"(?P<concession>(?:{concessions})[^.\n]{{0,60}}?(?:{connectors}))"
 
     art_pattern = "|".join(sorted(all_articles, key=lambda x: -len(x)))
     term_pattern = "|".join(re.escape(t).replace(r"\ ", r"\s*") for t in sorted(all_terms, key=lambda x: -len(x)))
     p2 = rf"(?:(?:헌법|민법|형법)?\s*(?:제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?|상)?\s*(?:{term_pattern})|제\s*(?:{art_pattern})\s*조(?:의\s*\d+)?)"
+    requirement_patterns = "|".join(signals.get("stated_requirements", []))
+    if requirement_patterns:
+        p2 = rf"(?:{p2}|(?:{requirement_patterns}))"
 
-    c_alt = "|".join(signals.get("categorical_conclusions", ["당연(?:히)?\\s*무효", "허용될\\s*수\\s*없", "전면\\s*면책", "전액\\s*면제"]))
-    p3 = rf"(?:{c_alt})(?:[^.\n]{{0,50}}?(?:{c_alt}))*"
+    c_alt = "|".join(categorical_patterns(signals.get("categorical_conclusions", ["당연(?:히)?\\s*무효", "허용될\\s*수\\s*없", "전면\\s*면책", "전액\\s*면제"])))
+    # One effect per match lets a later independent authored statement survive
+    # a preceding reported claim; effects are scoped separately below.
+    p3 = rf"(?:{c_alt}|{structural_effect_pattern()})"
 
     return re.compile(rf"{p1}[^.\n]{{0,100}}?{p2}[^.\n]{{0,100}}?{p3}")
 
@@ -176,6 +185,8 @@ def _finding(doc: NormalizedDocument, rule: Dict[str, Any], claim: str, sources:
                 # 공식 원문을 아직 받지 못한 근거 조문. 원문 없이 근거로 싣지 않고 이름만 알린다.
                 "basis_pending": list(rule.get("basis_pending") or []),
                 "confidence": CONFIDENCE.get(grade, 0.5)}
+    if rule.get("defense_scope") is not None:
+        features["defense_scope"] = rule["defense_scope"]
     kind = FindingType.OVERCLAIM if rule["rule_id"].startswith("GEN.") else FindingType.LEGAL_ARGUMENT_INVALID
     evidence = [Evidence.create(description="서면의 주장", grade=EvidenceGrade.B, document_id=doc.document_id,
                                 excerpt=claim[:300], supports=False)]
@@ -269,36 +280,91 @@ _REQUIREMENT_NEGATIVE_MODIFIER_RE = re.compile(
     r"(?:없(?:는|었던)|않(?:은|는|았던)|못(?:한|하는|했던)|아닌|"
     r"전무(?:한|했던)|불가(?:능)?(?:한|했던))\s*$"
 )
-_REQUIREMENT_EXISTENCE_RE = re.compile(r"있(?:었|으|음|다|고|어|는|을|습|지)|존재하")
 _REQUIREMENT_ADJUNCT_RE = re.compile(
     r"^\s*(?:에\s*(?:따라|의하여|관하여|대하여)|"
     r"(?:의\s*)?(?:직후|직전|이후|이전|후|전|뒤)"
     r"(?:에|부터|까지|에도)?)(?:\s|$)"
 )
 _REQUIREMENT_BARE_SUFFIX_RE = re.compile(r"[\s이가은는을를도만의,;.!?]*")
+_ARGUMENT_CASE_RE = re.compile(r"(?<![가-힣])[가-힣]{2,}(?:이|가|은|는|을|를)(?=\s|[,;.!?]|$)")
+_SEMANTIC_ARGUMENT_CASE_RE = re.compile(r"(?<![가-힣])[가-힣]+(?:이|가|은|는|을|를)(?=\s|[,;.!?]|$)")
+_DIRECT_NEGATIVE_AUXILIARY_RE = re.compile(
+    r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?"
+    r"(?P<predicate>[가-힣]+?)(?:지는|지도|지)\s*(?P<auxiliary>않|아니|못)"
+)
+_DIRECT_EXISTENTIAL_RE = re.compile(r"^\s*[을를이가은는도만]*\s*(?:[가-힣]+\s+)*?(?P<predicate>없|있)")
+_FINITE_PREDICATE_RE = re.compile(
+    rf"[{_PAST_STEM_FINALS}](?:다|습니다)(?=\s|[,;.!?]|$)|"
+    r"(?:한다|된다|이다|있다)(?=\s|[,;.!?]|$)"
+)
+_EMBEDDED_PREDICATE_RE = re.compile(
+    rf"(?:다고|라고|다는|라는|[{_ADNOMINAL_FINALS}])(?=\s|$)"
+)
 
 
-def _defense_requirement_state(
-    unit: str, requirements: List[str], limited_conclusions: List[str],
-    polarities: Dict[str, str],
-) -> tuple[bool, bool, bool]:
-    """Read claimed fulfilment, denial and uncertainty within requirement clauses.
+def _has_requirement_predicate(text: str) -> bool:
+    return bool(_FINITE_PREDICATE_RE.search(text) or any(
+        match.group() not in ",;.!?\n" for match in _REQUIREMENT_CLAUSE_END_RE.finditer(text)
+    ))
 
-    This checks what the writer asserts, not whether the legal defense actually
-    succeeds. Config metadata distinguishes facts required to exist from
-    disqualifying facts required to be absent. Bare mentions and nested
-    negations do not establish fulfilment, even beside another positive fact.
+
+def _finite_negative_attachment(after: str, match: re.Match | None) -> bool:
+    """The auxiliary itself must end the governing clause, not modify a later verb."""
+    if match is None:
+        return False
+    if _EMBEDDED_PREDICATE_RE.search(after[:match.start('predicate')]):
+        return False
+    auxiliary = after[match.start('auxiliary'):]
+    token = re.match(r'[가-힣]+', auxiliary)
+    return bool(token and _has_requirement_predicate(token.group()))
+
+
+def _requirement_extent_observations(
+    text: str, argument_start: int, argument_end: int, predicate_end: int,
+) -> List[Dict[str, Any]]:
+    """Retain extent inside this predicate and immediately on this argument.
+
+    A qualifier inside the same chain can have ambiguous attachment. It blocks
+    whole-fulfillment support without proving denial. Prefix attachment never
+    skips an intervening subject, object, action or arbitrary word.
     """
-    boundaries = [m.end() for m in _REQUIREMENT_CLAUSE_END_RE.finditer(unit)]
-    boundaries.append(len(unit))
+    rows = assertion_extent_evidence(text[argument_end:predicate_end])
+    for row in rows:
+        row['span'] = [argument_end + offset for offset in row['span']]
+        row['attachment'] = 'PREDICATE_CHAIN'
+    prefix_start = max((boundary.end() for boundary in _REQUIREMENT_CLAUSE_END_RE.finditer(
+        text, 0, argument_start)), default=0)
+    prefix = text[prefix_start:argument_start]
+    cursor = len(prefix)
+    attached = []
+    for row in reversed(assertion_extent_evidence(prefix)):
+        if prefix[row['span'][1]:cursor].strip():
+            break
+        cursor = row['span'][0]
+        row['span'] = [prefix_start + offset for offset in row['span']]
+        row['attachment'] = 'ARGUMENT_PREFIX'
+        attached.append(row)
+    return list(reversed(attached)) + rows
+
+
+def _defense_requirement_observations(
+    unit: str, requirements: List[str], limited_conclusions: List[str],
+    polarities: Dict[str, str], *, quotation_uncertain: bool = False,
+    projected_text: str | None = None,
+) -> List[Dict[str, Any]]:
+    """Attach polarity to governing predicates; retain unbound scope as uncertain."""
+    if projected_text is None:
+        masked, _, uncertain_quote = mask_quotations(unit)
+    else:
+        masked, uncertain_quote = projected_text, False
+    uncertain_quote = uncertain_quote or quotation_uncertain
     conclusions = [
-        m.span() for pat in limited_conclusions for m in re.finditer(pat, unit)
+        m.span() for pat in limited_conclusions for m in re.finditer(pat, masked)
     ]
-    positive = denied = uncertain = False
+    observations = []
     for pattern in requirements:
-        for match in re.finditer(pattern, unit):
-            end = next((end for end in boundaries if end >= match.end()), len(unit))
-            # Reuse the configured conclusion spans, not a second word list.
+        for match in re.finditer(pattern, masked):
+            end = clause_end(masked, match.end(), _REQUIREMENT_CLAUSE_END_RE)
             later_conclusions = [
                 start for start, _ in conclusions if match.end() <= start < end
             ]
@@ -306,32 +372,243 @@ def _defense_requirement_state(
                 end = min(later_conclusions)
             if any(start <= match.start() < stop for start, stop in conclusions):
                 continue
-            after = unit[match.end():end]
+            first_end = end
+            first_after = masked[match.end():end]
+            first_auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(first_after)
+            continuation = bool(first_auxiliary and re.search(
+                r"(?:않|아니하|못하)(?:고|으며)\s*$", first_after))
+            chain = None
+            if continuation:
+                # Nonpast -지 않고 can qualify a following act. It is not a
+                # completed denial, and an arbitrary final positive act does
+                # not certify fulfillment of the requirement either.
+                end = clause_end(masked, first_end + 1, _REQUIREMENT_CLAUSE_END_RE)
+                later = [left for left, _ in conclusions if match.end() <= left < end]
+                if later:
+                    end = min(later)
+                if masked[first_end:end].strip():
+                    chain = {"negative_span": [match.end(), first_end],
+                             "continuation_span": [first_end, end],
+                             "relation": "UNRESOLVED", "asserted_fulfillment_supported": False}
+                else:
+                    end = first_end
+            after = masked[match.end():end]
+            state, reason = "UNCERTAIN", "UNBOUND_PREDICATE"
+            semantic_evidence = None
+            changed_argument = False
+            finite_auxiliary = False
+            negations = []
+            requires_absence = polarities.get(pattern) == 'absent'
+            auxiliary = None
             if _REQUIREMENT_ADJUNCT_RE.match(after):
-                continue
-            if _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(unit[:match.start()]):
-                uncertain = True
-                continue
-            negations = list(_REQUIREMENT_NEGATION_RE.finditer(after))
-            requires_absence = polarities.get(pattern) == "absent"
-            if len(negations) == 1:
-                if requires_absence:
-                    positive = True
-                else:
-                    denied = True
-            elif len(negations) > 1:
-                uncertain = True
-            elif requires_absence:
-                if _REQUIREMENT_EXISTENCE_RE.search(after):
-                    denied = True
-                else:
-                    uncertain = True
-            elif (_REQUIREMENT_BARE_SUFFIX_RE.fullmatch(after)
-                  and not _REQUIREMENT_CLAUSE_END_RE.search(match.group())):
-                uncertain = True
+                state, reason = "CONTEXT", "ADJUNCT"
+            elif _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(masked[:match.start()]):
+                reason = "NEGATIVE_MODIFIER"
             else:
-                positive = True
-    return positive, denied, uncertain
+                negations = list(_REQUIREMENT_NEGATION_RE.finditer(after))
+                auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(after)
+                finite_auxiliary = _finite_negative_attachment(after, auxiliary)
+                # -지는 is the focused negative connective of this predicate,
+                # not a new noun taking the topic particle -는. Independent
+                # arguments before the governing token remain visible.
+                argument = next((candidate for candidate in _ARGUMENT_CASE_RE.finditer(after)
+                                 if not (finite_auxiliary and auxiliary
+                                         and auxiliary.start('predicate') <= candidate.start()
+                                         and candidate.end() <= auxiliary.start('auxiliary'))), None)
+                changed_argument = bool(argument and (not negations or argument.start() < negations[0].start()))
+                existential = _DIRECT_EXISTENTIAL_RE.match(after) if not changed_argument else None
+                if auxiliary and not negations:
+                    # Nonfinite -지 않게/-지 않도록 still needs scope review;
+                    # it is not an asserted positive governing predicate.
+                    negations = [auxiliary]
+                direct_negative = not changed_argument and (
+                    finite_auxiliary
+                    or existential and existential.group("predicate") == "없"
+                )
+                if len(negations) > 1:
+                    reason = "NESTED_NEGATION"
+                elif len(negations) == 1 and direct_negative:
+                    state = "POSITIVE" if requires_absence else "DENIED"
+                    reason = "ATTACHED_NEGATIVE_PREDICATE"
+                elif negations:
+                    reason = "CHANGED_ARGUMENT" if changed_argument else "UNBOUND_NEGATION"
+                elif requires_absence:
+                    if existential and existential.group("predicate") == "있":
+                        state, reason = "DENIED", "DISQUALIFYING_PRESENCE"
+                    else:
+                        reason = "UNBOUND_ABSENCE_PREDICATE"
+                elif (_REQUIREMENT_BARE_SUFFIX_RE.fullmatch(after)
+                      and not _REQUIREMENT_CLAUSE_END_RE.search(match.group())):
+                    reason = "BARE_REFERENCE"
+                elif changed_argument:
+                    reason = "CHANGED_ARGUMENT"
+                elif not _has_requirement_predicate(match.group() + after):
+                    reason = "UNBOUND_PREDICATE"
+                else:
+                    state, reason = "POSITIVE", "ASSERTED_PREDICATE"
+            syntax_state = state
+            if chain and state != "CONTEXT" and reason != "NEGATIVE_MODIFIER":
+                state, reason = "UNCERTAIN", "PREDICATE_CHAIN_RELATION_UNRESOLVED"
+            # Public lexical senses may support the final assertion, never an
+            # arbitrary positive act sharing the object. Changed arguments,
+            # embedding, prospectivity and reported scope remain unresolved.
+            tokens = list(re.finditer(r"[가-힣]+", after))
+            independent_argument = any(
+                not (finite_auxiliary and auxiliary
+                     and auxiliary.start('predicate') <= candidate.start()
+                     and candidate.end() <= auxiliary.start('auxiliary'))
+                for candidate in _SEMANTIC_ARGUMENT_CASE_RE.finditer(after))
+            object_case = re.match(r"^\s*(?P<case>[을를])(?:도|만)?(?=\s)", after)
+            event_object = bool(object_case
+                                and not changed_argument and not independent_argument
+                                and not _EMBEDDED_PREDICATE_RE.search(after)
+                                and not requires_absence
+                                and not _REQUIREMENT_NEGATIVE_MODIFIER_RE.search(masked[:match.start()])
+                                and state != "CONTEXT" and reason != "NEGATIVE_MODIFIER")
+            final_token = tokens[-1] if tokens else None
+            if final_token:
+                semantic_evidence = past_predicate_evidence(final_token.group(), event_object=event_object)
+                if (semantic_evidence and any(sense['frame'] == 'STATE_SUBJECT' for sense in semantic_evidence['senses'])
+                        and re.search(r"[가-힣]+(?:으로|로)(?=\s)", after)):
+                    semantic_evidence = past_predicate_evidence(final_token.group(), event_object=False)
+                    semantic_evidence['frame_conflict'] = True
+                if semantic_evidence:
+                    extent = _requirement_extent_observations(
+                        masked, match.start(), match.end(), match.end() + final_token.start())
+                    if extent:
+                        semantic_evidence['scope_limitations'] = extent
+                        semantic_evidence['supports_asserted_fulfillment'] = False
+                        semantic_evidence['total_completion_asserted'] = False
+                    semantic_evidence['argument_span'] = list(match.span())
+                    semantic_evidence['case_span'] = ([match.end() + offset for offset in object_case.span('case')]
+                                                      if object_case else None)
+                    semantic_evidence['argument_binding'] = ('MATCHED_REQUIREMENT_DIRECT_OBJECT'
+                                                             if event_object else 'UNRESOLVED')
+                    semantic_evidence['span'] = [match.end() + offset for offset in final_token.span()]
+                    prior_predicate = first_auxiliary.group('predicate') if chain and first_auxiliary else ''
+                    prior_meaning = sense_evidence(prior_predicate + '다', event_object=event_object)
+                    prior_head = prior_predicate[:-1] if prior_predicate.endswith('하') else prior_predicate
+                    same_event_denial = (prior_predicate == '하'
+                                         or prior_meaning['supports_asserted_fulfillment']
+                                         or bool(prior_head and match.group().endswith(prior_head)))
+                    if chain and (event_object and len(negations) == 1
+                                  and semantic_evidence['supports_asserted_fulfillment']
+                                  and not same_event_denial and not uncertain_quote):
+                        state, reason = "POSITIVE", "ASSERTED_REQUIREMENT_REALIZATION"
+                        chain['relation'] = 'FINAL_REQUIREMENT_REALIZATION'
+                        chain['asserted_fulfillment_supported'] = True
+                    elif state == 'POSITIVE' and not negations:
+                        if semantic_evidence['supports_asserted_fulfillment']:
+                            reason = 'ASSERTED_REQUIREMENT_REALIZATION'
+                        elif (event_object and not extent
+                              and any(sense['category'] in {'COMPLETION', 'REALIZATION'}
+                                      for sense in semantic_evidence['selected_senses'])):
+                            # Preserve existing normal single-clause assertions.
+                            # An unresolved transitive homonym is not a new
+                            # source-backed fulfillment certificate.
+                            reason = 'LEGACY_ASSERTED_PREDICATE_SENSE_UNRESOLVED'
+                        else:
+                            state, reason = 'UNCERTAIN', 'FINAL_ACT_NOT_REQUIREMENT_REALIZATION'
+            if uncertain_quote and state != "CONTEXT":
+                state, reason = "UNCERTAIN", "UNRESOLVED_QUOTATION"
+            observations.append({"span": list(match.span()), "predicate_span": [match.end(), end],
+                                 "state": state, "reason": reason, "legacy_syntax_state": syntax_state})
+            if semantic_evidence:
+                observations[-1]['predicate_semantics'] = semantic_evidence
+            if chain:
+                observations[-1]["predicate_chain"] = chain
+            if auxiliary and reason == "ATTACHED_NEGATIVE_PREDICATE":
+                observations[-1]['governing_predicate_span'] = [match.end() + offset for offset in auxiliary.span('predicate')]
+                observations[-1]['negative_auxiliary_span'] = [match.end() + offset for offset in auxiliary.span('auxiliary')]
+            if reason == "NEGATIVE_MODIFIER":
+                start = max((m.end() for m in _REQUIREMENT_CLAUSE_END_RE.finditer(masked)
+                             if m.end() <= match.start()), default=0)
+                observations[-1]["modifier_span"] = [start, match.start()]
+    return observations
+
+
+def _defense_requirement_state(
+    unit: str, requirements: List[str], limited_conclusions: List[str], polarities: Dict[str, str],
+) -> tuple[bool, bool, bool]:
+    states = {row["state"] for row in _defense_requirement_observations(unit, requirements, limited_conclusions, polarities)}
+    return "POSITIVE" in states, "DENIED" in states, "UNCERTAIN" in states
+
+
+def _review_defense_statement(
+    doc: NormalizedDocument, rule: Dict[str, Any], unit: str, pattern: re.Pattern[str],
+    prior: str, sources: Dict[str, Any], seen: set,
+    *, context_link: Dict[str, Any] | None = None,
+) -> List[Finding]:
+    """Review independent authored spans; a reported statement cannot mask a rebuttal."""
+    masked, unit_quotes = quotation_projection(unit, previous=prior)
+    matches = list(pattern.finditer(masked))
+    signals = load_defense_groups().get("structural_signals", {})
+    req_list, lim_list = signals.get("stated_requirements", []), signals.get("limited_conclusions", [])
+    findings = []
+    for index, match in enumerate(matches):
+        stop = matches[index + 1].start() if index + 1 < len(matches) else len(unit)
+        claim = unit[match.start():stop]
+        local_masked = masked[match.start():stop]
+        quote_rows = [{'span': [max(0, row['span'][0] - match.start()), min(len(claim), row['span'][1] - match.start())],
+                       'role': row['role']} for row in unit_quotes
+                      if row['span'][0] < stop and row['span'][1] > match.start()]
+        uncertain_quote = any(row['role'] in {'UNCERTAIN', 'UNCLOSED'} for row in quote_rows)
+        local_match = pattern.search(local_masked)
+        if local_match is None:
+            continue
+        observations = _defense_requirement_observations(
+            claim, req_list, lim_list, signals.get("requirement_polarities", {}),
+            quotation_uncertain=uncertain_quote, projected_text=local_masked,
+        )
+        states = {row["state"] for row in observations}
+        positive, denied, uncertain = "POSITIVE" in states, "DENIED" in states, "UNCERTAIN" in states
+        has_lim = any(re.search(pat, local_masked) for pat in lim_list)
+        excluded = [(row["span"][0], row["predicate_span"][1]) for row in observations]
+        excluded.extend(tuple(row["modifier_span"]) for row in observations if "modifier_span" in row)
+        scopes = conclusion_scopes(claim, signals.get("categorical_conclusions", []), lim_list,
+                                  _REQUIREMENT_CLAUSE_END_RE, previous=prior,
+                                  start=local_match.end("concession"), speaker_prefix=masked[:match.start()],
+                                  excluded_spans=excluded, projected_text=local_masked,
+                                  quotation_uncertain=uncertain_quote, structural_anchor=True)
+        if context_link and not any(
+            row['authored'] and row['span'][0] + match.start() >= context_link['current_sentence_span'][0]
+            for row in scopes):
+            continue
+        if not scopes or (not any(row["authored"] for row in scopes) and not uncertain_quote):
+            continue
+        scope_uncertain = any(row['authored'] and row.get('scope_uncertain', False) for row in scopes)
+        is_extended = has_lim and any(row["authored"] and not row["limited"] for row in scopes)
+        established_unlimited = any(row['authored'] and not row['limited']
+                                    and not row.get('scope_uncertain', False) for row in scopes)
+        needs_scope_review = scope_uncertain and not denied and not established_unlimited
+        if positive and not denied and not uncertain and not uncertain_quote and has_lim and not is_extended:
+            continue
+        mod_rule = dict(rule)
+        mod_rule["defense_scope"] = {"requirements": observations, "conclusions": scopes,
+                                     "uncertain": uncertain or uncertain_quote or scope_uncertain or not (positive or denied),
+                                     "quotation_spans": [row['span'] for row in quote_rows],
+                                     "quotations": quote_rows,
+                                     "uncertain_quotation": uncertain_quote,
+                                     "statement_span": [match.start(), stop]}
+        if context_link:
+            mod_rule['defense_scope']['context_link'] = context_link
+        if uncertain_quote or needs_scope_review or (has_lim and not denied and not is_extended and (not positive or uncertain)):
+            mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
+            mod_rule["explanation"] = (
+                "항변의 결론이 해당 채무로 한정되어 있으나 법정 요건에 관한 구체적 근거 또는 소명이 부족하므로, "
+                "관련 요건의 충족 여부를 확인해야 합니다."
+            )
+        if needs_scope_review:
+            mod_rule['verdict'] = "요건 확인 요청 (연결된 결론의 법적 효과·범위 확인 필요)"
+            mod_rule['explanation'] = (
+                "법적 항변과 연결된 부정적 결론이 있으나, "
+                "사실행위 부정인지 별도 법적 효과의 주장인지 확정되지 않아 결론의 범위를 확인해야 합니다."
+            )
+        key = (rule["rule_id"], claim[:80])
+        if key not in seen:
+            seen.add(key)
+            findings.append(_finding(doc, mod_rule, claim, sources))
+    return findings
 
 
 def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
@@ -375,6 +652,15 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             prior, previous = previous, unit
             if not unit:
                 continue
+            if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
+                signals = load_defense_groups().get('structural_signals', {})
+                linked = None if pattern.search(unit) else linked_conclusion_text(
+                    prior, unit, signals.get('categorical_conclusions', []),
+                    signals.get('limited_conclusions', []), _REQUIREMENT_CLAUSE_END_RE, pattern)
+                review_unit, context_link = linked if linked else (unit, None)
+                out.extend(_review_defense_statement(doc, rule, review_unit, pattern, prior, sources, seen,
+                                                     context_link=context_link))
+                continue
             m = pattern.search(unit)
             if not m:
                 continue
@@ -389,50 +675,6 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             # 법이 정한 예외를 근거로 든 문장은 규칙이 겨냥한 무리한 주장이 아니다(추가지시 G4 오탐 방지).
             if rule.get("unless") and re.search(rule["unless"], unit):
                 continue
-
-            # TK-32, TK-40: 요건의 긍정적 소명, 발화 주체, 책임 범위의 구조적 판정
-            if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
-                signals = load_defense_groups().get("structural_signals", {})
-                req_list = signals.get("stated_requirements", [])
-                lim_list = signals.get("limited_conclusions", [])
-
-                has_positive_req, has_denied_req, uncertain_req = _defense_requirement_state(
-                    unit, req_list, lim_list, signals.get("requirement_polarities", {})
-                )
-
-                lim_pats = "|".join(lim_list)
-                has_lim = bool(lim_pats and re.search(lim_pats, unit))
-
-                # 타 법적 책임(형사·징계·행정 등)으로의 확장 또는 무제한 무효 주장 여부 검사
-                is_extended = bool(re.search(
-                    r"형사(?:책임|상\s*책임|처벌|고소|범죄)|징계(?:책임|처분|사유)|행정(?:처분|제재)|"
-                    r"당연(?:히)?\s*무효|전면\s*면책|전액\s*면제|어떠한\s*책임도",
-                    unit
-                ))
-
-                # 1. 요건이 긍정적으로 소명되고, 결론이 해당 채무로 한정되며, 타 책임으로 확장되지 않은 정상 항변: 경고 제외
-                if (has_positive_req and not has_denied_req and not uncertain_req
-                        and has_lim and not is_extended):
-                    continue
-
-                # 2. 요건을 부정·미충족으로 자인하였거나 타 책임으로 확장한 경우: 과대주장 경고 유지 (원 규칙)
-                if has_denied_req or is_extended:
-                    pass
-
-                # 3. 결론은 한정되었으나 요건 소명이 부족한 경우: "요건 확인 요청"으로 완화
-                elif has_lim and (not has_positive_req or uncertain_req):
-                    mod_rule = dict(rule)
-                    mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
-                    mod_rule["explanation"] = (
-                        "항변의 결론이 해당 채무로 한정되어 있으나 법정 요건에 관한 구체적 근거 또는 소명이 부족하므로, "
-                        "관련 요건의 충족 여부를 확인해야 합니다."
-                    )
-                    key = (rule["rule_id"], unit[:80])
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    out.append(_finding(doc, mod_rule, unit, sources))
-                    continue
 
             key = (rule["rule_id"], unit[:80])
             if key in seen:
