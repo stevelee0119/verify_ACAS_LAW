@@ -16,8 +16,6 @@ from packages.llm_router.providers import LLMRequest, LLMResponse
 POSITIVES = ["010-9627-4831", "010-8471-6293", "010-5738-1946",
              "850425-1647293", "920613-2146385", "790821-1346927"]
 CONTROLS = ["서원 연구소", "민법 제398조", "2025. 3. 4."]
-PENDING = pytest.mark.xfail(strict=True, raises=AssertionError,
-                            reason="TK55 lossless duplicate JSON leaf inspection pending evaluator promotion")
 
 
 def _request(value, position, escaped, nested):
@@ -60,7 +58,6 @@ def _route(monkeypatch, request):
     return result, sent, reserved
 
 
-@PENDING
 @pytest.mark.parametrize("value", POSITIVES)
 @pytest.mark.parametrize("position", ["system", "user", "schema", "metadata"])
 @pytest.mark.parametrize("escaped", [False, True])
