@@ -50,6 +50,7 @@ from packages.common.enums import (
 )
 from packages.common.schemas import Claim, Finding, NormalizedDocument, SourceRecord
 from packages.document_engine import parse_document
+from packages.document_engine.boundary_candidates import boundary_association_metadata
 from packages.forensic_engine import ForensicContext, ForensicEngine
 from packages.forensic_engine.advisory import AdvisoryContext
 from packages.legal_engine import LegalVerifier, extract_citations, verify_argument_validity
@@ -604,6 +605,9 @@ class VerificationPipeline:
         # 문서 내용에 'ground truth' 또는 '정답지'가 포함된 경우 입력 거부
         check_and_reject_ground_truth(document.filename, doc.visible_text)
         result.normalized = doc
+        boundary_metadata = boundary_association_metadata(doc)
+        if boundary_metadata is not None:
+            result.engine_data['input_boundary_associations'] = boundary_metadata
         result.warnings.extend(doc.parse_warnings)
         result.engine_data["page_coverage"] = doc.structure.get("page_coverage", [])
         result.unverified_items.extend({"kind": "page", "document_id": doc.document_id, **item}

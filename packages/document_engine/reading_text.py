@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from packages.common.schemas import Block, NormalizedDocument
+from .boundary_candidates import reading_boundary_associations
 
 RUNNING_HEAD = "running_head"
 
@@ -197,6 +198,13 @@ class ReadingText:
     text: str
     segments: List[Segment] = field(default_factory=list)
     _starts: List[int] = field(default_factory=list, repr=False)
+    boundary_associations: List[Dict[str, Any]] = field(default_factory=list)
+
+    def boundaries_between(self, start: int, end: int) -> List[Dict[str, Any]]:
+        """Primary span associations only; alternatives have not been evaluated."""
+        return [row for row in self.boundary_associations
+                if (start <= row['reading_span'][0] < end if row['reading_span'][0] == row['reading_span'][1]
+                    else row['reading_span'][1] > start and row['reading_span'][0] < end)]
 
     def locate(self, index: int) -> Tuple[Optional[Block], int]:
         """본문 위치 → (블록, 블록 안 위치). 구분 문자 위치는 뒤 블록의 시작으로 본다."""
@@ -267,6 +275,7 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
     word_pages = _word_wrap_pages(chosen, pages, right_edges)
     parts: List[str] = []
     segments: List[Segment] = []
+    boundary_associations: List[Dict[str, Any]] = []
     cursor = 0
     previous: Optional[Block] = None
     for block in chosen:
@@ -286,10 +295,11 @@ def build_reading_text(doc: NormalizedDocument, blocks: Optional[Iterable[Block]
             parts.append(separator)
             cursor += len(separator)
         segments.append(Segment(cursor, cursor + len(text), block))
+        boundary_associations.extend(reading_boundary_associations(block, cursor, text))
         parts.append(text)
         cursor += len(text)
         previous = block
-    return ReadingText("".join(parts), segments)
+    return ReadingText("".join(parts), segments, boundary_associations=boundary_associations)
 
 
 # --- 문장 경계 --------------------------------------------------------------------
