@@ -4,7 +4,7 @@
 티켓 번호는 발견한 문제 수다. 해소 여부·회귀(구현 수정이 새로 만든 결함)·재발은 아래처럼 따로 센다.
 
 - 전체 75건 · 회귀 24건 · 미해결(open·accepted·merged·known_open) 14건
-- 상태별: open 5 · accepted 3 · merged 4 · known_open 2 · deployed 61 · closed 0
+- 상태별: open 4 · accepted 0 · merged 8 · known_open 2 · deployed 61 · closed 0
 - 해소일(deployed_on·closed_on)은 2026-10-10 이후 기록분만 있다. 그 전 해소 건은 날짜 미상이라 주간 해소 수에 들어가지 않는다.
 
 ## 주별
@@ -30,20 +30,20 @@
 ## 미해결 목록
 | 티켓 | 상태 | 종류 | 발견일 | 메모 |
 |---|---|---|---|---|
-| TK-24 | merged | existing | 2026-10-01 | PR #53 0ad4fac 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 9c1b218 미배포 |
-| TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
+| TK-24 | merged | existing | 2026-10-01 | PR #53 0ad4fac 수용·통합 #67 병합. Steve 통합 반영, 운영 main 9c1b218 미배포 |
+| TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포 |
 | TK-44 | open | regression | 2026-10-03 | 설계 #63 e20bd6c 조건부 승인. 2단계는 평가 조건 2(계약/PDF 보호 시험) 준비 + TK-56 수용 뒤; 사용자 다음 릴리스 우선순위 TK-72→TK-75 뒤 추가 제품 구현, 평가 보호 시험 준비는 가능 |
 | TK-45 | open | regression | 2026-10-03 | Codex 대기열 4순위. TK-24 통합 충족, TK-56→TK-44/49 수용 뒤 |
 | TK-49 | open | regression | 2026-10-03 | TK-44와 묶음. 평가 조건 2 + TK-56 수용 뒤 2단계; 사용자 다음 릴리스 우선순위 TK-72→TK-75 뒤 추가 제품 구현, 평가 보호 시험 준비는 가능 |
 | TK-55 | known_open | regression | 2026-10-04 | 3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음 |
-| TK-56 | accepted | regression | 2026-10-04 | PR #70 71905eb 내용 수용. 과차단 6/28·유출 0·목표 21건 승격, #73 평가 통합 131506d. Steve 병합/배포 전; 최신 필수 CI·사용자 승인·새 봉인 필요 |
+| TK-56 | merged | regression | 2026-10-04 | #70 71905eb 기술 수용·#73 head46774df 동일 SHA CI 성공·Steve8ed13e8 병합. 목표21 strict xfail 제거·기대값 유지. 과차단6/28·유출0. 이전 local full 환경 실패 원본 보존. 아직 운영 배포 전. |
 | TK-57 | known_open | existing | 2026-10-04 | 필수 게이트 8F-1 해소·배포. intl_paren 원본 1/54는 국가코드 범위 참고 잔여(가입자 가림·실제 도달 0), 신규 배정 없음 |
-| TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. 현재 Steve ad25f51 반영, 운영 main 미배포 |
-| TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. 현재 Steve ad25f51 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
-| TK-72 | accepted | existing | 2026-10-10 | PR #72 df4a9c003b0f42cb4faf180fa05b86bafb286d42 내용 수용·평가 PR #73 통합4acea3b. 동일 SHA CI 11개 성공·고정81.7/79.2/오탐0·합성272건 차이0(승인된 헌재 예외 별도)·32k 실제 추출0.693295초. full verify_all 종료1은 환경 실패 원본으로 보존; 3 acceptance UI와 UI 시험 묶음은 허용 환경에서 통과, 마운트 시험 1건은 로컬 실행환경 실패. Steve 병합·새 봉인·배포 전. 이전 불승인 SHA 유지. |
+| TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. Steve 통합 반영, 운영 main 미배포 |
+| TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
+| TK-72 | merged | existing | 2026-10-10 | #72 최종f184253 수용·c26afede 통합·#73 head46774df 필수 CI 성공·Steve8ed13e8 병합. 기존32k/1초 게이트 유지. 과거543fc69 성능 실패와 local full 종료1 보존. 독립 합성 문법20k/전체필드1000 차이0·32k0.295740초는 별도 감사 표본. 새 봉인/운영 배포 전. |
 | TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
-| TK-74 | accepted | existing | 2026-10-10 | PR #68 30f9f92 내용 수용·평가 #73 통합51e042c. 공개 합성32통과·필수 CI11개 성공·고정81.7/79.2/0. 일반 TXT/PDF/DOCX 캐시 검색 회귀 해소; 이전 실패/교체1건 승인 유지. Steve 병합/운영 배포 전. 별도 Codex 구현은 TK-72로 진행, 평가 환경 독립 유지 |
-| TK-75 | open | existing | 2026-10-10 | 사용자 2026-10-10 다음 릴리스 배정. PR #74 40fd3a9 제출; CI/점수 게이트 성공·공개 합성 47건은 제출 보고. 1차 Codex 판정 보류/미수용/미통합: 지정 Claude review_document 경로 대신 공통 argument-validity 경로를 Anthropic/OpenAI/Gemini에 적용, TK-75 고정 참조 SHA와 제출 출처 SHA 불일치, 실제 모델 법률 품질·비용·지연 A/B 미측정. 보완/평가 전 릴리스 제외. 판정 코멘트6098611209. |
+| TK-74 | merged | existing | 2026-10-10 | #68 30f9f92 수용·#73 head46774df CI 성공·Steve8ed13e8 병합. 표 색인·일반TXT/PDF/DOCX 캐시 복구. 기존 교체1건 최소 승인·불승인 이력 유지. 실제 온라인 효과/운영 배포 전. |
+| TK-75 | merged | existing | 2026-10-10 | #74 최종3805e949 기술 수용 리뷰5481214189·CI38094767858/점수38094767864 성공·Steveba12d25 병합. Claude 전용/fallback 유지·수용 참조4a6c651·공개70건. 기본OFF 기술 릴리스, 품질은 배포 후 실제 프로그램OFF/ON 온라인 대조·독립한국변호사1명 조건가림·제3판정 없음. 비용/p95+20% 참고. 실제 개선 미측정; 운영 미배포. 40fd3a9 불승인 이력 보존/사전A/B 조건 대체. |
 
 ## 읽는 법
 - 회귀 비율이 줄면 수정 과정의 품질 관리가 나아지는 것이다. 성능(처음 보는 문서의 탐지율)은 고정 비공개 벤치마크로 따로 본다(`FIXED_BENCHMARK.md`).

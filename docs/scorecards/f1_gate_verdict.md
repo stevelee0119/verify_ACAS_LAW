@@ -1602,3 +1602,28 @@ ACADEMIC_RE 저자 상한 `{0,9}`로 저자 11/12명의 선행 저자가 빠지�
 | CI·기본 안전 게이트 | 같은 SHA 필수 CI·점수 게이트 성공, 공개 합성시험 47 passed는 제출 보고. | 통과한 범위만 확인; 위 미충족 기준 대체 불가 |
 
 구현 경로/provider 범위 및 참조 출처를 보완하고 결과를 확인하기 전에 고정한 기준으로 실제 모델 A/B 평가를 마친 뒤 재판정한다. [PR 판정 코멘트](https://github.com/stevelee0119/verify_ACAS_LAW/pull/74#issuecomment-6098611209). 작성자 PR이라 formal APPROVE 대신 conversation comment를 사용했다.
+
+
+# #73·#74 최종 기술 수용·Steve 통합 (2026-10-11 한국 시각)
+
+사용자 "제안대로 진행해" 승인으로 #73 head46774df를Steve8ed13e8, #74 head3805e949를Steveba12d25에 병합했다. #75 참고 기준 후보 메타데이터는4178cca 반영. 운영main9c1b218/0.12.0 유지. 구현/평가 같은 계열 별도 세션, 별도gpt-6-astra 감사 및 사용자 새 봉인/최종main승인을 유지한다.
+
+| 대상 | 근거 | 판정·한계 |
+|---|---|---|
+| TK56/74/72 #73 46774df | CI38094778368·score38094778357 성공(평가 재실행 아님), Codex COMMENT 리뷰5481242311 | 기술 수용·Steve 병합. 과거 통합/환경 실패는 보존 |
+| TK75 #74 3805e949 | CI38094767858·score38094767864 성공, 리뷰5481214189. 제품/시험은7eab582와 동일 | 기본OFF 기술 수용·Steve 병합. 실제 법률 품질/비용/지연 미측정 |
+| 독립 감사 | [공개 감사](RELEASE_AUDIT_73_74.md), 문법20,000개/전체필드1,000비교 차이0, 공개70건·통합교차25건 통과 | 새P1 미발견(표본 범위). 통합 전체CI/봉인/실제법률 품질 대체 불가 |
+| 제품 통합 | ba12d25 tree b2a8b2aa7a5d82832300f4e4eda53d679093eb58 = 감사표본2eb56ec의 tree | 겹친privacy/review 변경 모두 보존. #75와 이후 평가 기록은 문서만 |
+| 운영 배포 | main9c1b218 유지, 새봉인/최종후보 검증·CI·버전판정·최종승인 별도 | 배포 보류. merged8건을deployed로 기록하지 않음 |
+
+**현행 TK75 품질 평가:** 최신 사용자 결정으로 종전40fd3a9 판정의 사전A/B 요구 및 TK75-AB-20261010-R2 사전표본/통계/제3판정 조건을 대체한다. 40fd3a9 경로/참조 결함은7eab582에서 보완됐고 최종3805e949로 수용했다. 배포 후 같은프로그램OFF/ON 온라인 실행결과·독립한국변호사1명 조건가림 대조. 비용/p95+20% 참고목표; 예산USD40·실제잔여·기존한도 중 낮은값. 실제개선이나 기본ON승인으로 해석하지 않는다. [실행계획](../handoff/requests/TK75_ONLINE_OFF_ON_CHECK.md).
+
+최종 전체검증·CI·새봉인·버전 상태는 [다음릴리스 준비표](RELEASE_NEXT_READINESS.md)에 갱신한다. 기존 기준선·시험 제한은 바꾸지 않았다.
+
+## 제품 후보 full 1회·실패 환경 재확인 (2026-10-11 한국 시각)
+
+- 대상 ba12d25c7f1a877d9d3083dcad460816c718faf6, 기준 운영9c1b21848110a8df6ba0e6308b49e6947c0d6feb. clean tree·오프라인, Python3.11.15/Tesseract5.5.0 kor(저장소CI5.3.4와 다름), `--allow-env-mismatch` 명시. 기존 Playwright 캐시·외부 NanumGothic 경로 대역으로 글꼴 위치만 보완했다. 제품/시험/기준/시간상한 변경 없음.
+- **원본 verify_all full 종료1:** acceptance1014/실제실패0, regression_ledger591/0, full_tests6207/실제실패1, browser_tests197/0. score/regression/hardcoding/test-edit/protected/version 게이트 모두 통과. raw JSON/log는 평가 artifact에 그대로 보존한다. 이 원본을 종료0으로 덮어쓰지 않았다.
+- 유일한 실패는 `tests/test_durability.py::test_mount_detection_uses_the_filesystem_not_the_path`. 운영9c1b218·후보ba12d25의 해당제품/시험 diff0이며 같은 환경의 기본 `/tmp`에서 양쪽 모두 같은assertion 실패를 직접 재현했다. stat device `/`=27, `/tmp`=33, `/workspace`=27: `/tmp`가 별도파일시스템이라 시험의 비마운트 가정이 맞지 않았다.
+- 제품/시험 수정이나 가짜 mount 응답 없이 pytest `--basetemp=/workspace/scratch/<대상>-pytest`로 실패1건만 재검증했다. 운영본exit0/후보exit0 **각1건 통과**. 통과한 나머지 묶음은 재실행하지 않았다. 전체원본1·별도환경보완2통과를 구분하며 full명령 전체종료0으로 표현하지 않는다. 현재 확인된 후보 고유 코드 실패0; 최종같은SHA CI 및 새봉인/버전/사용자배포승인은 별도다.
+- 고정 성적표 후보 dev81.7/holdout79.2/FP0, A0·인젝션방어. 환경이 다른 사용자 고정비공개벤치마크20.5와 같은 측정으로 합치지 않는다. 실제법률품질/과금/지연·새봉인·최종고정비공개벤치마크 미측정.
