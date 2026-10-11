@@ -289,6 +289,51 @@ def test_synthetic_unclassified_pdf_footer_is_preserved_as_residual(tmp_path, se
     assert len(_duplicates(doc)) == 1
 
 
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("locator", [False, True])
+@pytest.mark.parametrize("title,first,second", [
+    ("기록", ": 동쪽에 있다.", ": 동쪽에 있다!"),
+    ("관찰표", "： 상단에 있다。", ": 상단에 있다."),
+    ("안내문", ": 북쪽을 표시한다！", "： 북쪽을 표시한다。"),
+])
+def test_synthetic_single_terminal_mark_variants_are_repeat_identities(tmp_path, extension, section, locator,
+                                                                      title, first, second):
+    anchor = f"갑 제1호증 {title}" + (", 부록7쪽 확인 부분." if locator else "")
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        anchor, f"갑 제1호증 {title}{first}", f"갑 제1호증 {title}{second}", "첨부서류",
+    ])
+    for row in exhibit_rows(doc):
+        _assert_source_projection(doc, row, _duplicate_mention_view(row))
+    assert not _duplicates(doc)
+
+
+@pytest.mark.parametrize("extension", ["pdf", "txt"])
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("locator", [False, True])
+@pytest.mark.parametrize("first,second", [
+    ("동쪽에 있다.", "서쪽에 있다!"),
+    ("동쪽에 조금 있다.", "동쪽에 많이 있다!"),
+    ("동쪽에만 있다.", "동쪽에 있다!"),
+    ("동쪽에 있다.", "동쪽에 없다!"),
+    ("[2024. 1. 2.] 동쪽에 있다.", "[2024. 1. 3.] 동쪽에 있다!"),
+    ("동쪽에 있다.", "동쪽에 있다?"),
+    ("동쪽에 있다.", "동쪽에 있다!!"),
+    ("동쪽에 있다. 참고: 첫 부분.", "동쪽에 있다! 참고: 첫 부분."),
+])
+def test_synthetic_terminal_projection_preserves_complete_caption_differences(tmp_path, extension, section,
+                                                                             locator, first, second):
+    anchor = "갑 제1호증 기록" + (", 부록7쪽 확인 부분." if locator else "")
+    doc = _parsed(tmp_path, extension, (["입증방법"] if section else []) + [
+        anchor, f"갑 제1호증 기록: {first}", f"갑 제1호증 기록: {second}", "첨부서류",
+    ])
+    for row in exhibit_rows(doc):
+        _assert_source_projection(doc, row, _duplicate_mention_view(row))
+    found = _duplicates(doc)
+    assert len(found) == 1
+    assert str(found[0].evidence_grade) == "A"
+
+
 def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # Measure the new source projection/comparison work on thousands of
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
