@@ -1,0 +1,112 @@
+"""Synthetic glyph observations; no document fixtures or lexical exceptions."""
+import pytest
+
+from packages.document_engine.boundary_signals import glyph_line_evidence, observe_boundary
+from packages.document_engine import parse_document
+from packages.document_engine.paragraph_reconstruction import join_lines
+from packages.document_engine.paragraph_reconstruction import reconstruct_page_blocks
+from packages.common.schemas import BBox, Block
+
+
+def _glyphs(text, *, upright=True):
+    return [{"text": char, "x0": i * 10, "x1": (i + 1) * 10,
+             "size": 10, "upright": upright} for i, char in enumerate(text)]
+
+
+@pytest.mark.parametrize("left,right", [("가나다 ", "라마"), ("바사", " 아자"), ("차카 ", " 타파")])
+def test_direct_boundary_whitespace_is_observable(left, right):
+    a = glyph_line_evidence(_glyphs(left), list(range(len(left))))
+    b = glyph_line_evidence(_glyphs(right), list(range(len(left), len(left) + len(right))))
+    observation = observe_boundary({"glyph_boundary_evidence": a}, {"glyph_boundary_evidence": b})
+    assert observation["boundary_signal"] == "SPACE_CONFIRMED"
+    assert observation["space_glyph_indices"]
+
+
+@pytest.mark.parametrize("left,right", [("가나다", "라마"), ("바사", "아자"), ("차카", "타파")])
+def test_absent_space_is_not_join_evidence(left, right):
+    a = glyph_line_evidence(_glyphs(left), list(range(len(left))))
+    b = glyph_line_evidence(_glyphs(right), list(range(len(left), len(left) + len(right))))
+    assert observe_boundary({"glyph_boundary_evidence": a}, {"glyph_boundary_evidence": b})["boundary_signal"] == "UNKNOWN"
+
+
+def test_rotated_or_overlapping_glyphs_cannot_confirm_spaces():
+    chars = _glyphs("가나 ", upright=False)
+    evidence = glyph_line_evidence(chars, [0, 1, 2])
+    assert not evidence["usable"]
+    chars = _glyphs("가나 ")
+    chars[-1]["x0"] = 0
+    assert not glyph_line_evidence(chars, [0, 1, 2])["usable"]
+
+
+@pytest.mark.parametrize("has_space", [False, True])
+@pytest.mark.parametrize("size,extra,width", [(10, 0, 320), (12, 1, 600), (16, 2, 900)])
+def test_real_pdf_boundary_evidence_controls_reconstruction(tmp_path, has_space, size, extra, width):
+    from reportlab.pdfgen import canvas
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+
+    pdfmetrics.registerFont(UnicodeCIDFont("HYSMyeongJo-Medium"))
+    path = tmp_path / "synthetic-boundaries.pdf"
+    pdf = canvas.Canvas(str(path), pagesize=(width, 800))
+    pdf.setFont("HYSMyeongJo-Medium", size)
+    pdf.drawString(70, 700, "가나다 (라" + (" " if has_space else ""))
+    pdf.drawString(70, 700 - size * 1.5, "마바사) 아자차카.")
+    for index in range(extra):
+        pdf.drawString(70, 500 - index * size * 1.5, "타파하 가나다라마 바사아자차카.")
+    pdf.save()
+    doc = parse_document(str(path), document_id="synthetic", filename=path.name,
+                         mime_type="application/pdf", sha256="synthetic")
+    observations = [entry for page in doc.pages for block in page.blocks
+                    for entry in block.attributes.get("boundary_observations", [])]
+    assert observations, doc.parse_warnings
+    assert observations[0]["boundary_signal"] == ("SPACE_CONFIRMED" if has_space else "UNKNOWN")
+    target = next(block for page in doc.pages for block in page.blocks if "가나다 (라" in block.text)
+    assert target.text == "가나다 (라" + (" " if has_space else "") + "마바사) 아자차카."
+    assert bool(observations[0]["space_glyph_indices"]) == has_space
+
+
+@pytest.mark.parametrize("left,right", [("가나다 (라", "마바사)"), ("아자 차", "카타파"), ("하가", "나다")])
+def test_explicit_signal_triplet_and_legacy_compatibility(left, right):
+    assert join_lines(left, right, boundary_signal="JOIN_CONFIRMED") == left + right
+    assert join_lines(left, right, boundary_signal="SPACE_CONFIRMED") == left + " " + right
+    assert join_lines(left, right, True, True, boundary_signal="UNKNOWN") == join_lines(left, right, True, True)
+
+
+@pytest.mark.parametrize("left,right", [("(", "가"), ("가", ")"), ("가", ",")])
+def test_explicit_space_precedes_punctuation_heuristics(left, right):
+    assert join_lines(left, right, boundary_signal="SPACE_CONFIRMED") == left + " " + right
+
+
+@pytest.mark.parametrize("signal", ["JOIN_CONFIRMED", "SPACE_CONFIRMED", "UNKNOWN"])
+def test_valid_signals_preserve_empty_identity(signal):
+    assert join_lines("", " Ａ ", boundary_signal=signal) == "A "
+    assert join_lines(" Ａ ", "", boundary_signal=signal) == " A"
+
+
+@pytest.mark.parametrize("signal", ["join", "", None, []])
+def test_invalid_signal_raises_even_for_empty_inputs(signal):
+    with pytest.raises(ValueError):
+        join_lines("", "", boundary_signal=signal)
+
+
+@pytest.mark.parametrize("width", [320, 600, 900])
+def test_single_longest_endpoint_is_not_a_full_line_signal(width):
+    lines = [Block(block_id="a", text="가나다 라", page=1, bbox=BBox(50, 50, 200, 62)),
+             Block(block_id="b", text="마바사.", page=1, bbox=BBox(50, 64, 150, 76))]
+    result = reconstruct_page_blocks(lines, page_width=width)
+    assert result[0].text == "가나다 라 마바사."
+    assert result[0].attributes["boundary_observations"][0]["boundary_signal"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("width", [420, 595, 720])
+@pytest.mark.parametrize("endpoint", [300, 500])
+def test_unknown_repeated_endpoints_keep_baseline_fullness(width, endpoint):
+    lines = [Block(block_id="a", text="가나다 라", page=1, bbox=BBox(50, 50, endpoint, 62)),
+             Block(block_id="b", text="마바사 내용을", page=1, bbox=BBox(50, 64, endpoint, 76)),
+             Block(block_id="c", text="안내하였다.", page=1, bbox=BBox(50, 78, 200, 90))]
+    result = reconstruct_page_blocks(lines, page_width=width)
+    legacy_joined = endpoint == 500 and width in (420, 595)
+    assert result[0].text == "가나다 라" + ("" if legacy_joined else " ") + "마바사 내용을 안내하였다."
+    assert result[0].attributes["paragraph_right_edge"] == endpoint
+    assert result[0].attributes["char_wrap_state"] == "UNKNOWN"
+    assert all(item["boundary_signal"] == "UNKNOWN" for item in result[0].attributes["boundary_observations"])

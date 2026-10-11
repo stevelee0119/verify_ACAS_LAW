@@ -457,7 +457,8 @@ def review_document(result, library, router, context, pii):
             system=RAG_REVIEW_SYSTEM_PROMPT,
             user=json.dumps({"document": document, "untrusted_references": [
                 {k: s[k] for k in ("source_id", "title", "text", "page")} for s in s_batch]}, ensure_ascii=False),
-            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls})
+            schema=ENVELOPE_SCHEMA, max_tokens=4000, metadata={"stage": "drive_rag_advisory", "batch": total_calls},
+            input_contract="reference_review_v1")
         request = with_review_context(request, enabled=korean_profile, reference_date=getattr(context, "case_date", None))
         # One selected provider; the existing router bounds each call and its transient retries.
         batch_outcome = asyncio.run(router.run(LLMRole.PRIMARY_REASONER, request,
@@ -649,6 +650,7 @@ def review_document(result, library, router, context, pii):
             system=RAG_REVIEW_SYSTEM_PROMPT,
             user=json.dumps(claim_payload, ensure_ascii=False),
             schema=ENVELOPE_SCHEMA,
+            input_contract="claim_review_v1",
             max_tokens=4000,
             metadata={"stage": "claim_rag_advisory", "claim_id": c_id},
         )

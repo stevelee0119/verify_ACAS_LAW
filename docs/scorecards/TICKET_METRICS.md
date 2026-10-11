@@ -4,7 +4,7 @@
 티켓 번호는 발견한 문제 수다. 해소 여부·회귀(구현 수정이 새로 만든 결함)·재발은 아래처럼 따로 센다.
 
 - 전체 75건 · 회귀 24건 · 미해결(open·accepted·merged·known_open) 14건
-- 상태별: open 4 · accepted 0 · merged 8 · known_open 2 · deployed 61 · closed 0
+- 상태별: open 4 · accepted 1 · merged 8 · known_open 1 · deployed 61 · closed 0
 - 해소일(deployed_on·closed_on)은 2026-10-10 이후 기록분만 있다. 그 전 해소 건은 날짜 미상이라 주간 해소 수에 들어가지 않는다.
 
 ## 주별
@@ -32,18 +32,18 @@
 |---|---|---|---|---|
 | TK-24 | merged | existing | 2026-10-01 | PR #53 0ad4fac 수용·통합 #67 병합. Steve 통합 반영, 운영 main 9c1b218 미배포 |
 | TK-43 | merged | regression | 2026-10-03 | PR #62 e4867e7 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포 |
-| TK-44 | open | regression | 2026-10-03 | 설계 #63 e20bd6c 조건부 승인. 2단계는 평가 조건 2(계약/PDF 보호 시험) 준비 + TK-56 수용 뒤; 사용자 다음 릴리스 우선순위 TK-72→TK-75 뒤 추가 제품 구현, 평가 보호 시험 준비는 가능 |
-| TK-45 | open | regression | 2026-10-03 | Codex 대기열 4순위. TK-24 통합 충족, TK-56→TK-44/49 수용 뒤 |
-| TK-49 | open | regression | 2026-10-03 | TK-44와 묶음. 평가 조건 2 + TK-56 수용 뒤 2단계; 사용자 다음 릴리스 우선순위 TK-72→TK-75 뒤 추가 제품 구현, 평가 보호 시험 준비는 가능 |
-| TK-55 | known_open | regression | 2026-10-04 | 3절(키 신호 없는 역할 명사 키) 알려진 미해결, 배정 없음 |
+| TK-44 | open | regression | 2026-10-03 | #78 c6e 직접SPACE 보존·#86 ebd UNKNOWN lazy대안/진단 메타데이터 제한범위내용수용·844평가통합CI성공. 실제명시SPACE48/48·UNKNOWN24·legacy29출력동일9/29. primary폭의존/ActualText잔여유지·완전해소아님·최종full/봉인/운영배포전. |
+| TK-45 | open | regression | 2026-10-03 | PR84 d11ae3e 불수용 리뷰5481744949. 같은SHA 필수CI성공이나 기존20 부정8/8·정상7/8·확장0/4 유지; actualTXT 전체pipeline도 동일. 새clause/effect 일반화설계부터 보완·원래계약유지·미통합/미배포. |
+| TK-49 | open | regression | 2026-10-03 | #78 c6e 직접SPACE 보존·#86 ebd UNKNOWN lazy대안/진단 메타데이터 제한범위내용수용·844평가통합CI성공. 실제명시SPACE48/48·UNKNOWN24·legacy29출력동일9/29. primary폭의존/ActualText잔여유지·완전해소아님·최종full/봉인/운영배포전. |
+| TK-55 | known_open | regression | 2026-10-04 | #82 ce83355 first-party계약/손실없는JSON 제한범위 내용 수용. 기존개인정보/라우터 보호 유지·#81과 통합PHONE/RRN 도달0. 호환성 결정에 따라 legacy역할키24/encoded불명역할 잔여 유지·전체해소 아님·최종릴리스 대기. |
 | TK-56 | merged | regression | 2026-10-04 | #70 71905eb 기술 수용·#73 head46774df 동일 SHA CI 성공·Steve8ed13e8 병합. 목표21 strict xfail 제거·기대값 유지. 과차단6/28·유출0. 이전 local full 환경 실패 원본 보존. 아직 운영 배포 전. |
-| TK-57 | known_open | existing | 2026-10-04 | 필수 게이트 8F-1 해소·배포. intl_paren 원본 1/54는 국가코드 범위 참고 잔여(가입자 가림·실제 도달 0), 신규 배정 없음 |
+| TK-57 | accepted | existing | 2026-10-04 | #81 0261 국가코드전체범위 내용 수용: intl_paren 포함 PHONE누락1/54→0/54·RRN0/84·mockprovider0. 평가draft통합 상태, Steve병합/최종검증/봉인/배포 대기. |
 | TK-69 | merged | existing | 2026-10-07 | PR #56 ce68dc4 수용·통합 #67 병합. Steve 통합 반영, 운영 main 미배포 |
 | TK-70 | merged | existing | 2026-10-09 | PR #60 db21f19 수용·통합 #69 병합. Steve 통합 반영, 운영 main 미배포. 배포 후 온라인 v2/서면9 확인 |
 | TK-72 | merged | existing | 2026-10-10 | #72 최종f184253 수용·c26afede 통합·#73 head46774df 필수 CI 성공·Steve8ed13e8 병합. 기존32k/1초 게이트 유지. 과거543fc69 성능 실패와 local full 종료1 보존. 독립 합성 문법20k/전체필드1000 차이0·32k0.295740초는 별도 감사 표본. 새 봉인/운영 배포 전. |
-| TK-73 | open | existing | 2026-10-10 | 평가 측 사전 점검 대기, 미배정 |
+| TK-73 | open | existing | 2026-10-10 | PR79 2f1424d 불수용 리뷰5481729440. 같은SHA CI성공이나 은퇴20261010 AFP3/필수0 유지. line출처후보-anchor완전일치0의 경계 새설계부터 보완. 신규tablegap은별도잔여·현필수실패원인아님. 미통합/미배포. |
 | TK-74 | merged | existing | 2026-10-10 | #68 30f9f92 수용·#73 head46774df CI 성공·Steve8ed13e8 병합. 표 색인·일반TXT/PDF/DOCX 캐시 복구. 기존 교체1건 최소 승인·불승인 이력 유지. 실제 온라인 효과/운영 배포 전. |
-| TK-75 | merged | existing | 2026-10-10 | #74 최종3805e949 기술 수용 리뷰5481214189·CI38094767858/점수38094767864 성공·Steveba12d25 병합. Claude 전용/fallback 유지·수용 참조4a6c651·공개70건. 기본OFF 기술 릴리스, 품질은 배포 후 실제 프로그램OFF/ON 온라인 대조·독립한국변호사1명 조건가림·제3판정 없음. 비용/p95+20% 참고. 실제 개선 미측정; 운영 미배포. 40fd3a9 불승인 이력 보존/사전A/B 조건 대체. |
+| TK-75 | merged | existing | 2026-10-10 | #74 최종3805e949 기술 수용 리뷰5481214189·CI38094767858/점수38094767864 성공·Steveba12d25 병합. Claude 전용/fallback 유지·수용 참조4a6c651·공개70건. 기본OFF 기술 릴리스, 품질은 배포 후 실제 프로그램OFF/ON 온라인 대조·독립한국변호사1명 조건가림·제3판정 없음. 비용평가·증가율조건은사용자최신결정으로삭제·가격PR87폐기. 기존USD40예산보호유지·배포후ON분석JSON실제Claude토큰변화참고. 실제 개선 미측정; 운영 미배포. 40fd3a9 불승인 이력 보존/사전A/B 조건 대체. |
 
 ## 읽는 법
 - 회귀 비율이 줄면 수정 과정의 품질 관리가 나아지는 것이다. 성능(처음 보는 문서의 탐지율)은 고정 비공개 벤치마크로 따로 본다(`FIXED_BENCHMARK.md`).
