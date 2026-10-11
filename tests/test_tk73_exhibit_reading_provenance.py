@@ -268,6 +268,25 @@ def test_synthetic_repeated_complete_prose_identity_still_corroborates(tmp_path,
     assert not _duplicates(doc)
 
 
+@pytest.mark.parametrize("section", [False, True])
+@pytest.mark.parametrize("title,first,second", _PROSE_IDENTITY_CONTROLS)
+def test_synthetic_unclassified_pdf_footer_is_preserved_as_residual(tmp_path, section, title, first, second):
+    # Without a following section, the unchanged legacy parser appends the
+    # one-page generator footer to the last row. This remains an explicit FP
+    # residual; no footer vocabulary is removed to force identity agreement.
+    narrative = f"갑 제1호증 {title}: {first}"
+    doc = _parsed(tmp_path, "pdf", (["입증방법"] if section else []) + [
+        f"갑 제1호증 {title}", narrative, narrative,
+    ])
+    rows = exhibit_rows(doc)
+    views = [_duplicate_mention_view(row) for row in rows]
+    for row, view in zip(rows, views):
+        _assert_source_projection(doc, row, view)
+    assert views[1]["fallback"] != views[2]["fallback"]
+    assert any(origin["origin"] == "continuation" for origin in views[2]["origins"])
+    assert len(_duplicates(doc)) == 1
+
+
 def test_synthetic_forward_provenance_and_continuation_runtime(tmp_path):
     # Measure the new source projection/comparison work on thousands of
     # distinct physical mentions. Existing PDF/TXT parsing is outside this
