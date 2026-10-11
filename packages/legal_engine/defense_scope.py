@@ -64,6 +64,57 @@ def categorical_patterns(patterns: list[str]) -> list[str]:
     return [pattern.replace('(?:이|은)?', '(?:이|은|도|조차|마저)?') for pattern in patterns]
 
 
+# Finite morphology supplies review candidates, never a domain vocabulary or
+# proof that a nonpast negative is a legal exemption rather than a fact.
+_FINITE_NEGATIVE_EFFECT_RE = re.compile(
+    r"(?<![가-힣])(?P<argument>[가-힣]+?)(?:을|를)\s+"
+    r"(?:[가-힣]+(?:히|게)\s+)*"
+    r"(?P<predicate>[가-힣]+?(?:지는|지도|지)\s*(?:않는다|않습니다|못한다))"
+    r"(?=\s|[,;.!?]|$)"
+)
+SUBJECT_CASE_RE = re.compile(r"(?<![가-힣])(?P<argument>[가-힣]{2,}?)(?:이|가|은|는)(?=\s|[,;.!?]|$)")
+_OBJECT_CASE_RE = re.compile(r"(?<![가-힣])(?P<argument>[가-힣]+?)(?:을|를)(?=\s|[,;.!?]|$)")
+_EXPLICIT_CONCLUSION_LINK_RE = re.compile(r"^\s*(?:따라서|그러므로|그렇기에|이에)(?=\s|,)")
+
+
+def linked_conclusion_text(
+    previous_text: str, text: str, categorical: list[str], limited: list[str],
+    breaks: re.Pattern[str], anchor: re.Pattern[str],
+) -> tuple[str, dict[str, Any]] | None:
+    """Supply only an immediately prior authored anchor with an explicit link.
+
+    An introduced subject needs a shared argument head from the prior limited
+    conclusion. An unexplained subject/topic reset cannot inherit its premise.
+    Returned spans are local to the two source sentences, not the document.
+    """
+    link = _EXPLICIT_CONCLUSION_LINK_RE.match(text)
+    if not link or not previous_text:
+        return None
+    projected, rows = quotation_projection(previous_text)
+    match = anchor.search(projected)
+    if match is None or any(row['role'] in {'UNCERTAIN', 'UNCLOSED'} for row in rows):
+        return None
+    prior_scopes = conclusion_scopes(previous_text, categorical, limited, breaks,
+                                    start=match.end('concession'), projected_text=projected)
+    if not any(row['authored'] for row in prior_scopes):
+        return None
+    current, _ = quotation_projection(text, previous=previous_text)
+    subjects = list(SUBJECT_CASE_RE.finditer(current[link.end():]))
+    if subjects:
+        heads = [argument.group('argument') for pattern in limited
+                 for limit in re.finditer(pattern, projected)
+                 for argument in _OBJECT_CASE_RE.finditer(limit.group())]
+        if not heads or any(not any(subject.group('argument').endswith(head) for head in heads)
+                            for subject in subjects):
+            return None
+    combined = previous_text + ' ' + text
+    return combined, {'relation': 'EXPLICIT_IMMEDIATE_CONCLUSION',
+                      'prior_sentence_span': [0, len(previous_text)],
+                      'current_sentence_span': [len(previous_text) + 1, len(combined)],
+                      'link_span': [len(previous_text) + 1 + link.start(),
+                                    len(previous_text) + 1 + link.end()]}
+
+
 def conclusion_scopes(
     text: str, categorical: list[str], limited: list[str], breaks: re.Pattern[str],
     *, previous: str = '', start: int = 0, speaker_prefix: str = '',
@@ -93,10 +144,40 @@ def conclusion_scopes(
                                previous=previous)
             observed.append({
                 'span': list(match.span()),
+                'candidate_kind': 'CONFIGURED',
+                'scope_uncertain': False,
                 'clause_end': end,
                 'speaker': speaker,
                 'uncertain_quotation': uncertain_quote,
                 'limited': any(left <= match.start() and match.end() <= right for left, right in limits),
                 'authored': speaker == ASSERTED,
             })
+    anchors = [row for row in observed if row['authored']]
+    for match in _FINITE_NEGATIVE_EFFECT_RE.finditer(masked):
+        if match.start() < start or any(left < match.end() and match.start() < right
+                                       for left, right in excluded_spans or []):
+            continue
+        if any(row['span'][0] < match.end() and match.start() < row['span'][1] for row in observed):
+            continue
+        earlier = [row for row in anchors if row['span'][1] <= match.start()]
+        if not earlier:
+            continue
+        anchor = max(earlier, key=lambda row: row['span'][1])
+        # Preserve independent subjects and stated facts; a matrix attribution
+        # or topic reset is not merely another effect of the old argument.
+        between = masked[anchor['clause_end']:match.start()]
+        if SUBJECT_CASE_RE.search(between):
+            continue
+        end = clause_end(masked, match.end(), breaks)
+        speaker = polarity(speaker_prefix + masked[:end],
+                           (len(speaker_prefix) + match.start(), len(speaker_prefix) + match.end()),
+                           previous=previous)
+        observed.append({'span': list(match.span()), 'clause_end': end,
+                         'candidate_kind': 'FINITE_NEGATIVE', 'scope_uncertain': True,
+                         'speaker': speaker, 'uncertain_quotation': uncertain_quote,
+                         'limited': any(left <= match.start() and match.end() <= right for left, right in limits),
+                         'authored': speaker == ASSERTED,
+                         'argument_span': list(match.span('argument')),
+                         'predicate_span': list(match.span('predicate')),
+                         'anchor_span': anchor['span']})
     return sorted(observed, key=lambda observation: observation['span'])

@@ -18,7 +18,7 @@ from packages.document_engine.reading_text import build_reading_text, sentence_b
 
 from .polarity import asserted
 from .defense_scope import (
-    categorical_patterns, clause_end, conclusion_scopes, mask_quotations,
+    categorical_patterns, clause_end, conclusion_scopes, linked_conclusion_text, mask_quotations,
     quotation_projection,
 )
 
@@ -342,6 +342,26 @@ def _defense_requirement_observations(
                 end = min(later_conclusions)
             if any(start <= match.start() < stop for start, stop in conclusions):
                 continue
+            first_end = end
+            first_after = masked[match.end():end]
+            first_auxiliary = _DIRECT_NEGATIVE_AUXILIARY_RE.match(first_after)
+            continuation = bool(first_auxiliary and re.search(
+                r"(?:않|아니하|못하)(?:고|으며)\s*$", first_after))
+            chain = None
+            if continuation:
+                # Nonpast -지 않고 can qualify a following act. It is not a
+                # completed denial, and an arbitrary final positive act does
+                # not certify fulfillment of the requirement either.
+                end = clause_end(masked, first_end + 1, _REQUIREMENT_CLAUSE_END_RE)
+                later = [left for left, _ in conclusions if match.end() <= left < end]
+                if later:
+                    end = min(later)
+                if masked[first_end:end].strip():
+                    chain = {"negative_span": [match.end(), first_end],
+                             "continuation_span": [first_end, end],
+                             "relation": "UNRESOLVED", "fulfillment_certified": False}
+                else:
+                    end = first_end
             after = masked[match.end():end]
             state, reason = "UNCERTAIN", "UNBOUND_PREDICATE"
             auxiliary = None
@@ -392,10 +412,14 @@ def _defense_requirement_observations(
                     reason = "UNBOUND_PREDICATE"
                 else:
                     state, reason = "POSITIVE", "ASSERTED_PREDICATE"
+            if chain and state != "CONTEXT":
+                state, reason = "UNCERTAIN", "PREDICATE_CHAIN_RELATION_UNRESOLVED"
             if uncertain_quote and state != "CONTEXT":
                 state, reason = "UNCERTAIN", "UNRESOLVED_QUOTATION"
             observations.append({"span": list(match.span()), "predicate_span": [match.end(), end],
                                  "state": state, "reason": reason})
+            if chain:
+                observations[-1]["predicate_chain"] = chain
             if auxiliary and reason == "ATTACHED_NEGATIVE_PREDICATE":
                 observations[-1]['governing_predicate_span'] = [match.end() + offset for offset in auxiliary.span('predicate')]
                 observations[-1]['negative_auxiliary_span'] = [match.end() + offset for offset in auxiliary.span('auxiliary')]
@@ -416,6 +440,7 @@ def _defense_requirement_state(
 def _review_defense_statement(
     doc: NormalizedDocument, rule: Dict[str, Any], unit: str, pattern: re.Pattern[str],
     prior: str, sources: Dict[str, Any], seen: set,
+    *, context_link: Dict[str, Any] | None = None,
 ) -> List[Finding]:
     """Review independent authored spans; a reported statement cannot mask a rebuttal."""
     masked, unit_quotes = quotation_projection(unit, previous=prior)
@@ -450,21 +475,33 @@ def _review_defense_statement(
                                   quotation_uncertain=uncertain_quote)
         if not scopes or (not any(row["authored"] for row in scopes) and not uncertain_quote):
             continue
+        scope_uncertain = any(row['authored'] and row.get('scope_uncertain', False) for row in scopes)
         is_extended = has_lim and any(row["authored"] and not row["limited"] for row in scopes)
+        established_unlimited = any(row['authored'] and not row['limited']
+                                    and not row.get('scope_uncertain', False) for row in scopes)
+        needs_scope_review = scope_uncertain and not denied and not established_unlimited
         if positive and not denied and not uncertain and not uncertain_quote and has_lim and not is_extended:
             continue
         mod_rule = dict(rule)
         mod_rule["defense_scope"] = {"requirements": observations, "conclusions": scopes,
-                                     "uncertain": uncertain or uncertain_quote or not (positive or denied),
+                                     "uncertain": uncertain or uncertain_quote or scope_uncertain or not (positive or denied),
                                      "quotation_spans": [row['span'] for row in quote_rows],
                                      "quotations": quote_rows,
                                      "uncertain_quotation": uncertain_quote,
                                      "statement_span": [match.start(), stop]}
-        if uncertain_quote or (has_lim and not denied and not is_extended and (not positive or uncertain)):
+        if context_link:
+            mod_rule['defense_scope']['context_link'] = context_link
+        if uncertain_quote or needs_scope_review or (has_lim and not denied and not is_extended and (not positive or uncertain)):
             mod_rule["verdict"] = "요건 확인 요청 (구체적 요건 소명 확인 필요)"
             mod_rule["explanation"] = (
                 "항변의 결론이 해당 채무로 한정되어 있으나 법정 요건에 관한 구체적 근거 또는 소명이 부족하므로, "
                 "관련 요건의 충족 여부를 확인해야 합니다."
+            )
+        if needs_scope_review:
+            mod_rule['verdict'] = "요건 확인 요청 (연결된 결론의 법적 효과·범위 확인 필요)"
+            mod_rule['explanation'] = (
+                "한정된 항변 뒤에 다른 논항의 부정적 결론이 연결되어 있으나, "
+                "사실행위 부정인지 별도 법적 효과의 주장인지 확정되지 않아 결론의 범위를 확인해야 합니다."
             )
         key = (rule["rule_id"], claim[:80])
         if key not in seen:
@@ -515,7 +552,13 @@ def review_legal_rules(doc: NormalizedDocument) -> List[Finding]:
             if not unit:
                 continue
             if rule.get("rule_id") == "GEN.DEFENSE_OVERCLAIM_WITHOUT_REQUIREMENTS":
-                out.extend(_review_defense_statement(doc, rule, unit, pattern, prior, sources, seen))
+                signals = load_defense_groups().get('structural_signals', {})
+                linked = None if pattern.search(unit) else linked_conclusion_text(
+                    prior, unit, signals.get('categorical_conclusions', []),
+                    signals.get('limited_conclusions', []), _REQUIREMENT_CLAUSE_END_RE, pattern)
+                review_unit, context_link = linked if linked else (unit, None)
+                out.extend(_review_defense_statement(doc, rule, review_unit, pattern, prior, sources, seen,
+                                                     context_link=context_link))
                 continue
             m = pattern.search(unit)
             if not m:
