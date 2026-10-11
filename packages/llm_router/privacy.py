@@ -309,13 +309,24 @@ def is_registered_schema(schema: Any) -> bool:
 # ===========================================================================
 # R8-A / 8B-2 (TK-51, TK-52 2절): 구조화 JSON 값에서 문맥을 복원하여 문자열 추출
 # ===========================================================================
+@dataclass(frozen=True)
+class _JSONObjectPairs:
+    """Inspection-only JSON object; duplicate values must never disappear."""
+
+    pairs: tuple[tuple[str, Any], ...]
+
+
+def _json_object_pairs(pairs):
+    return _JSONObjectPairs(tuple(pairs))
+
+
 def _try_json_parse(value: str):
     """문자열을 JSON으로 파싱 시도. 성공하면 파싱 결과, 실패하면 None 반환."""
     try:
-        decoded = json.loads(value)
+        decoded = json.loads(value, object_pairs_hook=_json_object_pairs)
     except (ValueError, TypeError):
         return None
-    if isinstance(decoded, (dict, list)):
+    if isinstance(decoded, (_JSONObjectPairs, list, str)):
         return decoded
     return None
 
@@ -346,10 +357,11 @@ def _collect_texts_from_value(
             # 일반 문자열 값
             results.append((path, value))
 
-    elif isinstance(value, dict):
+    elif isinstance(value, (dict, _JSONObjectPairs)):
         # 각 키-값 쌍을 검사
         str_items: List[Tuple[str, str]] = []  # 형제 문자열 (key, value) 수집용
-        for key, item in value.items():
+        items = value.pairs if isinstance(value, _JSONObjectPairs) else value.items()
+        for key, item in items:
             current_path = f"{path}.{key}" if path else str(key)
             label = _person_label_for_key(key)
             marker = _has_name_field_marker(key)
