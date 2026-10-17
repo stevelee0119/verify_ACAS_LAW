@@ -13,17 +13,31 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from packages.claim_engine.date_verifier import DATE_WEEKDAY_RE, HEADING_LINE_RE
+from packages.claim_engine.evidence_consistency import (
+    EVI_FORM_TRANSLATION_RE,
+    EVI_FORM_SIGNATURE_RE,
+    EVI_FORM_AUDIO_RE,
+    EVI_FORM_TRUNCATION_RE,
+    EVI_FORM_MISSING_REF_RE,
+)
 
 
 def measure_regex(name: str, pattern, base_text: str):
+    import gc
     text_1x = base_text
     text_4x = base_text * 4
 
     runs = 100
     repeats = 3
 
-    t1_raw = min(timeit.repeat(lambda: list(pattern.finditer(text_1x)), number=runs, repeat=repeats)) / runs
-    t4_raw = min(timeit.repeat(lambda: list(pattern.finditer(text_4x)), number=runs, repeat=repeats)) / runs
+    gc_was_enabled = gc.isenabled()
+    try:
+        gc.disable()
+        t1_raw = min(timeit.repeat(lambda: list(pattern.finditer(text_1x)), number=runs, repeat=repeats)) / runs
+        t4_raw = min(timeit.repeat(lambda: list(pattern.finditer(text_4x)), number=runs, repeat=repeats)) / runs
+    finally:
+        if gc_was_enabled:
+            gc.enable()
 
     # 분모 보정 (0.0001초 미만인 경우)
     t1_adj = max(t1_raw, 0.0001)
@@ -55,9 +69,22 @@ def main():
         "제1조 목적 및 적용 범위\n"
     ) * 10
 
-    print("=== TK-76 EVI-DATE 정규식 성능 측정 (공통 점검표 2항) ===")
+    sample_text_form = (
+        "갑 제101호증 물품대금 1차 번역문만 제출하고 외국어 원본은 첨부하지 않았다.\n"
+        "갑 제102호증 확인서 작성자: (공란). 서명: (공란) 서명 누락 상태이나 제출한다.\n"
+        "갑 제103호증 녹음원본 포함 자료: 이 요약문 1매뿐 소리 데이터나 녹취 전문은 포함하지 않았다.\n"
+        "갑 제104호증 영수증 사본의 하단이 잘려 합계 및 발행인은 복사 범위 밖이다.\n"
+        "갑 제105호증 완결 제출목록: 갑 제1호증. 이 둘 외에는 자료를 제출하지 않았다.\n"
+    ) * 10
+
+    print("=== TK-76 정규식 성능 측정 (공통 점검표 2항) ===")
     measure_regex("DATE_WEEKDAY_RE", DATE_WEEKDAY_RE, sample_text_weekday)
     measure_regex("HEADING_LINE_RE", HEADING_LINE_RE, sample_text_heading)
+    measure_regex("EVI_FORM_TRANSLATION_RE", EVI_FORM_TRANSLATION_RE, sample_text_form)
+    measure_regex("EVI_FORM_SIGNATURE_RE", EVI_FORM_SIGNATURE_RE, sample_text_form)
+    measure_regex("EVI_FORM_AUDIO_RE", EVI_FORM_AUDIO_RE, sample_text_form)
+    measure_regex("EVI_FORM_TRUNCATION_RE", EVI_FORM_TRUNCATION_RE, sample_text_form)
+    measure_regex("EVI_FORM_MISSING_REF_RE", EVI_FORM_MISSING_REF_RE, sample_text_form)
     print("모든 정규식 성능 기준(비 < 8.0, 4배 < 1.0s) 충족 확인 완료.")
 
 

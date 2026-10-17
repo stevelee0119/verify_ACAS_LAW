@@ -63,6 +63,35 @@ STATEMENT_HEADING_RE = re.compile(r"(?:^|\n)\s*(?:진\s*술\s*서|사\s*실\s*�
 COPY_MIN_CHARS = 24
 COPY_SIMILARITY = 0.9
 
+# 서증 형식 결함 검출 정규식 (민사소송법 제277·355·358조 및 민사소송규칙 제121·122조)
+# 1. 외국어 번역문 단독 제출 및 원본 미첨부
+EVI_FORM_TRANSLATION_RE = re.compile(
+    r"(?:외국어|외국문|원문)\s*(?:원본|자료|서류)?(?:은|는|을|를)?\s*(?:첨부하지|제출하지|포함하지)\s*(?:않|아니)|"
+    r"번역문\s*만\s*(?:단독\s*)?(?:제출|첨부)"
+)
+# 2. 사문서 작성자·서명란 공란/누락
+EVI_FORM_SIGNATURE_RE = re.compile(
+    r"(?:작성자|서명|날인|기명날인)\s*[:：]?\s*\((?:공란|미기재|없음)\)|"
+    r"(?:서명|날인|기명날인)\s*(?:누락|공란|비어\s*있)"
+)
+# 3. 음성·녹음자료 소리데이터 및 녹취록 흠결
+EVI_FORM_AUDIO_RE = re.compile(
+    r"(?:소리\s*(?:데이터|자료|파일)|음성\s*(?:데이터|자료|파일)|녹취\s*(?:전문|록|서))\s*(?:은|는|를|이나)?\s*(?:포함하지|제출하지|첨부하지)\s*(?:않|아니)|"
+    r"(?:포함|첨부|제출)\s*자료\s*[:：]?\s*(?:이\s*)?요약(?:문|본|서)?\s*\d*\s*매?\s*뿐"
+)
+# 4. 사본 중요 기재사항(합계·발행인 등) 잘림
+EVI_FORM_TRUNCATION_RE = re.compile(
+    r"(?:하단|상단|일부|중요\s*부분|합계|발행인|서명)\s*(?:부분|란)?(?:은|는|이|가)?\s*(?:복사\s*범위\s*밖|잘려|누락|식별\s*불가|읽을\s*수\s*없)|"
+    r"사본의\s*(?:하단|상단|일부)(?:이|가)?\s*잘려"
+)
+# 5. 완결 제출목록 외 미제출 서증 참조
+EVI_FORM_MISSING_REF_RE = re.compile(
+    r"(?:완결\s*(?:제출)?목록|제출목록)\s*[:：].*?(?:이\s*(?:둘|외|자료)\s*외에는\s*(?:자료를\s*)?제출하지\s*않|외에는\s*자료를\s*제출하지\s*않)|"
+    r"이번\s*제출\s*증거라고\s*한.*?(?:완결\s*목록|제출목록).*?없고"
+)
+# 호증 라벨 식별 정규식
+EXHIBIT_LABEL_RE = re.compile(r"(?:갑|을|병|정|소갑|소을)\s*제?\s*\d+\s*호증(?:의\s*\d+)?")
+
 
 # --- 날짜 --------------------------------------------------------------------------
 def _k(value: date) -> str:
@@ -676,9 +705,122 @@ def check_statements(doc: NormalizedDocument, exhibits: Sequence[Dict[str, Any]]
     return out
 
 
+def check_evidence_form_defects(doc: NormalizedDocument) -> List[Finding]:
+    """서증의 소송법상 형식 요건 흠결(외국어 원본 미첨부, 서명란 공란, 음성자료 흠결, 사본 잘림, 완결목록 외 미제출 서증 참조)을 검출한다."""
+    out: List[Finding] = []
+    blocks = [b for b in doc.body_blocks() if b.block_type != "running_head"]
+    if not blocks:
+        return out
+
+    # 소제목 또는 번호 매김 블록 기준으로 섹션(구역) 묶기
+    sections: List[List[Any]] = []
+    current_section: List[Any] = []
+    for b in blocks:
+        text = (b.text or "").strip()
+        if not text:
+            continue
+        if re.match(r"^\s*\d+\s*[.)]\s+[^\n]{2,40}$", text):
+            if current_section:
+                sections.append(current_section)
+            current_section = [b]
+        else:
+            if current_section:
+                current_section.append(b)
+            else:
+                current_section = [b]
+    if current_section:
+        sections.append(current_section)
+
+    for sec_blocks in sections:
+        sec_text = " ".join((b.text or "").strip() for b in sec_blocks)
+        exhibit_m = EXHIBIT_LABEL_RE.search(sec_text)
+        if not exhibit_m:
+            continue
+
+        exhibit_label = exhibit_m.group(0)
+        defect_type = None
+        defect_title = ""
+        defect_detail = ""
+        matched_str = ""
+
+        # 1. 외국어 번역문 단독 제출 (원문 미첨부)
+        m_trans = EVI_FORM_TRANSLATION_RE.search(sec_text)
+        if m_trans:
+            defect_type = FindingType.EVIDENCE_FORM_DEFECT
+            defect_title = f"서증 형식 결함: 외국어 원본 미첨부(번역문 단독 제출) — {exhibit_label}"
+            defect_detail = (
+                "민사소송법 제277조 및 제355조 제1항에 따라 외국어 문서를 서증으로 제출할 때는 "
+                "원본과 번역문을 함께 제출해야 하나, 번역문만 단독 제출하고 외국어 원본을 첨부하지 않은 형식적 흠결이 있다."
+            )
+            matched_str = m_trans.group(0)
+
+        # 2. 사문서 서명란 공란/누락
+        elif (m_sig := EVI_FORM_SIGNATURE_RE.search(sec_text)):
+            # 본안 소송서류 자체 말미의 전자제출 등 서명 생략 방어
+            is_pleading_end = bool(
+                re.search(r"귀중|법원\s*귀중", sec_text) and re.search(r"제출인|원고|피고|대리인", sec_text)
+            )
+            if not is_pleading_end:
+                defect_type = FindingType.EVIDENCE_FORM_DEFECT
+                defect_title = f"서증 형식 결함: 사문서 작성자·서명 누락(진정성립 추정 불가) — {exhibit_label}"
+                defect_detail = (
+                    "민사소송법 제358조에 따라 사문서는 작성 명의인의 서명 또는 날인이 있어야 진정성립이 추정되나, "
+                    "작성자 또는 서명이 공란이거나 누락되어 진정성립을 추정할 수 없다."
+                )
+                matched_str = m_sig.group(0)
+
+        # 3. 음성·녹음자료 소리데이터 및 녹취록 흠결
+        elif (m_audio := EVI_FORM_AUDIO_RE.search(sec_text)):
+            defect_type = FindingType.EVIDENCE_FORM_DEFECT
+            defect_title = f"서증 형식 결함: 음성·녹음자료 소리데이터 및 녹취록 미제출 — {exhibit_label}"
+            defect_detail = (
+                "민사소송규칙 제121조 및 제122조에 따라 음성·녹음자료를 서증으로 제출할 때는 소리 파일 또는 "
+                "공인된 녹취서 전문을 제출해야 하나, 요약 텍스트만 있고 음성 데이터나 녹취 전문이 누락된 형식적 흠결이 있다."
+            )
+            matched_str = m_audio.group(0)
+
+        # 4. 사본 중요 기재사항(합계·발행인 등) 잘림
+        elif (m_trunc := EVI_FORM_TRUNCATION_RE.search(sec_text)):
+            defect_type = FindingType.EVIDENCE_FORM_DEFECT
+            defect_title = f"서증 형식 결함: 사본 중요 기재사항(합계·발행인 등) 잘림 — {exhibit_label}"
+            defect_detail = (
+                "민사소송법 제355조에 따라 사본으로 서증을 제출할 때는 원본의 중요 기재사항이 온전히 포함되어야 하나, "
+                "하단 합계 및 발행인 등 중요 부분이 잘려 판독할 수 없는 형식적 흠결이 있다."
+            )
+            matched_str = m_trunc.group(0)
+
+        # 5. 완결 제출목록 외 미제출 서증 참조
+        elif (m_ref := EVI_FORM_MISSING_REF_RE.search(sec_text)):
+            defect_type = FindingType.EVIDENCE_FORM_DEFECT
+            defect_title = f"서증 형식 결함: 완결 제출목록 외 미제출 서증 참조 — {exhibit_label}"
+            defect_detail = (
+                "완결된 제출목록 외에 추가 제출된 증거가 없음을 명시하였음에도 본문에서 미제출된 서증을 "
+                "참조·원용한 형식적 흠결이 있다."
+            )
+            matched_str = m_ref.group(0)
+
+        if defect_type:
+            first_block = sec_blocks[0]
+            excerpt = sec_text[:350]
+            out.append(_finding(
+                doc,
+                defect_type,
+                EvidenceGrade.B,
+                Severity.MEDIUM,
+                defect_title,
+                defect_detail,
+                excerpt,
+                status=VerificationStatus.CONTRADICTED,
+                page=first_block.page,
+                features={"exhibit": exhibit_label, "matched": matched_str, "rule_id": "EVI.FORM_DEFECT"}
+            ))
+
+    return out
+
+
 def check_document(doc: NormalizedDocument) -> List[Finding]:
     exhibits = exhibit_rows(doc)
-    return check_exhibits(doc) + check_statements(doc, exhibits)
+    return check_exhibits(doc) + check_statements(doc, exhibits) + check_evidence_form_defects(doc)
 
 
 # --- 서면 간 문장 복사 -------------------------------------------------------------
