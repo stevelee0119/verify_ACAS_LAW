@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -58,6 +59,17 @@ def _load_json(path: Path) -> Dict[str, Any]:
     if path.exists():
         return json.loads(path.read_text(encoding="utf-8"))
     return {}
+
+
+def _model_overrides() -> Dict[str, str]:
+    purposes = ("openai", "anthropic", "gemini", "local", "openai_review",
+                "openai_extraction", "anthropic_escalation")
+    return {purpose: os.environ[f"LV_{purpose.upper()}_MODEL"] for purpose in purposes
+            if os.getenv(f"LV_{purpose.upper()}_MODEL")}
+
+
+def _provider_model_defaults() -> Dict[str, str]:
+    return {name: config.get("model", "") for name, config in _load_json(CONFIG_DIR / "providers.json").items()}
 
 
 @dataclass
@@ -145,11 +157,20 @@ class Settings:
         default_factory=lambda: os.getenv("LV_CELERY_BACKEND") or resolve_broker_url()
     )
     worker_mode: str = field(default_factory=lambda: os.getenv("LV_WORKER_MODE", "auto"))
-    # 교차검증 범위. all=쓸 수 있는 공급자를 모두 거친다(기본), auto=1차 신뢰도가
-    # 낮거나 중대한 항목일 때만 교차검증, off=1차 판단만 쓴다.
+    # all=사용 가능한 전체 공급자, auto=법리 독립 검토와 선택적 추가 검토(기본),
+    # off=1차 판단만 사용. 작성 정황은 auto에서 저비용 분석 및 표본 검토.
     # 공급자 수만큼 호출 비용이 늘어나므로 예산 설정과 함께 본다.
     llm_cross_check: str = field(
-        default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "all").strip().lower())
+        default_factory=lambda: (os.getenv("LV_LLM_CROSS_CHECK") or "auto").strip().lower())
+    llm_efficient_routing: bool = field(default_factory=lambda: _flag("LV_LLM_EFFICIENT_ROUTING", True))
+    # Stateless claim prompts change each time; automatic cache writes can add 25%
+    # without hits. Run-local exact reuse stays on; provider caching is opt-in.
+    llm_prompt_caching: bool = field(default_factory=lambda: _flag("LV_LLM_PROMPT_CACHING", False))
+    llm_review_sample_percent: int = field(default_factory=lambda: max(0, min(100,
+        int(os.getenv("LV_LLM_REVIEW_SAMPLE_PERCENT", "10")))))
+    llm_routing: Dict[str, Any] = field(default_factory=dict)
+    llm_model_overrides: Dict[str, str] = field(default_factory=_model_overrides)
+    llm_default_models: Dict[str, str] = field(default_factory=_provider_model_defaults)
     authorship_max_chars: int = field(default_factory=lambda: max(6000, min(48000,
         int(os.getenv("LV_AUTHORSHIP_MAX_CHARS", "24000")))))
     rule_version: str = "2026.09.30.1"
@@ -181,10 +202,18 @@ class Settings:
             self.providers = _default_providers()
         if not self.pricing:
             self.pricing = _load_json(CONFIG_DIR / "pricing.json")
+        if not self.llm_routing:
+            self.llm_routing = _load_json(CONFIG_DIR / "llm_routing.json")
+            for purpose, model in list(self.llm_routing.items()):
+                self.llm_routing[purpose] = self.llm_model_overrides.get(purpose) or model
 
     def model_config_version(self) -> str:
         active = sorted(p.name + ":" + p.model for p in self.providers.values() if p.enabled and p.has_key)
-        return "|".join(active) or "none"
+        identity = json.dumps({"routing": self.llm_routing, "efficient": self.llm_efficient_routing,
+            "overrides": self.llm_model_overrides, "model_defaults": self.llm_default_models,
+            "cross_check": self.llm_cross_check, "sample": self.llm_review_sample_percent,
+            "cache": self.llm_prompt_caching}, sort_keys=True)
+        return ("|".join(active) or "none") + "|routing:" + hashlib.sha256(identity.encode()).hexdigest()[:12]
 
 
 def _default_providers() -> Dict[str, ProviderConfig]:

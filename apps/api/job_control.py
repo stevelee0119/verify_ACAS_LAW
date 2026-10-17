@@ -123,6 +123,9 @@ def execution_settings_snapshot():
         "budget": budget_settings(settings),
         "settings": {name: getattr(settings, name) for name in (
             "rule_version", "prompt_version", "korean_law_review_profile", "allow_network", "http_timeout", "source_lookup_budget_seconds", "ocr_lang",
+            "llm_cross_check", "llm_efficient_routing", "llm_prompt_caching", "llm_review_sample_percent", "llm_routing",
+            "llm_model_overrides", "llm_default_models",
+            "rag_claim_max_per_document", "rag_claim_budget_seconds", "rag_claim_budget_usd",
             "source_lookup_max_document_seconds", "source_lookup_recovery_seconds", "source_lookup_attempts",
             "ocr_psm", "ocr_dpi", "ocr_min_confidence", "ocr_max_pages", "ocr_timeout_seconds", "independent_ocr_pages",
             "independent_ocr_mode", "seal_meta_message_content", "allow_sealed_reveal",
@@ -652,6 +655,6 @@ def _execution_summary(execution):
             "ok": bool(execution.get("ok")), "quarantined": bool(execution.get("quarantined")),
             "input_tokens": number("input_tokens"), "output_tokens": number("output_tokens"),
             "latency_ms": number("latency_ms"), "cost_usd": number("cost_usd"),
-            "cost_status": cost_status if cost_status in {"REPORTED", "ESTIMATED", "LOCAL", "NOT_SENT",
+            "cost_status": cost_status if cost_status in {"REPORTED", "ESTIMATED", "LOCAL", "NOT_SENT", "CACHED",
                                                            "RESERVED_UNCERTAIN"} else "UNKNOWN",
             "error": _status_error(execution.get("error"))}

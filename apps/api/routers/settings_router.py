@@ -80,4 +80,7 @@ def runtime_info(admin: User = Depends(require_admin)) -> Dict[str, Any]:
         "available_providers": router_instance.available_providers(),
         "max_upload_mb": settings.max_upload_mb,
         "monthly_budget_usd": settings.monthly_budget_usd,
+        "llm_cross_check": settings.llm_cross_check,
+        "llm_efficient_routing": settings.llm_efficient_routing,
+        "routing_models": settings.llm_routing,
     }

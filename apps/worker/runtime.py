@@ -186,6 +186,12 @@ def snapshot_settings(snapshot):
     current = get_settings()
     execution = snapshot["execution"]
     saved = execution["settings"]
+    routing_fields = {"llm_cross_check", "llm_efficient_routing", "llm_prompt_caching",
+                      "llm_review_sample_percent", "llm_routing", "llm_model_overrides", "llm_default_models"}
+    if not routing_fields <= saved.keys():
+        # Older queued jobs did not freeze task routing. A manual retry captures today's
+        # configuration while _retry_snapshot preserves the original spending limits.
+        raise ExecutionSettingsChanged("EXECUTION_SETTINGS_CHANGED: routing snapshot missing; retry required")
     # These parsers still read global settings; refuse drift rather than silently retry new inputs.
     for name, value in saved.items():
         if name not in {"allow_network", "http_timeout"} and getattr(current, name) != value:

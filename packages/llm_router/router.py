@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import re
 import uuid
+import copy
 from dataclasses import replace
 from decimal import Decimal
 from dataclasses import dataclass, field
@@ -25,7 +26,7 @@ from packages.common.enums import (
     VerificationStatus,
 )
 
-from .budget import BudgetLedger, budget_settings, estimate_call, money, usage_cost
+from .budget import BudgetLedger, budget_settings, estimate_call, effective_pricing, money, usage_cost
 from .providers import PROVIDER_CLASSES, LLMProvider, LLMRequest, LLMResponse, NullProvider, build_providers
 
 # 제12.4장 Judge Source Priority
@@ -66,6 +67,11 @@ class ModelExecution:
     cost_status: str = "REPORTED"
     reservation_id: str = ""
     input_privacy: Dict[str, Any] = field(default_factory=dict)
+    purpose: str = ""
+    thinking_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reused: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -231,6 +237,10 @@ class LLMRouter:
         self.call_guard, self.dispatch_guard, self.on_execution = call_guard, dispatch_guard, on_execution
         self.blocked_providers = set(blocked_providers or [])
         self.provider_guard = provider_guard
+        self._result_cache = {}
+
+    def clear_result_cache(self):
+        self._result_cache.clear()
 
     # -- Provider 선택 ------------------------------------------------------
     def available_providers(self, *, policy: ExternalAIPolicy = ExternalAIPolicy.MASKED) -> List[str]:
@@ -330,8 +340,9 @@ class LLMRouter:
         preference = ROLE_PREFERENCE.get(role, [])
         names = sorted(self.available_providers(policy=policy),
                        key=lambda n: preference.index(n) if n in preference else len(preference))
-        # 비용 조절 설정은 캐스케이드와 같다. off면 1순위 한 곳에만 묻는다.
-        if (self.settings.llm_cross_check or "all").lower() == "off":
+        mode = (self.settings.llm_cross_check or "auto").lower()
+        efficient = getattr(self.settings, "llm_efficient_routing", False)
+        if mode == "off":
             names = names[:1]
 
         async def ask(name: str) -> RouterResult:
@@ -341,7 +352,30 @@ class LLMRouter:
 
         # DB를 쓰는 예약·정산은 await 사이에 동기적으로 끝나므로 한 스레드
         # 안에서 서로 끼어들지 않는다. 기다리는 동안의 HTTP만 겹친다.
-        return list(await asyncio.gather(*(ask(name) for name in names)))
+        if (mode != "auto" or not efficient
+                or request.input_contract not in {"ai_document_v1", "argument_review_v1"}):
+            return list(await asyncio.gather(*(ask(name) for name in names)))
+
+        from .routing import sampled, needs_additional_review, conflicting, complete_argument_reviews
+        advisory = request.input_contract == "ai_document_v1"
+        if advisory and "openai" in names:
+            names = ["openai", *[n for n in names if n != "openai"]]
+        answers = []
+        wanted = 1 if advisory else 2
+        for name in names:
+            answers.append(await ask(name))
+            successes = [a for a in answers if a.used]
+            if advisory and len(successes) == 1:
+                import json
+                payload = json.loads(request.user)
+                if (needs_additional_review(successes[0]) or payload.get("metadata_ai_hint")
+                        or sampled(request, self.settings.llm_review_sample_percent)):
+                    wanted = 2
+            if len(successes) >= wanted:
+                complete = advisory or complete_argument_reviews(request, successes)
+                if complete and not conflicting(successes):
+                    break
+        return answers
 
     # -- 단일 호출 ----------------------------------------------------------
     async def run(
@@ -358,6 +392,9 @@ class LLMRouter:
         provider = self.pick(role, policy=policy, exclude=exclude)
         if provider is None:
             return RouterResult(note="사용 가능한 Provider가 없어 이 단계는 수행하지 않았다.")
+
+        from .routing import task_provider, request_key
+        provider = task_provider(provider, role, request, self.settings)
 
         from packages.rag_engine.review_profile import select_review_profile
         request = select_review_profile(request, provider_name=provider.name, role=role,
@@ -386,6 +423,31 @@ class LLMRouter:
                 if self.on_execution:
                     self.on_execution(execution)
                 return RouterResult(executions=[execution], note=execution.error)
+        cache_key = request_key(request, provider, role, policy, expected_task)
+        if cache_key is not None and cache_key in self._result_cache:
+            try:
+                if self.dispatch_guard or self.provider_guard:
+                    from .budget import write_session
+                    with write_session(getattr(self.ledger, "factory", None)) as session:
+                        if self.dispatch_guard:
+                            self.dispatch_guard(session)
+                        if self.provider_guard:
+                            self.provider_guard(provider, policy, session=session)
+            except Exception as exc:
+                execution = ModelExecution(str(role), provider.name, provider.config.model, False,
+                    error="PROVIDER_POLICY_BLOCKED: " + type(exc).__name__, cost_status="NOT_SENT")
+                if self.on_execution:
+                    self.on_execution(execution)
+                return RouterResult(executions=[execution], note=execution.error)
+            cached = copy.deepcopy(self._result_cache[cache_key])
+            execution = ModelExecution(str(role), provider.name, provider.config.model, True,
+                prompt_version=self.settings.prompt_version, cost_status="CACHED", reused=True,
+                purpose=request.metadata.get("stage") or request.input_contract or str(role),
+                input_privacy=privacy)
+            cached.executions = [execution]
+            if self.on_execution:
+                self.on_execution(execution)
+            return cached
         reservation = None
         rates = None
         if provider.config.kind != "local":
@@ -449,10 +511,8 @@ class LLMRouter:
         cost, cost_status = Decimal(0), "LOCAL"
         if reservation is not None:
             if response.ok or (response.input_tokens > 0 and response.output_tokens > 0):
-                cost, cost_status = usage_cost(response, rates, reservation.amount)
-                # The Gemini adapter omits thinking tokens. Do not label that partial usage exact.
-                if provider.name == "gemini":
-                    cost, cost_status = max(cost, reservation.amount), "ESTIMATED"
+                pricing = effective_pricing(self.settings, provider)
+                cost, cost_status = usage_cost(response, rates, reservation.amount, pricing=pricing)
                 self.ledger.settle(reservation.id, cost, detail={"cost_status": cost_status,
                     "input_tokens": response.input_tokens, "output_tokens": response.output_tokens})
             else:
@@ -465,12 +525,20 @@ class LLMRouter:
             error=response.error, cost_usd=float(cost), cost_status=cost_status,
             reservation_id=reservation.id if reservation else "",
             input_privacy=privacy,
+            purpose=request.metadata.get("stage") or request.input_contract or str(role),
+            thinking_tokens=getattr(response, "thinking_tokens", 0),
+            cache_read_tokens=getattr(response, "cache_read_tokens", 0),
+            cache_write_tokens=getattr(response, "cache_write_tokens", 0),
         )
         self.spent_usd += cost
 
         def finish(result):
             if self.on_execution:
                 self.on_execution(execution)
+            if result.used and cache_key is not None:
+                if len(self._result_cache) >= 256:
+                    self._result_cache.pop(next(iter(self._result_cache)))
+                self._result_cache[cache_key] = copy.deepcopy(result)
             return result
 
         if not response.ok:
@@ -583,10 +651,11 @@ class LLMRouter:
         primary_verdict = primary.parsed or _extract_verdict(primary.text)
         # 교차검증 범위. 한 모델의 의견만으로 법률 판단을 뒷받침하지 않는다는 것이
         # 기본값이다. 공급자 수만큼 비용이 늘어나므로 설정으로 조절할 수 있게 둔다.
-        mode = (self.settings.llm_cross_check or "all").lower()
+        mode = (self.settings.llm_cross_check or "auto").lower()
         cross_all = mode == "all"
         need_critic = mode != "off" and (
             cross_all
+            or mode == "auto"  # Legal source interpretation always receives an independent opinion.
             or profile == VerificationProfile.DEEP_VERIFY
             or severity_hint.rank >= Severity.HIGH.rank
             or float(primary_verdict.get("confidence", 0)) < 0.7
@@ -604,7 +673,9 @@ class LLMRouter:
         # Stage 3: Independent Critic (다른 Provider 우선)
         critic = await self.run_any(
             LLMRole.INDEPENDENT_CRITIC,
-            build_cascade_request("critic", question, evidence, primary_verdict=primary_verdict),
+            build_cascade_request("critic", question, evidence,
+                primary_verdict={} if mode == "auto" and getattr(self.settings, "llm_efficient_routing", False)
+                else primary_verdict),
             policy=policy,
             exclude=[e.provider for e in primary.executions],
             expected_task=question,
@@ -621,7 +692,7 @@ class LLMRouter:
         # Stage 4: 제3 모델. all에서는 의견이 갈리지 않아도 거친다.
         # 두 모델이 같은 답을 냈다는 사실만으로는 교차검증이라 하기 어렵다.
         third_verdict: Dict[str, Any] = {}
-        if cross_all or (disagreement and profile == VerificationProfile.DEEP_VERIFY):
+        if cross_all or disagreement or not critic.used:
             third = await self.run_any(
                 LLMRole.WEB_GROUNDER,
                 build_cascade_request("grounder", question, evidence),
@@ -647,6 +718,17 @@ class LLMRouter:
         )
         outcome.stages = stages
         outcome.executions = executions
+        if (mode == "auto" and getattr(self.settings, "llm_efficient_routing", False)
+                and (disagreement or not critic.used)):
+            selected = self.providers.get("anthropic")
+            if selected is not None and selected.available:
+                request = replace(build_cascade_request("primary", question, evidence), model_tier="escalation")
+                escalation = await self.run(LLMRole.PRIMARY_REASONER, request, policy=policy,
+                    exclude=[name for name in self.providers if name != "anthropic"], expected_task=question)
+                outcome.executions.extend(escalation.executions)
+                # Additional advice never counts as a second independent provider or resolves a conflict.
+                outcome.stages.append({"stage": 5, "name": "escalation", "used": escalation.used,
+                    "advisory_only": True, "advisory_verdict": escalation.parsed, "note": escalation.note})
         return outcome
 
     def judge(

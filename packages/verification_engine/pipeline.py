@@ -242,8 +242,13 @@ def execution_summary(log):
     summary: Dict[str, Any] = {"calls": len(log), "providers": {}}
     for entry in log:
         provider = summary["providers"].setdefault(entry.get("provider") or "unknown",
-                                                   {"calls": 0, "ok": 0, "failed": 0, "errors": {}})
+                                                   {"calls": 0, "ok": 0, "failed": 0, "errors": {},
+                                                    "reused": 0, "external_calls": 0})
         provider["calls"] += 1
+        if entry.get("reused") or entry.get("cost_status") == "CACHED":
+            provider["reused"] += 1
+        elif entry.get("cost_status") not in {"LOCAL", "NOT_SENT"}:
+            provider["external_calls"] += 1
         if entry.get("ok"):
             provider["ok"] += 1
         else:
@@ -280,6 +285,8 @@ class VerificationPipeline:
         단계마다 따로 모으면 빠지는 단계가 생긴다(법리 교차검토·AI 작성 판별이 집계에서 빠졌다). 기존 훅
         (워커의 체크포인트)은 그대로 호출한다."""
         log: List[Dict[str, Any]] = []
+        if hasattr(self.router, "clear_result_cache"):
+            self.router.clear_result_cache()
         self._execution_document = None
         previous = getattr(self.router, "on_execution", None)
 
@@ -1359,6 +1366,16 @@ class VerificationPipeline:
             if consensus["disagreement"] or consensus["incomplete_models"]:
                 reason = "모델 의견 불일치 또는 일부 미완료로 전문가 검토 필요. " + reason
 
+            additional_advice = []
+            for stage in outcome.stages:
+                advice = stage.get("advisory_verdict") or {}
+                advice_quotes = advice.get("evidence_quotes") or []
+                if (stage.get("name") == "escalation" and stage.get("used") and advice_quotes
+                        and all(isinstance(q, str) and q.strip() and q in source_text for q in advice_quotes)):
+                    additional_advice.append({"rationale": str(advice.get("rationale", ""))[:800],
+                                              "evidence_quotes": advice_quotes, "advisory_only": True})
+                    reason += " 추가 정밀 검토 의견(참고): " + str(advice.get("rationale", ""))[:800]
+
             review = {"citation_id": citation.citation_id, "status": sem_status,
                       "semantic_status": sem_status,
                       "review_id": verdict.get("review_id"),
@@ -1368,6 +1385,7 @@ class VerificationPipeline:
                       "consensus": consensus,
                       "source_truncated": len(str(official["full_text"])) > len(source_text),
                       "reason": reason,
+                      "additional_advice": additional_advice,
                       "stages": outcome.stages, "evidence_quotes": quotes if grounded else []}
             reviews.append(review)
             verdict["semantic_status"] = sem_status

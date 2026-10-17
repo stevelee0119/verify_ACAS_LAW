@@ -1,0 +1,5 @@
+{
+  "openai_review": "gpt-6.1-sol",
+  "openai_extraction": "gpt-6-luna",
+  "anthropic_escalation": "claude-opus-5-5"
+}

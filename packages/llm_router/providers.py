@@ -25,6 +25,7 @@ class LLMRequest:
     input_contract: Optional[str] = None
     # Opaque inspection-only context; excluded from repr and redacted by asdict.
     inspection_source: Any = field(default=None, repr=False, compare=False)
+    model_tier: str = "standard"
 
 
 @dataclass
@@ -38,6 +39,10 @@ class LLMResponse:
     output_tokens: int = 0
     error: str = ""
     latency_ms: int = 0
+    thinking_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    usage_complete: bool = True
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -214,6 +219,8 @@ class OpenAIProvider(LLMProvider):
             model=self.config.model,
             input_tokens=usage.get("prompt_tokens", 0),
             output_tokens=usage.get("completion_tokens", 0),
+            cache_read_tokens=(usage.get("prompt_tokens_details") or {}).get("cached_tokens", 0),
+            usage_complete="prompt_tokens" in usage and "completion_tokens" in usage,
             latency_ms=int((time.time() - started) * 1000),
         ), truncated=choice.get("finish_reason") == "length", limit=request.max_tokens)
 
@@ -243,6 +250,8 @@ class AnthropicProvider(LLMProvider):
             }
             if include_temperature:
                 payload["temperature"] = request.temperature
+            if getattr(self.settings, "llm_prompt_caching", False):
+                payload["cache_control"] = {"type": "ephemeral"}
             return payload
 
         try:
@@ -276,8 +285,12 @@ class AnthropicProvider(LLMProvider):
             text=text,
             provider=self.name,
             model=self.config.model,
-            input_tokens=usage.get("input_tokens", 0),
+            input_tokens=(usage.get("input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+                          + usage.get("cache_creation_input_tokens", 0)),
             output_tokens=usage.get("output_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+            cache_write_tokens=usage.get("cache_creation_input_tokens", 0),
+            usage_complete="input_tokens" in usage and "output_tokens" in usage,
             latency_ms=int((time.time() - started) * 1000),
         ), truncated=data.get("stop_reason") == "max_tokens", limit=request.max_tokens)
 
@@ -328,7 +341,10 @@ class GeminiProvider(LLMProvider):
                 (data.get("promptFeedback") or {}).get("blockReason") or "UNKNOWN"
             return LLMResponse(False, provider=self.name, model=self.config.model,
                                input_tokens=usage.get("promptTokenCount", 0),
-                               output_tokens=usage.get("candidatesTokenCount", 0),
+                               output_tokens=usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0),
+                               thinking_tokens=usage.get("thoughtsTokenCount", 0),
+                               cache_read_tokens=usage.get("cachedContentTokenCount", 0),
+                               usage_complete="promptTokenCount" in usage and "candidatesTokenCount" in usage,
                                latency_ms=int((time.time() - started) * 1000),
                                error=f"EMPTY_RESPONSE: 본문 없는 응답(finishReason={finish}, "
                                      f"thinking {usage.get('thoughtsTokenCount', 0)} tokens, "
@@ -339,7 +355,10 @@ class GeminiProvider(LLMProvider):
             provider=self.name,
             model=self.config.model,
             input_tokens=usage.get("promptTokenCount", 0),
-            output_tokens=usage.get("candidatesTokenCount", 0),
+            output_tokens=usage.get("candidatesTokenCount", 0) + usage.get("thoughtsTokenCount", 0),
+            thinking_tokens=usage.get("thoughtsTokenCount", 0),
+            cache_read_tokens=usage.get("cachedContentTokenCount", 0),
+            usage_complete="promptTokenCount" in usage and "candidatesTokenCount" in usage,
             latency_ms=int((time.time() - started) * 1000),
         ), truncated=(candidates[0].get("finishReason") == "MAX_TOKENS" if candidates else False),
             limit=request.max_tokens)

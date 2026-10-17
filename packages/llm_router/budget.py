@@ -225,9 +225,18 @@ def budget_settings(settings):
     }
 
 
+def effective_pricing(settings, provider, *, today=None):
+    pricing = dict(settings.pricing.get(provider.config.model) or settings.pricing.get(provider.name) or {})
+    today = today or datetime.utcnow().date().isoformat()
+    for key in sorted(pricing):
+        if key.startswith("after_") and today > key[6:]:
+            pricing.update(pricing[key])
+    return pricing
+
+
 def estimate_call(settings, provider, request, limits):
     """Reserve configured input capacity and output cap, never chars/4 guesses."""
-    pricing = settings.pricing.get(provider.config.model) or settings.pricing.get(provider.name) or {}
+    pricing = effective_pricing(settings, provider)
     input_cap = int(limits["max_input_tokens"])
     output_cap = int(limits["max_output_tokens"])
     if input_cap <= 0 or output_cap <= 0 or request.max_tokens <= 0:
@@ -245,12 +254,25 @@ def estimate_call(settings, provider, request, limits):
     rates = (money(pricing["input"]), money(pricing["output"]))
     if rates == (Decimal(0), Decimal(0)):
         raise ValueError("External provider prices cannot both be zero")
-    return (input_cap * rates[0] + request.max_tokens * rates[1]) / Decimal(1000000), rates
+    input_rate = rates[0]
+    if provider.name == "anthropic" and getattr(settings, "llm_prompt_caching", False):
+        input_rate = max(input_rate, money(pricing.get("cache_write", input_rate * Decimal("1.25"))))
+    return (input_cap * input_rate + request.max_tokens * rates[1]) / Decimal(1000000), rates
 
 
-def usage_cost(response, rates, reserved):
+def usage_cost(response, rates, reserved, *, pricing=None):
     # Provider adapters use zero for missing usage. Keep the full estimate in that case.
-    if rates is None or response.input_tokens <= 0 or response.output_tokens <= 0:
+    if (rates is None or response.input_tokens <= 0 or response.output_tokens <= 0
+            or not getattr(response, "usage_complete", True)):
         return money(reserved), "ESTIMATED"
-    return ((money(response.input_tokens) * rates[0] + money(response.output_tokens) * rates[1])
+    read = getattr(response, "cache_read_tokens", 0)
+    write = getattr(response, "cache_write_tokens", 0)
+    pricing = pricing or {}
+    if (read < 0 or write < 0 or read + write > response.input_tokens
+            or read and "cache_read" not in pricing or write and "cache_write" not in pricing):
+        return money(reserved), "ESTIMATED"
+    return ((money(response.input_tokens - read - write) * rates[0]
+             + money(read) * money(pricing.get("cache_read", rates[0]))
+             + money(write) * money(pricing.get("cache_write", rates[0]))
+             + money(response.output_tokens) * rates[1])
             / Decimal(1000000)), "REPORTED"
